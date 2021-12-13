@@ -21,13 +21,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/lureiny/v2raymg/bound"
+	"github.com/lureiny/v2raymg/config"
+	"github.com/lureiny/v2raymg/fileIO"
 	"github.com/spf13/cobra"
 	"github.com/v2fly/v2ray-core/v4/app/proxyman/command"
 	"github.com/v2fly/v2ray-core/v4/infra/conf"
 	"google.golang.org/grpc"
-	"v2raymg.top/bound"
-	"v2raymg.top/config"
-	"v2raymg.top/fileIO"
 )
 
 // removeCmd represents the remove command

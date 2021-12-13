@@ -5,11 +5,11 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/lureiny/v2raymg/config"
 	"github.com/v2fly/v2ray-core/v4/common/protocol"
 	"github.com/v2fly/v2ray-core/v4/proxy/vless"
 	"github.com/v2fly/v2ray-core/v4/proxy/vmess"
 	"google.golang.org/protobuf/runtime/protoiface"
-	"v2raymg.top/config"
 )
 
 type User struct {

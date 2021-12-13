@@ -19,11 +19,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/lureiny/v2raymg/config"
+	"github.com/lureiny/v2raymg/stats"
 	"github.com/spf13/cobra"
 	"github.com/v2fly/v2ray-core/v4/app/stats/command"
 	"google.golang.org/grpc"
-	"v2raymg.top/config"
-	"v2raymg.top/stats"
 )
 
 const (

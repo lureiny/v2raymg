@@ -1,4 +1,4 @@
-module v2raymg.top
+module github.com/lureiny/v2raymg
 
 go 1.17
 
