@@ -1,0 +1,226 @@
+syntax = "proto3";
+
+option go_package = "github.com/lureiny/v2raymg/server/proto";
+
+package proto;
+
+message User {
+    string name = 1;
+    string passwd = 2;
+    int64 expire_time = 3;
+    repeated string tags = 4;
+}
+
+message NodeAuthInfo {
+    string token = 1;
+    Node node = 2;
+}
+
+message GetUsersReq {
+    NodeAuthInfo node_auth_info = 1;
+}
+
+message GetUsersRsp {
+    int32 code = 1;
+    string msg = 2;
+    repeated User users = 3;
+}
+
+message UserOpReq {
+    NodeAuthInfo node_auth_info = 1;
+    repeated User users = 2;
+}
+
+message UserOpRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
+message GetSubReq {
+    NodeAuthInfo node_auth_info = 1;
+    User user = 2;
+}
+
+message GetSubRsp {
+    int32 code = 1;
+    string msg = 2;
+    repeated string uris = 3;
+}
+
+message HeartBeatReq {
+    NodeAuthInfo node_auth_info = 1;
+}
+
+message Node {
+    string host = 1;
+    int32 port = 2;
+    string cluster_name = 3;
+    string name = 4;
+}
+
+message HeartBeatRsp {
+    int32 code = 1;
+    string msg = 2;
+    map<string, Node> nodesMap = 3;
+}
+
+message Nodes {
+    map<string, Nodes> nodes = 1;
+}
+
+message RegisterNodeReq {
+    NodeAuthInfo node_auth_info = 1;
+}
+
+message RegisterNodeRsp {
+    int32 code = 1;
+    string msg = 2;
+    bytes data  = 3;  // end node 节点间注册返回token(string), 注册到center node返回[]Node
+}
+
+message GetBandwidthStatsReq {
+    NodeAuthInfo node_auth_info = 1;
+    string pattern = 2;
+    bool reset = 3;
+}
+
+message Stats {
+    string name = 1;
+    string type = 2;
+    int64 downlink = 3;
+    int64 uplink = 4;
+}
+
+message GetBandwidthStatsRsp {
+    int32 code = 1;
+    string msg = 2;
+    repeated Stats stats = 3;
+}
+
+message InboundOpReq {
+    NodeAuthInfo node_auth_info = 1;
+    string inboundInfo = 2; // inbound info 添加inbound时为inbound对应的base64, 删除时为tag
+}
+
+message InboundOpRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
+message TransferInboundReq {
+    NodeAuthInfo node_auth_info = 1;
+    string tag = 2;
+    int32 new_port = 3;
+}
+
+message CopyInboundReq {
+    NodeAuthInfo node_auth_info = 1;
+    string src_tag = 2;
+    string new_tag = 3;
+    int32 new_port = 4;
+    bool is_copy_user = 5;
+    string new_protocol = 6;
+}
+
+message CopyUserReq {
+    NodeAuthInfo node_auth_info = 1;
+    string src_tag = 2;
+    string new_tag = 3;
+}
+
+message GetInboundReq {
+    NodeAuthInfo node_auth_info = 1;
+    string tag = 2;
+}
+
+message GetInboundRsp {
+    int32 code = 1;
+    string msg = 2;
+    string data = 3;
+}
+
+message GetTagReq {
+    NodeAuthInfo node_auth_info = 1;
+}
+
+message GetTagRsp {
+    int32 code = 1;
+    string msg = 2;
+    repeated string tags = 3;
+}
+
+message UpdateProxyReq {
+    NodeAuthInfo node_auth_info = 1;
+    string tag = 2;
+}
+
+message UpdateProxyRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
+message AdaptiveOpReq {
+    NodeAuthInfo node_auth_info = 1;
+    repeated string ports = 2; // 可以为port range port1-port2
+    repeated string tags = 3;
+}
+
+message AdaptiveReq {
+    NodeAuthInfo node_auth_info = 1;
+    repeated string tags = 2;
+}
+
+message AdaptiveRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
+service EndNodeAccess {
+    rpc GetUsers(GetUsersReq) returns (GetUsersRsp) {}
+    rpc AddUsers(UserOpReq) returns (UserOpRsp) {}
+    rpc DeleteUsers(UserOpReq) returns (UserOpRsp) {}
+    rpc UpdateUsers(UserOpReq) returns (UserOpRsp) {}
+    rpc ResetUser(UserOpReq) returns (UserOpRsp) {}
+    rpc GetSub(GetSubReq) returns (GetSubRsp) {}
+    rpc HeartBeat(HeartBeatReq) returns (HeartBeatRsp) {}
+    rpc RegisterNode(RegisterNodeReq) returns (RegisterNodeRsp) {}
+    rpc GetBandWidthStats(GetBandwidthStatsReq) returns (GetBandwidthStatsRsp) {}
+    rpc AddInbound(InboundOpReq) returns (InboundOpRsp) {}
+    rpc DeleteInbound(InboundOpReq) returns (InboundOpRsp) {}
+    rpc TransferInbound(TransferInboundReq) returns (InboundOpRsp) {}
+    rpc CopyInbound(CopyInboundReq) returns (InboundOpRsp) {}
+    rpc CopyUser(CopyUserReq) returns (InboundOpRsp) {}
+    rpc GetInbound(GetInboundReq) returns (GetInboundRsp) {}
+    rpc GetTag(GetTagReq) returns (GetTagRsp) {}
+    rpc UpdateProxy(UpdateProxyReq) returns (UpdateProxyRsp) {}
+    rpc AddAdaptiveConfig(AdaptiveOpReq) returns (AdaptiveRsp) {}
+    rpc DeleteAdaptiveConfig(AdaptiveOpReq) returns (AdaptiveRsp) {}
+    rpc Adaptive(AdaptiveReq) returns (AdaptiveRsp) {} // 外部调用的主动修改接口
+}
+
+message GetClutersReq {
+    string cluster_name = 1;
+}
+
+message GetClutersRsp {
+    repeated string cluster_names = 1;
+}
+
+message GetNodesReq {
+    string cluster_name = 1;
+}
+
+message GetNodesRsp {
+    string cluster_name = 1;
+    map<string, Node> nodesMap = 2;
+}
+
+service CenterNodeAdmin {
+    rpc GetCluters(GetClutersReq) returns (GetClutersRsp) {}
+    rpc GetNodes(GetNodesReq) returns (GetNodesRsp) {}
+}
+
+service CenterNodeAccess {
+    rpc HeartBeat(HeartBeatReq) returns (HeartBeatRsp) {}
+    rpc RegisterNode(RegisterNodeReq) returns (RegisterNodeRsp) {}
+}
