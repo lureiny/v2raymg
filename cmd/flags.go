@@ -17,10 +17,7 @@ var (
 
 	// query flags
 	unit string
-)
 
-type RuntimeConfig struct {
-	Host       string `json:"host"`
-	Port       int    `json:"port`
-	ConfigFile string `json:"config"`
-}
+	// server's token
+	token string
+)

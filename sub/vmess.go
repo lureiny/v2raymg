@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/lureiny/v2raymg/fileIO"
+	protocolP "github.com/lureiny/v2raymg/protocol"
 	"github.com/v2fly/v2ray-core/v4/common/protocol"
 	"github.com/v2fly/v2ray-core/v4/infra/conf"
 )
@@ -26,7 +26,7 @@ type VmessShareConfig struct {
 	Sni  string `json:"sni"`
 }
 
-func NewVmessShareConfig(in *fileIO.InboundDetourConfig, email string, host string, port uint32) (*VmessShareConfig, error) {
+func NewVmessShareConfig(in *protocolP.InboundDetourConfig, email string, host string, port uint32) (*VmessShareConfig, error) {
 	// 获取UUID
 	id, aid, err := getVmessUserUUID(in, email)
 	if err != nil {
@@ -109,7 +109,7 @@ func NewDefaultVmessShareConfig() *VmessShareConfig {
 	return &VmessShareConfig{V: "2"}
 }
 
-func getVmessUserUUID(in *fileIO.InboundDetourConfig, email string) (string, int, error) {
+func getVmessUserUUID(in *protocolP.InboundDetourConfig, email string) (string, int, error) {
 	vmessConfig := new(conf.VMessInboundConfig)
 
 	err := json.Unmarshal([]byte(*(in.Settings)), vmessConfig)

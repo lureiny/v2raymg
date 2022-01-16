@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lureiny/v2raymg/fileIO"
+	protocolP "github.com/lureiny/v2raymg/protocol"
 	"github.com/v2fly/v2ray-core/v4/common/protocol"
 	"github.com/v2fly/v2ray-core/v4/infra/conf"
 	"github.com/v2fly/v2ray-core/v4/proxy/vless"
@@ -30,7 +30,7 @@ func (c *VlessShareConfig) Build() string {
 	return fmt.Sprintf("%s?%s", c.BaseConfig.Build(), paramsURI)
 }
 
-func getVlessUserUUID(in *fileIO.InboundDetourConfig, email string) (string, error) {
+func getVlessUserUUID(in *protocolP.InboundDetourConfig, email string) (string, error) {
 	vlessConfig := new(conf.VLessInboundConfig)
 
 	err := json.Unmarshal([]byte(*(in.Settings)), vlessConfig)
@@ -52,7 +52,7 @@ func getVlessUserUUID(in *fileIO.InboundDetourConfig, email string) (string, err
 	return "", errors.New(errMsg)
 }
 
-func NewVlessShareConfig(in *fileIO.InboundDetourConfig, email string, host string, port uint32) (*VlessShareConfig, error) {
+func NewVlessShareConfig(in *protocolP.InboundDetourConfig, email string, host string, port uint32) (*VlessShareConfig, error) {
 	// 获取UUID
 	id, err := getVlessUserUUID(in, email)
 	if err != nil {

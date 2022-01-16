@@ -1,4 +1,4 @@
-package fileIO
+package protocol
 
 import (
 	"encoding/json"
@@ -45,4 +45,38 @@ type V2rayInboundUser struct {
 	ID      string `json:"id"`
 	Level   uint32 `json:"level,omitempty"`
 	AlterID uint32 `json:"alterId,omitempty"`
+}
+
+func NewStreamSetting(network, tls, keyFile, certFile string) (*conf.StreamConfig, error) {
+	t := conf.TransportProtocol(network)
+	streamConfig := &conf.StreamConfig{
+		Network:  &t,
+		Security: tls,
+		TLSSettings: &conf.TLSConfig{
+			Certs: []*conf.TLSCertConfig{
+				&conf.TLSCertConfig{
+					CertFile: certFile,
+					KeyFile:  keyFile,
+				},
+			},
+		},
+	}
+	return streamConfig, nil
+}
+
+func NewInboundDetourConfig(protocol, listenon, tag string, port uint32) (*InboundDetourConfig, error) {
+	inboundConfig := &InboundDetourConfig{
+		Protocol:  protocol,
+		ListenOn:  listenon,
+		Tag:       tag,
+		PortRange: port,
+	}
+
+	return inboundConfig, nil
+}
+
+type VLessInboundConfig struct {
+	Clients    []json.RawMessage       `json:"clients"`
+	Decryption string                  `json:"decryption"`
+	Fallbacks  []*conf.VLessInboundFallback `json:"fallbacks"`
 }

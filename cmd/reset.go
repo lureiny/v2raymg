@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"github.com/lureiny/v2raymg/bound"
+	"github.com/lureiny/v2raymg/config"
 	"github.com/spf13/cobra"
 )
 
@@ -22,7 +23,7 @@ func init() {
 
 // Reset reset user uuid
 func Reset(email string, tag string) error {
-	runtimeConfig := RuntimeConfig{
+	runtimeConfig := config.RuntimeConfig{
 		Host:       host,
 		Port:       port,
 		ConfigFile: configFile,
@@ -38,11 +39,11 @@ func Reset(email string, tag string) error {
 		return err
 	}
 
-	if err := RemoveUser(&runtimeConfig, user); err != nil {
+	if err := bound.RemoveUser(&runtimeConfig, user); err != nil {
 		return err
 	}
 
-	if err := AddUser(&runtimeConfig, user); err != nil {
+	if err := bound.AddUser(&runtimeConfig, user); err != nil {
 		return err
 	}
 	return nil

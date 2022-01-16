@@ -124,7 +124,7 @@ func newTransportConfig(streamSetting *conf.StreamConfig) (*VlessTransportConfig
 	switch string(*streamSetting.Network) {
 	case "tcp":
 		transportConfig.TransportConfig = &VlessTcpConfig{}
-	case "kcp":
+	case "kcp", "mkcp":
 		kcpConfig := streamSetting.KCPSettings
 		var clientMkcpConfig VlessMkcpConfig
 		var kcpHeader map[string]string

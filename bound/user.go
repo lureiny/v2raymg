@@ -2,6 +2,7 @@ package bound
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,11 +10,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/lureiny/v2raymg/config"
 	"github.com/lureiny/v2raymg/fileIO"
+	protocolP "github.com/lureiny/v2raymg/protocol"
 	"github.com/v2fly/v2ray-core/v4/app/proxyman/command"
 	"github.com/v2fly/v2ray-core/v4/common/protocol"
 	"github.com/v2fly/v2ray-core/v4/common/serial"
+	"github.com/v2fly/v2ray-core/v4/infra/conf"
 	"github.com/v2fly/v2ray-core/v4/proxy/vless"
 	"github.com/v2fly/v2ray-core/v4/proxy/vmess"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/runtime/protoiface"
 )
 
@@ -104,7 +108,7 @@ func GetProtocol(tag string, file string) (string, error) {
 	return "", errors.New(fmt.Sprintf("Not found inbound with %v", tag))
 }
 
-func AddUser(con command.HandlerServiceClient, user *User) error {
+func addUser(con command.HandlerServiceClient, user *User) error {
 	_, err := con.AlterInbound(context.Background(), &command.AlterInboundRequest{
 		Tag: user.InBoundTag,
 		Operation: serial.ToTypedMessage(&command.AddUserOperation{
@@ -118,7 +122,7 @@ func AddUser(con command.HandlerServiceClient, user *User) error {
 	return err
 }
 
-func RemoveUser(con command.HandlerServiceClient, user *User) error {
+func removeUser(con command.HandlerServiceClient, user *User) error {
 	_, err := con.AlterInbound(context.Background(), &command.AlterInboundRequest{
 		Tag: user.InBoundTag,
 		Operation: serial.ToTypedMessage(&command.RemoveUserOperation{
@@ -126,4 +130,246 @@ func RemoveUser(con command.HandlerServiceClient, user *User) error {
 		}),
 	})
 	return err
+}
+
+func addUserToRuntime(runtimeConfig *config.RuntimeConfig, user *User) error {
+	// 创建grpc client
+	cmdConn, err := grpc.Dial(fmt.Sprintf("%s:%d", runtimeConfig.Host, runtimeConfig.Port), grpc.WithInsecure())
+	if err != nil {
+		return err
+	}
+
+	handlerClient := command.NewHandlerServiceClient(cmdConn)
+
+	err = addUser(handlerClient, user)
+	if err != nil {
+		return err
+	}
+
+	config.Info.Printf("Add user to runtime: [Email] %s, [UUID] %s to [Bound] %s", user.Email, user.UUID, user.InBoundTag)
+	return nil
+}
+
+// AddUser 添加用户, 同时添加的运行中的程序以及配置文件中
+func AddUser(runtimeConfig *config.RuntimeConfig, user *User) error {
+	err := addUserToRuntime(runtimeConfig, user)
+	if err != nil {
+		return err
+	}
+
+	if err := addUserToFile(user, runtimeConfig.ConfigFile); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func addUserToFile(user *User, configFile string) error {
+	c, err := fileIO.LoadConfig(configFile)
+	if err != nil {
+		return err
+	}
+
+	if err := addUserToConfig(c, user); err != nil {
+		return err
+	}
+
+	if err := fileIO.DumpConfig(c, configFile); err != nil {
+		return err
+	}
+
+	config.Info.Printf("Add user to config file: [Email] %s, [UUID] %s to [Bound] %s", user.Email, user.UUID, user.InBoundTag)
+	return nil
+}
+
+func addUserToConfig(c *protocolP.V2rayConfig, user *User) error {
+	for index := range c.InboundConfigs {
+		inBound := &(c.InboundConfigs[index])
+		if inBound.Tag == user.InBoundTag {
+			switch strings.ToLower(inBound.Protocol) {
+			// 添加用户前应先检测是否已经存在
+			case "vmess":
+				return addVmessUser(inBound, user)
+			case "vless":
+				return addVlessUser(inBound, user)
+			}
+		}
+	}
+
+	return errors.New("No inbound which has tag: " + user.InBoundTag)
+}
+
+func addVmessUser(in *protocolP.InboundDetourConfig, user *User) error {
+	vmessConfig := new(conf.VMessInboundConfig)
+
+	err := json.Unmarshal([]byte(*(in.Settings)), vmessConfig)
+	if err != nil {
+		return err
+	}
+
+	c := protocolP.V2rayInboundUser{Email: user.Email, ID: user.UUID}
+	cb, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+
+	vmessConfig.Users = append(vmessConfig.Users, cb)
+	vmessConfigBytes, err := json.MarshalIndent(vmessConfig, "", "    ")
+	if err != nil {
+		return err
+	}
+
+	in.Settings = (*json.RawMessage)(&vmessConfigBytes)
+	return nil
+}
+
+func addVlessUser(in *protocolP.InboundDetourConfig, user *User) error {
+	vlessConfig := new(protocolP.VLessInboundConfig)
+
+	err := json.Unmarshal([]byte(*(in.Settings)), vlessConfig)
+	if err != nil {
+		return err
+	}
+
+	c := protocolP.V2rayInboundUser{Email: user.Email, ID: user.UUID}
+	cb, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+
+	vlessConfig.Clients = append(vlessConfig.Clients, cb)
+	vlessConfigBytes, err := json.MarshalIndent(vlessConfig, "", "    ")
+	if err != nil {
+		return err
+	}
+
+	in.Settings = (*json.RawMessage)(&vlessConfigBytes)
+	return nil
+}
+
+func removeVmessUser(in *protocolP.InboundDetourConfig, user *User) error {
+	vmessConfig := new(conf.VMessInboundConfig)
+
+	err := json.Unmarshal([]byte(*(in.Settings)), vmessConfig)
+	if err != nil {
+		return err
+	}
+
+	for index := range vmessConfig.Users {
+		var vmessUser protocolP.V2rayInboundUser
+		json.Unmarshal(vmessConfig.Users[index], &vmessUser)
+		if vmessUser.Email == user.Email {
+			vmessConfig.Users = append(vmessConfig.Users[:index], vmessConfig.Users[index+1:]...)
+			break
+		}
+		if index == len(vmessConfig.Users)-1 {
+			return errors.New("No User " + user.Email)
+		}
+	}
+
+	vmessConfigBytes, err := json.MarshalIndent(vmessConfig, "", "    ")
+	if err != nil {
+		return err
+	}
+
+	in.Settings = (*json.RawMessage)(&vmessConfigBytes)
+	return nil
+}
+
+func removeVlessUser(in *protocolP.InboundDetourConfig, user *User) error {
+	vlessConfig := new(protocolP.VLessInboundConfig)
+
+	err := json.Unmarshal([]byte(*(in.Settings)), vlessConfig)
+	if err != nil {
+		return err
+	}
+
+	for index := range vlessConfig.Clients {
+		var vlessUser protocolP.V2rayInboundUser
+		json.Unmarshal(vlessConfig.Clients[index], &vlessUser)
+		if vlessUser.Email == user.Email {
+			vlessConfig.Clients = append(vlessConfig.Clients[:index], vlessConfig.Clients[index+1:]...)
+			break
+		}
+		if index == len(vlessConfig.Clients)-1 {
+			return errors.New(" " + user.Email)
+		}
+	}
+
+	vlessConfigBytes, err := json.MarshalIndent(vlessConfig, "", "    ")
+	if err != nil {
+		return err
+	}
+
+	in.Settings = (*json.RawMessage)(&vlessConfigBytes)
+	return nil
+}
+
+func RemoveUser(runtimeConfig *config.RuntimeConfig, user *User) error {
+	if err := removeUserFromRuntime(runtimeConfig, user); err != nil {
+		return err
+	}
+
+	if err := removeUserFromFile(user, runtimeConfig.ConfigFile); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func removeUserFromFile(user *User, configFile string) error {
+	c, err := fileIO.LoadConfig(configFile)
+	if err != nil {
+		return err
+	}
+
+	if err := removeUserFromConfig(c, user); err != nil {
+		return err
+	}
+
+	if err := fileIO.DumpConfig(c, configFile); err != nil {
+		return err
+	}
+
+	config.Info.Printf("Remove user from config file: [Email] %s from [Bound] %s", user.Email, user.InBoundTag)
+	return nil
+}
+
+func removeUserFromConfig(c *protocolP.V2rayConfig, user *User) error {
+	for index := range c.InboundConfigs {
+		inBound := &(c.InboundConfigs[index])
+		if inBound.Tag == user.InBoundTag {
+			switch strings.ToLower(inBound.Protocol) {
+			// 添加用户前应先检测是否已经存在
+			case "vmess":
+				return removeVmessUser(inBound, user)
+			case "vless":
+				return removeVlessUser(inBound, user)
+			}
+		}
+	}
+
+	return errors.New("No inbound which has tag: " + user.InBoundTag)
+}
+
+func removeUserFromRuntime(runtimeConfig *config.RuntimeConfig, user *User) error {
+	// 创建grpc client
+	cmdConn, err := grpc.Dial(fmt.Sprintf("%s:%d", runtimeConfig.Host, runtimeConfig.Port), grpc.WithInsecure())
+	if err != nil {
+		return err
+	}
+
+	handlerClient := command.NewHandlerServiceClient(cmdConn)
+
+	if err != nil {
+		return err
+	}
+
+	err = removeUser(handlerClient, user)
+	if err != nil {
+		return err
+	}
+	config.Info.Printf("Remove User from runtime: [Email] %s from [Bound] %s", user.Email, user.InBoundTag)
+
+	return nil
 }
