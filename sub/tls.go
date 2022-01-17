@@ -27,10 +27,12 @@ func (c *VlessTLSConfig) Build() string {
 }
 
 func newTLSConfig(t *conf.TLSConfig) *VlessTLSConfig {
-	tlsConfig := VlessTLSConfig{
-		SNI:  t.ServerName,
-		ALPN: strings.Join(*t.ALPN, ","),
+	tlsConfig := &VlessTLSConfig{
 		Flow: "",
 	}
-	return &tlsConfig
+	if t != nil {
+		tlsConfig.ALPN = strings.Join(*t.ALPN, ",")
+		tlsConfig.SNI = t.ServerName
+	}
+	return tlsConfig
 }
