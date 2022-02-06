@@ -11,10 +11,10 @@ import (
 
 // MyStat 集成了用户uplink和downlink的
 type MyStat struct {
-	Name     string
-	Type     string
-	Downlink int64
-	Uplink   int64
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Downlink int64  `json:"downlink"`
+	Uplink   int64  `json:"uplink"`
 }
 
 var regexCompile = regexp.MustCompile(`(user|inbound|outbound)>>>(\S+)>>>traffic>>>(downlink|uplink)`)

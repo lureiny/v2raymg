@@ -90,7 +90,7 @@ func setUserAccount(user *User) {
 			Id: user.UUID,
 		}
 	default:
-		config.Error.Fatalf("Unsupport protocol %s", user.Protocol)
+		config.Error.Printf("Unsupport protocol %s", user.Protocol)
 	}
 }
 
