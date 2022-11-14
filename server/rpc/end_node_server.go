@@ -467,6 +467,12 @@ func (s *EndNodeServer) AddInbound(ctx context.Context, inboundOpReq *proto.Inbo
 		inboundOpRsp.Code = 601
 		return inboundOpRsp, nil
 	}
+	// 如果本身不存在的user会被过滤掉
+	for _, u := range newInbound.GetUsers() {
+		if user := s.userManager.Get(u); user != nil {
+			user.Tags = append(user.Tags, newInbound.Tag)
+		}
+	}
 	return inboundOpRsp, nil
 }
 
