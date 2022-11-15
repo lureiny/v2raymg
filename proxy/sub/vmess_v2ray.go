@@ -46,7 +46,6 @@ func NewVmessShareConfig(in *protocolP.InboundDetourConfig, email string, host s
 		port = in.PortRange
 	}
 
-	v.Add = host
 	v.Port = fmt.Sprint(port)
 	v.TLS = "tls"
 
@@ -64,6 +63,9 @@ func NewVmessShareConfig(in *protocolP.InboundDetourConfig, email string, host s
 		v.Port = fmt.Sprintf("%d", upstreamInbound.PortRange)
 		insertVmessTlsSetting(v, upstreamInbound.StreamSetting)
 	}
+
+	// 根据sni和host设置remote host
+	v.Add = parseHost(host, v.Sni)
 
 	return v, nil
 }

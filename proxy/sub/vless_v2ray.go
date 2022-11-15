@@ -73,7 +73,6 @@ func NewVlessShareConfig(in *protocolP.InboundDetourConfig, email string, host s
 		port = in.PortRange
 	}
 
-	sharedConfig.BaseConfig.RemoteHost = host
 	sharedConfig.BaseConfig.RemotePort = port
 
 	p, err := newProtocolConfig(in.StreamSetting)
@@ -96,6 +95,9 @@ func NewVlessShareConfig(in *protocolP.InboundDetourConfig, email string, host s
 		sharedConfig.BaseConfig.RemotePort = upstreamInbound.PortRange
 		sharedConfig.TLSConfig = newTLSOrXTLSConfig(upstreamInbound.StreamSetting)
 	}
+
+	// 根据sni和host设置remote host
+	sharedConfig.BaseConfig.RemoteHost = parseHost(host, sharedConfig.TLSConfig.SNI)
 
 	return sharedConfig, nil
 }

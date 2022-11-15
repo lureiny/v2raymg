@@ -66,8 +66,6 @@ func NewTrojanShareConfig(in *protocolP.InboundDetourConfig, email string, host 
 	if port == 0 {
 		port = in.PortRange
 	}
-
-	sharedConfig.BaseConfig.RemoteHost = host
 	sharedConfig.BaseConfig.RemotePort = port
 
 	p, err := newProtocolConfig(in.StreamSetting)
@@ -77,6 +75,7 @@ func NewTrojanShareConfig(in *protocolP.InboundDetourConfig, email string, host 
 	if p.Type == "tcp" {
 		p.Type = "original"
 	}
+
 	sharedConfig.ProtocolConfig = p
 
 	t, err := newTransportConfig(in.StreamSetting)
@@ -93,6 +92,9 @@ func NewTrojanShareConfig(in *protocolP.InboundDetourConfig, email string, host 
 		sharedConfig.BaseConfig.RemotePort = upstreamInbound.PortRange
 		sharedConfig.TLSConfig = newTLSOrXTLSConfig(upstreamInbound.StreamSetting)
 	}
+
+	// 根据sni和host设置remote host
+	sharedConfig.BaseConfig.RemoteHost = parseHost(host, sharedConfig.TLSConfig.SNI)
 
 	return sharedConfig, nil
 }

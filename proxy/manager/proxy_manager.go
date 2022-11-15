@@ -554,6 +554,9 @@ func (proxyManager *ProxyManager) AdaptiveOneInbound(tag string) (int64, int64, 
 
 	newPort := proxyManager.getRandPort()
 	inbound := proxyManager.InboundManager.Get(tag)
+	if inbound == nil {
+		return 0, 0, fmt.Errorf("not found inbound with tag(%s)", tag)
+	}
 	if err := proxyManager.TransferInbound(tag, uint32(newPort)); err != nil {
 		return int64(inbound.Config.PortRange), newPort, err
 	}
