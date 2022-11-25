@@ -27,11 +27,13 @@ func init() {
 }
 
 func startServer(cmd *cobra.Command, args []string) {
+	log.Printf("Start v2raymg which manage %s", manager.FileName)
 	// 读取配置文件
 	err := configManager.Init(serverConfig)
 	if err != nil {
 		log.Fatal(err.Error())
 	}
+	log.Printf("read config from: %s \n", serverConfig)
 	// center node
 	serverType := configManager.GetString("server.rpc.type")
 	if strings.ToLower(serverType) == "center" {

@@ -316,7 +316,7 @@ func (proxyManager *ProxyManager) TransferInbound(tag string, newPort uint32) er
 	}
 	inbound := proxyManager.GetInbound(tag)
 	if inbound == nil {
-		return fmt.Errorf("Not found dnbound with tag(%s) already exist", tag)
+		return fmt.Errorf("Not found inbound with tag(%s)", tag)
 	}
 	err := proxyManager.DeleteInbound(tag)
 	if err != nil {
@@ -333,9 +333,13 @@ func (proxyManager *ProxyManager) TransferInbound(tag string, newPort uint32) er
 	inbound.Config.PortRange = newPort
 	err = proxyManager.AddInbound(inbound)
 	if err != nil {
+		// 可能出现listen失败但是依旧存在该tag的inbound的情况
+		proxyManager.DeleteInbound(tag)
 		inbound.Config.PortRange = oldProt
 		// 回滚
-		proxyManager.AddInbound(inbound)
+		if lErr := proxyManager.AddInbound(inbound); lErr != nil {
+			err = fmt.Errorf("%v > rollback err %v", err, lErr)
+		}
 		return err
 	}
 	return nil
@@ -557,13 +561,15 @@ func (proxyManager *ProxyManager) AdaptiveOneInbound(tag string) (int64, int64, 
 	if inbound == nil {
 		return 0, 0, fmt.Errorf("not found inbound with tag(%s)", tag)
 	}
+
+	oldPort := int64(inbound.Config.PortRange)
 	if err := proxyManager.TransferInbound(tag, uint32(newPort)); err != nil {
-		return int64(inbound.Config.PortRange), newPort, err
+		return oldPort, newPort, err
 	}
 	// 将已经分配的端口从候选池中去除, 同时回收刚刚使用过的端口
 	proxyManager.adaptive.DeletePort(newPort)
 	proxyManager.adaptive.AddPort(inbound.Config.PortRange)
-	return int64(inbound.Config.PortRange), newPort, nil
+	return oldPort, newPort, nil
 }
 
 // 自动更新端口的线程
@@ -571,7 +577,7 @@ func (proxyManager *ProxyManager) CycleAdaptive() {
 	cycleFunc := func() {
 		for tag := range proxyManager.adaptive.Tags {
 			oldPort, newPort, err := proxyManager.AdaptiveOneInbound(tag)
-			log.Printf("INFO|Func=CycleAdaptive|OldPort=%d|NewPort=%d|Err=%v\n", oldPort, newPort, err)
+			log.Printf("INFO|Func=CycleAdaptive|Tag=%s|OldPort=%d|NewPort=%d|Err=%v\n", tag, oldPort, newPort, err)
 		}
 	}
 	if _, err := proxyManager.adaptive.Cron.AddFunc(proxyManager.adaptive.CronRule, cycleFunc); err != nil {
