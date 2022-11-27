@@ -240,7 +240,7 @@ func (um *UserManager) Update(user *proto.User) error {
 	return err
 }
 
-// 重制用户proxy的uuid
+// 重置用户proxy的uuid
 func (um *UserManager) Reset(user *proto.User) error {
 	checkUserTag(user)
 	_, _, err := proxyUserOp(user, "reset")

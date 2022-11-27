@@ -69,7 +69,7 @@ func startServer(cmd *cobra.Command, args []string) {
 	endNodeServer := rpc.GetEndNodeServer()
 	endNodeServer.Init(globalUserManager, globalClusterManager)
 	go endNodeServer.Start()
-	httpServer := &http.HttpServer{}
+	httpServer := http.GlobalHttpServer
 	httpServer.Init(globalUserManager, globalClusterManager)
 	httpServer.Start()
 }

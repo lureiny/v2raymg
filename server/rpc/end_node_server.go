@@ -373,7 +373,7 @@ func (s *EndNodeServer) ResetUser(ctx context.Context, resetUserReq *proto.UserO
 				err.Error(),
 				user.Name,
 			)
-			resetUserRsp.Msg += fmt.Sprintf("user: %s delete failed, %s\n", user.Name, err.Error())
+			resetUserRsp.Msg += fmt.Sprintf("user: %s reset failed, %s\n", user.Name, err.Error())
 		}
 	}
 	if len(resetUserRsp.Msg) > 0 {
