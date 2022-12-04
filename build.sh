@@ -1,1 +1,0 @@
-CGO_ENABLED=0 go build -a -ldflags '-extldflags "-static"' -gcflags "-N -l" -o bin/v2raymg main.go 
