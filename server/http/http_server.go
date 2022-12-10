@@ -2,18 +2,30 @@ package http
 
 import (
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lureiny/v2raymg/client"
 	"github.com/lureiny/v2raymg/common"
 	"github.com/lureiny/v2raymg/server"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var configManager = common.GetGlobalConfigManager()
 var localNode = common.GlobalLocalNode
 
 var GlobalHttpServer = &HttpServer{}
+
+var trafficStats = prometheus.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Name: "v2raymg_traffic",
+		Help: "v2ray/xray traffic ",
+	},
+	[]string{"node", "name", "type", "direction"},
+)
 
 type HttpServer struct {
 	RestfulServer *gin.Engine
@@ -38,6 +50,68 @@ func (s *HttpServer) Init(um *common.UserManager, cm *common.EndNodeClusterManag
 	s.Port = configManager.GetInt("server.http.port")
 	s.token = configManager.GetString("server.http.token")
 	s.Name = configManager.GetString("server.name")
+
+	if configManager.GetBool("server.http.support_prometheus") {
+		registerPrometheus(s)
+	}
+}
+
+func PrometheusHandler(handler http.Handler) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		handler.ServeHTTP(c.Writer, c.Request)
+	}
+}
+
+func metricHandler(c *gin.Context) {
+	nodes := []*common.Node{&common.Node{
+		InToken:  localNode.Token,
+		OutToken: localNode.Token,
+		Node: &proto.Node{
+			Name: GlobalHttpServer.Name,
+			Host: "127.0.0.1",
+			Port: int32(configManager.GetInt("server.rpc.port")),
+		},
+		ReportHeartBeatTime: time.Now().Unix(),
+	}}
+	rpcClient := client.NewEndNodeClient(&nodes, localNode)
+	statsMap, err := rpcClient.GetBandWidthStats("", true)
+	if err != nil {
+		logger.Info(
+			"Err=%s",
+			err.Error(),
+		)
+		c.String(200, err.Error())
+		c.Abort()
+	}
+	updateTrafficStats(statsMap)
+	c.Next()
+}
+
+func updateTrafficStats(statsMap *map[string][]*proto.Stats) {
+	for _, s := range (*statsMap)[GlobalHttpServer.Name] {
+		trafficStats.WithLabelValues(
+			GlobalHttpServer.Name,
+			s.Name,
+			s.Type,
+			"downlink",
+		).Set(float64(s.Downlink))
+
+		trafficStats.WithLabelValues(
+			GlobalHttpServer.Name,
+			s.Name,
+			s.Type,
+			"uplink",
+		).Set(float64(s.Uplink))
+	}
+}
+
+func registerPrometheus(s *HttpServer) {
+	prometheus.Register(trafficStats)
+	if authHandler, ok := s.handlersMap["/auth"]; ok {
+		s.RestfulServer.GET("/metrics", authHandler.handlerFunc, metricHandler, PrometheusHandler(promhttp.Handler()))
+	} else {
+		s.RestfulServer.GET("/metrics", metricHandler, PrometheusHandler(promhttp.Handler()))
+	}
 }
 
 func (s *HttpServer) SetName(name string) {
