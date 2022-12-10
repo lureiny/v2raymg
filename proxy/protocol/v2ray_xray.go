@@ -43,6 +43,7 @@ type InboundDetourConfig struct {
 type V2rayInboundUser struct {
 	Email   string `json:"email"`
 	ID      string `json:"id"`
+	Flow    string `json:"flow,omitempty"`
 	Level   uint32 `json:"level,omitempty"`
 	AlterID uint32 `json:"alterId,omitempty"`
 }
