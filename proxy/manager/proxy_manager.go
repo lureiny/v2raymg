@@ -250,7 +250,7 @@ func (proxyManager *ProxyManager) addUserToFile(user *User) error {
 	}
 	if err == nil {
 		proxyManager.needFlush = true
-		log.Printf("Add user to config file: [Email] %s, [UUID/Password] %s to [Bound] %s", user.Email, user.UUID, user.Tag)
+		log.Printf("Add user to config file, user: %v", user)
 	}
 	return err
 }

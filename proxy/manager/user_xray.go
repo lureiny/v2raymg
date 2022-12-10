@@ -91,14 +91,17 @@ func SetUserAccount(user *User) error {
 			SecuritySettings: &protocol.SecurityConfig{Type: protocol.SecurityType_AUTO},
 		}
 	case VlessProtocolName:
+		user.Flow = "xtls-rprx-direct"
 		user.Account = &vless.Account{
 			Id:   user.UUID,
-			Flow: "xtls-rprx-direct",
+			Flow: user.Flow,
 		}
+
 	case TrojanProtocolName:
+		user.Flow = "xtls-rprx-direct"
 		user.Account = &trojan.Account{
 			Password: user.UUID,
-			Flow:     "xtls-rprx-direct",
+			Flow:     user.Flow,
 		}
 	default:
 		fmt.Errorf(fmt.Sprintf("Unsupport protocol %s", user.Protocol))
@@ -148,7 +151,7 @@ func addVlessUser(in *protocolP.InboundDetourConfig, user *User) error {
 		return err
 	}
 
-	c := protocolP.V2rayInboundUser{Email: user.Email, ID: user.UUID}
+	c := protocolP.V2rayInboundUser{Email: user.Email, ID: user.UUID, Flow: user.Flow}
 	cb, err := json.Marshal(c)
 	if err != nil {
 		return err
@@ -201,7 +204,7 @@ func addUserToRuntime(runtimeConfig *RuntimeConfig, user *User) error {
 		return err
 	}
 
-	log.Printf("Add user to runtime: [Email] %s, [UUID] %s to [Bound] %s", user.Email, user.UUID, user.Tag)
+	log.Printf("Add user to runtime, user: %v", user)
 	return nil
 }
 

@@ -204,7 +204,8 @@ make xray  #  构建xray版本
   "server": {                                                     
     "http": {                                                     
       "port": 23155,                                              // http服务监听端口
-      "token": "iiiii"                                            // 访问http服务时的token, 每个节点的token可以不同
+      "token": "iiiii",                                            // 访问http服务时的token, 每个节点的token可以不同
+	  "support_prometheus": true
     },
     "listen": "0.0.0.0",                                          // http与rpc服务监听地址
     "name": "end_node1",                                          // 本地节点名称
