@@ -8,12 +8,6 @@ import (
 
 type HelpHandler struct{ HttpHandlerImp }
 
-func (handler *HelpHandler) parseParam(c *gin.Context) map[string]string {
-	parasMap := map[string]string{}
-
-	return parasMap
-}
-
 func (handler *HelpHandler) handlerFunc(c *gin.Context) {
 	relativePath := c.Param("relativePath")
 	if h, ok := handler.getHttpServer().handlersMap[relativePath]; !ok {

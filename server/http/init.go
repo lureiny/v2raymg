@@ -40,4 +40,7 @@ func init() {
 
 	userHandler := &UserHandler{}
 	GlobalHttpServer.RegisterHandler("/user", userHandler, true)
+
+	gatewayHandler := &GatewayHandler{}
+	GlobalHttpServer.RegisterHandler("/gateway", gatewayHandler, true)
 }

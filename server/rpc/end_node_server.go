@@ -54,7 +54,7 @@ func (s *EndNodeServer) initRpcServerKey() {
 var methodPrefixLen = len("/proto.EndNodeAccess/")
 
 // gateway模式下放行的接口列表
-var onlyGatewayMethods = "HeartBeat|RegisterNode"
+var onlyGatewayMethods = "HeartBeat|RegisterNode|SetGatewayModel"
 
 func isOnlyGatewayMethod(fullMethod string) bool {
 	return strings.Contains(onlyGatewayMethods, fullMethod[methodPrefixLen:])
@@ -81,6 +81,7 @@ var methodRspMap = map[string]interface{}{
 	"AddAdaptiveConfig":    &proto.AdaptiveRsp{},
 	"DeleteAdaptiveConfig": &proto.AdaptiveRsp{},
 	"Adaptive":             &proto.AdaptiveRsp{},
+	"SetGatewayModel":      &proto.SetGatewayModelRsp{},
 }
 
 func newEmptyRsp(fullMethod string) (interface{}, error) {
@@ -821,6 +822,14 @@ func (s *EndNodeServer) Adaptive(ctx context.Context, adaptiveReq *proto.Adaptiv
 		adaptiveRsp.Msg = strings.Join(errs, "\n")
 	}
 	return adaptiveRsp, nil
+}
+
+func (s *EndNodeServer) SetGatewayModel(ctx context.Context, setGatewayModelReq *proto.SetGatewayModelReq) (*proto.SetGatewayModelRsp, error) {
+	setGatewayModelRsp := &proto.SetGatewayModelRsp{
+		Code: 0,
+	}
+	configManager.Set(common.ServerRpcOnlyGateway, setGatewayModelReq.GetEnableGatewayModel())
+	return setGatewayModelRsp, nil
 }
 
 func (s *EndNodeServer) registerToEndNode(node *common.Node, wg *sync.WaitGroup, ch chan struct{}) {

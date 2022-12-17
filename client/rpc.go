@@ -1010,3 +1010,78 @@ func (c *EndNodeClient) Adaptive(tags []string) error {
 	}
 	return err
 }
+
+func reqSetGatewayModel(node *common.Node, localNode *proto.Node, enableGatewayModel bool) error {
+	if !node.RegisteredRemote() {
+		return nil
+	}
+	conn, err := node.GetGrpcClientConn()
+	if err != nil {
+		return err
+	}
+
+	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
+	req := &proto.SetGatewayModelReq{
+		NodeAuthInfo: &proto.NodeAuthInfo{
+			Token: node.OutToken,
+			Node:  localNode,
+		},
+		EnableGatewayModel: enableGatewayModel,
+	}
+
+	rsp, err := endNodeAccessClient.SetGatewayModel(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+
+	if err != nil {
+		return err
+	}
+	if rsp.GetCode() != 0 {
+		return fmt.Errorf(rsp.GetMsg())
+	}
+	return nil
+}
+
+func (c *EndNodeClient) SetGatewayModel(enableGatewayModel bool) error {
+	wg := &sync.WaitGroup{}
+	lock := sync.Mutex{}
+	succList := []string{}
+	failedList := []string{}
+	for _, node := range *c.nodes {
+		ch <- struct{}{}
+		wg.Add(1)
+		go func(n *common.Node) {
+			defer func() {
+				<-ch
+				wg.Done()
+			}()
+			err := reqSetGatewayModel(n, &c.localNode.Node, enableGatewayModel)
+			if err != nil {
+				logger.Error(
+					"Err=%s|Dst=%s:%d|DstName=%s",
+					err.Error(),
+					n.Host,
+					n.Port,
+					n.Name,
+				)
+				lock.Lock()
+				failedList = append(failedList, n.Name+" > "+err.Error())
+				lock.Unlock()
+				return
+			}
+			lock.Lock()
+			succList = append(succList, n.Name)
+			lock.Unlock()
+
+		}(node)
+	}
+	wg.Wait()
+	var err error = nil
+	if len(failedList) != 0 {
+		errMsg := fmt.Sprintf(
+			"succ list: [%s], failed list: [%s]",
+			strings.Join(succList, "|"),
+			strings.Join(failedList, "|"),
+		)
+		err = fmt.Errorf(errMsg)
+	}
+	return err
+}
