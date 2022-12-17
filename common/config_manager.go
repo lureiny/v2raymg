@@ -9,6 +9,27 @@ import (
 
 var globalConfigManager *ConfigManager = nil
 
+const (
+	RpcServerType        = "server.rpc.type"
+	ProxyConfigFile      = "proxy.config_file"
+	ProxyExec            = "proxy.exec"
+	ProxyDefaultTags     = "proxy.default_tags"
+	Users                = "users"
+	ProxyHost            = "proxy.host"
+	ProxyPort            = "proxy.port"
+	ServerListen         = "server.listen"
+	ServerHttpPort       = "server.http.port"
+	ServerHttpToken      = "server.http.token"
+	ServerName           = "server.name"
+	SupportPrometheus    = "server.http.support_prometheus"
+	ServerRpcPort        = "server.rpc.port"
+	ServerRpcOnlyGateway = "server.rpc.only_gateway"
+	ClusterName          = "cluster.name"
+	ClusterToken         = "cluster.token"
+	CenterNodeHost       = "cluster.center_node.host"
+	CenterNodePort       = "cluster.center_node.port"
+)
+
 // 管理进程本身配置
 type ConfigManager struct {
 	v         *viper.Viper

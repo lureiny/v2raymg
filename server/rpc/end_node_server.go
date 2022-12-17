@@ -116,7 +116,7 @@ func authRemoteNode(req interface{}, fullMethod string) (bool, interface{}, *pro
 
 func UnaryServerInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, hander grpc.UnaryHandler) (interface{}, error) {
 	// only gateway表示当前节点仅作为转发节点, 本身对外不提供代理服务
-	if configManager.GetBool("server.rpc.only_gateway") &&
+	if configManager.GetBool(common.ServerRpcOnlyGateway) &&
 		!isOnlyGatewayMethod(info.FullMethod) {
 		return newEmptyRsp(info.FullMethod)
 	}
@@ -141,19 +141,19 @@ func UnaryServerInterceptor(ctx context.Context, req interface{}, info *grpc.Una
 func (s *EndNodeServer) Init(um *common.UserManager, cm *common.EndNodeClusterManager) {
 	s.clusterManager = cm
 	s.userManager = um
-	s.Host = configManager.GetString("server.listen")
-	s.Port = configManager.GetInt("server.rpc.port")
+	s.Host = configManager.GetString(common.ServerListen)
+	s.Port = configManager.GetInt(common.ServerRpcPort)
 	s.Type = "End"
-	s.clusterManager.Name = configManager.GetString("cluster.name")
-	serverName := configManager.GetString("server.name")
-	accessHost := configManager.GetString("proxy.host")
+	s.clusterManager.Name = configManager.GetString(common.ClusterName)
+	serverName := configManager.GetString(common.ServerName)
+	accessHost := configManager.GetString(common.ProxyHost)
 	if serverName == "" {
 		serverName = fmt.Sprintf("%s:%d", accessHost, s.Port)
 	}
 	s.Name = serverName
 	localNode.Token = uuid.New().String()
 	localNode.Node = proto.Node{
-		Host:        configManager.GetString("proxy.host"),
+		Host:        configManager.GetString(common.ProxyHost),
 		Port:        int32(s.Port),
 		ClusterName: s.clusterManager.Name,
 		Name:        s.Name,
@@ -163,7 +163,7 @@ func (s *EndNodeServer) Init(um *common.UserManager, cm *common.EndNodeClusterMa
 	logger.SetNodeType("End")
 	logger.SetServerName(serverName)
 
-	s.clusterManager.Token = configManager.GetString("cluster.token")
+	s.clusterManager.Token = configManager.GetString(common.ClusterToken)
 	err := s.clusterManager.LoadStaticNode()
 	s.initRpcServerKey()
 	if err != nil {
@@ -967,12 +967,12 @@ func (s *EndNodeServer) registerOrHeartBeatToEndNode() {
 
 func (s *EndNodeServer) heartbeatToCenterNode() {
 	// 发送心跳到center node
-	centerNodeHost := configManager.GetString("cluster.center_node.host")
-	centerNodePort := configManager.GetInt("cluster.center_node.port")
+	centerNodeHost := configManager.GetString(common.CenterNodeHost)
+	centerNodePort := configManager.GetInt(common.CenterNodePort)
 	if centerNodeHost == "" || centerNodePort <= 1000 {
 		return
 	}
-	addr := fmt.Sprintf("%s:%d", configManager.GetString("cluster.center_node.host"), configManager.GetInt("cluster.center_node.port"))
+	addr := fmt.Sprintf("%s:%d", centerNodeHost, centerNodePort)
 	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		errMsg := fmt.Sprintf("did not connect > %v", err)

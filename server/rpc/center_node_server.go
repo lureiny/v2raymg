@@ -102,11 +102,11 @@ func (s *CenterNodeServer) filter() {
 }
 
 func (s *CenterNodeServer) Init() {
-	s.Host = configManager.GetString("server.listen")
-	s.Port = configManager.GetInt("server.rpc.port")
+	s.Host = configManager.GetString(common.ServerListen)
+	s.Port = configManager.GetInt(common.ServerRpcPort)
 	s.Type = "Center"
-	serverName := configManager.GetString("server.name")
-	accessHost := configManager.GetString("proxy.host")
+	serverName := configManager.GetString(common.ServerName)
+	accessHost := configManager.GetString(common.ProxyHost)
 	if serverName == "" {
 		serverName = fmt.Sprintf("%s:%d", accessHost, s.Port)
 	}

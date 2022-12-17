@@ -46,12 +46,12 @@ func (s *HttpServer) Init(um *common.UserManager, cm *common.EndNodeClusterManag
 	s.userManager = um
 	s.clusterManager = cm
 
-	s.Host = configManager.GetString("server.listen")
-	s.Port = configManager.GetInt("server.http.port")
-	s.token = configManager.GetString("server.http.token")
-	s.Name = configManager.GetString("server.name")
+	s.Host = configManager.GetString(common.ServerListen)
+	s.Port = configManager.GetInt(common.ServerHttpPort)
+	s.token = configManager.GetString(common.ServerHttpToken)
+	s.Name = configManager.GetString(common.ServerName)
 
-	if configManager.GetBool("server.http.support_prometheus") {
+	if configManager.GetBool(common.SupportPrometheus) {
 		registerPrometheus(s)
 	}
 }
@@ -69,7 +69,7 @@ func metricHandler(c *gin.Context) {
 		Node: &proto.Node{
 			Name: GlobalHttpServer.Name,
 			Host: "127.0.0.1",
-			Port: int32(configManager.GetInt("server.rpc.port")),
+			Port: int32(configManager.GetInt(common.ServerRpcPort)),
 		},
 		ReportHeartBeatTime: time.Now().Unix(),
 	}}
@@ -140,7 +140,7 @@ func (s *HttpServer) getTargetNodes(target string) *[]*common.Node {
 			Node: &proto.Node{
 				Name: s.Name,
 				Host: "127.0.0.1",
-				Port: int32(configManager.GetInt("server.rpc.port")),
+				Port: int32(configManager.GetInt(common.ServerRpcPort)),
 			},
 			ReportHeartBeatTime: time.Now().Unix(),
 		})
@@ -154,7 +154,7 @@ func (s *HttpServer) getTargetNodes(target string) *[]*common.Node {
 				Node: &proto.Node{
 					Name: s.Name,
 					Host: "127.0.0.1",
-					Port: int32(configManager.GetInt("server.rpc.port")),
+					Port: int32(configManager.GetInt(common.ServerRpcPort)),
 				},
 				ReportHeartBeatTime: time.Now().Unix(),
 			},
