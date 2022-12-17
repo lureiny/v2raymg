@@ -63,7 +63,7 @@ func PrometheusHandler(handler http.Handler) gin.HandlerFunc {
 }
 
 func metricHandler(c *gin.Context) {
-	nodes := []*common.Node{&common.Node{
+	nodes := []*common.Node{{
 		InToken:  localNode.Token,
 		OutToken: localNode.Token,
 		Node: &proto.Node{
@@ -131,39 +131,15 @@ func (s *HttpServer) Start() {
 func (s *HttpServer) getTargetNodes(target string) *[]*common.Node {
 	if target == "all" {
 		filter := func(n *common.Node) bool {
-			return n.IsValid()
+			return n.Name == s.Name || n.IsValid()
 		}
-		nodes := s.clusterManager.RemoteNode.GetNodesWithFilter(filter)
-		*nodes = append(*nodes, &common.Node{
-			InToken:  localNode.Token,
-			OutToken: localNode.Token,
-			Node: &proto.Node{
-				Name: s.Name,
-				Host: "127.0.0.1",
-				Port: int32(configManager.GetInt(common.ServerRpcPort)),
-			},
-			ReportHeartBeatTime: time.Now().Unix(),
-		})
+		nodes := s.clusterManager.NodeManager.GetNodesWithFilter(filter)
 		return nodes
-	} else if target == s.Name {
-		// 本地节点
-		return &[]*common.Node{
-			{
-				InToken:  localNode.Token,
-				OutToken: localNode.Token,
-				Node: &proto.Node{
-					Name: s.Name,
-					Host: "127.0.0.1",
-					Port: int32(configManager.GetInt(common.ServerRpcPort)),
-				},
-				ReportHeartBeatTime: time.Now().Unix(),
-			},
-		}
 	} else {
 		filter := func(n *common.Node) bool {
 			return n.IsValid() && n.Name == target
 		}
-		return s.clusterManager.RemoteNode.GetNodesWithFilter(filter)
+		return s.clusterManager.NodeManager.GetNodesWithFilter(filter)
 	}
 }
 

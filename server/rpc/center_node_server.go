@@ -72,7 +72,11 @@ func (s *CenterNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.He
 			cluster.Add(node)
 		}
 		// 只返回有效节点
-		heartBeatRsp.NodesMap = cluster.GetNodes(true)
+		heartBeatRsp.NodesMap = cluster.GetNodes(
+			func(node *common.Node) bool {
+				return node.IsValid()
+			},
+		)
 	} else {
 		// 集群不存在，创建新集群并添加节点
 		logger.Info("Msg=create new cluster: %s", clusterName)

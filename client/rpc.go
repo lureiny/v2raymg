@@ -12,15 +12,14 @@ import (
 	"github.com/lureiny/v2raymg/server/rpc"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 var logger = common.LoggerImp
 
 const MaxConcurrencyClientNum = 32
 
-var ops = map[string]string{
-	"AddUsers": "", "DeleteUsers": "", "UpdateUsers": "", "ResetUser": "",
+var ops = map[string]bool{
+	"AddUsers": true, "DeleteUsers": true, "UpdateUsers": true, "ResetUser": true,
 }
 
 // 控制全局订阅拉取并发数量
@@ -41,24 +40,6 @@ func NewEndNodeClient(nodes *[]*common.Node, localNode *common.LocalNode) *EndNo
 	return endNodeClient
 }
 
-func newGrpcClientConn(node *common.Node) (*grpc.ClientConn, error) {
-	addr := fmt.Sprintf("%s:%d", node.GetHost(), node.GetPort())
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		errMsg := fmt.Sprintf("did not connect > %v", err)
-		logger.Error(
-			"Err=%s|Dst=%s:%d|DstName=%s",
-			errMsg,
-			node.Host,
-			node.Port,
-			node.Name,
-		)
-		conn.Close()
-		return nil, err
-	}
-	return conn, err
-}
-
 func processReqResult(rsp *proto.UserOpRsp, err error) error {
 	if rsp.GetCode() != 0 {
 		return fmt.Errorf(rsp.GetMsg())
@@ -75,11 +56,10 @@ func reqUserOpToOneNode(node *common.Node, user *proto.User, localNode *proto.No
 		return fmt.Errorf("unsupport Optype=%s", opType)
 	}
 
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.UserOpReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -141,11 +121,11 @@ func reqGetUserSub(node *common.Node, user *proto.User, localNode *proto.Node) (
 	if !node.RegisteredRemote() {
 		return nil, nil
 	}
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.GetSubReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -208,11 +188,11 @@ func reqGetBandwidthStats(node *common.Node, localNode *proto.Node, pattern stri
 	if !node.RegisteredRemote() {
 		return []*proto.Stats{}, nil
 	}
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return []*proto.Stats{}, err
 	}
-	defer conn.Close()
+
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.GetBandwidthStatsReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -278,11 +258,11 @@ func reqAddInbound(node *common.Node, localNode *proto.Node, inboundRawString st
 	if !node.RegisteredRemote() {
 		return nil
 	}
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.InboundOpReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -338,11 +318,11 @@ func reqDeleteInbound(node *common.Node, localNode *proto.Node, tag string) erro
 	if !node.RegisteredRemote() {
 		return nil
 	}
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.InboundOpReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -398,11 +378,11 @@ func reqTransferInbound(node *common.Node, localNode *proto.Node, tag string, ne
 	if !node.RegisteredRemote() {
 		return nil
 	}
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.TransferInboundReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -462,11 +442,11 @@ func reqCopyInbound(node *common.Node, localNode *proto.Node, srcTag, newTag, ne
 	if !node.RegisteredRemote() {
 		return nil
 	}
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.CopyInboundReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -529,11 +509,11 @@ func reqCopyUser(node *common.Node, localNode *proto.Node, srcTag, newTag string
 	if !node.RegisteredRemote() {
 		return nil
 	}
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.CopyUserReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -590,11 +570,11 @@ func reqGetUsers(node *common.Node, localNode *proto.Node) ([]*proto.User, error
 	if !node.RegisteredRemote() {
 		return []*proto.User{}, nil
 	}
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.GetUsersReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -662,11 +642,11 @@ func reqGetInbound(node *common.Node, localNode *proto.Node, tag string) (string
 	if !node.RegisteredRemote() {
 		return "", nil
 	}
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return "", err
 	}
-	defer conn.Close()
+
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.GetInboundReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -731,11 +711,11 @@ func reqGetTag(node *common.Node, localNode *proto.Node) ([]string, error) {
 	if !node.RegisteredRemote() {
 		return nil, nil
 	}
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.GetTagReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -799,11 +779,11 @@ func reqUpdateProxy(node *common.Node, localNode *proto.Node, versionTag string)
 	if !node.RegisteredRemote() {
 		return nil
 	}
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.UpdateProxyReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -878,11 +858,11 @@ func reqAdaptiveOp(node *common.Node, localNode *proto.Node, tags, ports []strin
 	if !node.RegisteredRemote() {
 		return nil
 	}
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.AdaptiveOpReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -960,11 +940,11 @@ func reqAdaptive(node *common.Node, localNode *proto.Node, tags []string) error 
 	if !node.RegisteredRemote() {
 		return nil
 	}
-	conn, err := newGrpcClientConn(node)
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+
 	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 	req := &proto.AdaptiveReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{

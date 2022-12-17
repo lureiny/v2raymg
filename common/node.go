@@ -1,9 +1,13 @@
 package common
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/lureiny/v2raymg/server/rpc/proto"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type Node struct {
@@ -14,6 +18,8 @@ type Node struct {
 	ReportHeartBeatTime int64  // 上次上报到该节点的时间
 	CreateTime          int64
 	isLocal             bool // 是否为从本地文件中加载的node, 本地节点是为了不使用中心节点的场景而设计的
+
+	grpcClientConn *grpc.ClientConn
 }
 
 // node连续60s没有更新则认为无效
@@ -22,6 +28,15 @@ const nodeTimeOut int64 = 60
 // 比较两个node是否相同, 相同返回true
 func (n1 *Node) Compare(n2 *Node) bool {
 	return n1.Host == n2.Host && n1.Port == n2.Port && n1.ClusterName == n2.ClusterName && n1.Name == n2.Name
+}
+
+func (node *Node) GetGrpcClientConn() (*grpc.ClientConn, error) {
+	var err error = nil
+	if node.grpcClientConn == nil || node.grpcClientConn.GetState() != connectivity.Ready {
+		addr := fmt.Sprintf("%s:%d", node.GetHost(), node.GetPort())
+		node.grpcClientConn, err = grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
+	return node.grpcClientConn, err
 }
 
 func (n *Node) IsLocal() bool {

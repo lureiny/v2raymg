@@ -3,6 +3,7 @@ package rpc
 import (
 	context "context"
 	"fmt"
+	"math"
 	"net"
 	"reflect"
 	"strconv"
@@ -17,7 +18,6 @@ import (
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 
 	grpc "google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/encoding"
 )
 
@@ -32,6 +32,7 @@ type EndNodeServer struct {
 	proto.UnimplementedEndNodeAccessServer
 	clusterManager *common.EndNodeClusterManager
 	userManager    *common.UserManager
+	centerNode     *common.Node
 	server.ServerConfig
 }
 
@@ -158,6 +159,15 @@ func (s *EndNodeServer) Init(um *common.UserManager, cm *common.EndNodeClusterMa
 		ClusterName: s.clusterManager.Name,
 		Name:        s.Name,
 	}
+	// 添加本地节点
+	cm.Add(&common.Node{
+		InToken:             localNode.Token,
+		OutToken:            localNode.Token,
+		Node:                &localNode.Node,
+		ReportHeartBeatTime: math.MaxInt64,
+		GetHeartBeatTime:    math.MaxInt64,
+		CreateTime:          time.Now().Unix(),
+	})
 	logger.Init()
 	logger.SetLogLevel(0)
 	logger.SetNodeType("End")
@@ -168,6 +178,14 @@ func (s *EndNodeServer) Init(um *common.UserManager, cm *common.EndNodeClusterMa
 	s.initRpcServerKey()
 	if err != nil {
 		logger.Error("Err=Load Static Node > %v", err)
+	}
+
+	// init center node
+	s.centerNode = &common.Node{
+		Node: &proto.Node{
+			Host: configManager.GetString(common.CenterNodeHost),
+			Port: int32(configManager.GetInt(common.CenterNodePort)),
+		},
 	}
 
 	err = proxyManager.StartProxyServer()
@@ -220,7 +238,7 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 	// 重新带有正确token验证后应该从wrong node list中清除
 	s.clusterManager.DeleteFromWrongTokenNodeList(nodeName)
 
-	if n, ok := s.clusterManager.RemoteNode.HaveNode(nodeName); ok {
+	if n, ok := s.clusterManager.NodeManager.HaveNode(nodeName); ok {
 		// 已经感知到的节点
 		if n.RegisteredLocal() {
 			errMsg := "repeated register"
@@ -276,7 +294,11 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 
 func (s *EndNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.HeartBeatReq) (*proto.HeartBeatRsp, error) {
 	heartBeatRsp := &proto.HeartBeatRsp{}
-	heartBeatRsp.NodesMap = s.clusterManager.GetNodes(true)
+	heartBeatRsp.NodesMap = s.clusterManager.GetNodes(
+		func(node *common.Node) bool {
+			return node.Name != s.Name && node.IsValid()
+		},
+	)
 	return heartBeatRsp, nil
 }
 
@@ -806,8 +828,7 @@ func (s *EndNodeServer) registerToEndNode(node *common.Node, wg *sync.WaitGroup,
 		wg.Done()
 		<-ch
 	}()
-	addr := fmt.Sprintf("%s:%d", node.GetHost(), node.GetPort())
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		errMsg := fmt.Sprintf("did not connect > %v", err)
 		logger.Error(
@@ -819,7 +840,7 @@ func (s *EndNodeServer) registerToEndNode(node *common.Node, wg *sync.WaitGroup,
 		)
 		return
 	}
-	defer conn.Close()
+
 	c := proto.NewEndNodeAccessClient(conn)
 	registerNodeReq := &proto.RegisterNodeReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -862,8 +883,7 @@ func (s *EndNodeServer) heartbeatToEndNode(node *common.Node, wg *sync.WaitGroup
 		wg.Done()
 		<-ch
 	}()
-	addr := fmt.Sprintf("%s:%d", node.GetHost(), node.GetPort())
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := node.GetGrpcClientConn()
 	if err != nil {
 		errMsg := fmt.Sprintf("did not connect > %v", err)
 		logger.Error(
@@ -875,7 +895,7 @@ func (s *EndNodeServer) heartbeatToEndNode(node *common.Node, wg *sync.WaitGroup
 		)
 		return
 	}
-	defer conn.Close()
+
 	c := proto.NewEndNodeAccessClient(conn)
 	heartBeatReq := &proto.HeartBeatReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -902,31 +922,7 @@ func (s *EndNodeServer) heartbeatToEndNode(node *common.Node, wg *sync.WaitGroup
 		)
 	} else {
 		node.ReportHeartBeatTime = time.Now().Unix()
-		// 添加本地不存在的node
-		for key, remoteNode := range rsp.NodesMap {
-			remoteNodeName := remoteNode.GetName()
-			if node := s.clusterManager.Get(key); node == nil && remoteNode.Name != localNode.Name {
-				if wrongNode := s.clusterManager.GetNodeFromWrongNodeList(remoteNodeName); wrongNode != nil {
-					continue
-				}
-				logger.Info(
-					"Msg=Add Node From EndNode|Node=%s:%d|NodeName=%s",
-					remoteNode.GetHost(),
-					remoteNode.GetPort(),
-					remoteNode.GetName(),
-				)
-				s.clusterManager.Add(
-					&common.Node{
-						Node:                remoteNode,
-						InToken:             "",
-						OutToken:            "",
-						GetHeartBeatTime:    0,
-						ReportHeartBeatTime: 0,
-						CreateTime:          time.Now().Unix(),
-					},
-				)
-			}
-		}
+		addRemoteNode(rsp, s, "End")
 	}
 }
 
@@ -935,9 +931,9 @@ func (s *EndNodeServer) registerOrHeartBeatToEndNode() {
 	// 并发数 10
 	ch := make(chan struct{}, 10)
 	wg := sync.WaitGroup{}
-	for _, node := range s.clusterManager.RemoteNode.GetNodes() {
+	for _, node := range s.clusterManager.NodeManager.GetNodes() {
 		//网络波动导致节点间断连的场景下, 若本地节点不继续探测则会导致网络恢复后无法重现建立链接
-		// 因此对于本地节点, 无论成功与否都更新上报时间, 确保节点使用有效, 从而会始终尝试探测与心跳上报
+		// 因此对于本地节点, 无论成功与否都更新上报时间, 确保节点始终有效, 从而会始终尝试探测与心跳上报
 		if node.IsLocal() {
 			node.ReportHeartBeatTime = time.Now().Unix()
 		}
@@ -967,23 +963,19 @@ func (s *EndNodeServer) registerOrHeartBeatToEndNode() {
 
 func (s *EndNodeServer) heartbeatToCenterNode() {
 	// 发送心跳到center node
-	centerNodeHost := configManager.GetString(common.CenterNodeHost)
-	centerNodePort := configManager.GetInt(common.CenterNodePort)
-	if centerNodeHost == "" || centerNodePort <= 1000 {
+	if s.centerNode.Host == "" || s.centerNode.Port <= 1000 {
 		return
 	}
-	addr := fmt.Sprintf("%s:%d", centerNodeHost, centerNodePort)
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := s.centerNode.GetGrpcClientConn()
 	if err != nil {
 		errMsg := fmt.Sprintf("did not connect > %v", err)
 		logger.Error(
 			"Err=%s|Center=%s",
 			errMsg,
-			addr,
+			s.centerNode.Host,
 		)
 		return
 	}
-	defer conn.Close()
 	c := proto.NewCenterNodeAccessClient(conn)
 	heartBeatReq := &proto.HeartBeatReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
@@ -997,33 +989,38 @@ func (s *EndNodeServer) heartbeatToCenterNode() {
 		logger.Error(
 			"Err=%s|Center=%s:%d",
 			errMsg,
-			addr,
+			s.centerNode.Host,
 		)
 	} else {
-		// 添加本地不存在的node
-		for key, remoteNode := range rsp.NodesMap {
-			remoteNodeName := remoteNode.GetName()
-			if node := s.clusterManager.Get(key); node == nil && remoteNode.Name != localNode.Name {
-				if wrongNode := s.clusterManager.GetNodeFromWrongNodeList(remoteNodeName); wrongNode != nil {
-					continue
-				}
-				logger.Info(
-					"Msg=Add Node From Center Node|Node=%s:%d|NodeName=%s",
-					remoteNode.GetHost(),
-					remoteNode.GetPort(),
-					remoteNode.GetName(),
-				)
-				s.clusterManager.Add(
-					&common.Node{
-						Node:                remoteNode,
-						InToken:             "",
-						OutToken:            "",
-						GetHeartBeatTime:    0,
-						ReportHeartBeatTime: 0,
-						CreateTime:          time.Now().Unix(),
-					},
-				)
+		addRemoteNode(rsp, s, "Center")
+	}
+}
+
+func addRemoteNode(rsp *proto.HeartBeatRsp, s *EndNodeServer, remoteServerType string) {
+	// 添加本地不存在的node
+	for key, remoteNode := range rsp.NodesMap {
+		remoteNodeName := remoteNode.GetName()
+		if node := s.clusterManager.Get(key); node == nil && remoteNode.Name != localNode.Name {
+			if wrongNode := s.clusterManager.GetNodeFromWrongNodeList(remoteNodeName); wrongNode != nil {
+				continue
 			}
+			logger.Info(
+				"Msg=Add Node From %s Node|Node=%s:%d|NodeName=%s",
+				remoteServerType,
+				remoteNode.GetHost(),
+				remoteNode.GetPort(),
+				remoteNode.GetName(),
+			)
+			s.clusterManager.Add(
+				&common.Node{
+					Node:                remoteNode,
+					InToken:             "",
+					OutToken:            "",
+					GetHeartBeatTime:    0,
+					ReportHeartBeatTime: 0,
+					CreateTime:          time.Now().Unix(),
+				},
+			)
 		}
 	}
 }
@@ -1047,7 +1044,7 @@ func (s *EndNodeServer) filter() {
 		<-timeTicker.C
 		logger.Info("Msg=fliter invalid node and expire user")
 		// 过滤掉无效节点, 保留本地节点
-		s.clusterManager.RemoteNode.Filter(func(n *common.Node) bool {
+		s.clusterManager.NodeManager.Filter(func(n *common.Node) bool {
 			return n.IsValid() || n.IsLocal()
 		})
 		// 过滤无效用户
