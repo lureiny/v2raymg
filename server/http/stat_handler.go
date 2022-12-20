@@ -43,6 +43,13 @@ func (handler *StatHandler) handlerFunc(c *gin.Context) {
 	c.JSON(200, jsonDatas)
 }
 
+func (handler *StatHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		getAuthHandlerFunc(handler.httpServer),
+		handler.handlerFunc,
+	}
+}
+
 func (handler *StatHandler) help() string {
 	usage := `/stat
 	获取指定节点的统计信息, 需要proxy配置中开启统计

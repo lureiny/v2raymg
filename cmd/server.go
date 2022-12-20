@@ -71,5 +71,8 @@ func startServer(cmd *cobra.Command, args []string) {
 	go endNodeServer.Start()
 	httpServer := http.GlobalHttpServer
 	httpServer.Init(globalUserManager, globalClusterManager)
+	if configManager.GetBool(common.SupportPrometheus) {
+		http.RegisterPrometheus()
+	}
 	httpServer.Start()
 }

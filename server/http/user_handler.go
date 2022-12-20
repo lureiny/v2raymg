@@ -98,6 +98,13 @@ func (handler *UserHandler) handlerFunc(c *gin.Context) {
 	c.String(200, "Succ")
 }
 
+func (handler *UserHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		getAuthHandlerFunc(handler.httpServer),
+		handler.handlerFunc,
+	}
+}
+
 func (handler *UserHandler) help() string {
 	usage := `/user
 	user操作接口, 支持添加, 删除, 更新user信息, 重置用户proxy的密钥信息, 获取用户列表

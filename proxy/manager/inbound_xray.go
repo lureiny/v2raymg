@@ -12,7 +12,6 @@ import (
 	"github.com/xtls/xray-core/app/proxyman/command"
 	xrayCore "github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf"
-	"google.golang.org/grpc"
 )
 
 func AddInbound(con command.HandlerServiceClient, inboundConfigByte []byte) error {
@@ -29,7 +28,7 @@ func AddInbound(con command.HandlerServiceClient, inboundConfigByte []byte) erro
 
 func AddInboundToRuntime(runtimeConfig *RuntimeConfig, inboundConfigByte []byte) error {
 	// 创建grpc client
-	cmdConn, err := grpc.Dial(fmt.Sprintf("%s:%d", runtimeConfig.Host, runtimeConfig.Port), grpc.WithInsecure())
+	cmdConn, err := GetProxyClient(runtimeConfig.Host, runtimeConfig.Port).GetGrpcClientConn()
 	if err != nil {
 		return err
 	}
@@ -64,7 +63,7 @@ func RemoveInbound(con command.HandlerServiceClient, tag string) error {
 
 func RemoveInboundFromRuntime(runtimeConfig *RuntimeConfig, tag string) error {
 	// 创建grpc client
-	cmdConn, err := grpc.Dial(fmt.Sprintf("%s:%d", runtimeConfig.Host, runtimeConfig.Port), grpc.WithInsecure())
+	cmdConn, err := GetProxyClient(runtimeConfig.Host, runtimeConfig.Port).GetGrpcClientConn()
 	if err != nil {
 		return err
 	}

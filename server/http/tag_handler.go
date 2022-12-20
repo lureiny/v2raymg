@@ -30,6 +30,13 @@ func (handler *TagHandler) handlerFunc(c *gin.Context) {
 	c.JSON(200, remoteTags)
 }
 
+func (handler *TagHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		getAuthHandlerFunc(handler.httpServer),
+		handler.handlerFunc,
+	}
+}
+
 func (handler *TagHandler) help() string {
 	usage := `/tag
 	获取目标节点的所有inbound tag

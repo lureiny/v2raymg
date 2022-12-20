@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/lureiny/v2raymg/proxy/protocol"
-	"github.com/lureiny/v2raymg/proxy/stats"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -303,7 +302,7 @@ func (proxyManager *ProxyManager) ResetUser(user *User) error {
 }
 
 func (proxyManager *ProxyManager) QueryStats(pattern string, reset bool) (*map[string]*proto.Stats, error) {
-	return stats.QueryStats(pattern, proxyManager.RuntimeConfig.Host, proxyManager.RuntimeConfig.Port, reset)
+	return QueryStats(pattern, proxyManager.RuntimeConfig.Host, proxyManager.RuntimeConfig.Port, reset)
 }
 
 // 搬迁inbound, 适用于修改端口的场景

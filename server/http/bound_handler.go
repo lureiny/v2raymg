@@ -72,6 +72,13 @@ func (handler *BoundHandler) handlerFunc(c *gin.Context) {
 	}
 }
 
+func (handler *BoundHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		getAuthHandlerFunc(handler.httpServer),
+		handler.handlerFunc,
+	}
+}
+
 func (handler *BoundHandler) help() string {
 	usage := `/bound
 	inbound操作接口, 支持添加, 删除, 迁移, 复制inbound, inbound间复制用户, 获取inbound

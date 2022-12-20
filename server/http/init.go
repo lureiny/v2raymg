@@ -7,40 +7,36 @@ func init() {
 	GlobalHttpServer.RestfulServer = gin.Default()
 	GlobalHttpServer.handlersMap = map[string]HttpHandlerInterface{}
 
-	// auth handler注册后才可以注册其他需要auth的handler
-	authWithTokenHandler := &AuthWithTokenHandler{}
-	GlobalHttpServer.RegisterHandler("/auth", authWithTokenHandler, false)
-
 	subHandler := &SubHandler{}
-	GlobalHttpServer.RegisterHandler("/sub", subHandler, false)
+	GlobalHttpServer.RegisterHandler("/sub", subHandler)
 
 	helpHandler := &HelpHandler{}
-	GlobalHttpServer.RegisterHandler("/help/*relativePath", helpHandler, false)
+	GlobalHttpServer.RegisterHandler("/help/*relativePath", helpHandler)
 
 	adaptiveHandler := &AdaptiveHandler{}
-	GlobalHttpServer.RegisterHandler("/adaptive", adaptiveHandler, true)
+	GlobalHttpServer.RegisterHandler("/adaptive", adaptiveHandler)
 
 	adaptiveOpHandler := &AdaptiveOpHandler{}
-	GlobalHttpServer.RegisterHandler("/adaptiveOp", adaptiveOpHandler, true)
+	GlobalHttpServer.RegisterHandler("/adaptiveOp", adaptiveOpHandler)
 
 	boundHandler := &BoundHandler{}
-	GlobalHttpServer.RegisterHandler("/bound", boundHandler, true)
+	GlobalHttpServer.RegisterHandler("/bound", boundHandler)
 
 	nodeHandler := &NodeHandler{}
-	GlobalHttpServer.RegisterHandler("/node", nodeHandler, true)
+	GlobalHttpServer.RegisterHandler("/node", nodeHandler)
 
 	statHandler := &StatHandler{}
-	GlobalHttpServer.RegisterHandler("/stat", statHandler, true)
+	GlobalHttpServer.RegisterHandler("/stat", statHandler)
 
 	tagHandler := &TagHandler{}
-	GlobalHttpServer.RegisterHandler("/tag", tagHandler, true)
+	GlobalHttpServer.RegisterHandler("/tag", tagHandler)
 
 	updateHandler := &UpdateHandler{}
-	GlobalHttpServer.RegisterHandler("/update", updateHandler, true)
+	GlobalHttpServer.RegisterHandler("/update", updateHandler)
 
 	userHandler := &UserHandler{}
-	GlobalHttpServer.RegisterHandler("/user", userHandler, true)
+	GlobalHttpServer.RegisterHandler("/user", userHandler)
 
 	gatewayHandler := &GatewayHandler{}
-	GlobalHttpServer.RegisterHandler("/gateway", gatewayHandler, true)
+	GlobalHttpServer.RegisterHandler("/gateway", gatewayHandler)
 }

@@ -71,6 +71,13 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 	c.String(200, "Succ")
 }
 
+func (handler *CopyUserBetweenNodesHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		getAuthHandlerFunc(handler.httpServer),
+		handler.handlerFunc,
+	}
+}
+
 func (handler *CopyUserBetweenNodesHandler) help() string {
 	usage := `/copyUserBetweenNodes
 	节点间复制用户, 将源节点上的用户添加到目标节点的默认inbound上

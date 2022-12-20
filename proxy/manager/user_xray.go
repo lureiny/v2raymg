@@ -18,7 +18,6 @@ import (
 	"github.com/xtls/xray-core/proxy/trojan"
 	"github.com/xtls/xray-core/proxy/vless"
 	"github.com/xtls/xray-core/proxy/vmess"
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/runtime/protoiface"
 )
 
@@ -192,7 +191,7 @@ func addTrojanUser(in *protocolP.InboundDetourConfig, user *User) error {
 
 func addUserToRuntime(runtimeConfig *RuntimeConfig, user *User) error {
 	// 创建grpc client
-	cmdConn, err := grpc.Dial(fmt.Sprintf("%s:%d", runtimeConfig.Host, runtimeConfig.Port), grpc.WithInsecure())
+	cmdConn, err := GetProxyClient(runtimeConfig.Host, runtimeConfig.Port).GetGrpcClientConn()
 	if err != nil {
 		return err
 	}
@@ -300,7 +299,7 @@ func removeTrojanUser(in *protocolP.InboundDetourConfig, user *User) error {
 
 func removeUserFromRuntime(runtimeConfig *RuntimeConfig, user *User) error {
 	// 创建grpc client
-	cmdConn, err := grpc.Dial(fmt.Sprintf("%s:%d", runtimeConfig.Host, runtimeConfig.Port), grpc.WithInsecure())
+	cmdConn, err := GetProxyClient(runtimeConfig.Host, runtimeConfig.Port).GetGrpcClientConn()
 	if err != nil {
 		return err
 	}

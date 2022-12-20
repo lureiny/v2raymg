@@ -43,6 +43,13 @@ func (handler *AdaptiveHandler) handlerFunc(c *gin.Context) {
 	c.String(200, "Succ")
 }
 
+func (handler *AdaptiveHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		getAuthHandlerFunc(handler.httpServer),
+		handler.handlerFunc,
+	}
+}
+
 func (handler *AdaptiveHandler) help() string {
 	usage := `/adaptive
 	对每一个指定tag的inbound, 从配置的port库中随机选择一个, 更新指定tag的端口

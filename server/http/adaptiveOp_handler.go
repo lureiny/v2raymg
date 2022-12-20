@@ -61,6 +61,13 @@ func (handler *AdaptiveOpHandler) handlerFunc(c *gin.Context) {
 	c.String(200, "Succ")
 }
 
+func (handler *AdaptiveOpHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		getAuthHandlerFunc(handler.httpServer),
+		handler.handlerFunc,
+	}
+}
+
 func (handler *AdaptiveOpHandler) help() string {
 	usage := `/adaptiveOp
 	修改端口区间

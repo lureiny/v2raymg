@@ -39,6 +39,13 @@ func (handler *UpdateHandler) handlerFunc(c *gin.Context) {
 	c.String(200, "Succ")
 }
 
+func (handler *UpdateHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		getAuthHandlerFunc(handler.httpServer),
+		handler.handlerFunc,
+	}
+}
+
 func (handler *UpdateHandler) help() string {
 	usage := `/update
 	更新目标节点的proxy版本

@@ -29,6 +29,13 @@ func (handler *GatewayHandler) handlerFunc(c *gin.Context) {
 	c.JSON(200, "Succ")
 }
 
+func (handler *GatewayHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		getAuthHandlerFunc(handler.httpServer),
+		handler.handlerFunc,
+	}
+}
+
 func (handler *GatewayHandler) help() string {
 	usage := `/gateway
 	/gateway?token={token}&target={target}&enable_gateway_model={enable_gateway_model}
