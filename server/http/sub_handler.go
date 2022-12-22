@@ -70,6 +70,12 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 	c.String(200, uri)
 }
 
+func (handler *SubHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		handler.handlerFunc,
+	}
+}
+
 func (handler *SubHandler) help() string {
 	usage := `/sub
 	获取订阅

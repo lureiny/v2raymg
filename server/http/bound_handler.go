@@ -88,8 +88,8 @@ func (handler *BoundHandler) help() string {
 	type: 操作类型, 可选值有addInbound, deleteInbound, transferInbound, copyInbound, copyUser, getInbound
 	各个接口参数说明: 
 	1. 添加inbound
-	/bound?type=addInbound&boundRawString={boundRawString}&token={token}
-	boundRawString, json中inbound配置base64编码后的字符串
+	/bound?type=addInbound&bound_raw_string={boundRawString}&token={token}
+	bound_raw_string, json中inbound配置base64编码后的字符串
 	2. 删除inbound
 	/bound?type=deleteInbound&src_tag={src_tag}&token={token}
 	src_tag, 要删除inbound的tag

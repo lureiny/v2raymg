@@ -23,6 +23,12 @@ func (handler *HelpHandler) handlerFunc(c *gin.Context) {
 	}
 }
 
+func (handler *HelpHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		handler.handlerFunc,
+	}
+}
+
 func (handler *HelpHandler) help() string {
 	usage := `/help/{relativePath}
 	返回指定路径的help信息, 当relativePath为空时返回全部help信息

@@ -29,13 +29,16 @@ type User struct {
 	UUID     string
 	Account  protoiface.MessageV1
 	Protocol string
-	Flow     string // for xray
+	IsXtls   bool
+	Flow     string // for xtls
 }
 
 const (
 	VlessProtocolName  = "vless"
 	TrojanProtocolName = "trojan"
 	VmessProtocolName  = "vmess"
+
+	XTLSName = "xtls"
 )
 
 type UserOption func(*User)
@@ -90,18 +93,21 @@ func SetUserAccount(user *User) error {
 			SecuritySettings: &protocol.SecurityConfig{Type: protocol.SecurityType_AUTO},
 		}
 	case VlessProtocolName:
-		user.Flow = "xtls-rprx-direct"
-		user.Account = &vless.Account{
-			Id:   user.UUID,
-			Flow: user.Flow,
+		vlessAccount := &vless.Account{
+			Id: user.UUID,
 		}
-
+		if user.IsXtls {
+			vlessAccount.Flow = "xtls-rprx-direct"
+		}
+		user.Account = vlessAccount
 	case TrojanProtocolName:
-		user.Flow = "xtls-rprx-direct"
-		user.Account = &trojan.Account{
+		trojanAccount := &trojan.Account{
 			Password: user.UUID,
-			Flow:     user.Flow,
 		}
+		if user.IsXtls {
+			trojanAccount.Flow = "xtls-rprx-direct"
+		}
+		user.Account = trojanAccount
 	default:
 		fmt.Errorf(fmt.Sprintf("Unsupport protocol %s", user.Protocol))
 	}
@@ -326,6 +332,7 @@ func CompleteUserInformation(user *User, inbound *Inbound) error {
 	inbound.RWMutex.RLock()
 	defer inbound.RWMutex.RUnlock()
 	user.Protocol = inbound.Config.Protocol
+	user.IsXtls = inbound.Config.StreamSetting.Security == XTLSName
 	// 设置protocol后需要重新设置account
 	return SetUserAccount(user)
 }
