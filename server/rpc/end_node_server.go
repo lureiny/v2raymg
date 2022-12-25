@@ -165,8 +165,8 @@ func (s *EndNodeServer) Init(um *common.UserManager, cm *common.EndNodeClusterMa
 		InToken:             localNode.Token,
 		OutToken:            localNode.Token,
 		Node:                &localNode.Node,
-		ReportHeartBeatTime: math.MaxInt64,
-		GetHeartBeatTime:    math.MaxInt64,
+		ReportHeartBeatTime: math.MaxInt64 - common.NodeTimeOut,
+		GetHeartBeatTime:    math.MaxInt64 - common.NodeTimeOut,
 		CreateTime:          time.Now().Unix(),
 	})
 	logger.Init()
@@ -328,7 +328,7 @@ func (s *EndNodeServer) AddUsers(ctx context.Context, addUsersReq *proto.UserOpR
 				err.Error(),
 				user.Name,
 			)
-			addUsersRsp.Msg += fmt.Sprintf("user: %s add failed, %s\n", user.Name, err.Error())
+			addUsersRsp.Msg += fmt.Sprintf("user: %s add failed: %s|", user.Name, err.Error())
 		}
 	}
 	if len(addUsersRsp.Msg) > 0 {
@@ -601,14 +601,14 @@ func (s *EndNodeServer) CopyUser(ctx context.Context, copyUserReq *proto.CopyUse
 		Code: 0,
 	}
 
-	err := s.copyUser(copyUserReq.GetSrcTag(), copyUserReq.GetNewTag())
+	err := s.copyUser(copyUserReq.GetSrcTag(), copyUserReq.GetDstTag())
 	if err != nil {
 		errMsg := err.Error()
 		logger.Error(
-			"Err=%s|SrcTag=%s|NewTag=%s",
+			"Err=%s|SrcTag=%s|DstTag=%s",
 			errMsg,
 			copyUserReq.GetSrcTag(),
-			copyUserReq.GetNewTag(),
+			copyUserReq.GetDstTag(),
 		)
 		inboundOpRsp.Code = 801
 		inboundOpRsp.Msg = errMsg
@@ -941,6 +941,9 @@ func (s *EndNodeServer) registerOrHeartBeatToEndNode() {
 	ch := make(chan struct{}, 10)
 	wg := sync.WaitGroup{}
 	for _, node := range s.clusterManager.NodeManager.GetNodes() {
+		if node.Name == s.Name {
+			continue
+		}
 		//网络波动导致节点间断连的场景下, 若本地节点不继续探测则会导致网络恢复后无法重现建立链接
 		// 因此对于本地节点, 无论成功与否都更新上报时间, 确保节点始终有效, 从而会始终尝试探测与心跳上报
 		if node.IsLocal() {

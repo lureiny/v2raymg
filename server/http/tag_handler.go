@@ -3,6 +3,7 @@ package http
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
+	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
 type TagHandler struct{ HttpHandlerImp }
@@ -23,11 +24,19 @@ func (handler *TagHandler) handlerFunc(c *gin.Context) {
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, localNode)
-	remoteTags, err := rpcClient.GetTag()
-	if err != nil {
-		logger.Error("Err=%s|Target=%s", err.Error(), parasMap["target"])
+	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
+		client.GetTagReqType,
+		&proto.GetTagReq{},
+	)
+	if len(failedList) != 0 {
+		errMsg := joinFailedList(failedList)
+		logger.Error(
+			"Err=%s|Target=%s",
+			errMsg,
+			parasMap["target"],
+		)
 	}
-	c.JSON(200, remoteTags)
+	c.JSON(200, succList)
 }
 
 func (handler *TagHandler) getHandlers() []gin.HandlerFunc {

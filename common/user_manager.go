@@ -33,7 +33,7 @@ func NewUserManager() *UserManager {
 func (um *UserManager) Init() {
 	um.LoadUser()
 	// 不指定tag同时default_tag配置为空, 则获取全部tag的订阅
-	defaultTags := configManager.GetStringSlice(ProxyDefaultTags)
+	defaultTags = configManager.GetStringSlice(ProxyDefaultTags)
 
 	localDefaultTags := []string{}
 	if len(defaultTags) == 0 {

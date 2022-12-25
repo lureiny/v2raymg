@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
 type AdaptiveOpHandler struct{ HttpHandlerImp }
@@ -33,29 +34,30 @@ func (handler *AdaptiveOpHandler) handlerFunc(c *gin.Context) {
 	portList := common.StringList{}
 	portList = strings.Split(parasMap["ports"], ",")
 
-	opType := ""
+	req := &proto.AdaptiveOpReq{
+		Ports: portList.Filter(func(p string) bool { return len(p) > 0 }),
+		Tags:  tagList.Filter(func(t string) bool { return len(t) > 0 }),
+	}
+	var reqType client.ReqToEndNodeType = -1
 	switch strings.ToLower(parasMap["type"]) {
 	case "del":
-		opType = client.DeleteAdaptiveOpType
+		reqType = client.DeleteAdaptiveConfigReqType
 	default:
-		opType = client.AddAdaptiveOpType
+		reqType = client.AddAdaptiveConfigReqType
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, localNode)
-	err := rpcClient.AdaptiveOp(
-		portList.Filter(func(p string) bool { return len(p) > 0 }),
-		tagList.Filter(func(t string) bool { return len(t) > 0 }),
-		opType,
-	)
-	if err != nil {
+	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(reqType, req)
+	if len(failedList) != 0 {
+		errMsg := joinFailedList(failedList)
 		logger.Error(
 			"Err=%s|Tags=%s|Ports=%s|Type=%s",
-			err.Error(),
+			errMsg,
 			strings.Join(tagList, ","),
 			strings.Join(portList, ","),
 			parasMap["type"],
 		)
-		c.String(200, err.Error())
+		c.String(200, errMsg)
 		return
 	}
 	c.String(200, "Succ")

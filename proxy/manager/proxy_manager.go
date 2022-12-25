@@ -17,6 +17,7 @@ import (
 )
 
 const apiTag = "api"
+const supportInboundProtocol = "vmess|vless|trojan|shadowsocks"
 const minPort = 100
 const maxPort = 65535
 
@@ -78,7 +79,7 @@ func (proxyManager *ProxyManager) InitAdaptive(rawAdaptive *RawAdaptive) error {
 }
 
 func (proxyManager *ProxyManager) InitRuntimeConfig() error {
-	inbound := proxyManager.GetInbound("api")
+	inbound := proxyManager.GetInbound(apiTag)
 	if inbound == nil {
 		return fmt.Errorf("can not found api inbound")
 	}
@@ -399,7 +400,7 @@ func (proxyManager *ProxyManager) GetTags() []string {
 	tags := []string{}
 
 	for _, inbound := range proxyManager.Config.InboundConfigs {
-		if inbound.Tag != "api" {
+		if inbound.Tag != apiTag && strings.Contains(supportInboundProtocol, inbound.Protocol) {
 			tags = append(tags, inbound.Tag)
 		}
 	}

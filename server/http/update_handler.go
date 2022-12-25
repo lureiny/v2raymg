@@ -3,6 +3,7 @@ package http
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
+	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
 type UpdateHandler struct{ HttpHandlerImp }
@@ -25,15 +26,22 @@ func (handler *UpdateHandler) handlerFunc(c *gin.Context) {
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, localNode)
+	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
+		client.UpdateProxyReqType,
+		&proto.UpdateProxyReq{
+			Tag: parasMap["versionTag"],
+		},
+	)
 
-	if err := rpcClient.UpdateProxy(parasMap["versionTag"]); err != nil {
+	if len(failedList) != 0 {
+		errMsg := joinFailedList(failedList)
 		logger.Error(
 			"Err=%s|Target=%s|Tag=%s",
-			err.Error(),
+			errMsg,
 			parasMap["target"],
 			parasMap["versionTag"],
 		)
-		c.String(200, err.Error())
+		c.String(200, errMsg)
 		return
 	}
 	c.String(200, "Succ")

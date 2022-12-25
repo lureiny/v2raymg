@@ -23,7 +23,7 @@ type Node struct {
 }
 
 // node连续60s没有更新则认为无效
-const nodeTimeOut int64 = 60
+const NodeTimeOut int64 = 60
 
 // 比较两个node是否相同, 相同返回true
 func (n1 *Node) Compare(n2 *Node) bool {
@@ -46,19 +46,19 @@ func (n *Node) IsLocal() bool {
 // 有效返回true
 func (node *Node) IsValid() bool {
 	currentTime := time.Now().Unix()
-	return node.GetHeartBeatTime+nodeTimeOut > currentTime ||
-		node.ReportHeartBeatTime+nodeTimeOut > currentTime ||
-		node.CreateTime+nodeTimeOut > currentTime
+	return node.GetHeartBeatTime+NodeTimeOut > currentTime ||
+		node.ReportHeartBeatTime+NodeTimeOut > currentTime ||
+		node.CreateTime+NodeTimeOut > currentTime
 }
 
 // 本地是否已经在node上注册
 func (node *Node) RegisteredRemote() bool {
-	return node.OutToken != "" && node.ReportHeartBeatTime+nodeTimeOut > time.Now().Unix()
+	return node.OutToken != "" && node.ReportHeartBeatTime+NodeTimeOut > time.Now().Unix()
 }
 
 // 节点node在本地注册过
 func (node *Node) RegisteredLocal() bool {
-	return node.InToken != "" && node.GetHeartBeatTime+nodeTimeOut > time.Now().Unix()
+	return node.InToken != "" && node.GetHeartBeatTime+NodeTimeOut > time.Now().Unix()
 }
 
 func (node *Node) IsComplete() bool {

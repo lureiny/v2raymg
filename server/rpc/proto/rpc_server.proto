@@ -125,7 +125,7 @@ message CopyInboundReq {
 message CopyUserReq {
     NodeAuthInfo node_auth_info = 1;
     string src_tag = 2;
-    string new_tag = 3;
+    string dst_tag = 3;
 }
 
 message GetInboundReq {

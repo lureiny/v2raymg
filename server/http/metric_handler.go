@@ -18,8 +18,8 @@ func prometheusHandler(handler http.Handler) gin.HandlerFunc {
 	}
 }
 
-func updateTrafficStats(statsMap *map[string][]*proto.Stats) {
-	for _, s := range (*statsMap)[GlobalHttpServer.Name] {
+func updateTrafficStats(stats *[]*proto.Stats) {
+	for _, s := range *stats {
 		trafficStats.WithLabelValues(
 			GlobalHttpServer.Name,
 			s.Name,
@@ -39,16 +39,21 @@ func updateTrafficStats(statsMap *map[string][]*proto.Stats) {
 func (handler *MetricHandler) handlerFunc(c *gin.Context) {
 	nodes := handler.getHttpServer().getTargetNodes(handler.getHttpServer().Name)
 	rpcClient := client.NewEndNodeClient(nodes, localNode)
-	statsMap, err := rpcClient.GetBandWidthStats("", true)
-	if err != nil {
-		logger.Info(
-			"Err=%s",
-			err.Error(),
-		)
-		c.String(200, err.Error())
+	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
+		client.GetBandWidthStatsReqType,
+		&proto.GetBandwidthStatsReq{
+			Pattern: "",
+			Reset_:  true,
+		},
+	)
+	if len(failedList) != 0 {
+		errMsg := joinFailedList(failedList)
+		logger.Error("Err=%s", errMsg)
+		c.String(200, errMsg)
 		c.Abort()
 	}
-	updateTrafficStats(statsMap)
+	stats := succList[handler.getHttpServer().Name].([]*proto.Stats)
+	updateTrafficStats(&stats)
 	c.Next()
 }
 

@@ -3,11 +3,9 @@ package client
 import (
 	"context"
 	"fmt"
-	"reflect"
-	"strconv"
-	"strings"
 	"sync"
 
+	pb "github.com/golang/protobuf/proto"
 	"github.com/lureiny/v2raymg/common"
 	"github.com/lureiny/v2raymg/server/rpc"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
@@ -16,13 +14,58 @@ import (
 
 var logger = common.LoggerImp
 
-const MaxConcurrencyClientNum = 32
+const MaxConcurrencyClientNum = 64
 
-var ops = map[string]bool{
-	"AddUsers": true, "DeleteUsers": true, "UpdateUsers": true, "ResetUser": true,
+type ReqToEndNodeFunc func([]byte, proto.EndNodeAccessClient, *proto.NodeAuthInfo) (interface{}, error)
+
+var reqFuncMap = map[ReqToEndNodeType]ReqToEndNodeFunc{}
+
+func init() {
+	// add user
+	registerReqToEndNodeFunc(AddUsersReqType, reqAddUsers)
+	// delete user
+	registerReqToEndNodeFunc(DeleteUsersReqType, reqDeleteUsers)
+	// update user
+	registerReqToEndNodeFunc(UpdateUsersReqType, reqUpdateUsers)
+	// reset user
+	registerReqToEndNodeFunc(ResetUserReqType, reqResetUser)
+	// get sub
+	registerReqToEndNodeFunc(GetSubReqType, reqGetSub)
+	// get bandwidth stats
+	registerReqToEndNodeFunc(GetBandWidthStatsReqType, reqGetBandwidthStats)
+	// add inbound
+	registerReqToEndNodeFunc(AddInboundReqType, reqAddInbound)
+	// delete inbound
+	registerReqToEndNodeFunc(DeleteInboundReqType, reqDeleteInbound)
+	// transfer inbound
+	registerReqToEndNodeFunc(TransferInboundReqType, reqTransferInbound)
+	// copy inbound
+	registerReqToEndNodeFunc(CopyInboundReqType, reqCopyInbound)
+	// copy user
+	registerReqToEndNodeFunc(CopyUserReqType, reqCopyUser)
+	// get users
+	registerReqToEndNodeFunc(GetUsersReqType, reqGetUsers)
+	// get inbound
+	registerReqToEndNodeFunc(GetInboundReqType, reqGetInbound)
+	// get tag
+	registerReqToEndNodeFunc(GetTagReqType, reqGetTag)
+	// update proxy
+	registerReqToEndNodeFunc(UpdateProxyReqType, reqUpdateProxy)
+	// add adaptive
+	registerReqToEndNodeFunc(AddAdaptiveConfigReqType, reqAddAdaptiveOp)
+	// delete adaptive
+	registerReqToEndNodeFunc(DeleteAdaptiveConfigReqType, reqDeleteAdaptiveOp)
+	// adaptive
+	registerReqToEndNodeFunc(AdaptiveReqType, reqAdaptive)
+	// set gateway model
+	registerReqToEndNodeFunc(SetGatewayModelReqType, reqSetGatewayModel)
 }
 
-// 控制全局订阅拉取并发数量
+func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
+	reqFuncMap[reqType] = f
+}
+
+// 控制全局rpc请求数
 var ch = make(chan struct{}, MaxConcurrencyClientNum)
 
 type EndNodeClient struct {
@@ -40,102 +83,65 @@ func NewEndNodeClient(nodes *[]*common.Node, localNode *common.LocalNode) *EndNo
 	return endNodeClient
 }
 
-func processReqResult(rsp *proto.UserOpRsp, err error) error {
+func processUserOpRsp(rsp *proto.UserOpRsp, err error) (interface{}, error) {
 	if rsp.GetCode() != 0 {
-		return fmt.Errorf(rsp.GetMsg())
+		return nil, fmt.Errorf(rsp.GetMsg())
 	}
-	return err
+	return nil, err
 }
 
-func reqUserOpToOneNode(node *common.Node, user *proto.User, localNode *proto.Node, opType string) error {
-	if !node.RegisteredRemote() {
-		// 没有注册过的节点不算作失败
-		return nil
-	}
-	if _, ok := ops[opType]; !ok {
-		return fmt.Errorf("unsupport Optype=%s", opType)
+func reqAddUsers(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	addUsersReq := &proto.UserOpReq{}
+	if err := pb.Unmarshal(reqData, addUsersReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to add users req > %v", reqData, err)
 	}
 
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return err
-	}
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.UserOpReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-		Users: []*proto.User{
-			user,
-		},
-	}
-
-	value := reflect.ValueOf(endNodeAccessClient)
-	f := value.MethodByName(opType)
-	paramList := []reflect.Value{reflect.ValueOf(context.Background()), reflect.ValueOf(req), reflect.ValueOf(grpc.ForceCodec(&rpc.EncryptMessageCodec{}))}
-	results := f.Call(paramList)
-	var rsp *proto.UserOpRsp = (*proto.UserOpRsp)(results[0].UnsafePointer())
-	if results[1].IsNil() {
-		err = nil
-	} else {
-		err = results[1].Interface().(error)
-	}
-	return processReqResult(rsp, err)
+	addUsersReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.AddUsers(context.Background(), addUsersReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	return processUserOpRsp(rsp, err)
 }
 
-func (c *EndNodeClient) UserOp(user *proto.User, opType string) error {
-	failedNodes := []*common.Node{}
-	globalErrMsg := ""
-	lock := sync.Mutex{}
-	wg := &sync.WaitGroup{}
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			err := reqUserOpToOneNode(n, user, &c.localNode.Node, opType)
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				globalErrMsg = fmt.Sprintf("%s|%s", globalErrMsg, err.Error())
-				lock.Unlock()
-				failedNodes = append(failedNodes, n)
-			}
-			wg.Done()
-		}(node)
+func reqDeleteUsers(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	deleteUsersReq := &proto.UserOpReq{}
+	if err := pb.Unmarshal(reqData, deleteUsersReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to delete users req > %v", reqData, err)
 	}
-	wg.Wait()
-	if len(failedNodes) == 0 {
-		return nil
-	}
-	return fmt.Errorf(globalErrMsg)
+
+	deleteUsersReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.DeleteUsers(context.Background(), deleteUsersReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	return processUserOpRsp(rsp, err)
 }
 
-func reqGetUserSub(node *common.Node, user *proto.User, localNode *proto.Node) ([]string, error) {
-	if !node.RegisteredRemote() {
-		return nil, nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return nil, err
+func reqUpdateUsers(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	updateUsersReq := &proto.UserOpReq{}
+	if err := pb.Unmarshal(reqData, updateUsersReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to update users req > %v", reqData, err)
 	}
 
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.GetSubReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-		User: user,
+	updateUsersReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.UpdateUsers(context.Background(), updateUsersReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	return processUserOpRsp(rsp, err)
+}
+
+func reqResetUser(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	resetUserReq := &proto.UserOpReq{}
+	if err := pb.Unmarshal(reqData, resetUserReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to reset users req > %v", reqData, err)
 	}
 
-	rsp, err := endNodeAccessClient.GetSub(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	resetUserReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.ResetUser(context.Background(), resetUserReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	return processUserOpRsp(rsp, err)
+}
+
+func reqGetSub(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	getSubReq := &proto.GetSubReq{}
+	if err := pb.Unmarshal(reqData, getSubReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to get sub req > %v", reqData, err)
+	}
+
+	getSubReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.GetSub(context.Background(), getSubReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
 	if err != nil {
 		return nil, err
 	}
@@ -145,65 +151,14 @@ func reqGetUserSub(node *common.Node, user *proto.User, localNode *proto.Node) (
 	return rsp.GetUris(), nil
 }
 
-func (c *EndNodeClient) GetUsersSub(user *proto.User) ([]string, error) {
-	wg := &sync.WaitGroup{}
-	globalErrMsg := ""
-	lock := sync.Mutex{}
-	allUris := []string{}
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			defer func() {
-				<-ch
-				wg.Done()
-			}()
-			uris, err := reqGetUserSub(n, user, &c.localNode.Node)
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				globalErrMsg = fmt.Sprintf("%s|%s", globalErrMsg, err.Error())
-				lock.Unlock()
-			} else if len(uris) != 0 {
-				lock.Lock()
-				allUris = append(allUris, uris...)
-				lock.Unlock()
-			}
-		}(node)
-	}
-	wg.Wait()
-	if len(allUris) == 0 {
-		return nil, fmt.Errorf(globalErrMsg)
-	}
-	return allUris, nil
-}
-
-func reqGetBandwidthStats(node *common.Node, localNode *proto.Node, pattern string, reset bool) ([]*proto.Stats, error) {
-	if !node.RegisteredRemote() {
-		return []*proto.Stats{}, nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return []*proto.Stats{}, err
+func reqGetBandwidthStats(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	getBandWidthStatsReq := &proto.GetBandwidthStatsReq{}
+	if err := pb.Unmarshal(reqData, getBandWidthStatsReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to get badnwidth stats req > %v", reqData, err)
 	}
 
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.GetBandwidthStatsReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-		Pattern: pattern,
-		Reset_:  reset,
-	}
-
-	rsp, err := endNodeAccessClient.GetBandWidthStats(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	getBandWidthStatsReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.GetBandWidthStats(context.Background(), getBandWidthStatsReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
 	if err != nil {
 		return []*proto.Stats{}, err
 	}
@@ -211,606 +166,242 @@ func reqGetBandwidthStats(node *common.Node, localNode *proto.Node, pattern stri
 		return []*proto.Stats{}, fmt.Errorf(rsp.GetMsg())
 	}
 	return rsp.GetStats(), nil
+
 }
 
-func (c *EndNodeClient) GetBandWidthStats(pattern string, reset bool) (*map[string][]*proto.Stats, error) {
-	wg := &sync.WaitGroup{}
-	globalErrMsg := ""
-	lock := sync.Mutex{}
-	allNodeStats := map[string][]*proto.Stats{}
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			defer func() {
-				<-ch
-				wg.Done()
-			}()
-			remoteNodeStats, err := reqGetBandwidthStats(n, &c.localNode.Node, pattern, reset)
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				globalErrMsg = fmt.Sprintf("%s|%s", globalErrMsg, err.Error())
-				lock.Unlock()
-				return
-			}
-			lock.Lock()
-			allNodeStats[n.Name] = remoteNodeStats
-			lock.Unlock()
-
-		}(node)
-	}
-	wg.Wait()
-	var err error = nil
-	if globalErrMsg != "" {
-		err = fmt.Errorf(globalErrMsg)
-	}
-	return &allNodeStats, err
-}
-
-func reqAddInbound(node *common.Node, localNode *proto.Node, inboundRawString string) error {
-	if !node.RegisteredRemote() {
-		return nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return err
+func reqAddInbound(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	addInboundReq := &proto.InboundOpReq{}
+	if err := pb.Unmarshal(reqData, addInboundReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to add inbound req > %v", reqData, err)
 	}
 
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.InboundOpReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-		InboundInfo: inboundRawString,
-	}
-
-	rsp, err := endNodeAccessClient.AddInbound(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
-	if rsp.GetCode() != 0 {
-		return fmt.Errorf(rsp.GetMsg())
-	}
-	return err
-}
-
-func (c *EndNodeClient) AddInbound(inboundRawString string) error {
-	wg := &sync.WaitGroup{}
-	globalErrMsg := ""
-	lock := sync.Mutex{}
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			defer func() {
-				<-ch
-				wg.Done()
-			}()
-			err := reqAddInbound(n, &c.localNode.Node, inboundRawString)
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				globalErrMsg = fmt.Sprintf("%s|%s", globalErrMsg, err.Error())
-				lock.Unlock()
-			}
-		}(node)
-	}
-	wg.Wait()
-	var err error = nil
-	if globalErrMsg != "" {
-		err = fmt.Errorf(globalErrMsg)
-	}
-	return err
-}
-
-func reqDeleteInbound(node *common.Node, localNode *proto.Node, tag string) error {
-	if !node.RegisteredRemote() {
-		return nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return err
-	}
-
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.InboundOpReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-		InboundInfo: tag,
-	}
-
-	rsp, err := endNodeAccessClient.DeleteInbound(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
-	if rsp.GetCode() != 0 {
-		return fmt.Errorf(rsp.GetMsg())
-	}
-	return err
-}
-
-func (c *EndNodeClient) DeleteInbound(tag string) error {
-	wg := &sync.WaitGroup{}
-	globalErrMsg := ""
-	lock := sync.Mutex{}
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			defer func() {
-				<-ch
-				wg.Done()
-			}()
-			err := reqDeleteInbound(n, &c.localNode.Node, tag)
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				globalErrMsg = fmt.Sprintf("%s|%s", globalErrMsg, err.Error())
-				lock.Unlock()
-			}
-		}(node)
-	}
-	wg.Wait()
-	var err error = nil
-	if globalErrMsg != "" {
-		err = fmt.Errorf(globalErrMsg)
-	}
-	return err
-}
-
-func reqTransferInbound(node *common.Node, localNode *proto.Node, tag string, newPort int32) error {
-	if !node.RegisteredRemote() {
-		return nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return err
-	}
-
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.TransferInboundReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-		Tag:     tag,
-		NewPort: newPort,
-	}
-
-	rsp, err := endNodeAccessClient.TransferInbound(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
-	if rsp.GetCode() != 0 {
-		return fmt.Errorf(rsp.GetMsg())
-	}
-	return err
-}
-
-func (c *EndNodeClient) TransferInbound(tag, newPort string) error {
-	port, err := strconv.ParseInt(newPort, 10, 64)
-	if err != nil {
-		return err
-	}
-	wg := &sync.WaitGroup{}
-	globalErrMsg := ""
-	lock := sync.Mutex{}
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			defer func() {
-				<-ch
-				wg.Done()
-			}()
-			err := reqTransferInbound(n, &c.localNode.Node, tag, int32(port))
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				globalErrMsg = fmt.Sprintf("%s|%s", globalErrMsg, err.Error())
-				lock.Unlock()
-			}
-		}(node)
-	}
-	wg.Wait()
-	if globalErrMsg != "" {
-		err = fmt.Errorf(globalErrMsg)
-	}
-	return err
-}
-
-func reqCopyInbound(node *common.Node, localNode *proto.Node, srcTag, newTag, newProtocol string, newPort int32, isCopyUser bool) error {
-	if !node.RegisteredRemote() {
-		return nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return err
-	}
-
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.CopyInboundReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-		SrcTag:      srcTag,
-		NewTag:      newTag,
-		NewPort:     newPort,
-		IsCopyUser:  isCopyUser,
-		NewProtocol: newProtocol,
-	}
-
-	rsp, err := endNodeAccessClient.CopyInbound(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
-	if rsp.GetCode() != 0 {
-		return fmt.Errorf(rsp.GetMsg())
-	}
-	return err
-}
-
-func (c *EndNodeClient) CopyInbound(srcTag, newTag, newPort, newProtocol string, isCopyUser bool) error {
-	port, err := strconv.ParseInt(newPort, 10, 64)
-	if err != nil {
-		return err
-	}
-	wg := &sync.WaitGroup{}
-	globalErrMsg := ""
-	lock := sync.Mutex{}
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			defer func() {
-				<-ch
-				wg.Done()
-			}()
-			err := reqCopyInbound(n, &c.localNode.Node, srcTag, newTag, newProtocol, int32(port), isCopyUser)
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				globalErrMsg = fmt.Sprintf("%s|%s", globalErrMsg, err.Error())
-				lock.Unlock()
-			}
-		}(node)
-	}
-	wg.Wait()
-	if globalErrMsg != "" {
-		err = fmt.Errorf(globalErrMsg)
-	}
-	return err
-}
-
-func reqCopyUser(node *common.Node, localNode *proto.Node, srcTag, newTag string) error {
-	if !node.RegisteredRemote() {
-		return nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return err
-	}
-
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.CopyUserReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-		SrcTag: srcTag,
-		NewTag: newTag,
-	}
-
-	rsp, err := endNodeAccessClient.CopyUser(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
-	if rsp.GetCode() != 0 {
-		return fmt.Errorf(rsp.GetMsg())
-	}
-	return err
-}
-
-func (c *EndNodeClient) CopyUser(srcTag, newTag string) error {
-	wg := &sync.WaitGroup{}
-	globalErrMsg := ""
-	lock := sync.Mutex{}
-	var err error = nil
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			defer func() {
-				<-ch
-				wg.Done()
-			}()
-			err := reqCopyUser(n, &c.localNode.Node, srcTag, newTag)
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				globalErrMsg = fmt.Sprintf("%s|%s", globalErrMsg, err.Error())
-				lock.Unlock()
-			}
-		}(node)
-	}
-	wg.Wait()
-	if globalErrMsg != "" {
-		err = fmt.Errorf(globalErrMsg)
-	}
-	return err
-}
-
-func reqGetUsers(node *common.Node, localNode *proto.Node) ([]*proto.User, error) {
-	if !node.RegisteredRemote() {
-		return []*proto.User{}, nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return nil, err
-	}
-
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.GetUsersReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-	}
-
-	rsp, err := endNodeAccessClient.GetUsers(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
-	if err != nil {
-		return nil, err
-	}
+	addInboundReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.AddInbound(context.Background(), addInboundReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
 	if rsp.GetCode() != 0 {
 		return nil, fmt.Errorf(rsp.GetMsg())
 	}
-	users := []*proto.User{}
-	for _, u := range rsp.GetUsers() {
-		users = append(users, u)
-	}
-	return users, nil
+	return nil, err
 }
 
-func (c *EndNodeClient) GetUsers() (map[string][]*proto.User, error) {
-	wg := &sync.WaitGroup{}
-	globalErrMsg := ""
-	lock := sync.Mutex{}
-	usersMap := map[string][]*proto.User{}
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			defer func() {
-				<-ch
-				wg.Done()
-			}()
-			remoteUsers, err := reqGetUsers(n, &c.localNode.Node)
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				globalErrMsg = fmt.Sprintf("%s|%s", globalErrMsg, err.Error())
-				lock.Unlock()
-				return
-			}
-			lock.Lock()
-			usersMap[n.Name] = remoteUsers
-			lock.Unlock()
+func reqDeleteInbound(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	deleteInboundReq := &proto.InboundOpReq{}
+	if err := pb.Unmarshal(reqData, deleteInboundReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to delete inbound req > %v", reqData, err)
+	}
 
-		}(node)
+	deleteInboundReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.DeleteInbound(context.Background(), deleteInboundReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
 	}
-	wg.Wait()
-	var err error = nil
-	if globalErrMsg != "" {
-		err = fmt.Errorf(globalErrMsg)
-	}
-	return usersMap, err
+	return nil, err
 }
 
-func reqGetInbound(node *common.Node, localNode *proto.Node, tag string) (string, error) {
-	if !node.RegisteredRemote() {
-		return "", nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return "", err
+func reqTransferInbound(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	transferInboundReq := &proto.TransferInboundReq{}
+	if err := pb.Unmarshal(reqData, transferInboundReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to TransferInboundReq > %v", reqData, err)
 	}
 
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.GetInboundReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-		Tag: tag,
+	transferInboundReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.TransferInbound(context.Background(), transferInboundReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	return nil, err
+}
+
+func reqCopyInbound(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	copyInboundReq := &proto.CopyInboundReq{}
+	if err := pb.Unmarshal(reqData, copyInboundReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to CopyInboundReq > %v", reqData, err)
 	}
 
-	rsp, err := endNodeAccessClient.GetInbound(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
-	if err != nil {
-		return "", err
+	copyInboundReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.CopyInbound(context.Background(), copyInboundReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
 	}
+	return nil, err
+}
+
+func reqCopyUser(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	copyUserReq := &proto.CopyUserReq{}
+	if err := pb.Unmarshal(reqData, copyUserReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to CopyUserReq > %v", reqData, err)
+	}
+
+	copyUserReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.CopyUser(context.Background(), copyUserReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	return nil, err
+}
+
+func reqGetUsers(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	getUsersReq := &proto.GetUsersReq{}
+	if err := pb.Unmarshal(reqData, getUsersReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to GetUsersReq > %v", reqData, err)
+	}
+
+	getUsersReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.GetUsers(context.Background(), getUsersReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	if err != nil {
+		return nil, err
+	}
+	return rsp.GetUsers(), nil
+}
+
+func reqGetInbound(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	getInboundReq := &proto.GetInboundReq{}
+	if err := pb.Unmarshal(reqData, getInboundReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to GetInboundReq > %v", reqData, err)
+	}
+
+	getInboundReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.GetInbound(context.Background(), getInboundReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
 	if rsp.GetCode() != 0 {
 		return "", fmt.Errorf(rsp.GetMsg())
+	}
+	if err != nil {
+		return "", err
 	}
 	return rsp.GetData(), nil
 }
 
-func (c *EndNodeClient) GetInbound(tag string) ([]string, error) {
-	wg := &sync.WaitGroup{}
-	globalErrMsg := ""
-	lock := sync.Mutex{}
-	inbounds := []string{}
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			defer func() {
-				<-ch
-				wg.Done()
-			}()
-			inboundData, err := reqGetInbound(n, &c.localNode.Node, tag)
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				globalErrMsg = fmt.Sprintf("%s|%s", globalErrMsg, err.Error())
-				lock.Unlock()
-				return
-			}
-			lock.Lock()
-			inbounds = append(inbounds, inboundData)
-			lock.Unlock()
-
-		}(node)
-	}
-	wg.Wait()
-	var err error = nil
-	if globalErrMsg != "" {
-		err = fmt.Errorf(globalErrMsg)
-	}
-	return inbounds, err
-}
-
-func reqGetTag(node *common.Node, localNode *proto.Node) ([]string, error) {
-	if !node.RegisteredRemote() {
-		return nil, nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return nil, err
+func reqGetTag(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	getTagReq := &proto.GetTagReq{}
+	if err := pb.Unmarshal(reqData, getTagReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to GetTagReq > %v", reqData, err)
 	}
 
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.GetTagReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-	}
-
-	rsp, err := endNodeAccessClient.GetTag(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
-	if err != nil {
-		return nil, err
-	}
+	getTagReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.GetTag(context.Background(), getTagReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
 	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
+		return "", fmt.Errorf(rsp.GetMsg())
+	}
+	if err != nil {
+		return "", err
 	}
 	return rsp.GetTags(), nil
 }
 
-func (c *EndNodeClient) GetTag() (map[string][]string, error) {
-	wg := &sync.WaitGroup{}
-	globalErrMsg := ""
-	lock := sync.Mutex{}
-	tags := map[string][]string{}
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			defer func() {
-				<-ch
-				wg.Done()
-			}()
-			remoteTags, err := reqGetTag(n, &c.localNode.Node)
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				globalErrMsg = fmt.Sprintf("%s|%s", globalErrMsg, err.Error())
-				lock.Unlock()
-				return
-			}
-			lock.Lock()
-			tags[n.Name] = remoteTags
-			lock.Unlock()
+func reqUpdateProxy(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	updateProxyReq := &proto.UpdateProxyReq{}
+	if err := pb.Unmarshal(reqData, updateProxyReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to UpdateProxyReq > %v", reqData, err)
+	}
 
-		}(node)
+	updateProxyReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.UpdateProxy(context.Background(), updateProxyReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
 	}
-	wg.Wait()
-	var err error = nil
-	if globalErrMsg != "" {
-		err = fmt.Errorf(globalErrMsg)
+	if err != nil {
+		return nil, err
 	}
-	return tags, err
+	return nil, nil
 }
 
-func reqUpdateProxy(node *common.Node, localNode *proto.Node, versionTag string) error {
-	if !node.RegisteredRemote() {
-		return nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return err
+func reqAddAdaptiveOp(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	addAdaptiveOp := &proto.AdaptiveOpReq{}
+	if err := pb.Unmarshal(reqData, addAdaptiveOp); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to add adaptive op req > %v", reqData, err)
 	}
 
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.UpdateProxyReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-		Tag: versionTag,
-	}
-
-	rsp, err := endNodeAccessClient.UpdateProxy(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
-	if err != nil {
-		return err
-	}
+	addAdaptiveOp.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.AddAdaptiveConfig(context.Background(), addAdaptiveOp, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
 	if rsp.GetCode() != 0 {
-		return fmt.Errorf(rsp.GetMsg())
-	} else if rsp.GetMsg() != "" {
-		logger.Debug("Msg=%s|VersionTag=%s", rsp.GetMsg(), versionTag)
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func reqDeleteAdaptiveOp(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	delteteAdaptiveOp := &proto.AdaptiveOpReq{}
+	if err := pb.Unmarshal(reqData, delteteAdaptiveOp); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to delete adaptive op req > %v", reqData, err)
+	}
+
+	delteteAdaptiveOp.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.AddAdaptiveConfig(context.Background(), delteteAdaptiveOp, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func reqAdaptive(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	adaptiveReq := &proto.AdaptiveReq{}
+	if err := pb.Unmarshal(reqData, adaptiveReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to AdaptiveReq > %v", reqData, err)
+	}
+
+	adaptiveReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.Adaptive(context.Background(), adaptiveReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func reqSetGatewayModel(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	setGatewayModelReq := &proto.SetGatewayModelReq{}
+	if err := pb.Unmarshal(reqData, setGatewayModelReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to SetGatewayModelReq > %v", reqData, err)
+	}
+
+	setGatewayModelReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.SetGatewayModel(context.Background(), setGatewayModelReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func getReqAndCallbakcFunc(reqType ReqToEndNodeType) ReqToEndNodeFunc {
+	if reqFunc, ok := reqFuncMap[reqType]; ok {
+		return reqFunc
 	}
 	return nil
 }
 
-func (c *EndNodeClient) UpdateProxy(versionTag string) error {
+func (c *EndNodeClient) ReqToMultiEndNodeServer(reqType ReqToEndNodeType, req interface{}) (succList map[string]interface{}, failedList map[string]string, err error) {
+	succList = map[string]interface{}{}
+	failedList = map[string]string{}
+	err = nil
 	wg := &sync.WaitGroup{}
 	lock := sync.Mutex{}
-	succList := []string{}
-	failedList := []string{}
+	reqData, err := pb.Marshal(req.(pb.Message))
+	if err != nil {
+		err = fmt.Errorf("req message can't marshal > %v, req: %v", err, req)
+		return
+	}
+	reqFunc := getReqAndCallbakcFunc(reqType)
+	if reqFunc == nil {
+		err = fmt.Errorf("unsupport req type: %v, req: %v", reqType, req)
+		return
+	}
 	for _, node := range *c.nodes {
+		if !node.RegisteredRemote() {
+			continue
+		}
 		ch <- struct{}{}
 		wg.Add(1)
 		go func(n *common.Node) {
@@ -818,270 +409,38 @@ func (c *EndNodeClient) UpdateProxy(versionTag string) error {
 				<-ch
 				wg.Done()
 			}()
-			err := reqUpdateProxy(n, &c.localNode.Node, versionTag)
+			conn, err := n.GetGrpcClientConn()
+			if err != nil {
+				lock.Lock()
+				failedList[n.Name] = err.Error()
+				lock.Unlock()
+				return
+			}
+			endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
+			nodeAuthInfo := &proto.NodeAuthInfo{
+				Token: n.OutToken,
+				Node:  &c.localNode.Node,
+			}
+			result, err := reqFunc(reqData, endNodeAccessClient, nodeAuthInfo)
 			if err != nil {
 				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
+					"Err=%s|Dst=%s:%d|DstName=%s|ReqType=%d",
 					err.Error(),
 					n.Host,
 					n.Port,
 					n.Name,
+					reqType,
 				)
 				lock.Lock()
-				failedList = append(failedList, n.Name+" > "+err.Error())
+				failedList[n.Name] = err.Error()
 				lock.Unlock()
 				return
 			}
 			lock.Lock()
-			succList = append(succList, n.Name)
+			succList[n.Name] = result
 			lock.Unlock()
-
 		}(node)
 	}
 	wg.Wait()
-	var err error = nil
-	if len(failedList) != 0 {
-		errMsg := fmt.Sprintf(
-			"succ list: [%s], failed list: [%s]",
-			strings.Join(succList, "|"),
-			strings.Join(failedList, "|"),
-		)
-		err = fmt.Errorf(errMsg)
-	}
-	return err
-}
-
-const AddAdaptiveOpType = "addAdaptive"
-const DeleteAdaptiveOpType = "deleteAdaptive"
-
-func reqAdaptiveOp(node *common.Node, localNode *proto.Node, tags, ports []string, opType string) error {
-	if !node.RegisteredRemote() {
-		return nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return err
-	}
-
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.AdaptiveOpReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-		Ports: ports,
-		Tags:  tags,
-	}
-
-	var rsp *proto.AdaptiveRsp = nil
-	switch opType {
-	case AddAdaptiveOpType:
-		rsp, err = endNodeAccessClient.AddAdaptiveConfig(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
-	case DeleteAdaptiveOpType:
-		rsp, err = endNodeAccessClient.DeleteAdaptiveConfig(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
-	}
-
-	if err != nil {
-		return err
-	}
-	if rsp.GetCode() != 0 {
-		return fmt.Errorf(rsp.GetMsg())
-	}
-	return nil
-}
-
-func (c *EndNodeClient) AdaptiveOp(ports, tags []string, opType string) error {
-	wg := &sync.WaitGroup{}
-	lock := sync.Mutex{}
-	succList := []string{}
-	failedList := []string{}
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			defer func() {
-				<-ch
-				wg.Done()
-			}()
-			err := reqAdaptiveOp(n, &c.localNode.Node, tags, ports, opType)
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				failedList = append(failedList, n.Name+" > "+err.Error())
-				lock.Unlock()
-				return
-			}
-			lock.Lock()
-			succList = append(succList, n.Name)
-			lock.Unlock()
-
-		}(node)
-	}
-	wg.Wait()
-	var err error = nil
-	if len(failedList) != 0 {
-		errMsg := fmt.Sprintf(
-			"succ list: [%s], failed list: [%s]",
-			strings.Join(succList, "|"),
-			strings.Join(failedList, "|"),
-		)
-		err = fmt.Errorf(errMsg)
-	}
-	return err
-}
-
-func reqAdaptive(node *common.Node, localNode *proto.Node, tags []string) error {
-	if !node.RegisteredRemote() {
-		return nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return err
-	}
-
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.AdaptiveReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-		Tags: tags,
-	}
-
-	rsp, err := endNodeAccessClient.Adaptive(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
-
-	if err != nil {
-		return err
-	}
-	if rsp.GetCode() != 0 {
-		return fmt.Errorf(rsp.GetMsg())
-	}
-	return nil
-}
-
-func (c *EndNodeClient) Adaptive(tags []string) error {
-	wg := &sync.WaitGroup{}
-	lock := sync.Mutex{}
-	succList := []string{}
-	failedList := []string{}
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			defer func() {
-				<-ch
-				wg.Done()
-			}()
-			err := reqAdaptive(n, &c.localNode.Node, tags)
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				failedList = append(failedList, n.Name+" > "+err.Error())
-				lock.Unlock()
-				return
-			}
-			lock.Lock()
-			succList = append(succList, n.Name)
-			lock.Unlock()
-
-		}(node)
-	}
-	wg.Wait()
-	var err error = nil
-	if len(failedList) != 0 {
-		errMsg := fmt.Sprintf(
-			"succ list: [%s], failed list: [%s]",
-			strings.Join(succList, "|"),
-			strings.Join(failedList, "|"),
-		)
-		err = fmt.Errorf(errMsg)
-	}
-	return err
-}
-
-func reqSetGatewayModel(node *common.Node, localNode *proto.Node, enableGatewayModel bool) error {
-	if !node.RegisteredRemote() {
-		return nil
-	}
-	conn, err := node.GetGrpcClientConn()
-	if err != nil {
-		return err
-	}
-
-	endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-	req := &proto.SetGatewayModelReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  localNode,
-		},
-		EnableGatewayModel: enableGatewayModel,
-	}
-
-	rsp, err := endNodeAccessClient.SetGatewayModel(context.Background(), req, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
-
-	if err != nil {
-		return err
-	}
-	if rsp.GetCode() != 0 {
-		return fmt.Errorf(rsp.GetMsg())
-	}
-	return nil
-}
-
-func (c *EndNodeClient) SetGatewayModel(enableGatewayModel bool) error {
-	wg := &sync.WaitGroup{}
-	lock := sync.Mutex{}
-	succList := []string{}
-	failedList := []string{}
-	for _, node := range *c.nodes {
-		ch <- struct{}{}
-		wg.Add(1)
-		go func(n *common.Node) {
-			defer func() {
-				<-ch
-				wg.Done()
-			}()
-			err := reqSetGatewayModel(n, &c.localNode.Node, enableGatewayModel)
-			if err != nil {
-				logger.Error(
-					"Err=%s|Dst=%s:%d|DstName=%s",
-					err.Error(),
-					n.Host,
-					n.Port,
-					n.Name,
-				)
-				lock.Lock()
-				failedList = append(failedList, n.Name+" > "+err.Error())
-				lock.Unlock()
-				return
-			}
-			lock.Lock()
-			succList = append(succList, n.Name)
-			lock.Unlock()
-
-		}(node)
-	}
-	wg.Wait()
-	var err error = nil
-	if len(failedList) != 0 {
-		errMsg := fmt.Sprintf(
-			"succ list: [%s], failed list: [%s]",
-			strings.Join(succList, "|"),
-			strings.Join(failedList, "|"),
-		)
-		err = fmt.Errorf(errMsg)
-	}
-	return err
+	return
 }

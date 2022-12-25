@@ -57,7 +57,7 @@ func (ccm *CenterClusterManager) Add(clusterName string, node *Node) {
 		cluster.NodeManager.Add(node.Name, node)
 	} else {
 		newCluster := &Cluster{
-			Name:       clusterName,
+			Name:        clusterName,
 			NodeManager: NewNodeManager(),
 		}
 		newCluster.NodeManager.Add(node.Name, node)

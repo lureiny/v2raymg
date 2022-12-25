@@ -3,6 +3,7 @@ package http
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
+	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
 type GatewayHandler struct{ HttpHandlerImp }
@@ -25,8 +26,20 @@ func (handler *GatewayHandler) handlerFunc(c *gin.Context) {
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, localNode)
-	rpcClient.SetGatewayModel(parasMap["enableGatewayModel"] == "1")
-	c.JSON(200, "Succ")
+	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(client.SetGatewayModelReqType, &proto.SetGatewayModelReq{
+		EnableGatewayModel: parasMap["enableGatewayModel"] == "1",
+	})
+	if len(failedList) != 0 {
+		errMsg := joinFailedList(failedList)
+		logger.Error(
+			"Err=%s|Target=%s",
+			errMsg,
+			parasMap["target"],
+		)
+		c.String(200, errMsg)
+		return
+	}
+	c.String(200, "Succ")
 }
 
 func (handler *GatewayHandler) getHandlers() []gin.HandlerFunc {

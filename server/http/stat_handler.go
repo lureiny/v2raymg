@@ -3,6 +3,7 @@ package http
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
+	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
 type StatHandler struct{ HttpHandlerImp }
@@ -26,21 +27,29 @@ func (handler *StatHandler) handlerFunc(c *gin.Context) {
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, localNode)
-	statsMap, err := rpcClient.GetBandWidthStats(parasMap["pattern"], parasMap["reset"] == "1")
+	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
+		client.GetBandWidthStatsReqType,
+		&proto.GetBandwidthStatsReq{
+			Pattern: parasMap["pattern"],
+			Reset_:  parasMap["reset"] == "1",
+		},
+	)
 
-	if err != nil {
-		logger.Info(
-			"Err=%s",
-			err.Error(),
-		)
-		c.String(200, err.Error())
+	if len(succList) > 0 {
+		c.JSON(200, succList)
 		return
 	}
-	var jsonDatas = gin.H{}
-	for key, s := range *statsMap {
-		jsonDatas[key] = s
+	if len(failedList) != 0 {
+		errMsg := joinFailedList(failedList)
+		logger.Error(
+			"Err=%s|Pattern=%s|Reset=%v",
+			errMsg,
+			parasMap["pattern"],
+			parasMap["reset"] == "1",
+		)
+		c.String(200, errMsg)
+		return
 	}
-	c.JSON(200, jsonDatas)
 }
 
 func (handler *StatHandler) getHandlers() []gin.HandlerFunc {
