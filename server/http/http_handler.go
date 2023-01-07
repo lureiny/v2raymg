@@ -7,11 +7,12 @@ type HttpHandlerInterface interface {
 	handlerFunc(*gin.Context)
 	setHttpServer(*HttpServer)
 	getHttpServer() *HttpServer
+	getHandlers() []gin.HandlerFunc
 	help() string
 }
 
 type HttpHandlerImp struct {
-	httpServer   *HttpServer
+	httpServer *HttpServer
 }
 
 func (handler *HttpHandlerImp) parseParam(*gin.Context) map[string]string {
@@ -19,6 +20,10 @@ func (handler *HttpHandlerImp) parseParam(*gin.Context) map[string]string {
 }
 
 func (handler *HttpHandlerImp) handlerFunc(*gin.Context) {}
+
+func (handler *HttpHandlerImp) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{handler.handlerFunc}
+}
 
 func (handler *HttpHandlerImp) setHttpServer(httpServer *HttpServer) {
 	handler.httpServer = httpServer

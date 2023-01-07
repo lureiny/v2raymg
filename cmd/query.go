@@ -5,7 +5,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/lureiny/v2raymg/proxy/stats"
+	"github.com/lureiny/v2raymg/proxy/manager"
 	"github.com/spf13/cobra"
 )
 
@@ -39,7 +39,7 @@ func queryStats(cmd *cobra.Command, args []string) {
 		unitBase = g
 		unitSign = "G"
 	}
-	statsResult, err := stats.QueryStats(pattern, host, port, false)
+	statsResult, err := manager.QueryStats(pattern, host, port, false)
 
 	if err != nil {
 		log.Fatal(err)

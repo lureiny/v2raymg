@@ -72,7 +72,11 @@ func (s *CenterNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.He
 			cluster.Add(node)
 		}
 		// 只返回有效节点
-		heartBeatRsp.NodesMap = cluster.GetNodes(true)
+		heartBeatRsp.NodesMap = cluster.GetNodes(
+			func(node *common.Node) bool {
+				return node.IsValid()
+			},
+		)
 	} else {
 		// 集群不存在，创建新集群并添加节点
 		logger.Info("Msg=create new cluster: %s", clusterName)
@@ -102,11 +106,11 @@ func (s *CenterNodeServer) filter() {
 }
 
 func (s *CenterNodeServer) Init() {
-	s.Host = configManager.GetString("server.listen")
-	s.Port = configManager.GetInt("server.rpc.port")
+	s.Host = configManager.GetString(common.ServerListen)
+	s.Port = configManager.GetInt(common.ServerRpcPort)
 	s.Type = "Center"
-	serverName := configManager.GetString("server.name")
-	accessHost := configManager.GetString("proxy.host")
+	serverName := configManager.GetString(common.ServerName)
+	accessHost := configManager.GetString(common.ProxyHost)
 	if serverName == "" {
 		serverName = fmt.Sprintf("%s:%d", accessHost, s.Port)
 	}

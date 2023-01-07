@@ -14,7 +14,6 @@ import (
 type UserHandler struct{ HttpHandlerImp }
 
 var userOpMap = map[string]string{
-	// ListUser暂时不支持转发
 	"1": "AddUsers", "2": "UpdateUsers", "3": "DeleteUsers", "4": "ResetUser",
 }
 
@@ -62,26 +61,44 @@ func (handler *UserHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	// 根据target做路由
+	rpcClient := client.NewEndNodeClient(nodes, localNode)
+
 	if opName, ok := userOpMap[parasMap["type"]]; ok {
-		// 此种场景结果仅作记录, 返回给用户的结果以本地添加的为主
-		rpcClient := client.NewEndNodeClient(nodes, localNode)
-		err := rpcClient.UserOp(userPoint, opName)
-		if err != nil {
-			c.String(200, err.Error())
+		req := &proto.UserOpReq{
+			Users: []*proto.User{userPoint},
 		}
-		return
+		var reqType client.ReqToEndNodeType = -1
+		switch opName {
+		case "AddUsers":
+			reqType = client.AddUsersReqType
+		case "UpdateUsers":
+			reqType = client.UpdateUsersReqType
+		case "DeleteUsers":
+			reqType = client.DeleteUsersReqType
+		case "ResetUser":
+			reqType = client.ResetUserReqType
+		}
+		_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(reqType, req)
+		if len(failedList) != 0 {
+			errMsg := joinFailedList(failedList)
+			logger.Error(
+				"Err=%s|User=%s|Passwd=%s|OpType=%s|Target=%s",
+				errMsg,
+				parasMap["user"],
+				parasMap["pwd"],
+				parasMap["type"],
+				parasMap["target"],
+			)
+			c.String(200, errMsg)
+			return
+		}
 	} else if parasMap["type"] == "5" {
-		rpcClient := client.NewEndNodeClient(nodes, localNode)
-		usersMap, _ := rpcClient.GetUsers()
-		users := map[string][]string{}
-		for targetUsers, userList := range usersMap {
-			users[targetUsers] = []string{}
-			for _, u := range userList {
-				users[targetUsers] = append(users[targetUsers], u.Name)
-			}
-		}
-		c.JSON(200, users)
+		// GetUsers
+		succList, _, _ := rpcClient.ReqToMultiEndNodeServer(
+			client.GetUsersReqType,
+			&proto.GetUsersReq{},
+		)
+		c.JSON(200, succList)
 		return
 	} else {
 		err = fmt.Errorf("unsupport operation type %s", parasMap["type"])
@@ -94,8 +111,16 @@ func (handler *UserHandler) handlerFunc(c *gin.Context) {
 			parasMap["target"],
 		)
 		c.String(200, err.Error())
+		return
 	}
 	c.String(200, "Succ")
+}
+
+func (handler *UserHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		getAuthHandlerFunc(handler.httpServer),
+		handler.handlerFunc,
+	}
 }
 
 func (handler *UserHandler) help() string {

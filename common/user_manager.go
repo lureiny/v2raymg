@@ -33,7 +33,7 @@ func NewUserManager() *UserManager {
 func (um *UserManager) Init() {
 	um.LoadUser()
 	// 不指定tag同时default_tag配置为空, 则获取全部tag的订阅
-	defaultTags := configManager.GetStringSlice("proxy.default_tags")
+	defaultTags = configManager.GetStringSlice(ProxyDefaultTags)
 
 	localDefaultTags := []string{}
 	if len(defaultTags) == 0 {
@@ -71,7 +71,7 @@ func (um *UserManager) Init() {
 func (um *UserManager) LoadUser() {
 	um.users = map[string]*proto.User{}
 	um.lock = sync.RWMutex{}
-	usersLocal := configManager.GetStringMapString("users")
+	usersLocal := configManager.GetStringMapString(Users)
 	um.lock.Lock()
 	defer um.lock.Unlock()
 
@@ -105,7 +105,7 @@ func proxyUserOp(user *proto.User, opType string) (succTags, faileTags []string,
 	err = nil
 
 	if len(user.Tags) == 0 {
-		user.Tags = []string{configManager.GetString("proxy.default_tags")}
+		user.Tags = []string{configManager.GetString(ProxyDefaultTags)}
 	}
 
 	for _, tag := range user.Tags {
@@ -340,8 +340,8 @@ func (um *UserManager) GetUserSub(user *proto.User) ([]string, error) {
 }
 
 func getUserSubUri(user *proto.User) ([]string, error) {
-	proxyHost := configManager.GetString("proxy.host")
-	proxyPort := configManager.GetInt("proxy.port")
+	proxyHost := configManager.GetString(ProxyHost)
+	proxyPort := configManager.GetInt(ProxyPort)
 
 	// get sub不会返回错误, 只会打印日志
 	uris := StringList{}

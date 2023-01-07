@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
 type AdaptiveHandler struct{ HttpHandlerImp }
@@ -30,17 +31,28 @@ func (handler *AdaptiveHandler) handlerFunc(c *gin.Context) {
 	tagList = strings.Split(parasMap["tags"], ",")
 
 	rpcClient := client.NewEndNodeClient(nodes, localNode)
-	err := rpcClient.Adaptive(tagList.Filter(func(t string) bool { return len(t) > 0 }))
-	if err != nil {
+	req := &proto.AdaptiveReq{
+		Tags: tagList.Filter(func(t string) bool { return len(t) > 0 }),
+	}
+	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(client.AdaptiveReqType, req)
+	if len(failedList) != 0 {
+		errMsg := joinFailedList(failedList)
 		logger.Error(
 			"Err=%s|Tags=%s",
-			err.Error(),
+			errMsg,
 			strings.Join(tagList, ","),
 		)
-		c.String(200, err.Error())
+		c.String(200, errMsg)
 		return
 	}
 	c.String(200, "Succ")
+}
+
+func (handler *AdaptiveHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		getAuthHandlerFunc(handler.httpServer),
+		handler.handlerFunc,
+	}
 }
 
 func (handler *AdaptiveHandler) help() string {

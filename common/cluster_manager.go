@@ -54,13 +54,13 @@ func (ccm *CenterClusterManager) Add(clusterName string, node *Node) {
 	ccm.lock.Lock()
 	defer ccm.lock.Unlock()
 	if cluster, ok := ccm.clusters[clusterName]; ok {
-		cluster.RemoteNode.Add(node.Name, node)
+		cluster.NodeManager.Add(node.Name, node)
 	} else {
 		newCluster := &Cluster{
-			Name:       clusterName,
-			RemoteNode: NewNodeManager(),
+			Name:        clusterName,
+			NodeManager: NewNodeManager(),
 		}
-		newCluster.RemoteNode.Add(node.Name, node)
+		newCluster.NodeManager.Add(node.Name, node)
 		ccm.clusters[clusterName] = newCluster
 	}
 }
@@ -69,7 +69,7 @@ func (ccm *CenterClusterManager) DeleteNode(clusterName, nodeName string) {
 	ccm.lock.RLock()
 	defer ccm.lock.RUnlock()
 	if cluster, ok := ccm.clusters[clusterName]; ok {
-		cluster.RemoteNode.Delete(nodeName)
+		cluster.NodeManager.Delete(nodeName)
 	}
 }
 
@@ -91,7 +91,7 @@ func (ccm *CenterClusterManager) Filter() {
 	ccm.lock.RLock()
 	defer ccm.lock.RUnlock()
 	for _, cluster := range ccm.clusters {
-		cluster.RemoteNode.Filter(func(n *Node) bool {
+		cluster.NodeManager.Filter(func(n *Node) bool {
 			return n.IsValid()
 		})
 	}

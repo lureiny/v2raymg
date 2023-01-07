@@ -54,20 +54,36 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, localNode)
-	uris, err := rpcClient.GetUsersSub(userPoint)
+	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
+		client.GetSubReqType,
+		&proto.GetSubReq{
+			User: userPoint,
+		},
+	)
 
-	if err != nil {
+	if len(failedList) != 0 {
+		errMsg := joinFailedList(failedList)
 		logger.Error(
 			"Err=%s|User=%s|Passwd=%s|Target=%s",
-			err.Error(),
+			errMsg,
 			parasMap["user"],
 			parasMap["pwd"],
 			parasMap["target"],
 		)
 	}
+	uris := []string{}
+	for _, u := range succList {
+		uris = append(uris, u.([]string)...)
+	}
 
 	uri := sub.TransferSubUri(uris, userAgent)
 	c.String(200, uri)
+}
+
+func (handler *SubHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		handler.handlerFunc,
+	}
 }
 
 func (handler *SubHandler) help() string {

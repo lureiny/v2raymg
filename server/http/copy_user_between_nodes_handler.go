@@ -2,10 +2,10 @@ package http
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
+	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
 type CopyUserBetweenNodesHandler struct{ HttpHandlerImp }
@@ -41,9 +41,9 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 	srcNodeRpcClient := client.NewEndNodeClient(srcNodes, localNode)
 	dstNodeRpcClient := client.NewEndNodeClient(dstNodes, localNode)
 
-	usersMap, err := srcNodeRpcClient.GetUsers()
-	if err != nil {
-		errMsg := fmt.Sprintf("get src node user list err > %v", err)
+	succList, failedList, _ := srcNodeRpcClient.ReqToMultiEndNodeServer(client.GetUsersReqType, &proto.GetUsersReq{})
+	if len(failedList) > 0 {
+		errMsg := fmt.Sprintf("get src node user list err > %v", failedList[parasMap["srcNode"]])
 		logger.Error(
 			"Err=%s|SrcNode=%s",
 			errMsg,
@@ -53,22 +53,29 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	users := usersMap[parasMap["srcNode"]]
-	errMsgs := []string{}
-	for _, u := range users {
+	users := succList[parasMap["srcNode"]]
+	for _, u := range users.([]*proto.User) {
 		u.Tags = []string{}
-		err := dstNodeRpcClient.UserOp(u, "AddUsers")
-		if err != nil {
-			logger.Error("Err=%s|DstNode=%s", err.Error(), parasMap["dstNode"])
-			errMsgs = append(errMsgs, fmt.Sprintf("user: %s transfer err > %v", u.Name, err))
-		}
 	}
+	_, failedList, _ = dstNodeRpcClient.ReqToMultiEndNodeServer(
+		client.AddUsersReqType,
+		&proto.UserOpReq{
+			Users: users.([]*proto.User),
+		},
+	)
 
-	if len(errMsgs) > 0 {
-		c.String(200, strings.Join(errMsgs, "|"))
+	if len(failedList) > 0 {
+		c.String(200, joinFailedList(failedList))
 		return
 	}
 	c.String(200, "Succ")
+}
+
+func (handler *CopyUserBetweenNodesHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		getAuthHandlerFunc(handler.httpServer),
+		handler.handlerFunc,
+	}
 }
 
 func (handler *CopyUserBetweenNodesHandler) help() string {

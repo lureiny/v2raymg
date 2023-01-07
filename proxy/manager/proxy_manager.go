@@ -13,11 +13,11 @@ import (
 	"time"
 
 	"github.com/lureiny/v2raymg/proxy/protocol"
-	"github.com/lureiny/v2raymg/proxy/stats"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
 const apiTag = "api"
+const supportInboundProtocol = "vmess|vless|trojan|shadowsocks"
 const minPort = 100
 const maxPort = 65535
 
@@ -79,7 +79,7 @@ func (proxyManager *ProxyManager) InitAdaptive(rawAdaptive *RawAdaptive) error {
 }
 
 func (proxyManager *ProxyManager) InitRuntimeConfig() error {
-	inbound := proxyManager.GetInbound("api")
+	inbound := proxyManager.GetInbound(apiTag)
 	if inbound == nil {
 		return fmt.Errorf("can not found api inbound")
 	}
@@ -303,7 +303,7 @@ func (proxyManager *ProxyManager) ResetUser(user *User) error {
 }
 
 func (proxyManager *ProxyManager) QueryStats(pattern string, reset bool) (*map[string]*proto.Stats, error) {
-	return stats.QueryStats(pattern, proxyManager.RuntimeConfig.Host, proxyManager.RuntimeConfig.Port, reset)
+	return QueryStats(pattern, proxyManager.RuntimeConfig.Host, proxyManager.RuntimeConfig.Port, reset)
 }
 
 // 搬迁inbound, 适用于修改端口的场景
@@ -400,7 +400,7 @@ func (proxyManager *ProxyManager) GetTags() []string {
 	tags := []string{}
 
 	for _, inbound := range proxyManager.Config.InboundConfigs {
-		if inbound.Tag != "api" {
+		if inbound.Tag != apiTag && strings.Contains(supportInboundProtocol, inbound.Protocol) {
 			tags = append(tags, inbound.Tag)
 		}
 	}

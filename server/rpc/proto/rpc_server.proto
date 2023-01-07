@@ -125,7 +125,7 @@ message CopyInboundReq {
 message CopyUserReq {
     NodeAuthInfo node_auth_info = 1;
     string src_tag = 2;
-    string new_tag = 3;
+    string dst_tag = 3;
 }
 
 message GetInboundReq {
@@ -175,6 +175,16 @@ message AdaptiveRsp {
     string msg = 2;
 }
 
+message SetGatewayModelReq {
+    NodeAuthInfo node_auth_info = 1;
+    bool enableGatewayModel = 2;
+}
+
+message SetGatewayModelRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
 service EndNodeAccess {
     rpc GetUsers(GetUsersReq) returns (GetUsersRsp) {}
     rpc AddUsers(UserOpReq) returns (UserOpRsp) {}
@@ -196,6 +206,7 @@ service EndNodeAccess {
     rpc AddAdaptiveConfig(AdaptiveOpReq) returns (AdaptiveRsp) {}
     rpc DeleteAdaptiveConfig(AdaptiveOpReq) returns (AdaptiveRsp) {}
     rpc Adaptive(AdaptiveReq) returns (AdaptiveRsp) {} // 外部调用的主动修改接口
+    rpc SetGatewayModel(SetGatewayModelReq) returns(SetGatewayModelRsp) {}
 }
 
 message GetClutersReq {

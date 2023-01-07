@@ -42,6 +42,7 @@ type EndNodeAccessClient interface {
 	AddAdaptiveConfig(ctx context.Context, in *AdaptiveOpReq, opts ...grpc.CallOption) (*AdaptiveRsp, error)
 	DeleteAdaptiveConfig(ctx context.Context, in *AdaptiveOpReq, opts ...grpc.CallOption) (*AdaptiveRsp, error)
 	Adaptive(ctx context.Context, in *AdaptiveReq, opts ...grpc.CallOption) (*AdaptiveRsp, error)
+	SetGatewayModel(ctx context.Context, in *SetGatewayModelReq, opts ...grpc.CallOption) (*SetGatewayModelRsp, error)
 }
 
 type endNodeAccessClient struct {
@@ -232,6 +233,15 @@ func (c *endNodeAccessClient) Adaptive(ctx context.Context, in *AdaptiveReq, opt
 	return out, nil
 }
 
+func (c *endNodeAccessClient) SetGatewayModel(ctx context.Context, in *SetGatewayModelReq, opts ...grpc.CallOption) (*SetGatewayModelRsp, error) {
+	out := new(SetGatewayModelRsp)
+	err := c.cc.Invoke(ctx, "/proto.EndNodeAccess/SetGatewayModel", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EndNodeAccessServer is the server API for EndNodeAccess service.
 // All implementations must embed UnimplementedEndNodeAccessServer
 // for forward compatibility
@@ -256,6 +266,7 @@ type EndNodeAccessServer interface {
 	AddAdaptiveConfig(context.Context, *AdaptiveOpReq) (*AdaptiveRsp, error)
 	DeleteAdaptiveConfig(context.Context, *AdaptiveOpReq) (*AdaptiveRsp, error)
 	Adaptive(context.Context, *AdaptiveReq) (*AdaptiveRsp, error)
+	SetGatewayModel(context.Context, *SetGatewayModelReq) (*SetGatewayModelRsp, error)
 	mustEmbedUnimplementedEndNodeAccessServer()
 }
 
@@ -322,6 +333,9 @@ func (UnimplementedEndNodeAccessServer) DeleteAdaptiveConfig(context.Context, *A
 }
 func (UnimplementedEndNodeAccessServer) Adaptive(context.Context, *AdaptiveReq) (*AdaptiveRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Adaptive not implemented")
+}
+func (UnimplementedEndNodeAccessServer) SetGatewayModel(context.Context, *SetGatewayModelReq) (*SetGatewayModelRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetGatewayModel not implemented")
 }
 func (UnimplementedEndNodeAccessServer) mustEmbedUnimplementedEndNodeAccessServer() {}
 
@@ -696,6 +710,24 @@ func _EndNodeAccess_Adaptive_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EndNodeAccess_SetGatewayModel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetGatewayModelReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).SetGatewayModel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/proto.EndNodeAccess/SetGatewayModel",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).SetGatewayModel(ctx, req.(*SetGatewayModelReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EndNodeAccess_ServiceDesc is the grpc.ServiceDesc for EndNodeAccess service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -782,6 +814,10 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Adaptive",
 			Handler:    _EndNodeAccess_Adaptive_Handler,
+		},
+		{
+			MethodName: "SetGatewayModel",
+			Handler:    _EndNodeAccess_SetGatewayModel_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

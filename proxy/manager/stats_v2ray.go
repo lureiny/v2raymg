@@ -1,15 +1,13 @@
-//go:build !v2ray
+//go:build v2ray
 
-package stats
+package manager
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 
 	"github.com/lureiny/v2raymg/server/rpc/proto"
-	"github.com/xtls/xray-core/app/stats/command"
-	"google.golang.org/grpc"
+	"github.com/v2fly/v2ray-core/v5/app/stats/command"
 )
 
 var regexCompile = regexp.MustCompile(`(user|inbound|outbound)>>>(\S+)>>>traffic>>>(downlink|uplink)`)
@@ -44,9 +42,9 @@ func parseQueryStats(resp *command.QueryStatsResponse) (*map[string]*proto.Stats
 	return &result, nil
 }
 
-func QueryStats(pattern, host string, port int, reset bool) (*map[string]*proto.Stats, error) {
+func QueryStats(host, pattern string, port int, reset bool) (*map[string]*proto.Stats, error) {
 	// 创建grpc client
-	cmdConn, err := grpc.Dial(fmt.Sprintf("%s:%d", host, port), grpc.WithInsecure())
+	cmdConn, err := GetProxyClient(host, port).GetGrpcClientConn()
 	if err != nil {
 		return nil, err
 	}
@@ -63,3 +61,5 @@ func QueryStats(pattern, host string, port int, reset bool) (*map[string]*proto.
 	}
 	return parseQueryStats(resp)
 }
+
+

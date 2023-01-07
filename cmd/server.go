@@ -35,7 +35,7 @@ func startServer(cmd *cobra.Command, args []string) {
 	}
 	log.Printf("read config from: %s \n", serverConfig)
 	// center node
-	serverType := configManager.GetString("server.rpc.type")
+	serverType := configManager.GetString(common.RpcServerType)
 	if strings.ToLower(serverType) == "center" {
 		centerNodeServer := &rpc.CenterNodeServer{}
 		centerNodeServer.Init()
@@ -48,7 +48,7 @@ func startServer(cmd *cobra.Command, args []string) {
 	configManager.AutoFlush(1)
 
 	proxyManager := manager.GetProxyManager()
-	err = proxyManager.Init(configManager.GetString("proxy.config_file"), configManager.GetString("proxy.exec"))
+	err = proxyManager.Init(configManager.GetString(common.ProxyConfigFile), configManager.GetString(common.ProxyExec))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -71,5 +71,8 @@ func startServer(cmd *cobra.Command, args []string) {
 	go endNodeServer.Start()
 	httpServer := http.GlobalHttpServer
 	httpServer.Init(globalUserManager, globalClusterManager)
+	if configManager.GetBool(common.SupportPrometheus) {
+		http.RegisterPrometheus()
+	}
 	httpServer.Start()
 }
