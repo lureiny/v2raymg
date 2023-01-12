@@ -29,9 +29,11 @@ func init() {
 func startServer(cmd *cobra.Command, args []string) {
 	log.Printf("Start v2raymg which manage %s", manager.FileName)
 	// 读取配置文件
-	err := configManager.Init(serverConfig)
-	if err != nil {
-		log.Fatal(err.Error())
+	if err := configManager.Init(serverConfig); err != nil {
+		log.Fatalf("init global config fail: %v", err)
+	}
+	if err := common.CheckConfig(configManager); err != nil {
+		log.Fatalf("global config has something wrong: %v", err)
 	}
 	log.Printf("read config from: %s \n", serverConfig)
 	// center node
@@ -48,7 +50,7 @@ func startServer(cmd *cobra.Command, args []string) {
 	configManager.AutoFlush(1)
 
 	proxyManager := manager.GetProxyManager()
-	err = proxyManager.Init(configManager.GetString(common.ProxyConfigFile), configManager.GetString(common.ProxyExec))
+	err := proxyManager.Init(configManager.GetString(common.ProxyConfigFile), configManager.GetString(common.ProxyExec))
 	if err != nil {
 		log.Fatal(err)
 	}
