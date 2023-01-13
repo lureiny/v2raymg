@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
@@ -17,6 +18,31 @@ var userOpMap = map[string]string{
 	"1": "AddUsers", "2": "UpdateUsers", "3": "DeleteUsers", "4": "ResetUser",
 }
 
+func getExpireTime(parmas map[string]string) (int64, error) {
+	var expire uint64 = 0
+	var ttl uint64 = 0
+	var err error = nil
+
+	if _, ok := parmas["expire"]; ok {
+		if expire, err = strconv.ParseUint(parmas["expire"], 10, 64); err != nil {
+			return 0, fmt.Errorf("invalid expire param > %v", err)
+		}
+	}
+
+	if _, ok := parmas["ttl"]; ok {
+		if ttl, err = strconv.ParseUint(parmas["ttl"], 10, 64); err != nil {
+			return 0, fmt.Errorf("invalid ttl param > %v", err)
+		}
+	}
+
+	// 优先使用ttl
+	if ttl == 0 {
+		return int64(expire), nil
+	} else {
+		return time.Now().Unix() + int64(ttl), nil
+	}
+}
+
 func (handler *UserHandler) parseParam(c *gin.Context) map[string]string {
 	parasMap := map[string]string{}
 	parasMap["user"] = c.Query("user")
@@ -24,13 +50,15 @@ func (handler *UserHandler) parseParam(c *gin.Context) map[string]string {
 	parasMap["type"] = c.DefaultQuery("type", "")
 	parasMap["target"] = c.DefaultQuery("target", handler.getHttpServer().Name)
 	parasMap["tags"] = c.DefaultQuery("tags", "")
+	parasMap["ttl"] = c.DefaultQuery("ttl", "0")
+	parasMap["expire"] = c.DefaultQuery("expire", "0")
 	return parasMap
 }
 
 func (handler *UserHandler) handlerFunc(c *gin.Context) {
 	parasMap := handler.parseParam(c)
 	var err error = nil
-	expire, err := strconv.ParseInt(c.DefaultQuery("expire", "0"), 10, 64)
+	expire, err := getExpireTime(parasMap)
 
 	if err != nil {
 		errMsg := fmt.Sprintf("illegal expire time > %v", err)
@@ -133,15 +161,17 @@ func (handler *UserHandler) help() string {
 	token: 用于验证操作权限
 	各个接口参数说明:
 	1. 添加用户
-	/user?type=1&user={user}&pwd={pwd}&expire={expire}&target={target}&token={token}
+	/user?type=1&user={user}&pwd={pwd}&expire={expire}&target={target}&token={token}&ttl={ttl}
 	user: 用户名
 	pwd: password
-	expire: 过期时间, 过期时间的时间戳, 例如2022-11-27 12:00:00过期, 则expire=1669521600
+	expire: 过期时间, 过期时间的时间戳, 例如2022-11-27 12:00:00过期, 则expire=1669521600, 与下述ttl参数同时存在时, 优先使用ttl设置过期时间
+	ttl: 存活时间, 从添加时开始的有效存活时间, 单位为秒, 例如1个小时内有效, ttl=3600
 	2. 更新用户信息
-	/user?type=2&user={user}&pwd={pwd}&expire={expire}&target={target}&token={token}
+	/user?type=2&user={user}&pwd={pwd}&expire={expire}&target={target}&token={token}&ttl={ttl}
 	user: 用户名
 	pwd: password
-	expire: 过期时间, 过期时间的时间戳, 例如2022-11-27 12:00:00过期, 则expire=1669521600
+	expire: 过期时间, 过期时间的时间戳, 例如2022-11-27 12:00:00过期, 则expire=1669521600, 与下述ttl参数同时存在时, 优先使用ttl设置过期时间
+	ttl: 存活时间, 从添加时开始的有效存活时间, 单位为秒, 例如1个小时内有效, ttl=3600
 	3. 删除用户
 	/user?type=3&target={target}&user={user}&token={token}
 	user: 用户名
