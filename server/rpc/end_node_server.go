@@ -43,7 +43,7 @@ func GetEndNodeServer() *EndNodeServer {
 }
 
 func (s *EndNodeServer) initRpcServerKey() {
-	if len(s.clusterManager.Token) > rpcServerKeyLen {
+	if len(s.clusterManager.Token) >= rpcServerKeyLen {
 		RpcServerKey = []byte(s.clusterManager.Token)[:32]
 	} else {
 		// 如果密码为空, 则同样不具有安全性, 仅仅不会被抓包直接分析
