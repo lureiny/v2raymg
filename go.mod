@@ -3,7 +3,7 @@ module github.com/lureiny/v2raymg
 go 1.18
 
 require (
-	github.com/agiledragon/gomonkey v2.0.2+incompatible
+	github.com/agiledragon/gomonkey/v2 v2.9.0
 	github.com/gin-gonic/gin v1.7.7
 	github.com/golang/protobuf v1.5.2
 	github.com/google/go-github/v48 v48.0.0

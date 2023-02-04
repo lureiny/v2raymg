@@ -1,10 +1,15 @@
 package http
 
 import (
+	"fmt"
+	"io/ioutil"
+	"net/http"
 	"testing"
 	"time"
 
-	"github.com/agiledragon/gomonkey"
+	gomonkey "github.com/agiledragon/gomonkey/v2"
+	"github.com/gin-gonic/gin"
+	"github.com/lureiny/v2raymg/common"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -24,7 +29,7 @@ func TestGetExpireTime(t *testing.T) {
 					convey.Convey("get expire time by expire with out ttl", func() {
 						expireTime, err := getExpireTime(p)
 						convey.So(err, convey.ShouldBeNil)
-						convey.ShouldEqual(expireTime, 123)
+						convey.So(expireTime, convey.ShouldEqual, 123)
 					})
 				},
 			},
@@ -36,12 +41,12 @@ func TestGetExpireTime(t *testing.T) {
 					convey.Convey("get expire time by ttl with out expire", func() {
 						expireTime, err := getExpireTime(p)
 						convey.So(err, convey.ShouldBeNil)
-						convey.ShouldEqual(expireTime, 123+12)
+						convey.So(expireTime, convey.ShouldEqual, 123+12)
 					})
 				},
 				mockFunc: func() func() {
-					patch1 := gomonkey.ApplyFunc(time.Time.Unix, func(time.Time) int64 {
-						return 12
+					patch1 := gomonkey.ApplyFunc(time.Now, func() time.Time {
+						return time.Unix(12, 0)
 					})
 					return func() {
 						patch1.Reset()
@@ -57,7 +62,7 @@ func TestGetExpireTime(t *testing.T) {
 					convey.Convey("get expire time by expire with ttl", func() {
 						expireTime, err := getExpireTime(p)
 						convey.So(err, convey.ShouldBeNil)
-						convey.ShouldEqual(expireTime, 1234)
+						convey.So(expireTime, convey.ShouldEqual, 1234)
 					})
 				},
 			},
@@ -70,12 +75,12 @@ func TestGetExpireTime(t *testing.T) {
 					convey.Convey("get expire time by ttl with expire", func() {
 						expireTime, err := getExpireTime(p)
 						convey.So(err, convey.ShouldBeNil)
-						convey.ShouldEqual(expireTime, 123+12)
+						convey.So(expireTime, convey.ShouldEqual, 123+12)
 					})
 				},
 				mockFunc: func() func() {
-					patch1 := gomonkey.ApplyFunc(time.Time.Unix, func(time.Time) int64 {
-						return 12
+					patch1 := gomonkey.ApplyFunc(time.Now, func() time.Time {
+						return time.Unix(12, 0)
 					})
 					return func() {
 						patch1.Reset()
@@ -91,7 +96,7 @@ func TestGetExpireTime(t *testing.T) {
 					convey.Convey("get expire time by default expire and ttl", func() {
 						expireTime, err := getExpireTime(p)
 						convey.So(err, convey.ShouldBeNil)
-						convey.ShouldEqual(expireTime, 0)
+						convey.So(expireTime, convey.ShouldEqual, 0)
 					})
 				},
 			},
@@ -101,7 +106,7 @@ func TestGetExpireTime(t *testing.T) {
 					convey.Convey("get expire time with out expire and ttl", func() {
 						expireTime, err := getExpireTime(p)
 						convey.So(err, convey.ShouldBeNil)
-						convey.ShouldEqual(expireTime, 0)
+						convey.So(expireTime, convey.ShouldEqual, 0)
 					})
 				},
 			},
@@ -118,5 +123,90 @@ func TestGetExpireTime(t *testing.T) {
 			}
 		}
 	})
+}
 
+func getResponse(resp *http.Response) []byte {
+	d, _ := ioutil.ReadAll(resp.Body)
+	return d
+}
+
+func setGlobalServer() {
+	GlobalHttpServer.Host = "127.0.0.1"
+	GlobalHttpServer.Port = 10000
+}
+
+func startGlobalHttpServer() {
+	setGlobalServer()
+	go GlobalHttpServer.Start()
+	time.Sleep(100 * time.Microsecond)
+}
+
+func TestUserHandleFunc(t *testing.T) {
+	type TestCase struct {
+		f        func()
+		mockFunc func() func()
+	}
+	startGlobalHttpServer()
+
+	convey.Convey("test user handler func", t, func() {
+		testCases := []TestCase{
+			{
+				f: func() {
+					convey.Convey("get expire time fail", func() {
+						resp, _ := http.Get("http://127.0.0.1:10000/user")
+						convey.So(string(getResponse(resp)), convey.ShouldEqual, "illegal expire time > invalid expire time")
+					})
+				},
+				mockFunc: func() func() {
+					patch1 := gomonkey.ApplyPrivateMethod(&UserHandler{}, "parseParam", func(_ *gin.Context) map[string]string {
+						return map[string]string{}
+					})
+					patch2 := gomonkey.ApplyFunc(getExpireTime, func(map[string]string) (int64, error) {
+						return 0, fmt.Errorf("invalid expire time")
+					})
+					return func() {
+						patch1.Reset()
+						patch2.Reset()
+					}
+				},
+			},
+			{
+				f: func() {
+					convey.Convey("get node fail", func() {
+						resp, _ := http.Get("http://127.0.0.1:10000/user")
+						convey.So(string(getResponse(resp)), convey.ShouldEqual, "no avaliable node")
+					})
+				},
+				mockFunc: func() func() {
+					patch1 := gomonkey.ApplyPrivateMethod(&UserHandler{}, "parseParam", func(_ *gin.Context) map[string]string {
+						return map[string]string{
+							"target": "",
+						}
+					})
+					patch2 := gomonkey.ApplyFunc(getExpireTime, func(map[string]string) (int64, error) {
+						return 0, nil
+					})
+					patch3 := gomonkey.ApplyPrivateMethod(&HttpServer{}, "getTargetNodes", func(target string) *[]*common.Node {
+						return &[]*common.Node{}
+					})
+					return func() {
+						patch1.Reset()
+						patch2.Reset()
+						patch3.Reset()
+					}
+				},
+			},
+		}
+
+		for _, t := range testCases {
+			var cb func() = nil
+			if t.mockFunc != nil {
+				cb = t.mockFunc()
+			}
+			t.f()
+			if cb != nil {
+				cb()
+			}
+		}
+	})
 }
