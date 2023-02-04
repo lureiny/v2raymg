@@ -95,3 +95,7 @@ func (logger *Logger) baseLogOut(logLevel int, format string, a ...interface{}) 
 		logger.baseLogger.Printf(format, a...)
 	}
 }
+
+func init() {
+	logger.Init()
+}

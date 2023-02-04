@@ -55,7 +55,7 @@ func NewStreamSetting(network, tls, keyFile, certFile string) (*conf.StreamConfi
 		Security: tls,
 		TLSSettings: &conf.TLSConfig{
 			Certs: []*conf.TLSCertConfig{
-				&conf.TLSCertConfig{
+				{
 					CertFile: certFile,
 					KeyFile:  keyFile,
 				},

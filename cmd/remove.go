@@ -26,7 +26,7 @@ func removeUserLocal(cmd *cobra.Command, args []string) {
 	proxyManager := manager.GetProxyManager()
 	err := proxyManager.Init(configFile, "")
 	if err != nil {
-		log.Fatal("Failed to add user > %v", err)
+		log.Fatalf("Failed to add user > %v", err)
 	}
 
 	user, err := manager.NewUser(email, inBoundTag, manager.UUID(uuid))

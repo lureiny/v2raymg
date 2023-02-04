@@ -70,7 +70,7 @@ func (handler *UserHandler) handlerFunc(c *gin.Context) {
 			parasMap["type"],
 			parasMap["target"],
 		)
-		c.String(200, "illegal expire time")
+		c.String(200, errMsg)
 		return
 	}
 

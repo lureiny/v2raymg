@@ -12,7 +12,6 @@ var (
 
 	// Not necessary flags
 	uuid       string
-	protocol   string
 	alterID    int
 	level      int
 	configFile string
@@ -20,7 +19,4 @@ var (
 	// query flags
 	unit    string
 	pattern string
-
-	// server's token
-	token string
 )

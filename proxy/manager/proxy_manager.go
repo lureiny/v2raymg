@@ -20,6 +20,7 @@ const apiTag = "api"
 const supportInboundProtocol = "vmess|vless|trojan|shadowsocks"
 const minPort = 100
 const maxPort = 65535
+const defaultApiPort = 10085
 
 // 默认每天凌晨5点更换一次
 const defalutCron = "0 5 * * *"
@@ -61,7 +62,7 @@ func (proxyManager *ProxyManager) Init(configFile, exec string) error {
 	proxyManager.proxyServer = NewProxyServer(
 		configFile, exec,
 	)
-	return proxyManager.InitRuntimeConfig()
+	return proxyManager.InitRuntimeConfig(exec != "")
 }
 
 // 手动初始化
@@ -78,10 +79,15 @@ func (proxyManager *ProxyManager) InitAdaptive(rawAdaptive *RawAdaptive) error {
 	return nil
 }
 
-func (proxyManager *ProxyManager) InitRuntimeConfig() error {
+// InitRuntimeConfig init api config
+func (proxyManager *ProxyManager) InitRuntimeConfig(isManageExec bool) error {
 	inbound := proxyManager.GetInbound(apiTag)
 	if inbound == nil {
-		return fmt.Errorf("can not found api inbound")
+		if !isManageExec {
+			return fmt.Errorf("can't not found api inbound")
+		}
+		inbound = proxyManager.initApiConfig()
+		proxyManager.Flush()
 	}
 	inbound.RWMutex.RLock()
 	defer inbound.RWMutex.RUnlock()
@@ -90,6 +96,25 @@ func (proxyManager *ProxyManager) InitRuntimeConfig() error {
 		Port: int(inbound.Config.PortRange),
 	}
 	return nil
+}
+
+func (proxyManager *ProxyManager) initApiConfig() *Inbound {
+	s := json.RawMessage(`{"address": "127.0.0.1"}`)
+	inbound := &Inbound{
+		Tag: apiTag,
+		Config: protocol.InboundDetourConfig{
+			Protocol:  "dokodemo-door",
+			PortRange: defaultApiPort,
+			ListenOn:  "127.0.0.1",
+			Tag:       apiTag,
+			Settings:  &s,
+		},
+	}
+	// add inbound
+	proxyManager.InboundManager.Add(inbound)
+
+	configAllApiInfo(&proxyManager.Config)
+	return inbound
 }
 
 func (proxyManager *ProxyManager) AddInbound(inbound *Inbound) error {
