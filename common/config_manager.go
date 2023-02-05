@@ -14,7 +14,7 @@ var globalConfigManager *ConfigManager = nil
 const (
 	RpcServerType        = "server.rpc.type"
 	ProxyConfigFile      = "proxy.config_file"
-	ProxyExec            = "proxy.exec"
+	ProxyVersion         = "proxy.version"
 	ProxyDefaultTags     = "proxy.default_tags"
 	Users                = "users"
 	ProxyHost            = "proxy.host"
@@ -96,8 +96,10 @@ func checkProxyConfig(cm *ConfigManager) error {
 
 func checkProxyConfigFile(cm *ConfigManager) error {
 	fileName := cm.GetString(ProxyConfigFile)
-	_, err := os.Stat(fileName)
-	return fmt.Errorf("check proxy config fail: %v", err)
+	if _, err := os.Stat(fileName); err != nil {
+		return fmt.Errorf("check proxy config fail: %v", err)
+	}
+	return nil
 }
 
 func checkServerConfig(cm *ConfigManager) error {

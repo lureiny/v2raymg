@@ -52,17 +52,15 @@ func GetProxyManager() *ProxyManager {
 	return proxyManager
 }
 
-func (proxyManager *ProxyManager) Init(configFile, exec string) error {
+func (proxyManager *ProxyManager) Init(configFile, version string) error {
 	proxyManager.ConfigFile = configFile
 	err := proxyManager.LoadConfig()
 	if err != nil {
 		return err
 	}
 
-	proxyManager.proxyServer = NewProxyServer(
-		configFile, exec,
-	)
-	return proxyManager.InitRuntimeConfig(exec != "")
+	proxyManager.proxyServer = NewProxyServer(configFile, version)
+	return proxyManager.InitRuntimeConfig(true)
 }
 
 // 手动初始化
@@ -504,14 +502,7 @@ func (proxyManager *ProxyManager) ReStartProxyServer() error {
 }
 
 func (proxyManager *ProxyManager) UpdateProxyServer(tag string) error {
-	if err := proxyManager.proxyServer.UpdateByTagName(tag); err != nil {
-		return err
-	}
-	proxyManager.StopProxyServer()
-	if err := proxyManager.proxyServer.SwitchExec(); err != nil {
-		return err
-	}
-	return proxyManager.proxyServer.Start()
+	return proxyManager.proxyServer.Update(tag)
 }
 
 func (proxyManager *ProxyManager) GetProxyServerVersion() string {

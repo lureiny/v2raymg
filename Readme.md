@@ -195,7 +195,7 @@ make xray  #  构建xray版本
     "default_tags": ["vless"],                                    // 默认操作的inbound  tag, 为空时会在全部外部inbound上操作
     "host": "127.0.0.1",                                          // 本地的ip/host, 生成订阅时需要用到
     "port": 443,                                                  // proxy的端口, 不填时会使用proxy config中的监听端口, 不支持port range
-    "exec": "",                                                   // 可执行文件路径, 填写后v2raymg会接管进程的运行, 同时可以实现升级管理
+    "version": "",                                                // v2ray/xray server端版本, 默认为最新版
     "adaptive": {                                                 // 自适应配置
       "ports": [10000,"20000-21000"],                             // 端口范围, 自动更换时会从该端口范围内随机选择一个
       "tags": ["vless"],                                          // 需要自动更换端口的inbound tag

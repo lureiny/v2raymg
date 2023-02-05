@@ -50,7 +50,7 @@ func startServer(cmd *cobra.Command, args []string) {
 	configManager.AutoFlush(1)
 
 	proxyManager := manager.GetProxyManager()
-	err := proxyManager.Init(configManager.GetString(common.ProxyConfigFile), configManager.GetString(common.ProxyExec))
+	err := proxyManager.Init(configManager.GetString(common.ProxyConfigFile), configManager.GetString(common.ProxyVersion))
 	if err != nil {
 		log.Fatal(err)
 	}
