@@ -26,13 +26,13 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	srcNodes := handler.getHttpServer().getTargetNodes(parasMap["srcNode"])
+	srcNodes := handler.getHttpServer().GetTargetNodes(parasMap["srcNode"])
 	if len(*srcNodes) == 0 {
 		c.String(200, "no avaliable src node")
 		return
 	}
 
-	dstNodes := handler.getHttpServer().getTargetNodes(parasMap["dstNode"])
+	dstNodes := handler.getHttpServer().GetTargetNodes(parasMap["dstNode"])
 	if len(*dstNodes) == 0 {
 		c.String(200, "no avaliable dst node")
 		return

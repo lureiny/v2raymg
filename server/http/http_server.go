@@ -61,7 +61,7 @@ func (s *HttpServer) Start() {
 }
 
 // 根据target查找路由的节点
-func (s *HttpServer) getTargetNodes(target string) *[]*common.Node {
+func (s *HttpServer) GetTargetNodes(target string) *[]*common.Node {
 	if target == "all" {
 		filter := func(n *common.Node) bool {
 			return n.Name == s.Name || n.IsValid()

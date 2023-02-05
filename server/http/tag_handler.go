@@ -17,7 +17,7 @@ func (handler *TagHandler) parseParam(c *gin.Context) map[string]string {
 func (handler *TagHandler) handlerFunc(c *gin.Context) {
 	parasMap := handler.parseParam(c)
 
-	nodes := handler.getHttpServer().getTargetNodes(parasMap["target"])
+	nodes := handler.getHttpServer().GetTargetNodes(parasMap["target"])
 	if len(*nodes) == 0 {
 		c.String(200, "no avaliable node")
 		return

@@ -9,6 +9,8 @@ message User {
     string passwd = 2;
     int64 expire_time = 3;
     repeated string tags = 4;
+    int64 downlink = 5;
+    int64 uplink = 6;
 }
 
 message NodeAuthInfo {

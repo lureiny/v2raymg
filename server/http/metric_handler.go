@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lureiny/v2raymg/client"
+	"github.com/lureiny/v2raymg/common"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -37,23 +37,14 @@ func updateTrafficStats(stats *[]*proto.Stats) {
 }
 
 func (handler *MetricHandler) handlerFunc(c *gin.Context) {
-	nodes := handler.getHttpServer().getTargetNodes(handler.getHttpServer().Name)
-	rpcClient := client.NewEndNodeClient(nodes, localNode)
-	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
-		client.GetBandWidthStatsReqType,
-		&proto.GetBandwidthStatsReq{
-			Pattern: "",
-			Reset_:  true,
-		},
-	)
-	if len(failedList) != 0 {
-		errMsg := joinFailedList(failedList)
-		logger.Error("Err=%s", errMsg)
-		c.String(200, errMsg)
-		c.Abort()
+	common.StatsForPrometheus.Mutex.Lock()
+	defer common.StatsForPrometheus.Mutex.Unlock()
+	stats := []*proto.Stats{}
+	for _, s := range common.StatsForPrometheus.StatsMap {
+		stats = append(stats, s)
 	}
-	stats := succList[handler.getHttpServer().Name].([]*proto.Stats)
 	updateTrafficStats(&stats)
+	common.StatsForPrometheus.StatsMap = make(map[string]*proto.Stats)
 	c.Next()
 }
 

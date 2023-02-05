@@ -308,7 +308,14 @@ func (s *EndNodeServer) GetUsers(ctx context.Context, getUsersReq *proto.GetUser
 		Code: 0,
 	}
 	usersMap := s.userManager.GetUserList()
+	sumStats := common.SumStats
+	sumStats.Mutex.Lock()
+	defer sumStats.Mutex.Unlock()
 	for _, u := range usersMap {
+		if stat, ok := sumStats.StatsMap[u.Name+"_user"]; ok {
+			u.Downlink = stat.Downlink
+			u.Uplink = stat.Uplink
+		}
 		getUsersRsp.Users = append(getUsersRsp.Users, u)
 	}
 	return getUsersRsp, nil

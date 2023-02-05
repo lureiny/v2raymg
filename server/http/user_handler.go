@@ -83,7 +83,7 @@ func (handler *UserHandler) handlerFunc(c *gin.Context) {
 		Tags:       tagList.Filter(func(t string) bool { return len(t) > 0 }),
 	}
 
-	nodes := handler.getHttpServer().getTargetNodes(parasMap["target"])
+	nodes := handler.getHttpServer().GetTargetNodes(parasMap["target"])
 	if len(*nodes) == 0 {
 		c.String(200, "no avaliable node")
 		return
