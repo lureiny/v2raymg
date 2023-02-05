@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"log"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/lureiny/v2raymg/common"
 	"github.com/lureiny/v2raymg/proxy/manager"
@@ -76,5 +79,10 @@ func startServer(cmd *cobra.Command, args []string) {
 	if configManager.GetBool(common.SupportPrometheus) {
 		http.RegisterPrometheus()
 	}
-	httpServer.Start()
+	go httpServer.Start()
+	c := make(chan os.Signal)
+	signal.Notify(c, syscall.SIGTERM, syscall.SIGKILL)
+	signal := <-c
+	common.LoggerImp.Info("Msg=Exit With signal: %v", signal)
+	proxyManager.StopProxyServer()
 }

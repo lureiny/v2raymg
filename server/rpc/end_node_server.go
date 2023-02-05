@@ -828,6 +828,11 @@ func (s *EndNodeServer) SetGatewayModel(ctx context.Context, setGatewayModelReq 
 	setGatewayModelRsp := &proto.SetGatewayModelRsp{
 		Code: 0,
 	}
+	if setGatewayModelReq.GetEnableGatewayModel() {
+		proxyManager.StopProxyServer()
+	} else {
+		proxyManager.StartProxyServer()
+	}
 	configManager.Set(common.ServerRpcOnlyGateway, setGatewayModelReq.GetEnableGatewayModel())
 	return setGatewayModelRsp, nil
 }
