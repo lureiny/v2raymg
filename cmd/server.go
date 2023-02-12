@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -106,6 +107,15 @@ func collectStats(httpServer *http.HttpServer) {
 			common.SumStats.Ch <- stat
 		}
 	}
+}
+
+func init() {
+	ex, err := os.Executable()
+	if err != nil {
+		panic("can't get exec path")
+	}
+	exPath := filepath.Dir(ex)
+	os.Chdir(exPath)
 }
 
 func startServer(cmd *cobra.Command, args []string) {
