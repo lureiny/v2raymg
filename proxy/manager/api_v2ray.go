@@ -5,19 +5,19 @@ package manager
 import (
 	"encoding/json"
 
-	"github.com/lureiny/v2raymg/proxy/protocol"
+	"github.com/lureiny/v2raymg/proxy/config"
 	conf "github.com/v2fly/v2ray-core/v5/infra/conf/v4"
 )
 
-func configAllApiInfo(config *protocol.V2rayConfig) {
+func configAllApiInfo(c *config.V2rayConfig) {
 	config.Stats = &conf.StatsConfig{}
-	configApi(config)
-	configRoute(config)
-	configPolicy(config)
+	configApi(c)
+	configRoute(c)
+	configPolicy(c)
 }
 
-func configApi(config *protocol.V2rayConfig) {
-	config.API = &conf.APIConfig{
+func configApi(c *config.V2rayConfig) {
+	c.API = &conf.APIConfig{
 		Tag: apiTag,
 		Services: []string{
 			"HandlerService",
@@ -27,9 +27,9 @@ func configApi(config *protocol.V2rayConfig) {
 	}
 }
 
-func configRoute(config *protocol.V2rayConfig) {
-	config.RouterConfig.RuleList = append(
-		config.RouterConfig.RuleList,
+func configRoute(c *config.V2rayConfig) {
+	c.RouterConfig.RuleList = append(
+		c.RouterConfig.RuleList,
 		json.RawMessage(`{
 			"inboundTag": [
 				"api"
@@ -40,8 +40,8 @@ func configRoute(config *protocol.V2rayConfig) {
 	)
 }
 
-func configPolicy(config *protocol.V2rayConfig) {
-	config.Policy = &conf.PolicyConfig{
+func configPolicy(c *config.V2rayConfig) {
+	c.Policy = &conf.PolicyConfig{
 		Levels: map[uint32]*conf.Policy{
 			0: {
 				StatsUserUplink:   true,

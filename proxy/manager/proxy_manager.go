@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/lureiny/v2raymg/lego"
-	"github.com/lureiny/v2raymg/proxy/protocol"
+	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -29,7 +29,7 @@ const defalutCron = "0 5 * * *"
 // 管理proxy相关的基础配置, 不包含用户的变更
 type ProxyManager struct {
 	ConfigFile     string // 文件目录
-	Config         protocol.V2rayConfig
+	Config         config.V2rayConfig
 	needFlush      bool
 	InboundManager InboundManager
 	rwmutex        sync.RWMutex // bound操作锁
@@ -103,7 +103,7 @@ func (proxyManager *ProxyManager) initApiConfig() *Inbound {
 	s := json.RawMessage(`{"address": "127.0.0.1"}`)
 	inbound := &Inbound{
 		Tag: apiTag,
-		Config: protocol.InboundDetourConfig{
+		Config: config.InboundDetourConfig{
 			Protocol:  "dokodemo-door",
 			PortRange: defaultApiPort,
 			ListenOn:  "127.0.0.1",
@@ -211,7 +211,7 @@ func (proxyManager *ProxyManager) Flush() error {
 	proxyManager.rwmutex.Lock()
 	defer proxyManager.rwmutex.Unlock()
 
-	proxyManager.Config.InboundConfigs = make([]protocol.InboundDetourConfig, 0)
+	proxyManager.Config.InboundConfigs = make([]config.InboundDetourConfig, 0)
 	for _, inbound := range proxyManager.InboundManager.inbounds {
 		inbound.RWMutex.RLock()
 		proxyManager.Config.InboundConfigs = append(proxyManager.Config.InboundConfigs, inbound.Config)
@@ -433,7 +433,7 @@ func (proxyManager *ProxyManager) GetTags() []string {
 	return tags
 }
 
-func (proxyManager *ProxyManager) GetUpstreamInbound(port string) (protocol.InboundDetourConfig, error) {
+func (proxyManager *ProxyManager) GetUpstreamInbound(port string) (config.InboundDetourConfig, error) {
 	proxyManager.rwmutex.RLock()
 	defer proxyManager.rwmutex.RUnlock()
 
@@ -442,10 +442,10 @@ func (proxyManager *ProxyManager) GetUpstreamInbound(port string) (protocol.Inbo
 			return inboundConfig, nil
 		}
 	}
-	return protocol.InboundDetourConfig{}, fmt.Errorf("no upstream inbound of inbound with port(%s)", port)
+	return config.InboundDetourConfig{}, fmt.Errorf("no upstream inbound of inbound with port(%s)", port)
 }
 
-func isUpstreamInbound(port string, inboundConfig *protocol.InboundDetourConfig) bool {
+func isUpstreamInbound(port string, inboundConfig *config.InboundDetourConfig) bool {
 	protocolName := strings.ToLower(inboundConfig.Protocol)
 	if protocolName == VlessProtocolName {
 		vlessInboundConfig, err := NewVlessInboundConfig(inboundConfig)

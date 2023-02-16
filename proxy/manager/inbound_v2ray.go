@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lureiny/v2raymg/proxy/protocol"
+	"github.com/lureiny/v2raymg/proxy/config"
 	core "github.com/v2fly/v2ray-core/v5"
 	"github.com/v2fly/v2ray-core/v5/app/proxyman/command"
 	conf "github.com/v2fly/v2ray-core/v5/infra/conf/v4"
@@ -75,7 +75,7 @@ func RemoveInboundFromRuntime(runtimeConfig *RuntimeConfig, tag string) error {
 func resetInboundUser(inboundSetting *json.RawMessage, p string) {
 	switch strings.ToLower(p) {
 	case VlessProtocolName:
-		vlessConfig := new(protocol.VLessInboundConfig)
+		vlessConfig := new(config.VLessInboundConfig)
 		json.Unmarshal([]byte(*(inboundSetting)), vlessConfig)
 		vlessConfig.Clients = []json.RawMessage{}
 		vlessConfigBytes, _ := json.MarshalIndent(vlessConfig, "", "    ")
@@ -107,7 +107,7 @@ func NewProtocolSetting(p string) *json.RawMessage {
 		return (*json.RawMessage)(&trojanConfigBytes)
 	// 默认返回vless的配置
 	default:
-		vlessConfig := new(protocol.VLessInboundConfig)
+		vlessConfig := new(config.VLessInboundConfig)
 		vlessConfigBytes, _ := json.MarshalIndent(vlessConfig, "", "    ")
 		return (*json.RawMessage)(&vlessConfigBytes)
 	}

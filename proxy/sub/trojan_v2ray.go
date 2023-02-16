@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	protocolP "github.com/lureiny/v2raymg/proxy/protocol"
+	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/v2fly/v2ray-core/v5/infra/conf/v4"
 )
 
@@ -26,7 +26,7 @@ func (c *TrojanShareConfig) Build() string {
 	return fmt.Sprintf("%s?%s#%s", c.BaseConfig.Build(), fixUri(paramsURI), url.QueryEscape(c.NodeName))
 }
 
-func parseTrojanAccountInfo(in *protocolP.InboundDetourConfig, email string, sharedConfig *TrojanShareConfig) error {
+func parseTrojanAccountInfo(in *config.InboundDetourConfig, email string, sharedConfig *TrojanShareConfig) error {
 	trojanConfig := new(v4.TrojanServerConfig)
 
 	err := json.Unmarshal([]byte(*(in.Settings)), trojanConfig)
@@ -45,7 +45,7 @@ func parseTrojanAccountInfo(in *protocolP.InboundDetourConfig, email string, sha
 	return fmt.Errorf("%s not in %s", email, in.Tag)
 }
 
-func NewTrojanShareConfig(in *protocolP.InboundDetourConfig, email string, host string, port uint32) (*TrojanShareConfig, error) {
+func NewTrojanShareConfig(in *config.InboundDetourConfig, email string, host string, port uint32) (*TrojanShareConfig, error) {
 	sharedConfig := newDefaultTrojanShareConfig()
 	// 获取UUID
 	err := parseTrojanAccountInfo(in, email, sharedConfig)
@@ -81,7 +81,7 @@ func NewTrojanShareConfig(in *protocolP.InboundDetourConfig, email string, host 
 	sharedConfig.TransportConfig = t
 
 	sharedConfig.TLSConfig = newTLSOrXTLSConfig(in.StreamSetting)
-	
+
 	upstreamInbound, err := proxyManager.GetUpstreamInbound(fmt.Sprintf("%d", sharedConfig.BaseConfig.RemotePort))
 	if err == nil {
 		// 如果有上游fallback的inbound, 需要替换对应的port和tls配置
