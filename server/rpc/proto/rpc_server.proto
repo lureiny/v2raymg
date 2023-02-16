@@ -187,6 +187,16 @@ message SetGatewayModelRsp {
     string msg = 2;
 }
 
+message ObtainNewCertReq {
+    NodeAuthInfo node_auth_info = 1;
+    string domain = 2;
+}
+
+message ObtainNewCertRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
 service EndNodeAccess {
     rpc GetUsers(GetUsersReq) returns (GetUsersRsp) {}
     rpc AddUsers(UserOpReq) returns (UserOpRsp) {}
@@ -209,6 +219,7 @@ service EndNodeAccess {
     rpc DeleteAdaptiveConfig(AdaptiveOpReq) returns (AdaptiveRsp) {}
     rpc Adaptive(AdaptiveReq) returns (AdaptiveRsp) {} // 外部调用的主动修改接口
     rpc SetGatewayModel(SetGatewayModelReq) returns(SetGatewayModelRsp) {}
+    rpc ObtainNewCert(ObtainNewCertReq) returns(ObtainNewCertRsp) {}
 }
 
 message GetClutersReq {

@@ -24,7 +24,7 @@ func init() {
 func Reset(email string, tag string) error {
 	proxyManager := manager.GetProxyManager()
 
-	proxyManager.Init(configFile, "")
+	proxyManager.Init(configFile, "", nil)
 
 	user, err := manager.NewUser(email, tag)
 	if err != nil {

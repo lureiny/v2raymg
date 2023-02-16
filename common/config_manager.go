@@ -31,6 +31,11 @@ const (
 	CenterNodeHost       = "cluster.center_node.host"
 	CenterNodePort       = "cluster.center_node.port"
 	ClusterNodes         = "cluster.nodes"
+
+	CertEmail       = "cert.email"
+	CertSecrets     = "cert.secrets"
+	CertDnsProvider = "cert.dns_provider"
+	CertPath        = "cert.path"
 )
 
 // 管理进程本身配置

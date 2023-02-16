@@ -4,13 +4,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/lureiny/v2raymg/client"
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/proxy/manager"
 	"github.com/lureiny/v2raymg/server/http"
 	"github.com/lureiny/v2raymg/server/rpc"
@@ -50,8 +50,8 @@ func readConfig() {
 
 }
 
-func initProxyManager(proxyManager *manager.ProxyManager) {
-	err := proxyManager.Init(configManager.GetString(common.ProxyConfigFile), configManager.GetString(common.ProxyVersion))
+func initProxyManager(proxyManager *manager.ProxyManager, certManager *lego.CertManager) {
+	err := proxyManager.Init(configManager.GetString(common.ProxyConfigFile), configManager.GetString(common.ProxyVersion), certManager)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -68,9 +68,9 @@ func initProxyManager(proxyManager *manager.ProxyManager) {
 	proxyManager.CycleAdaptive()
 }
 
-func initAndStartEndNodeServer(globalUserManager *common.UserManager, globalClusterManager *common.EndNodeClusterManager) {
+func initAndStartEndNodeServer(globalUserManager *common.UserManager, globalClusterManager *common.EndNodeClusterManager, certManager *lego.CertManager) {
 	endNodeServer := rpc.GetEndNodeServer()
-	endNodeServer.Init(globalUserManager, globalClusterManager)
+	endNodeServer.Init(globalUserManager, globalClusterManager, certManager)
 	go endNodeServer.Start()
 }
 
@@ -109,13 +109,15 @@ func collectStats(httpServer *http.HttpServer) {
 	}
 }
 
-func init() {
-	ex, err := os.Executable()
-	if err != nil {
-		panic("can't get exec path")
+func initCertManager() *lego.CertManager {
+	certManager := &lego.CertManager{
+		Email:       configManager.GetString(common.CertEmail),
+		Secrets:     configManager.GetStringMapString(common.CertSecrets),
+		DnsProvider: configManager.GetString(common.CertDnsProvider),
+		Path:        configManager.GetString(common.CertPath),
 	}
-	exPath := filepath.Dir(ex)
-	os.Chdir(exPath)
+	lego.CheckAndFullCertManager(certManager)
+	return certManager
 }
 
 func startServer(cmd *cobra.Command, args []string) {
@@ -131,12 +133,13 @@ func startServer(cmd *cobra.Command, args []string) {
 	// end node
 	// 1s检查刷新一次
 	configManager.AutoFlush(1)
+	certManager := initCertManager()
 	proxyManager := manager.GetProxyManager()
-	initProxyManager(proxyManager)
+	initProxyManager(proxyManager, certManager)
 
 	globalUserManager := common.NewUserManager()
 	globalClusterManager := common.NewEndNodeClusterManager()
-	initAndStartEndNodeServer(globalUserManager, globalClusterManager)
+	initAndStartEndNodeServer(globalUserManager, globalClusterManager, certManager)
 	initAndStartHttpServer(globalUserManager, globalClusterManager)
 
 	// listen signal

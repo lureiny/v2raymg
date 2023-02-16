@@ -9,16 +9,20 @@ require (
 	github.com/golang/protobuf v1.5.2
 	github.com/google/go-github/v48 v48.0.0
 	github.com/google/uuid v1.3.0
+	github.com/mattn/go-isatty v0.0.17
 	github.com/prometheus/client_golang v1.14.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/smartystreets/goconvey v1.6.4
 	github.com/spf13/cobra v1.2.1
 	github.com/spf13/viper v1.8.1
+	github.com/stretchr/testify v1.8.1
 	github.com/urfave/cli/v2 v2.24.3
 	github.com/v2fly/v2ray-core/v5 v5.1.0
 	github.com/xtls/xray-core v1.6.0
+	golang.org/x/net v0.5.0
 	google.golang.org/grpc v1.49.0
 	google.golang.org/protobuf v1.28.1
+	software.sslmate.com/src/go-pkcs12 v0.2.0
 )
 
 require (
@@ -104,7 +108,6 @@ require (
 	github.com/magiconair/properties v1.8.5 // indirect
 	github.com/marten-seemann/qtls-go1-18 v0.1.2 // indirect
 	github.com/marten-seemann/qtls-go1-19 v0.1.0 // indirect
-	github.com/mattn/go-isatty v0.0.17 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/miekg/dns v1.1.50 // indirect
 	github.com/mimuret/golang-iij-dpf v0.7.1 // indirect
@@ -155,7 +158,6 @@ require (
 	github.com/spf13/jwalterweatherman v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/stretchr/objx v0.5.0 // indirect
-	github.com/stretchr/testify v1.8.1 // indirect
 	github.com/subosito/gotenv v1.2.0 // indirect
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.0.490 // indirect
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/dnspod v1.0.490 // indirect
@@ -179,7 +181,6 @@ require (
 	golang.org/x/crypto v0.5.0 // indirect
 	golang.org/x/exp v0.0.0-20220916125017-b168a2c6b86b // indirect
 	golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4 // indirect
-	golang.org/x/net v0.5.0 // indirect
 	golang.org/x/oauth2 v0.4.0 // indirect
 	golang.org/x/sys v0.4.0 // indirect
 	golang.org/x/text v0.6.0 // indirect
@@ -197,5 +198,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	inet.af/netaddr v0.0.0-20211027220019-c74959edd3b6 // indirect
 	lukechampine.com/blake3 v1.1.7 // indirect
-	software.sslmate.com/src/go-pkcs12 v0.2.0 // indirect
 )

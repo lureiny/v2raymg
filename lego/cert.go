@@ -1,10 +1,10 @@
-package manager
+package lego
 
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-acme/lego/v4/cmd"
 	"github.com/urfave/cli/v2"
 )
 
 const (
-	runCmd   = "run"
-	renewCmd = "renew"
+	runCmd      = "run"
+	renewCmd    = "renew"
+	subCertPath = "certificates"
 )
 
 type CertManager struct {
@@ -30,8 +30,9 @@ type CertManager struct {
 	certMutex   sync.Mutex
 }
 
-var defaultPath string = "./"
-var subCertPath = "certificates"
+var execRootPath = "./"
+var defaultCertPath = "./cert"
+var legoPath = ".lego"
 
 type Certificate struct {
 	Domain          string
@@ -40,18 +41,23 @@ type Certificate struct {
 	ExpireTime      time.Time
 }
 
-func NewCertManager(data []byte) (*CertManager, error) {
-	certManager := &CertManager{
-		Certs: map[string]*Certificate{},
+func checkAndMakeDefaultPath() {
+	if _, err := os.Stat(defaultCertPath); err != nil {
+		os.Mkdir(defaultCertPath, os.ModeDir)
 	}
-	if err := json.Unmarshal(data, certManager); err != nil {
-		return nil, err
-	}
+}
+
+func CheckAndFullCertManager(certManager *CertManager) {
+	certManager.Certs = map[string]*Certificate{}
+
 	if certManager.Path == "" {
-		certManager.Path = defaultPath
+		certManager.Path = defaultCertPath
+		checkAndMakeDefaultPath()
 	}
 	certManager.certMutex = sync.Mutex{}
-	return certManager, nil
+	if err := certManager.LoadCertificates(); err != nil {
+		fmt.Printf("load certificate err > %v", err)
+	}
 }
 
 func paraseDomainCertFile(path, fileName string) *Certificate {
@@ -102,8 +108,31 @@ func mergeCertificate(cert1, cert2 *Certificate) (*Certificate, error) {
 	return certificate, nil
 }
 
+func (certManager *CertManager) checkConfig() error {
+	if certManager.Email == "" {
+		return fmt.Errorf("email can't be empty")
+	}
+	if certManager.DnsProvider == "" {
+		return fmt.Errorf("invalid dns provider: %s", certManager.DnsProvider)
+	}
+	return nil
+}
+
+func (certManager *CertManager) checkCertFile() {
+	for _, cert := range certManager.Certs {
+		certFileName := strings.ReplaceAll(cert.Domain, "*", "_") + ".crt"
+		keyFileName := strings.ReplaceAll(cert.Domain, "*", "_") + ".key"
+		if _, err := os.Stat(cert.KeyFile); err != nil {
+			copyFile(filepath.Join(legoPath, subCertPath, keyFileName), cert.KeyFile)
+		}
+		if _, err := os.Stat(cert.CertificateFile); err != nil {
+			copyFile(filepath.Join(legoPath, subCertPath, certFileName), cert.CertificateFile)
+		}
+	}
+}
+
 func (certManager *CertManager) LoadCertificates() error {
-	entires, err := os.ReadDir(filepath.Join(certManager.Path, subCertPath))
+	entires, err := os.ReadDir(filepath.Join(legoPath, subCertPath))
 	if err != nil {
 		return err
 	}
@@ -124,6 +153,7 @@ func (certManager *CertManager) LoadCertificates() error {
 			certManager.Certs[cert1.Domain] = cert1
 		}
 	}
+	certManager.checkCertFile()
 	if errMsg != "" {
 		return fmt.Errorf("%v", err)
 	}
@@ -136,27 +166,74 @@ func SetEnvs(envs map[string]string) {
 	}
 }
 
+func copyFile(srcName, dstName string) (int64, error) {
+	src, err := os.Open(srcName)
+	if err != nil {
+		return 0, err
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(dstName, os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return 0, err
+	}
+	defer dst.Close()
+	return io.Copy(dst, src)
+}
+
 func (certManager *CertManager) ObtainNewCert(domain string) error {
+	certManager.certMutex.Lock()
+	defer certManager.certMutex.Unlock()
+	if _, ok := certManager.Certs[domain]; ok {
+		return nil
+	}
+	if err := certManager.checkConfig(); err != nil {
+		return err
+	}
+	if domain == "" {
+		return fmt.Errorf("domian can't be empty")
+	}
 	SetEnvs(certManager.Secrets)
-	args := []string{"lego", "--accept-tos", "--email", certManager.Email, "--domains", domain, "--dns", certManager.DnsProvider, "--path", certManager.Path, runCmd}
+	args := []string{"lego", "--accept-tos", "--email", certManager.Email, "--domains", domain, "--dns", certManager.DnsProvider, runCmd}
 	if err := ObtainNewCertWithDNS(args); err != nil {
 		return err
 	}
+	if err := certManager.copyCertAndKeyFile(domain); err != nil {
+		return err
+	}
+	certFileName := strings.ReplaceAll(domain, "*", "_") + ".crt"
+	keyFileName := strings.ReplaceAll(domain, "*", "_") + ".key"
 	cert := &Certificate{
-		CertificateFile: filepath.Join(certManager.Path, subCertPath, strings.ReplaceAll(domain, "*", "_")+".crt"),
-		KeyFile:         filepath.Join(certManager.Path, subCertPath, strings.ReplaceAll(domain, "*", "_")+".key"),
+		CertificateFile: filepath.Join(certManager.Path, certFileName),
+		KeyFile:         filepath.Join(certManager.Path, keyFileName),
 		Domain:          domain,
 	}
 	if err := fullCertExpireTime(cert); err != nil {
 		return fmt.Errorf("full cert expire time err > %v", err)
 	}
-	certManager.certMutex.Lock()
-	defer certManager.certMutex.Unlock()
 	certManager.Certs[domain] = cert
 	return nil
 }
 
+func (certManager *CertManager) copyCertAndKeyFile(domain string) error {
+	certFileName := strings.ReplaceAll(domain, "*", "_") + ".crt"
+	keyFileName := strings.ReplaceAll(domain, "*", "_") + ".key"
+	if _, err := copyFile(filepath.Join(legoPath, subCertPath, certFileName), filepath.Join(certManager.Path, certFileName)); err != nil {
+		return err
+	}
+	if _, err := copyFile(filepath.Join(legoPath, subCertPath, keyFileName), filepath.Join(certManager.Path, keyFileName)); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (certManager *CertManager) RenewCert(domain string) error {
+	if err := certManager.checkConfig(); err != nil {
+		return err
+	}
+	if domain == "" {
+		return fmt.Errorf("domian can't be empty")
+	}
 	certManager.certMutex.Lock()
 	defer certManager.certMutex.Unlock()
 	cert, ok := certManager.Certs[domain]
@@ -173,6 +250,9 @@ func (certManager *CertManager) RenewCert(domain string) error {
 	}
 	if err := fullCertExpireTime(cert); err != nil {
 		return fmt.Errorf("full cert expire time err > %v", err)
+	}
+	if err := certManager.copyCertAndKeyFile(domain); err != nil {
+		return err
 	}
 	fmt.Printf("Cert of domain[%s] has been renew, new expire time is: %v", domain, cert.ExpireTime)
 	return nil
@@ -215,11 +295,14 @@ func fullCertExpireTime(ca *Certificate) error {
 var app *cli.App = nil
 
 func ObtainNewCertWithDNS(args []string) error {
+	app.Flags = CreateFlags(legoPath)
+	app.Before = Before
+	app.Commands = CreateCommands()
 	return app.Run(args)
 }
 
 func initApp() {
-	app := cli.NewApp()
+	app = cli.NewApp()
 	app.Name = "lego"
 	app.HelpName = "lego"
 	app.Usage = "Let's Encrypt client written in Go"
@@ -229,19 +312,20 @@ func initApp() {
 	cli.VersionPrinter = func(c *cli.Context) {
 		fmt.Printf("lego version %s %s/%s\n", c.App.Version, runtime.GOOS, runtime.GOARCH)
 	}
-
-	app.Before = cmd.Before
-	app.Commands = cmd.CreateCommands()
 }
 
-func initDefaultPath() {
-	cwd, err := os.Getwd()
-	if err == nil {
-		defaultPath = filepath.Join(cwd, ".lego")
+func initCwd() {
+	ex, err := os.Executable()
+	if err != nil {
+		panic("can't get exec path")
 	}
+	execRootPath = filepath.Dir(ex)
+	defaultCertPath = filepath.Join(execRootPath, defaultCertPath)
+	legoPath = filepath.Join(execRootPath, legoPath)
+	os.Chdir(execRootPath)
 }
 
 func init() {
 	initApp()
-	initDefaultPath()
+	initCwd()
 }

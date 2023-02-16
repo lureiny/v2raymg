@@ -43,6 +43,7 @@ type EndNodeAccessClient interface {
 	DeleteAdaptiveConfig(ctx context.Context, in *AdaptiveOpReq, opts ...grpc.CallOption) (*AdaptiveRsp, error)
 	Adaptive(ctx context.Context, in *AdaptiveReq, opts ...grpc.CallOption) (*AdaptiveRsp, error)
 	SetGatewayModel(ctx context.Context, in *SetGatewayModelReq, opts ...grpc.CallOption) (*SetGatewayModelRsp, error)
+	ObtainNewCert(ctx context.Context, in *ObtainNewCertReq, opts ...grpc.CallOption) (*ObtainNewCertRsp, error)
 }
 
 type endNodeAccessClient struct {
@@ -242,6 +243,15 @@ func (c *endNodeAccessClient) SetGatewayModel(ctx context.Context, in *SetGatewa
 	return out, nil
 }
 
+func (c *endNodeAccessClient) ObtainNewCert(ctx context.Context, in *ObtainNewCertReq, opts ...grpc.CallOption) (*ObtainNewCertRsp, error) {
+	out := new(ObtainNewCertRsp)
+	err := c.cc.Invoke(ctx, "/proto.EndNodeAccess/ObtainNewCert", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EndNodeAccessServer is the server API for EndNodeAccess service.
 // All implementations must embed UnimplementedEndNodeAccessServer
 // for forward compatibility
@@ -267,6 +277,7 @@ type EndNodeAccessServer interface {
 	DeleteAdaptiveConfig(context.Context, *AdaptiveOpReq) (*AdaptiveRsp, error)
 	Adaptive(context.Context, *AdaptiveReq) (*AdaptiveRsp, error)
 	SetGatewayModel(context.Context, *SetGatewayModelReq) (*SetGatewayModelRsp, error)
+	ObtainNewCert(context.Context, *ObtainNewCertReq) (*ObtainNewCertRsp, error)
 	mustEmbedUnimplementedEndNodeAccessServer()
 }
 
@@ -336,6 +347,9 @@ func (UnimplementedEndNodeAccessServer) Adaptive(context.Context, *AdaptiveReq) 
 }
 func (UnimplementedEndNodeAccessServer) SetGatewayModel(context.Context, *SetGatewayModelReq) (*SetGatewayModelRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetGatewayModel not implemented")
+}
+func (UnimplementedEndNodeAccessServer) ObtainNewCert(context.Context, *ObtainNewCertReq) (*ObtainNewCertRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ObtainNewCert not implemented")
 }
 func (UnimplementedEndNodeAccessServer) mustEmbedUnimplementedEndNodeAccessServer() {}
 
@@ -728,6 +742,24 @@ func _EndNodeAccess_SetGatewayModel_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EndNodeAccess_ObtainNewCert_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ObtainNewCertReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).ObtainNewCert(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/proto.EndNodeAccess/ObtainNewCert",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).ObtainNewCert(ctx, req.(*ObtainNewCertReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EndNodeAccess_ServiceDesc is the grpc.ServiceDesc for EndNodeAccess service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -818,6 +850,10 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetGatewayModel",
 			Handler:    _EndNodeAccess_SetGatewayModel_Handler,
+		},
+		{
+			MethodName: "ObtainNewCert",
+			Handler:    _EndNodeAccess_ObtainNewCert_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

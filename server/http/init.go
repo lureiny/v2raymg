@@ -39,4 +39,7 @@ func init() {
 
 	gatewayHandler := &GatewayHandler{}
 	GlobalHttpServer.RegisterHandler("/gateway", gatewayHandler)
+
+	certHandler := &CertHandler{}
+	GlobalHttpServer.RegisterHandler("/cert", certHandler)
 }

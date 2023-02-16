@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/proxy/protocol"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
@@ -36,6 +37,7 @@ type ProxyManager struct {
 	proxyServer    *ProxyServer
 	adaptive       Adaptive
 	adaptiveMutex  sync.Mutex // 操作自适应变更时的锁
+	certManager    *lego.CertManager
 }
 
 var proxyManager = &ProxyManager{
@@ -52,7 +54,8 @@ func GetProxyManager() *ProxyManager {
 	return proxyManager
 }
 
-func (proxyManager *ProxyManager) Init(configFile, version string) error {
+func (proxyManager *ProxyManager) Init(configFile, version string, cm *lego.CertManager) error {
+	proxyManager.certManager = cm
 	proxyManager.ConfigFile = configFile
 	err := proxyManager.LoadConfig()
 	if err != nil {

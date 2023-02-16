@@ -26,7 +26,6 @@ type ProxyServer struct {
 	currentVersion string
 	expectVersion  string
 	stdout         io.ReadCloser
-	certManager    *CertManager
 }
 
 func NewProxyServer(file, version string) *ProxyServer {

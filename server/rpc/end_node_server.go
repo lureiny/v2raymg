@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/proxy/manager"
 	"github.com/lureiny/v2raymg/server"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
@@ -33,6 +34,7 @@ type EndNodeServer struct {
 	clusterManager *common.EndNodeClusterManager
 	userManager    *common.UserManager
 	centerNode     *common.Node
+	certManager    *lego.CertManager
 	server.ServerConfig
 }
 
@@ -82,6 +84,7 @@ var methodRspMap = map[string]interface{}{
 	"DeleteAdaptiveConfig": &proto.AdaptiveRsp{},
 	"Adaptive":             &proto.AdaptiveRsp{},
 	"SetGatewayModel":      &proto.SetGatewayModelRsp{},
+	"ObtainNewCert":        &proto.ObtainNewCertRsp{},
 }
 
 func newEmptyRsp(fullMethod string) (interface{}, error) {
@@ -140,9 +143,10 @@ func UnaryServerInterceptor(ctx context.Context, req interface{}, info *grpc.Una
 	return rsp, err
 }
 
-func (s *EndNodeServer) Init(um *common.UserManager, cm *common.EndNodeClusterManager) {
+func (s *EndNodeServer) Init(um *common.UserManager, cm *common.EndNodeClusterManager, certManager *lego.CertManager) {
 	s.clusterManager = cm
 	s.userManager = um
+	s.certManager = certManager
 	s.Host = configManager.GetString(common.ServerListen)
 	s.Port = configManager.GetInt(common.ServerRpcPort)
 	s.Type = "End"
@@ -829,6 +833,19 @@ func (s *EndNodeServer) Adaptive(ctx context.Context, adaptiveReq *proto.Adaptiv
 		adaptiveRsp.Msg = strings.Join(errs, "\n")
 	}
 	return adaptiveRsp, nil
+}
+
+func (s *EndNodeServer) ObtainNewCert(ctx context.Context, obtainNewCertReq *proto.ObtainNewCertReq) (*proto.ObtainNewCertRsp, error) {
+	obtainNewCertRsp := &proto.ObtainNewCertRsp{
+		Code: 0,
+	}
+	domain := obtainNewCertReq.GetDomain()
+	err := s.certManager.ObtainNewCert(domain)
+	if err != nil {
+		obtainNewCertRsp.Code = 1020
+		obtainNewCertRsp.Msg = err.Error()
+	}
+	return obtainNewCertRsp, nil
 }
 
 func (s *EndNodeServer) SetGatewayModel(ctx context.Context, setGatewayModelReq *proto.SetGatewayModelReq) (*proto.SetGatewayModelRsp, error) {
