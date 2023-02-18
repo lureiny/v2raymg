@@ -77,7 +77,7 @@ func insertVmessStreamSetting(v *VmessShareConfig, streamSetting *conf.StreamCon
 	switch string(*streamSetting.Network) {
 	case "tcp":
 		v.Net = "tcp"
-	case "kcp":
+	case "kcp", "mkcp":
 		v.Net = "kcp"
 		kcpConfig := streamSetting.KCPSettings
 		v.Path = *kcpConfig.Seed

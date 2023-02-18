@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lureiny/v2raymg/common"
 	"github.com/lureiny/v2raymg/lego"
+	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/lureiny/v2raymg/proxy/manager"
 	"github.com/lureiny/v2raymg/server"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
@@ -85,6 +86,7 @@ var methodRspMap = map[string]interface{}{
 	"Adaptive":             &proto.AdaptiveRsp{},
 	"SetGatewayModel":      &proto.SetGatewayModelRsp{},
 	"ObtainNewCert":        &proto.ObtainNewCertRsp{},
+	"FastAddInbound":       &proto.FastAddInboundReq{},
 }
 
 func newEmptyRsp(fullMethod string) (interface{}, error) {
@@ -859,6 +861,54 @@ func (s *EndNodeServer) SetGatewayModel(ctx context.Context, setGatewayModelReq 
 	}
 	configManager.Set(common.ServerRpcOnlyGateway, setGatewayModelReq.GetEnableGatewayModel())
 	return setGatewayModelRsp, nil
+}
+
+func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *proto.FastAddInboundReq) (*proto.FastAddInboundRsp, error) {
+	fastAddInboundRsp := &proto.FastAddInboundRsp{
+		Code: 0,
+	}
+	inbound, err := newInbound(fastAddInboundReq, s.certManager)
+	if err != nil {
+		fastAddInboundRsp.Code = 1020
+		fastAddInboundRsp.Msg = err.Error()
+		return fastAddInboundRsp, nil
+	}
+	if err := proxyManager.AddInbound(inbound); err != nil {
+		fastAddInboundRsp.Code = 1021
+		fastAddInboundRsp.Msg = err.Error()
+	}
+	return fastAddInboundRsp, nil
+}
+
+func newInbound(fastAddInboundReq *proto.FastAddInboundReq, c *lego.CertManager) (*manager.Inbound, error) {
+	if c.GetCert(fastAddInboundReq.GetDomain()) == nil {
+		return nil, fmt.Errorf("not found domain's[%s] cert", fastAddInboundReq.GetDomain())
+	}
+	inboundBuilder := config.GetInboundSettingBuilder(fastAddInboundReq.GetInboundBuilderType())
+	if inboundBuilder == nil {
+		return nil, fmt.Errorf("unsupport protocol")
+	}
+	inboundBuilder.Mutex.Lock()
+	defer inboundBuilder.Mutex.Unlock()
+	streamBuilder := config.GetStreamSettingBuilder(fastAddInboundReq.GetStreamBuilderType())
+	if streamBuilder == nil {
+		return nil, fmt.Errorf("unsupport stream type")
+	}
+	streamBuilder.Mutex.Lock()
+	defer streamBuilder.Mutex.Unlock()
+	streamBuilder.Init(fastAddInboundReq.GetDomain(), c, fastAddInboundReq.GetIsXtls())
+	inboundConfig := config.InboundDetourConfig{}
+	inboundConfig.StreamSetting = streamBuilder.Build()
+	inboundConfig.Protocol = inboundBuilder.GetProtocol()
+	inboundConfig.Settings = inboundBuilder.Build()
+	inboundConfig.ListenOn = "0.0.0.0"
+	inboundConfig.PortRange = uint32(fastAddInboundReq.GetPort())
+	inboundConfig.Tag = fastAddInboundReq.GetTag()
+	return &manager.Inbound{
+		Config:  inboundConfig,
+		Tag:     fastAddInboundReq.GetTag(),
+		RWMutex: sync.RWMutex{},
+	}, nil
 }
 
 func (s *EndNodeServer) registerToEndNode(node *common.Node, wg *sync.WaitGroup, ch chan struct{}) {

@@ -61,6 +61,8 @@ func init() {
 	registerReqToEndNodeFunc(ObtainNewCertType, reqObtainNewCert)
 	// set gateway model
 	registerReqToEndNodeFunc(SetGatewayModelReqType, reqSetGatewayModel)
+	// fast add inbound
+	registerReqToEndNodeFunc(FastAddInboundType, reqFastAddInbound)
 }
 
 func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
@@ -385,6 +387,23 @@ func reqObtainNewCert(reqData []byte, endNodeAccessClient proto.EndNodeAccessCli
 
 	obtainNewCertReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.ObtainNewCert(context.Background(), obtainNewCertReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func reqFastAddInbound(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	fastAddInboundReq := &proto.FastAddInboundReq{}
+	if err := pb.Unmarshal(reqData, fastAddInboundReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to FastAddInboundReq > %v", reqData, err)
+	}
+
+	fastAddInboundReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.FastAddInbound(context.Background(), fastAddInboundReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
 	if rsp.GetCode() != 0 {
 		return nil, fmt.Errorf(rsp.GetMsg())
 	}

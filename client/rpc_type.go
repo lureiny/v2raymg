@@ -23,4 +23,5 @@ const (
 	AdaptiveReqType
 	SetGatewayModelReqType
 	ObtainNewCertType
+	FastAddInboundType
 )

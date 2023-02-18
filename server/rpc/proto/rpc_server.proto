@@ -13,6 +13,19 @@ message User {
     int64 uplink = 6;
 }
 
+enum BuilderType {
+    UnknowBuilderType = 0;
+    VLESSSettingBuilderType = 10;
+	VMESSSettingBuilderType = 11;
+	TrojanSettingBuilderType = 12;
+	TCPBuilderType = 20;
+	WSBuilderType = 21; 
+	QuicBuilderType = 22; 
+	MkcpBuilderType = 23;
+	GrpcBuilderType = 24;
+	HttpBuilderType = 25;
+}
+
 message NodeAuthInfo {
     string token = 1;
     Node node = 2;
@@ -197,6 +210,21 @@ message ObtainNewCertRsp {
     string msg = 2;
 }
 
+message FastAddInboundReq {
+    NodeAuthInfo node_auth_info = 1;
+    BuilderType inboundBuilderType = 2;
+    BuilderType streamBuilderType = 3;
+    int32 port = 4;
+    string domain = 5;
+    bool isXtls = 6;
+    string tag = 7;
+}
+
+message FastAddInboundRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
 service EndNodeAccess {
     rpc GetUsers(GetUsersReq) returns (GetUsersRsp) {}
     rpc AddUsers(UserOpReq) returns (UserOpRsp) {}
@@ -218,8 +246,9 @@ service EndNodeAccess {
     rpc AddAdaptiveConfig(AdaptiveOpReq) returns (AdaptiveRsp) {}
     rpc DeleteAdaptiveConfig(AdaptiveOpReq) returns (AdaptiveRsp) {}
     rpc Adaptive(AdaptiveReq) returns (AdaptiveRsp) {} // 外部调用的主动修改接口
-    rpc SetGatewayModel(SetGatewayModelReq) returns(SetGatewayModelRsp) {}
-    rpc ObtainNewCert(ObtainNewCertReq) returns(ObtainNewCertRsp) {}
+    rpc SetGatewayModel(SetGatewayModelReq) returns (SetGatewayModelRsp) {}
+    rpc ObtainNewCert(ObtainNewCertReq) returns (ObtainNewCertRsp) {}
+    rpc FastAddInbound(FastAddInboundReq) returns (FastAddInboundRsp) {}
 }
 
 message GetClutersReq {

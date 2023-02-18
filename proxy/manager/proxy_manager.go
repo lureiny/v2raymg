@@ -132,15 +132,15 @@ func (proxyManager *ProxyManager) AddInbound(inbound *Inbound) error {
 	if err != nil {
 		return err
 	}
-	// 添加到runtime
-	err = AddInboundToRuntime(&proxyManager.RuntimeConfig, inboundConfigByte)
-	if err != nil {
-		return err
-	}
-
 	// 添加到配置文件
 	err = proxyManager.InboundManager.Add(inbound)
 	if err != nil {
+		return err
+	}
+	// 添加到runtime
+	err = AddInboundToRuntime(&proxyManager.RuntimeConfig, inboundConfigByte)
+	if err != nil {
+		proxyManager.InboundManager.Delete(inbound.Tag)
 		return err
 	}
 	proxyManager.needFlush = true

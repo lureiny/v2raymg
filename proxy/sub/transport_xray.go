@@ -28,8 +28,7 @@ func (c *VlessTransportConfig) Build() string {
 	return strings.Join(params, "&")
 }
 
-type VlessTcpConfig struct {
-}
+type VlessTcpConfig struct{}
 
 func (c *VlessTcpConfig) Build() string {
 	return ""

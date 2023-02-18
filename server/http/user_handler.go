@@ -161,11 +161,12 @@ func (handler *UserHandler) help() string {
 	token: 用于验证操作权限
 	各个接口参数说明:
 	1. 添加用户
-	/user?type=1&user={user}&pwd={pwd}&expire={expire}&target={target}&token={token}&ttl={ttl}
+	/user?type=1&user={user}&pwd={pwd}&expire={expire}&target={target}&token={token}&ttl={ttl}&tags={tags}
 	user: 用户名
 	pwd: password
 	expire: 过期时间, 过期时间的时间戳, 例如2022-11-27 12:00:00过期, 则expire=1669521600, 与下述ttl参数同时存在时, 优先使用ttl设置过期时间
 	ttl: 存活时间, 从添加时开始的有效存活时间, 单位为秒, 例如1个小时内有效, ttl=3600
+	tags: 添加inbound的tag列表, 以逗号分隔
 	2. 更新用户信息
 	/user?type=2&user={user}&pwd={pwd}&expire={expire}&target={target}&token={token}&ttl={ttl}
 	user: 用户名

@@ -10,7 +10,7 @@ import (
 )
 
 func configAllApiInfo(c *config.V2rayConfig) {
-	config.Stats = &conf.StatsConfig{}
+	c.Stats = &conf.StatsConfig{}
 	configApi(c)
 	configRoute(c)
 	configPolicy(c)

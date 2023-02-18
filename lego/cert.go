@@ -56,7 +56,7 @@ func CheckAndFullCertManager(certManager *CertManager) {
 	}
 	certManager.certMutex = sync.Mutex{}
 	if err := certManager.LoadCertificates(); err != nil {
-		fmt.Printf("load certificate err > %v", err)
+		fmt.Printf("load certificate err > %v\n", err)
 	}
 }
 
@@ -68,12 +68,12 @@ func paraseDomainCertFile(path, fileName string) *Certificate {
 	if strings.HasSuffix(fileName, ".crt") && !strings.HasSuffix(fileName, ".issuer.crt") {
 		return &Certificate{
 			Domain:          domain,
-			CertificateFile: filepath.Join(path, subCertPath, fileName),
+			CertificateFile: filepath.Join(path, fileName),
 		}
 	} else if strings.HasSuffix(fileName, ".key") {
 		return &Certificate{
 			Domain:  domain,
-			KeyFile: filepath.Join(path, subCertPath, fileName),
+			KeyFile: filepath.Join(path, fileName),
 		}
 	}
 	return nil
@@ -131,6 +131,7 @@ func (certManager *CertManager) checkCertFile() {
 	}
 }
 
+// LoadCertificates 加载本地证书文件
 func (certManager *CertManager) LoadCertificates() error {
 	entires, err := os.ReadDir(filepath.Join(legoPath, subCertPath))
 	if err != nil {
@@ -260,7 +261,20 @@ func (certManager *CertManager) RenewCert(domain string) error {
 
 // GetCert...
 func (certManager *CertManager) GetCert(domain string) *Certificate {
-	return certManager.Certs[domain]
+	certManager.certMutex.Lock()
+	defer certManager.certMutex.Unlock()
+	if cert, ok := certManager.Certs[domain]; ok {
+		return cert
+	}
+	return certManager.Certs[getWildcardDomain(domain)]
+}
+
+func getWildcardDomain(domain string) string {
+	index := strings.Index(domain, ".")
+	if index == -1 {
+		return domain
+	}
+	return "*" + domain[index:]
 }
 
 // AutoRenewCert... 根据指定时间周期定时renew
