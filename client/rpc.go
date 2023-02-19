@@ -67,6 +67,8 @@ func init() {
 	registerReqToEndNodeFunc(TransferCertType, reqTransferCert)
 	// get certs
 	registerReqToEndNodeFunc(GetCertsType, reqGetCerts)
+	// clear users
+	registerReqToEndNodeFunc(ClearUsersType, reqClearUsers)
 }
 
 func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
@@ -446,6 +448,23 @@ func reqGetCerts(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, 
 		return nil, err
 	}
 	return rsp.GetCerts(), nil
+}
+
+func reqClearUsers(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	clearUsersReq := &proto.ClearUsersReq{}
+	if err := pb.Unmarshal(reqData, clearUsersReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to ClearUsersReq > %v", reqData, err)
+	}
+
+	clearUsersReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.ClearUsers(context.Background(), clearUsersReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 func getReqAndCallbakcFunc(reqType ReqToEndNodeType) ReqToEndNodeFunc {

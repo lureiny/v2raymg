@@ -231,7 +231,6 @@ func (um *UserManager) Update(user *proto.User) error {
 	um.lock.Lock()
 	if _, ok := (um.users)[user.Name]; ok {
 		um.users[user.Name] = user
-
 	} else {
 		err = fmt.Errorf("user[%s] is not exist", user.Name)
 	}

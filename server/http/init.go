@@ -51,4 +51,7 @@ func init() {
 
 	getCertsHandler := &GetCertsHandler{}
 	GlobalHttpServer.RegisterHandler("/getCerts", getCertsHandler)
+
+	clearUserHandler := &ClearUserHandler{}
+	GlobalHttpServer.RegisterHandler("/clearUsers", clearUserHandler)
 }

@@ -934,6 +934,35 @@ func newInbound(fastAddInboundReq *proto.FastAddInboundReq, c *lego.CertManager)
 	}, nil
 }
 
+func (s *EndNodeServer) ClearUsers(ctx context.Context, clearUsersReq *proto.ClearUsersReq) (*proto.ClearUsersRsp, error) {
+	clearUsersRsp := &proto.ClearUsersRsp{
+		Code: 0,
+	}
+	users := []*proto.User{}
+	for _, user := range clearUsersReq.Users {
+		if u := s.userManager.Get(user); u != nil {
+			users = append(users, u)
+		}
+	}
+	userList := ""
+	for _, user := range users {
+		userList = userList + ";" + user.Name
+		err := s.userManager.Delete(user)
+		if err != nil {
+			logger.Error(
+				"Err=%s|User=%s",
+				err.Error(),
+				user.Name,
+			)
+			clearUsersRsp.Msg += fmt.Sprintf("user: %s clear failed, %s\n", user.Name, err.Error())
+		}
+	}
+	if len(clearUsersRsp.Msg) > 0 {
+		clearUsersRsp.Code = 1040
+	}
+	return clearUsersRsp, nil
+}
+
 func (s *EndNodeServer) registerToEndNode(node *common.Node, wg *sync.WaitGroup, ch chan struct{}) {
 	defer func() {
 		wg.Done()
