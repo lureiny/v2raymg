@@ -1,6 +1,8 @@
 package common
 
 import (
+	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -12,7 +14,7 @@ var globalConfigManager *ConfigManager = nil
 const (
 	RpcServerType        = "server.rpc.type"
 	ProxyConfigFile      = "proxy.config_file"
-	ProxyExec            = "proxy.exec"
+	ProxyVersion         = "proxy.version"
 	ProxyDefaultTags     = "proxy.default_tags"
 	Users                = "users"
 	ProxyHost            = "proxy.host"
@@ -28,6 +30,12 @@ const (
 	ClusterToken         = "cluster.token"
 	CenterNodeHost       = "cluster.center_node.host"
 	CenterNodePort       = "cluster.center_node.port"
+	ClusterNodes         = "cluster.nodes"
+
+	CertEmail       = "cert.email"
+	CertSecrets     = "cert.secrets"
+	CertDnsProvider = "cert.dns_provider"
+	CertPath        = "cert.path"
 )
 
 // 管理进程本身配置
@@ -46,6 +54,69 @@ func NewConfigManager(configFile string) *ConfigManager {
 	return cm
 }
 
+// CheckConifg check global config
+func CheckConfig(cm *ConfigManager) error {
+	if cm == nil {
+		return fmt.Errorf("global config is not init")
+	}
+	if err := checkClusterConfig(cm); err != nil {
+		return err
+	}
+
+	if err := checkProxyConfig(cm); err != nil {
+		return err
+	}
+
+	if err := checkServerConfig(cm); err != nil {
+		return err
+	}
+	return nil
+}
+
+func checkClusterConfig(cm *ConfigManager) error {
+	return checkStaticNodes(cm)
+}
+
+func checkStaticNodes(cm *ConfigManager) error {
+	nodeList := []staticNode{}
+	if err := cm.UnmarshalKey(ClusterNodes, &nodeList); err != nil {
+		return err
+	}
+	nodeMap := make(map[string]bool)
+	for _, n := range nodeList {
+		if _, ok := nodeMap[n.Name]; ok {
+			return fmt.Errorf("node name[%s] repeat", n.Name)
+		}
+		nodeMap[n.Name] = true
+	}
+	return nil
+}
+
+func checkProxyConfig(cm *ConfigManager) error {
+	if err := checkProxyConfigFile(cm); err != nil {
+		return err
+	}
+	return nil
+}
+
+func checkProxyConfigFile(cm *ConfigManager) error {
+	fileName := cm.GetString(ProxyConfigFile)
+	if _, err := os.Stat(fileName); err != nil {
+		return fmt.Errorf("check proxy config fail: %v", err)
+	}
+	return nil
+}
+
+func checkServerConfig(cm *ConfigManager) error {
+	if cm.GetString(ServerHttpToken) == "" {
+		return fmt.Errorf("http token can't be empty")
+	}
+	if cm.GetString(ServerName) == "" {
+		return fmt.Errorf("server name can't be empty")
+	}
+	return nil
+}
+
 // 获取全局的ConfigManager, 获取后需要初始化
 func GetGlobalConfigManager() *ConfigManager {
 	if globalConfigManager == nil {
@@ -54,6 +125,7 @@ func GetGlobalConfigManager() *ConfigManager {
 	return globalConfigManager
 }
 
+// Init...
 func (cm *ConfigManager) Init(configFile string) error {
 	cm.needFlush = false
 	cm.v = viper.GetViper()

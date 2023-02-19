@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	protocolP "github.com/lureiny/v2raymg/proxy/protocol"
+	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/infra/conf"
 )
@@ -28,7 +28,7 @@ type VmessShareConfig struct {
 	Sni  string `json:"sni"`
 }
 
-func NewVmessShareConfig(in *protocolP.InboundDetourConfig, email string, host string, port uint32) (*VmessShareConfig, error) {
+func NewVmessShareConfig(in *config.InboundDetourConfig, email string, host string, port uint32) (*VmessShareConfig, error) {
 	v := NewDefaultVmessShareConfig()
 	// 获取UUID
 	err := parseVmessAccountInfo(in, email, v)
@@ -77,7 +77,7 @@ func insertVmessStreamSetting(v *VmessShareConfig, streamSetting *conf.StreamCon
 	switch string(*streamSetting.Network) {
 	case "tcp":
 		v.Net = "tcp"
-	case "kcp":
+	case "kcp", "mkcp":
 		v.Net = "kcp"
 		kcpConfig := streamSetting.KCPSettings
 		v.Path = *kcpConfig.Seed
@@ -128,7 +128,7 @@ func NewDefaultVmessShareConfig() *VmessShareConfig {
 	return &VmessShareConfig{V: "2"}
 }
 
-func parseVmessAccountInfo(in *protocolP.InboundDetourConfig, email string, sharedConfig *VmessShareConfig) error {
+func parseVmessAccountInfo(in *config.InboundDetourConfig, email string, sharedConfig *VmessShareConfig) error {
 	vmessConfig := new(conf.VMessInboundConfig)
 
 	err := json.Unmarshal([]byte(*(in.Settings)), vmessConfig)

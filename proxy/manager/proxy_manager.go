@@ -12,7 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lureiny/v2raymg/proxy/protocol"
+	"github.com/lureiny/v2raymg/lego"
+	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -20,6 +21,7 @@ const apiTag = "api"
 const supportInboundProtocol = "vmess|vless|trojan|shadowsocks"
 const minPort = 100
 const maxPort = 65535
+const defaultApiPort = 10085
 
 // 默认每天凌晨5点更换一次
 const defalutCron = "0 5 * * *"
@@ -27,7 +29,7 @@ const defalutCron = "0 5 * * *"
 // 管理proxy相关的基础配置, 不包含用户的变更
 type ProxyManager struct {
 	ConfigFile     string // 文件目录
-	Config         protocol.V2rayConfig
+	Config         config.V2rayConfig
 	needFlush      bool
 	InboundManager InboundManager
 	rwmutex        sync.RWMutex // bound操作锁
@@ -35,6 +37,7 @@ type ProxyManager struct {
 	proxyServer    *ProxyServer
 	adaptive       Adaptive
 	adaptiveMutex  sync.Mutex // 操作自适应变更时的锁
+	certManager    *lego.CertManager
 }
 
 var proxyManager = &ProxyManager{
@@ -51,17 +54,16 @@ func GetProxyManager() *ProxyManager {
 	return proxyManager
 }
 
-func (proxyManager *ProxyManager) Init(configFile, exec string) error {
+func (proxyManager *ProxyManager) Init(configFile, version string, cm *lego.CertManager) error {
+	proxyManager.certManager = cm
 	proxyManager.ConfigFile = configFile
 	err := proxyManager.LoadConfig()
 	if err != nil {
 		return err
 	}
 
-	proxyManager.proxyServer = NewProxyServer(
-		configFile, exec,
-	)
-	return proxyManager.InitRuntimeConfig()
+	proxyManager.proxyServer = NewProxyServer(configFile, version)
+	return proxyManager.InitRuntimeConfig(true)
 }
 
 // 手动初始化
@@ -78,10 +80,15 @@ func (proxyManager *ProxyManager) InitAdaptive(rawAdaptive *RawAdaptive) error {
 	return nil
 }
 
-func (proxyManager *ProxyManager) InitRuntimeConfig() error {
+// InitRuntimeConfig init api config
+func (proxyManager *ProxyManager) InitRuntimeConfig(isManageExec bool) error {
 	inbound := proxyManager.GetInbound(apiTag)
 	if inbound == nil {
-		return fmt.Errorf("can not found api inbound")
+		if !isManageExec {
+			return fmt.Errorf("can't not found api inbound")
+		}
+		inbound = proxyManager.initApiConfig()
+		proxyManager.Flush()
 	}
 	inbound.RWMutex.RLock()
 	defer inbound.RWMutex.RUnlock()
@@ -90,6 +97,25 @@ func (proxyManager *ProxyManager) InitRuntimeConfig() error {
 		Port: int(inbound.Config.PortRange),
 	}
 	return nil
+}
+
+func (proxyManager *ProxyManager) initApiConfig() *Inbound {
+	s := json.RawMessage(`{"address": "127.0.0.1"}`)
+	inbound := &Inbound{
+		Tag: apiTag,
+		Config: config.InboundDetourConfig{
+			Protocol:  "dokodemo-door",
+			PortRange: defaultApiPort,
+			ListenOn:  "127.0.0.1",
+			Tag:       apiTag,
+			Settings:  &s,
+		},
+	}
+	// add inbound
+	proxyManager.InboundManager.Add(inbound)
+
+	configAllApiInfo(&proxyManager.Config)
+	return inbound
 }
 
 func (proxyManager *ProxyManager) AddInbound(inbound *Inbound) error {
@@ -106,15 +132,15 @@ func (proxyManager *ProxyManager) AddInbound(inbound *Inbound) error {
 	if err != nil {
 		return err
 	}
-	// 添加到runtime
-	err = AddInboundToRuntime(&proxyManager.RuntimeConfig, inboundConfigByte)
-	if err != nil {
-		return err
-	}
-
 	// 添加到配置文件
 	err = proxyManager.InboundManager.Add(inbound)
 	if err != nil {
+		return err
+	}
+	// 添加到runtime
+	err = AddInboundToRuntime(&proxyManager.RuntimeConfig, inboundConfigByte)
+	if err != nil {
+		proxyManager.InboundManager.Delete(inbound.Tag)
 		return err
 	}
 	proxyManager.needFlush = true
@@ -185,7 +211,7 @@ func (proxyManager *ProxyManager) Flush() error {
 	proxyManager.rwmutex.Lock()
 	defer proxyManager.rwmutex.Unlock()
 
-	proxyManager.Config.InboundConfigs = make([]protocol.InboundDetourConfig, 0)
+	proxyManager.Config.InboundConfigs = make([]config.InboundDetourConfig, 0)
 	for _, inbound := range proxyManager.InboundManager.inbounds {
 		inbound.RWMutex.RLock()
 		proxyManager.Config.InboundConfigs = append(proxyManager.Config.InboundConfigs, inbound.Config)
@@ -407,7 +433,7 @@ func (proxyManager *ProxyManager) GetTags() []string {
 	return tags
 }
 
-func (proxyManager *ProxyManager) GetUpstreamInbound(port string) (protocol.InboundDetourConfig, error) {
+func (proxyManager *ProxyManager) GetUpstreamInbound(port string) (config.InboundDetourConfig, error) {
 	proxyManager.rwmutex.RLock()
 	defer proxyManager.rwmutex.RUnlock()
 
@@ -416,10 +442,10 @@ func (proxyManager *ProxyManager) GetUpstreamInbound(port string) (protocol.Inbo
 			return inboundConfig, nil
 		}
 	}
-	return protocol.InboundDetourConfig{}, fmt.Errorf("no upstream inbound of inbound with port(%s)", port)
+	return config.InboundDetourConfig{}, fmt.Errorf("no upstream inbound of inbound with port(%s)", port)
 }
 
-func isUpstreamInbound(port string, inboundConfig *protocol.InboundDetourConfig) bool {
+func isUpstreamInbound(port string, inboundConfig *config.InboundDetourConfig) bool {
 	protocolName := strings.ToLower(inboundConfig.Protocol)
 	if protocolName == VlessProtocolName {
 		vlessInboundConfig, err := NewVlessInboundConfig(inboundConfig)
@@ -479,14 +505,7 @@ func (proxyManager *ProxyManager) ReStartProxyServer() error {
 }
 
 func (proxyManager *ProxyManager) UpdateProxyServer(tag string) error {
-	if err := proxyManager.proxyServer.UpdateByTagName(tag); err != nil {
-		return err
-	}
-	proxyManager.StopProxyServer()
-	if err := proxyManager.proxyServer.SwitchExec(); err != nil {
-		return err
-	}
-	return proxyManager.proxyServer.Start()
+	return proxyManager.proxyServer.Update(tag)
 }
 
 func (proxyManager *ProxyManager) GetProxyServerVersion() string {

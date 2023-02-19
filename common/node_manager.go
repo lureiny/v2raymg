@@ -46,7 +46,7 @@ func (nm *NodeManager) LoadStaticNode() error {
 	nm.lock.Lock()
 	defer nm.lock.Unlock()
 	nodeList := []staticNode{}
-	err := globalConfigManager.UnmarshalKey("cluster.nodes", &nodeList)
+	err := globalConfigManager.UnmarshalKey(ClusterNodes, &nodeList)
 	if err != nil {
 		return err
 	}

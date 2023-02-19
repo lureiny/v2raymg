@@ -2,12 +2,19 @@ package cmd
 
 import (
 	"log"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
+	"github.com/lureiny/v2raymg/client"
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/proxy/manager"
 	"github.com/lureiny/v2raymg/server/http"
 	"github.com/lureiny/v2raymg/server/rpc"
+	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"github.com/spf13/cobra"
 )
 
@@ -18,37 +25,36 @@ var serverCmd = &cobra.Command{
 	Run:   startServer,
 }
 
-var serverConfig = ""
+var logger = common.LoggerImp
+
+var (
+	serverConfig         = ""
+	certCheckCycle int64 = 5 // 5s
+)
 
 var configManager = common.GetGlobalConfigManager()
+
+const collectCycle = 30 * time.Second
 
 func init() {
 	serverCmd.Flags().StringVar(&serverConfig, "conf", "/usr/local/etc/v2raymg/config.json", "V2raymg server config file")
 }
 
-func startServer(cmd *cobra.Command, args []string) {
+func readConfig() {
 	log.Printf("Start v2raymg which manage %s", manager.FileName)
 	// 读取配置文件
-	err := configManager.Init(serverConfig)
-	if err != nil {
-		log.Fatal(err.Error())
+	if err := configManager.Init(serverConfig); err != nil {
+		log.Fatalf("init global config fail: %v", err)
+	}
+	if err := common.CheckConfig(configManager); err != nil {
+		log.Fatalf("global config has something wrong: %v", err)
 	}
 	log.Printf("read config from: %s \n", serverConfig)
-	// center node
-	serverType := configManager.GetString(common.RpcServerType)
-	if strings.ToLower(serverType) == "center" {
-		centerNodeServer := &rpc.CenterNodeServer{}
-		centerNodeServer.Init()
-		centerNodeServer.Start()
-		return
-	}
 
-	// end node
-	// 1s检查刷新一次
-	configManager.AutoFlush(1)
+}
 
-	proxyManager := manager.GetProxyManager()
-	err = proxyManager.Init(configManager.GetString(common.ProxyConfigFile), configManager.GetString(common.ProxyExec))
+func initProxyManager(proxyManager *manager.ProxyManager, certManager *lego.CertManager) {
+	err := proxyManager.Init(configManager.GetString(common.ProxyConfigFile), configManager.GetString(common.ProxyVersion), certManager)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -63,16 +69,87 @@ func startServer(cmd *cobra.Command, args []string) {
 	}
 	proxyManager.AutoFlush(1)
 	proxyManager.CycleAdaptive()
+}
 
-	globalUserManager := common.NewUserManager()
-	globalClusterManager := common.NewEndNodeClusterManager()
+func initAndStartEndNodeServer(globalUserManager *common.UserManager, globalClusterManager *common.EndNodeClusterManager, certManager *lego.CertManager) {
 	endNodeServer := rpc.GetEndNodeServer()
-	endNodeServer.Init(globalUserManager, globalClusterManager)
+	endNodeServer.Init(globalUserManager, globalClusterManager, certManager)
 	go endNodeServer.Start()
+}
+
+func initAndStartHttpServer(globalUserManager *common.UserManager, globalClusterManager *common.EndNodeClusterManager, certManager *lego.CertManager) {
 	httpServer := http.GlobalHttpServer
-	httpServer.Init(globalUserManager, globalClusterManager)
+	httpServer.Init(globalUserManager, globalClusterManager, certManager)
 	if configManager.GetBool(common.SupportPrometheus) {
 		http.RegisterPrometheus()
 	}
-	httpServer.Start()
+	go httpServer.Start()
+	go collectStats(httpServer)
+}
+
+func collectStats(httpServer *http.HttpServer) {
+	ticker := time.NewTicker(collectCycle)
+	nodes := httpServer.GetTargetNodes(httpServer.Name)
+	rpcClient := client.NewEndNodeClient(nodes, common.GlobalLocalNode)
+	req := &proto.GetBandwidthStatsReq{
+		Pattern: "",
+		Reset_:  true,
+	}
+	for range ticker.C {
+		succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
+			client.GetBandWidthStatsReqType,
+			req,
+		)
+		if len(succList) == 0 {
+			logger.Error("Err=Get local node stat error > %s", failedList[httpServer.Name])
+			continue
+		}
+		stats := succList[httpServer.Name].([]*proto.Stats)
+		for _, stat := range stats {
+			common.StatsForPrometheus.Ch <- stat
+			common.SumStats.Ch <- stat
+		}
+	}
+}
+
+func initCertManager() *lego.CertManager {
+	certManager := &lego.CertManager{
+		Email:       configManager.GetString(common.CertEmail),
+		Secrets:     configManager.GetStringMapString(common.CertSecrets),
+		DnsProvider: configManager.GetString(common.CertDnsProvider),
+		Path:        configManager.GetString(common.CertPath),
+	}
+	lego.CheckAndFullCertManager(certManager)
+	certManager.AutoRenewCert(certCheckCycle)
+	return certManager
+}
+
+func startServer(cmd *cobra.Command, args []string) {
+	readConfig()
+	// center node
+	serverType := configManager.GetString(common.RpcServerType)
+	if strings.ToLower(serverType) == "center" {
+		centerNodeServer := &rpc.CenterNodeServer{}
+		centerNodeServer.Init()
+		centerNodeServer.Start()
+		return
+	}
+	// end node
+	// 1s检查刷新一次
+	configManager.AutoFlush(1)
+	certManager := initCertManager()
+	proxyManager := manager.GetProxyManager()
+	initProxyManager(proxyManager, certManager)
+
+	globalUserManager := common.NewUserManager()
+	globalClusterManager := common.NewEndNodeClusterManager()
+	initAndStartEndNodeServer(globalUserManager, globalClusterManager, certManager)
+	initAndStartHttpServer(globalUserManager, globalClusterManager, certManager)
+
+	// listen signal
+	c := make(chan os.Signal)
+	signal.Notify(c, syscall.SIGTERM, syscall.SIGKILL)
+	signal := <-c
+	common.LoggerImp.Info("Msg=Exit With signal: %v", signal)
+	proxyManager.StopProxyServer()
 }

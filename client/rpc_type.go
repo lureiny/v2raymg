@@ -22,4 +22,8 @@ const (
 	DeleteAdaptiveConfigReqType
 	AdaptiveReqType
 	SetGatewayModelReqType
+	ObtainNewCertType
+	FastAddInboundType
+	TransferCertType
+	GetCertsType
 )

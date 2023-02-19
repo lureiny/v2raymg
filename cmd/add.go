@@ -33,9 +33,9 @@ func init() {
 
 func addUserLocal(cmd *cobra.Command, args []string) {
 	proxyManager := manager.GetProxyManager()
-	err := proxyManager.Init(configFile, "")
+	err := proxyManager.Init(configFile, "", nil)
 	if err != nil {
-		log.Fatal("Failed to add user > %v", err)
+		log.Fatalf("Failed to add user > %v", err)
 	}
 
 	user, err := manager.NewUser(email, inBoundTag, manager.UUID(uuid))
@@ -46,6 +46,6 @@ func addUserLocal(cmd *cobra.Command, args []string) {
 
 	err = proxyManager.AddUser(user)
 	if err != nil {
-		log.Fatal("Failed to add user > %v", err)
+		log.Fatalf("Failed to add user > %v", err)
 	}
 }

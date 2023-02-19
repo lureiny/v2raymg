@@ -22,15 +22,19 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type EndNodeAccessClient interface {
+	// user
 	GetUsers(ctx context.Context, in *GetUsersReq, opts ...grpc.CallOption) (*GetUsersRsp, error)
 	AddUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	DeleteUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	UpdateUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	ResetUser(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	GetSub(ctx context.Context, in *GetSubReq, opts ...grpc.CallOption) (*GetSubRsp, error)
+	GetBandWidthStats(ctx context.Context, in *GetBandwidthStatsReq, opts ...grpc.CallOption) (*GetBandwidthStatsRsp, error)
+	// system
 	HeartBeat(ctx context.Context, in *HeartBeatReq, opts ...grpc.CallOption) (*HeartBeatRsp, error)
 	RegisterNode(ctx context.Context, in *RegisterNodeReq, opts ...grpc.CallOption) (*RegisterNodeRsp, error)
-	GetBandWidthStats(ctx context.Context, in *GetBandwidthStatsReq, opts ...grpc.CallOption) (*GetBandwidthStatsRsp, error)
+	SetGatewayModel(ctx context.Context, in *SetGatewayModelReq, opts ...grpc.CallOption) (*SetGatewayModelRsp, error)
+	// inbound
 	AddInbound(ctx context.Context, in *InboundOpReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
 	DeleteInbound(ctx context.Context, in *InboundOpReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
 	TransferInbound(ctx context.Context, in *TransferInboundReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
@@ -38,11 +42,16 @@ type EndNodeAccessClient interface {
 	CopyUser(ctx context.Context, in *CopyUserReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
 	GetInbound(ctx context.Context, in *GetInboundReq, opts ...grpc.CallOption) (*GetInboundRsp, error)
 	GetTag(ctx context.Context, in *GetTagReq, opts ...grpc.CallOption) (*GetTagRsp, error)
+	// proxy
 	UpdateProxy(ctx context.Context, in *UpdateProxyReq, opts ...grpc.CallOption) (*UpdateProxyRsp, error)
 	AddAdaptiveConfig(ctx context.Context, in *AdaptiveOpReq, opts ...grpc.CallOption) (*AdaptiveRsp, error)
 	DeleteAdaptiveConfig(ctx context.Context, in *AdaptiveOpReq, opts ...grpc.CallOption) (*AdaptiveRsp, error)
 	Adaptive(ctx context.Context, in *AdaptiveReq, opts ...grpc.CallOption) (*AdaptiveRsp, error)
-	SetGatewayModel(ctx context.Context, in *SetGatewayModelReq, opts ...grpc.CallOption) (*SetGatewayModelRsp, error)
+	FastAddInbound(ctx context.Context, in *FastAddInboundReq, opts ...grpc.CallOption) (*FastAddInboundRsp, error)
+	// cert
+	ObtainNewCert(ctx context.Context, in *ObtainNewCertReq, opts ...grpc.CallOption) (*ObtainNewCertRsp, error)
+	TransferCert(ctx context.Context, in *TransferCertReq, opts ...grpc.CallOption) (*TransferCertRsp, error)
+	GetCerts(ctx context.Context, in *GetCertsReq, opts ...grpc.CallOption) (*GetCertsRsp, error)
 }
 
 type endNodeAccessClient struct {
@@ -107,6 +116,15 @@ func (c *endNodeAccessClient) GetSub(ctx context.Context, in *GetSubReq, opts ..
 	return out, nil
 }
 
+func (c *endNodeAccessClient) GetBandWidthStats(ctx context.Context, in *GetBandwidthStatsReq, opts ...grpc.CallOption) (*GetBandwidthStatsRsp, error) {
+	out := new(GetBandwidthStatsRsp)
+	err := c.cc.Invoke(ctx, "/proto.EndNodeAccess/GetBandWidthStats", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *endNodeAccessClient) HeartBeat(ctx context.Context, in *HeartBeatReq, opts ...grpc.CallOption) (*HeartBeatRsp, error) {
 	out := new(HeartBeatRsp)
 	err := c.cc.Invoke(ctx, "/proto.EndNodeAccess/HeartBeat", in, out, opts...)
@@ -125,9 +143,9 @@ func (c *endNodeAccessClient) RegisterNode(ctx context.Context, in *RegisterNode
 	return out, nil
 }
 
-func (c *endNodeAccessClient) GetBandWidthStats(ctx context.Context, in *GetBandwidthStatsReq, opts ...grpc.CallOption) (*GetBandwidthStatsRsp, error) {
-	out := new(GetBandwidthStatsRsp)
-	err := c.cc.Invoke(ctx, "/proto.EndNodeAccess/GetBandWidthStats", in, out, opts...)
+func (c *endNodeAccessClient) SetGatewayModel(ctx context.Context, in *SetGatewayModelReq, opts ...grpc.CallOption) (*SetGatewayModelRsp, error) {
+	out := new(SetGatewayModelRsp)
+	err := c.cc.Invoke(ctx, "/proto.EndNodeAccess/SetGatewayModel", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -233,9 +251,36 @@ func (c *endNodeAccessClient) Adaptive(ctx context.Context, in *AdaptiveReq, opt
 	return out, nil
 }
 
-func (c *endNodeAccessClient) SetGatewayModel(ctx context.Context, in *SetGatewayModelReq, opts ...grpc.CallOption) (*SetGatewayModelRsp, error) {
-	out := new(SetGatewayModelRsp)
-	err := c.cc.Invoke(ctx, "/proto.EndNodeAccess/SetGatewayModel", in, out, opts...)
+func (c *endNodeAccessClient) FastAddInbound(ctx context.Context, in *FastAddInboundReq, opts ...grpc.CallOption) (*FastAddInboundRsp, error) {
+	out := new(FastAddInboundRsp)
+	err := c.cc.Invoke(ctx, "/proto.EndNodeAccess/FastAddInbound", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *endNodeAccessClient) ObtainNewCert(ctx context.Context, in *ObtainNewCertReq, opts ...grpc.CallOption) (*ObtainNewCertRsp, error) {
+	out := new(ObtainNewCertRsp)
+	err := c.cc.Invoke(ctx, "/proto.EndNodeAccess/ObtainNewCert", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *endNodeAccessClient) TransferCert(ctx context.Context, in *TransferCertReq, opts ...grpc.CallOption) (*TransferCertRsp, error) {
+	out := new(TransferCertRsp)
+	err := c.cc.Invoke(ctx, "/proto.EndNodeAccess/TransferCert", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *endNodeAccessClient) GetCerts(ctx context.Context, in *GetCertsReq, opts ...grpc.CallOption) (*GetCertsRsp, error) {
+	out := new(GetCertsRsp)
+	err := c.cc.Invoke(ctx, "/proto.EndNodeAccess/GetCerts", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -246,15 +291,19 @@ func (c *endNodeAccessClient) SetGatewayModel(ctx context.Context, in *SetGatewa
 // All implementations must embed UnimplementedEndNodeAccessServer
 // for forward compatibility
 type EndNodeAccessServer interface {
+	// user
 	GetUsers(context.Context, *GetUsersReq) (*GetUsersRsp, error)
 	AddUsers(context.Context, *UserOpReq) (*UserOpRsp, error)
 	DeleteUsers(context.Context, *UserOpReq) (*UserOpRsp, error)
 	UpdateUsers(context.Context, *UserOpReq) (*UserOpRsp, error)
 	ResetUser(context.Context, *UserOpReq) (*UserOpRsp, error)
 	GetSub(context.Context, *GetSubReq) (*GetSubRsp, error)
+	GetBandWidthStats(context.Context, *GetBandwidthStatsReq) (*GetBandwidthStatsRsp, error)
+	// system
 	HeartBeat(context.Context, *HeartBeatReq) (*HeartBeatRsp, error)
 	RegisterNode(context.Context, *RegisterNodeReq) (*RegisterNodeRsp, error)
-	GetBandWidthStats(context.Context, *GetBandwidthStatsReq) (*GetBandwidthStatsRsp, error)
+	SetGatewayModel(context.Context, *SetGatewayModelReq) (*SetGatewayModelRsp, error)
+	// inbound
 	AddInbound(context.Context, *InboundOpReq) (*InboundOpRsp, error)
 	DeleteInbound(context.Context, *InboundOpReq) (*InboundOpRsp, error)
 	TransferInbound(context.Context, *TransferInboundReq) (*InboundOpRsp, error)
@@ -262,11 +311,16 @@ type EndNodeAccessServer interface {
 	CopyUser(context.Context, *CopyUserReq) (*InboundOpRsp, error)
 	GetInbound(context.Context, *GetInboundReq) (*GetInboundRsp, error)
 	GetTag(context.Context, *GetTagReq) (*GetTagRsp, error)
+	// proxy
 	UpdateProxy(context.Context, *UpdateProxyReq) (*UpdateProxyRsp, error)
 	AddAdaptiveConfig(context.Context, *AdaptiveOpReq) (*AdaptiveRsp, error)
 	DeleteAdaptiveConfig(context.Context, *AdaptiveOpReq) (*AdaptiveRsp, error)
 	Adaptive(context.Context, *AdaptiveReq) (*AdaptiveRsp, error)
-	SetGatewayModel(context.Context, *SetGatewayModelReq) (*SetGatewayModelRsp, error)
+	FastAddInbound(context.Context, *FastAddInboundReq) (*FastAddInboundRsp, error)
+	// cert
+	ObtainNewCert(context.Context, *ObtainNewCertReq) (*ObtainNewCertRsp, error)
+	TransferCert(context.Context, *TransferCertReq) (*TransferCertRsp, error)
+	GetCerts(context.Context, *GetCertsReq) (*GetCertsRsp, error)
 	mustEmbedUnimplementedEndNodeAccessServer()
 }
 
@@ -292,14 +346,17 @@ func (UnimplementedEndNodeAccessServer) ResetUser(context.Context, *UserOpReq) (
 func (UnimplementedEndNodeAccessServer) GetSub(context.Context, *GetSubReq) (*GetSubRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetSub not implemented")
 }
+func (UnimplementedEndNodeAccessServer) GetBandWidthStats(context.Context, *GetBandwidthStatsReq) (*GetBandwidthStatsRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBandWidthStats not implemented")
+}
 func (UnimplementedEndNodeAccessServer) HeartBeat(context.Context, *HeartBeatReq) (*HeartBeatRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method HeartBeat not implemented")
 }
 func (UnimplementedEndNodeAccessServer) RegisterNode(context.Context, *RegisterNodeReq) (*RegisterNodeRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RegisterNode not implemented")
 }
-func (UnimplementedEndNodeAccessServer) GetBandWidthStats(context.Context, *GetBandwidthStatsReq) (*GetBandwidthStatsRsp, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetBandWidthStats not implemented")
+func (UnimplementedEndNodeAccessServer) SetGatewayModel(context.Context, *SetGatewayModelReq) (*SetGatewayModelRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetGatewayModel not implemented")
 }
 func (UnimplementedEndNodeAccessServer) AddInbound(context.Context, *InboundOpReq) (*InboundOpRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddInbound not implemented")
@@ -334,8 +391,17 @@ func (UnimplementedEndNodeAccessServer) DeleteAdaptiveConfig(context.Context, *A
 func (UnimplementedEndNodeAccessServer) Adaptive(context.Context, *AdaptiveReq) (*AdaptiveRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Adaptive not implemented")
 }
-func (UnimplementedEndNodeAccessServer) SetGatewayModel(context.Context, *SetGatewayModelReq) (*SetGatewayModelRsp, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetGatewayModel not implemented")
+func (UnimplementedEndNodeAccessServer) FastAddInbound(context.Context, *FastAddInboundReq) (*FastAddInboundRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FastAddInbound not implemented")
+}
+func (UnimplementedEndNodeAccessServer) ObtainNewCert(context.Context, *ObtainNewCertReq) (*ObtainNewCertRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ObtainNewCert not implemented")
+}
+func (UnimplementedEndNodeAccessServer) TransferCert(context.Context, *TransferCertReq) (*TransferCertRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TransferCert not implemented")
+}
+func (UnimplementedEndNodeAccessServer) GetCerts(context.Context, *GetCertsReq) (*GetCertsRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCerts not implemented")
 }
 func (UnimplementedEndNodeAccessServer) mustEmbedUnimplementedEndNodeAccessServer() {}
 
@@ -458,6 +524,24 @@ func _EndNodeAccess_GetSub_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EndNodeAccess_GetBandWidthStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBandwidthStatsReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).GetBandWidthStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/proto.EndNodeAccess/GetBandWidthStats",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).GetBandWidthStats(ctx, req.(*GetBandwidthStatsReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _EndNodeAccess_HeartBeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HeartBeatReq)
 	if err := dec(in); err != nil {
@@ -494,20 +578,20 @@ func _EndNodeAccess_RegisterNode_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EndNodeAccess_GetBandWidthStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetBandwidthStatsReq)
+func _EndNodeAccess_SetGatewayModel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetGatewayModelReq)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(EndNodeAccessServer).GetBandWidthStats(ctx, in)
+		return srv.(EndNodeAccessServer).SetGatewayModel(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/proto.EndNodeAccess/GetBandWidthStats",
+		FullMethod: "/proto.EndNodeAccess/SetGatewayModel",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndNodeAccessServer).GetBandWidthStats(ctx, req.(*GetBandwidthStatsReq))
+		return srv.(EndNodeAccessServer).SetGatewayModel(ctx, req.(*SetGatewayModelReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -710,20 +794,74 @@ func _EndNodeAccess_Adaptive_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EndNodeAccess_SetGatewayModel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetGatewayModelReq)
+func _EndNodeAccess_FastAddInbound_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FastAddInboundReq)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(EndNodeAccessServer).SetGatewayModel(ctx, in)
+		return srv.(EndNodeAccessServer).FastAddInbound(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/proto.EndNodeAccess/SetGatewayModel",
+		FullMethod: "/proto.EndNodeAccess/FastAddInbound",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndNodeAccessServer).SetGatewayModel(ctx, req.(*SetGatewayModelReq))
+		return srv.(EndNodeAccessServer).FastAddInbound(ctx, req.(*FastAddInboundReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EndNodeAccess_ObtainNewCert_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ObtainNewCertReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).ObtainNewCert(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/proto.EndNodeAccess/ObtainNewCert",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).ObtainNewCert(ctx, req.(*ObtainNewCertReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EndNodeAccess_TransferCert_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TransferCertReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).TransferCert(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/proto.EndNodeAccess/TransferCert",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).TransferCert(ctx, req.(*TransferCertReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EndNodeAccess_GetCerts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCertsReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).GetCerts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/proto.EndNodeAccess/GetCerts",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).GetCerts(ctx, req.(*GetCertsReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -760,6 +898,10 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _EndNodeAccess_GetSub_Handler,
 		},
 		{
+			MethodName: "GetBandWidthStats",
+			Handler:    _EndNodeAccess_GetBandWidthStats_Handler,
+		},
+		{
 			MethodName: "HeartBeat",
 			Handler:    _EndNodeAccess_HeartBeat_Handler,
 		},
@@ -768,8 +910,8 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _EndNodeAccess_RegisterNode_Handler,
 		},
 		{
-			MethodName: "GetBandWidthStats",
-			Handler:    _EndNodeAccess_GetBandWidthStats_Handler,
+			MethodName: "SetGatewayModel",
+			Handler:    _EndNodeAccess_SetGatewayModel_Handler,
 		},
 		{
 			MethodName: "AddInbound",
@@ -816,8 +958,20 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _EndNodeAccess_Adaptive_Handler,
 		},
 		{
-			MethodName: "SetGatewayModel",
-			Handler:    _EndNodeAccess_SetGatewayModel_Handler,
+			MethodName: "FastAddInbound",
+			Handler:    _EndNodeAccess_FastAddInbound_Handler,
+		},
+		{
+			MethodName: "ObtainNewCert",
+			Handler:    _EndNodeAccess_ObtainNewCert_Handler,
+		},
+		{
+			MethodName: "TransferCert",
+			Handler:    _EndNodeAccess_TransferCert_Handler,
+		},
+		{
+			MethodName: "GetCerts",
+			Handler:    _EndNodeAccess_GetCerts_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

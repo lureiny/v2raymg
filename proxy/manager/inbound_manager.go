@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/lureiny/v2raymg/proxy/protocol"
+	"github.com/lureiny/v2raymg/proxy/config"
 )
 
 const emptyTcpHeaderConfig = "{\n\"type\": \"none\"\n}"
 
 type Inbound struct {
-	Config  protocol.InboundDetourConfig
+	Config  config.InboundDetourConfig
 	Tag     string // 全局唯一
 	RWMutex sync.RWMutex
 }
@@ -118,5 +118,10 @@ func (inboundManager *InboundManager) Delete(tag string) error {
 
 // 根据tag获取inbound, 不存在返回nil
 func (inboundManager *InboundManager) Get(tag string) *Inbound {
+	return inboundManager.inbounds[tag]
+}
+
+// 根据tag获取inbound, 不存在返回nil
+func (inboundManager *InboundManager) AddVlessTCPTLS(tag string) *Inbound {
 	return inboundManager.inbounds[tag]
 }

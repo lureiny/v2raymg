@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/lureiny/v2raymg/proxy/manager"
-	"github.com/lureiny/v2raymg/proxy/protocol"
+	"github.com/lureiny/v2raymg/proxy/config"
 )
 
 var proxyManager = manager.GetProxyManager()
@@ -47,7 +47,7 @@ func GetUserSubUri(user, tag, host, nodeName string, port uint32) (string, error
 	}
 }
 
-func GetVlessSub(in *protocol.InboundDetourConfig, user, host, nodeName string, port uint32) (string, error) {
+func GetVlessSub(in *config.InboundDetourConfig, user, host, nodeName string, port uint32) (string, error) {
 	u, err := NewVlessShareConfig(in, user, host, port)
 	if err != nil {
 		return "", err
@@ -56,7 +56,7 @@ func GetVlessSub(in *protocol.InboundDetourConfig, user, host, nodeName string, 
 	return getVlessUri(u)
 }
 
-func GetVmessSub(in *protocol.InboundDetourConfig, user, host, nodeName string, port uint32) (string, error) {
+func GetVmessSub(in *config.InboundDetourConfig, user, host, nodeName string, port uint32) (string, error) {
 	u, err := NewVmessShareConfig(in, user, host, port)
 	if err != nil {
 		return "", err
@@ -65,7 +65,7 @@ func GetVmessSub(in *protocol.InboundDetourConfig, user, host, nodeName string, 
 	return getVmessUri(u)
 }
 
-func GetTrojanSub(in *protocol.InboundDetourConfig, user, host, nodeName string, port uint32) (string, error) {
+func GetTrojanSub(in *config.InboundDetourConfig, user, host, nodeName string, port uint32) (string, error) {
 	u, err := NewTrojanShareConfig(in, user, host, port)
 	if err != nil {
 		return "", err

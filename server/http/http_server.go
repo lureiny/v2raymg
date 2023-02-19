@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/server"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -29,6 +30,7 @@ type HttpServer struct {
 	clusterManager *common.EndNodeClusterManager
 	token          string // for admin op such as user op, stat op
 	handlersMap    map[string]HttpHandlerInterface
+	certManager    *lego.CertManager
 }
 
 var logger = common.LoggerImp
@@ -37,9 +39,10 @@ func (s *HttpServer) SetUserManager(um *common.UserManager) {
 	s.userManager = um
 }
 
-func (s *HttpServer) Init(um *common.UserManager, cm *common.EndNodeClusterManager) {
+func (s *HttpServer) Init(um *common.UserManager, cm *common.EndNodeClusterManager, certManager *lego.CertManager) {
 	s.userManager = um
 	s.clusterManager = cm
+	s.certManager = certManager
 
 	s.Host = configManager.GetString(common.ServerListen)
 	s.Port = configManager.GetInt(common.ServerHttpPort)
@@ -61,7 +64,7 @@ func (s *HttpServer) Start() {
 }
 
 // 根据target查找路由的节点
-func (s *HttpServer) getTargetNodes(target string) *[]*common.Node {
+func (s *HttpServer) GetTargetNodes(target string) *[]*common.Node {
 	if target == "all" {
 		filter := func(n *common.Node) bool {
 			return n.Name == s.Name || n.IsValid()

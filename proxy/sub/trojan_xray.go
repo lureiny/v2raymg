@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	protocolP "github.com/lureiny/v2raymg/proxy/protocol"
+	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/xtls/xray-core/infra/conf"
 )
 
@@ -29,7 +29,7 @@ func (c *TrojanShareConfig) Build() string {
 	return fmt.Sprintf("%s?%s#%s", c.BaseConfig.Build(), fixUri(paramsURI), url.QueryEscape(c.NodeName))
 }
 
-func parseTrojanAccountInfo(in *protocolP.InboundDetourConfig, email string, sharedConfig *TrojanShareConfig) error {
+func parseTrojanAccountInfo(in *config.InboundDetourConfig, email string, sharedConfig *TrojanShareConfig) error {
 	trojanConfig := new(conf.TrojanServerConfig)
 
 	err := json.Unmarshal([]byte(*(in.Settings)), trojanConfig)
@@ -49,7 +49,7 @@ func parseTrojanAccountInfo(in *protocolP.InboundDetourConfig, email string, sha
 	return fmt.Errorf("%s not in %s", email, in.Tag)
 }
 
-func NewTrojanShareConfig(in *protocolP.InboundDetourConfig, email string, host string, port uint32) (*TrojanShareConfig, error) {
+func NewTrojanShareConfig(in *config.InboundDetourConfig, email string, host string, port uint32) (*TrojanShareConfig, error) {
 	sharedConfig := newDefaultTrojanShareConfig()
 	// 获取UUID
 	err := parseTrojanAccountInfo(in, email, sharedConfig)

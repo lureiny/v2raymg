@@ -47,7 +47,7 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	nodes := handler.getHttpServer().getTargetNodes(parasMap["target"])
+	nodes := handler.getHttpServer().GetTargetNodes(parasMap["target"])
 	if nodes == nil {
 		c.String(200, "no avaliable node")
 		return

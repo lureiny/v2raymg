@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	protocolP "github.com/lureiny/v2raymg/proxy/protocol"
+	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/infra/conf"
 	"github.com/xtls/xray-core/proxy/vless"
@@ -36,7 +36,7 @@ func (c *VlessShareConfig) Build() string {
 	return fmt.Sprintf("%s?%s#%s", c.BaseConfig.Build(), fixUri(paramsURI), url.QueryEscape(c.NodeName))
 }
 
-func parseVlessAccountInfo(in *protocolP.InboundDetourConfig, email string, sharedConfig *VlessShareConfig) error {
+func parseVlessAccountInfo(in *config.InboundDetourConfig, email string, sharedConfig *VlessShareConfig) error {
 	vlessConfig := new(conf.VLessInboundConfig)
 
 	err := json.Unmarshal([]byte(*(in.Settings)), vlessConfig)
@@ -59,7 +59,7 @@ func parseVlessAccountInfo(in *protocolP.InboundDetourConfig, email string, shar
 	return fmt.Errorf("%s not in %s", email, in.Tag)
 }
 
-func NewVlessShareConfig(in *protocolP.InboundDetourConfig, email string, host string, port uint32) (*VlessShareConfig, error) {
+func NewVlessShareConfig(in *config.InboundDetourConfig, email string, host string, port uint32) (*VlessShareConfig, error) {
 	sharedConfig := newDefaultVlessShareConfig()
 	// 获取UUID
 	err := parseVlessAccountInfo(in, email, sharedConfig)

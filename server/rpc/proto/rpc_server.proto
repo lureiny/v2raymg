@@ -9,6 +9,21 @@ message User {
     string passwd = 2;
     int64 expire_time = 3;
     repeated string tags = 4;
+    int64 downlink = 5;
+    int64 uplink = 6;
+}
+
+enum BuilderType {
+    UnknowBuilderType = 0;
+    VLESSSettingBuilderType = 10;
+	VMESSSettingBuilderType = 11;
+	TrojanSettingBuilderType = 12;
+	TCPBuilderType = 20;
+	WSBuilderType = 21; 
+	QuicBuilderType = 22; 
+	MkcpBuilderType = 23;
+	GrpcBuilderType = 24;
+	HttpBuilderType = 25;
 }
 
 message NodeAuthInfo {
@@ -185,16 +200,75 @@ message SetGatewayModelRsp {
     string msg = 2;
 }
 
+message ObtainNewCertReq {
+    NodeAuthInfo node_auth_info = 1;
+    string domain = 2;
+}
+
+message ObtainNewCertRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
+message FastAddInboundReq {
+    NodeAuthInfo node_auth_info = 1;
+    BuilderType inboundBuilderType = 2;
+    BuilderType streamBuilderType = 3;
+    int32 port = 4;
+    string domain = 5;
+    bool isXtls = 6;
+    string tag = 7;
+}
+
+message FastAddInboundRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
+message TransferCertReq {
+    NodeAuthInfo node_auth_info = 1;
+    string domain = 2;
+    bytes cert_data = 3;
+    bytes key_datas = 4;
+}
+
+message TransferCertRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
+message Cert {
+    string domain = 1;
+    string key_file = 2;
+    string cert_file = 3;
+    string expire_time = 4;
+}
+
+message GetCertsReq {
+    NodeAuthInfo node_auth_info = 1;
+}
+
+message GetCertsRsp {
+    int32 code = 1;
+    repeated Cert certs = 2;
+}
+
 service EndNodeAccess {
+    // user
     rpc GetUsers(GetUsersReq) returns (GetUsersRsp) {}
     rpc AddUsers(UserOpReq) returns (UserOpRsp) {}
     rpc DeleteUsers(UserOpReq) returns (UserOpRsp) {}
     rpc UpdateUsers(UserOpReq) returns (UserOpRsp) {}
     rpc ResetUser(UserOpReq) returns (UserOpRsp) {}
     rpc GetSub(GetSubReq) returns (GetSubRsp) {}
+    rpc GetBandWidthStats(GetBandwidthStatsReq) returns (GetBandwidthStatsRsp) {}
+
+    // system
     rpc HeartBeat(HeartBeatReq) returns (HeartBeatRsp) {}
     rpc RegisterNode(RegisterNodeReq) returns (RegisterNodeRsp) {}
-    rpc GetBandWidthStats(GetBandwidthStatsReq) returns (GetBandwidthStatsRsp) {}
+    rpc SetGatewayModel(SetGatewayModelReq) returns (SetGatewayModelRsp) {}
+    
+    // inbound
     rpc AddInbound(InboundOpReq) returns (InboundOpRsp) {}
     rpc DeleteInbound(InboundOpReq) returns (InboundOpRsp) {}
     rpc TransferInbound(TransferInboundReq) returns (InboundOpRsp) {}
@@ -202,11 +276,18 @@ service EndNodeAccess {
     rpc CopyUser(CopyUserReq) returns (InboundOpRsp) {}
     rpc GetInbound(GetInboundReq) returns (GetInboundRsp) {}
     rpc GetTag(GetTagReq) returns (GetTagRsp) {}
+
+    // proxy
     rpc UpdateProxy(UpdateProxyReq) returns (UpdateProxyRsp) {}
     rpc AddAdaptiveConfig(AdaptiveOpReq) returns (AdaptiveRsp) {}
     rpc DeleteAdaptiveConfig(AdaptiveOpReq) returns (AdaptiveRsp) {}
     rpc Adaptive(AdaptiveReq) returns (AdaptiveRsp) {} // 外部调用的主动修改接口
-    rpc SetGatewayModel(SetGatewayModelReq) returns(SetGatewayModelRsp) {}
+    rpc FastAddInbound(FastAddInboundReq) returns (FastAddInboundRsp) {}
+
+    // cert
+    rpc ObtainNewCert(ObtainNewCertReq) returns (ObtainNewCertRsp) {}
+    rpc TransferCert(TransferCertReq) returns (TransferCertRsp) {}
+    rpc GetCerts(GetCertsReq) returns (GetCertsRsp) {}
 }
 
 message GetClutersReq {

@@ -1,6 +1,6 @@
 //go:build !v2ray
 
-package protocol
+package config
 
 import (
 	"encoding/json"
@@ -55,7 +55,7 @@ func NewStreamSetting(network, tls, keyFile, certFile string) (*conf.StreamConfi
 		Security: tls,
 		TLSSettings: &conf.TLSConfig{
 			Certs: []*conf.TLSCertConfig{
-				&conf.TLSCertConfig{
+				{
 					CertFile: certFile,
 					KeyFile:  keyFile,
 				},

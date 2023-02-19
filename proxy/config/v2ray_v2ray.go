@@ -1,6 +1,6 @@
 //go:build v2ray
 
-package protocol
+package config
 
 import (
 	"encoding/json"

@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/lego"
+	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/lureiny/v2raymg/proxy/manager"
 	"github.com/lureiny/v2raymg/server"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
@@ -33,6 +35,7 @@ type EndNodeServer struct {
 	clusterManager *common.EndNodeClusterManager
 	userManager    *common.UserManager
 	centerNode     *common.Node
+	certManager    *lego.CertManager
 	server.ServerConfig
 }
 
@@ -43,7 +46,7 @@ func GetEndNodeServer() *EndNodeServer {
 }
 
 func (s *EndNodeServer) initRpcServerKey() {
-	if len(s.clusterManager.Token) > rpcServerKeyLen {
+	if len(s.clusterManager.Token) >= rpcServerKeyLen {
 		RpcServerKey = []byte(s.clusterManager.Token)[:32]
 	} else {
 		// 如果密码为空, 则同样不具有安全性, 仅仅不会被抓包直接分析
@@ -82,6 +85,8 @@ var methodRspMap = map[string]interface{}{
 	"DeleteAdaptiveConfig": &proto.AdaptiveRsp{},
 	"Adaptive":             &proto.AdaptiveRsp{},
 	"SetGatewayModel":      &proto.SetGatewayModelRsp{},
+	"ObtainNewCert":        &proto.ObtainNewCertRsp{},
+	"FastAddInbound":       &proto.FastAddInboundReq{},
 }
 
 func newEmptyRsp(fullMethod string) (interface{}, error) {
@@ -140,9 +145,10 @@ func UnaryServerInterceptor(ctx context.Context, req interface{}, info *grpc.Una
 	return rsp, err
 }
 
-func (s *EndNodeServer) Init(um *common.UserManager, cm *common.EndNodeClusterManager) {
+func (s *EndNodeServer) Init(um *common.UserManager, cm *common.EndNodeClusterManager, certManager *lego.CertManager) {
 	s.clusterManager = cm
 	s.userManager = um
+	s.certManager = certManager
 	s.Host = configManager.GetString(common.ServerListen)
 	s.Port = configManager.GetInt(common.ServerRpcPort)
 	s.Type = "End"
@@ -308,7 +314,14 @@ func (s *EndNodeServer) GetUsers(ctx context.Context, getUsersReq *proto.GetUser
 		Code: 0,
 	}
 	usersMap := s.userManager.GetUserList()
+	sumStats := common.SumStats
+	sumStats.Mutex.Lock()
+	defer sumStats.Mutex.Unlock()
 	for _, u := range usersMap {
+		if stat, ok := sumStats.StatsMap[u.Name+"_user"]; ok {
+			u.Downlink = stat.Downlink
+			u.Uplink = stat.Uplink
+		}
 		getUsersRsp.Users = append(getUsersRsp.Users, u)
 	}
 	return getUsersRsp, nil
@@ -824,12 +837,101 @@ func (s *EndNodeServer) Adaptive(ctx context.Context, adaptiveReq *proto.Adaptiv
 	return adaptiveRsp, nil
 }
 
+func (s *EndNodeServer) ObtainNewCert(ctx context.Context, obtainNewCertReq *proto.ObtainNewCertReq) (*proto.ObtainNewCertRsp, error) {
+	obtainNewCertRsp := &proto.ObtainNewCertRsp{
+		Code: 0,
+	}
+	domain := obtainNewCertReq.GetDomain()
+	err := s.certManager.ObtainNewCert(domain)
+	if err != nil {
+		obtainNewCertRsp.Code = 1020
+		obtainNewCertRsp.Msg = err.Error()
+	}
+	return obtainNewCertRsp, nil
+}
+
 func (s *EndNodeServer) SetGatewayModel(ctx context.Context, setGatewayModelReq *proto.SetGatewayModelReq) (*proto.SetGatewayModelRsp, error) {
 	setGatewayModelRsp := &proto.SetGatewayModelRsp{
 		Code: 0,
 	}
+	if setGatewayModelReq.GetEnableGatewayModel() {
+		proxyManager.StopProxyServer()
+	} else {
+		proxyManager.StartProxyServer()
+	}
 	configManager.Set(common.ServerRpcOnlyGateway, setGatewayModelReq.GetEnableGatewayModel())
 	return setGatewayModelRsp, nil
+}
+
+func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *proto.FastAddInboundReq) (*proto.FastAddInboundRsp, error) {
+	fastAddInboundRsp := &proto.FastAddInboundRsp{
+		Code: 0,
+	}
+	inbound, err := newInbound(fastAddInboundReq, s.certManager)
+	if err != nil {
+		fastAddInboundRsp.Code = 1020
+		fastAddInboundRsp.Msg = err.Error()
+		return fastAddInboundRsp, nil
+	}
+	if err := proxyManager.AddInbound(inbound); err != nil {
+		fastAddInboundRsp.Code = 1021
+		fastAddInboundRsp.Msg = err.Error()
+	}
+	return fastAddInboundRsp, nil
+}
+
+func (s *EndNodeServer) TransferCert(ctx context.Context, transferCertReq *proto.TransferCertReq) (*proto.TransferCertRsp, error) {
+	transferCertRsp := &proto.TransferCertRsp{
+		Code: 0,
+	}
+	if err := s.certManager.AddCertificates(
+		transferCertReq.Domain,
+		transferCertReq.KeyDatas,
+		transferCertReq.CertData,
+	); err != nil {
+		transferCertRsp.Code = 1030
+		transferCertRsp.Msg = err.Error()
+	}
+	return transferCertRsp, nil
+}
+
+func (s *EndNodeServer) GetCerts(ctx context.Context, getCertsReq *proto.GetCertsReq) (*proto.GetCertsRsp, error) {
+	getCertsRsp := &proto.GetCertsRsp{
+		Code: 0,
+	}
+	getCertsRsp.Certs = s.certManager.GetAllCert()
+	return getCertsRsp, nil
+}
+
+func newInbound(fastAddInboundReq *proto.FastAddInboundReq, c *lego.CertManager) (*manager.Inbound, error) {
+	if c.GetCert(fastAddInboundReq.GetDomain()) == nil {
+		return nil, fmt.Errorf("not found domain's[%s] cert", fastAddInboundReq.GetDomain())
+	}
+	inboundBuilder := config.GetInboundSettingBuilder(fastAddInboundReq.GetInboundBuilderType())
+	if inboundBuilder == nil {
+		return nil, fmt.Errorf("unsupport protocol")
+	}
+	inboundBuilder.Mutex.Lock()
+	defer inboundBuilder.Mutex.Unlock()
+	streamBuilder := config.GetStreamSettingBuilder(fastAddInboundReq.GetStreamBuilderType())
+	if streamBuilder == nil {
+		return nil, fmt.Errorf("unsupport stream type")
+	}
+	streamBuilder.Mutex.Lock()
+	defer streamBuilder.Mutex.Unlock()
+	streamBuilder.Init(fastAddInboundReq.GetDomain(), c, fastAddInboundReq.GetIsXtls())
+	inboundConfig := config.InboundDetourConfig{}
+	inboundConfig.StreamSetting = streamBuilder.Build()
+	inboundConfig.Protocol = inboundBuilder.GetProtocol()
+	inboundConfig.Settings = inboundBuilder.Build()
+	inboundConfig.ListenOn = "0.0.0.0"
+	inboundConfig.PortRange = uint32(fastAddInboundReq.GetPort())
+	inboundConfig.Tag = fastAddInboundReq.GetTag()
+	return &manager.Inbound{
+		Config:  inboundConfig,
+		Tag:     fastAddInboundReq.GetTag(),
+		RWMutex: sync.RWMutex{},
+	}, nil
 }
 
 func (s *EndNodeServer) registerToEndNode(node *common.Node, wg *sync.WaitGroup, ch chan struct{}) {

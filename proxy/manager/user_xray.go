@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	protocolP "github.com/lureiny/v2raymg/proxy/protocol"
+	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/xtls/xray-core/app/proxyman/command"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/serial"
@@ -128,13 +128,13 @@ func addUser(con command.HandlerServiceClient, user *User) error {
 	return err
 }
 
-func addVmessUser(in *protocolP.InboundDetourConfig, user *User) error {
+func addVmessUser(in *config.InboundDetourConfig, user *User) error {
 	vmessConfig, err := NewVmessInboundConfig(in)
 	if err != nil {
 		return err
 	}
 
-	c := protocolP.V2rayInboundUser{Email: user.Email, ID: user.UUID}
+	c := config.V2rayInboundUser{Email: user.Email, ID: user.UUID}
 	cb, err := json.Marshal(c)
 	if err != nil {
 		return err
@@ -150,13 +150,13 @@ func addVmessUser(in *protocolP.InboundDetourConfig, user *User) error {
 	return nil
 }
 
-func addVlessUser(in *protocolP.InboundDetourConfig, user *User) error {
+func addVlessUser(in *config.InboundDetourConfig, user *User) error {
 	vlessConfig, err := NewVlessInboundConfig(in)
 	if err != nil {
 		return err
 	}
 
-	c := protocolP.V2rayInboundUser{Email: user.Email, ID: user.UUID, Flow: user.Flow}
+	c := config.V2rayInboundUser{Email: user.Email, ID: user.UUID, Flow: user.Flow}
 	cb, err := json.Marshal(c)
 	if err != nil {
 		return err
@@ -172,7 +172,7 @@ func addVlessUser(in *protocolP.InboundDetourConfig, user *User) error {
 	return nil
 }
 
-func addTrojanUser(in *protocolP.InboundDetourConfig, user *User) error {
+func addTrojanUser(in *config.InboundDetourConfig, user *User) error {
 	trojanConfig, err := NewTrojanInboundConfig(in)
 	if err != nil {
 		return err
@@ -223,14 +223,14 @@ func removeUser(con command.HandlerServiceClient, user *User) error {
 	return err
 }
 
-func removeVmessUser(in *protocolP.InboundDetourConfig, user *User) error {
+func removeVmessUser(in *config.InboundDetourConfig, user *User) error {
 	vmessConfig, err := NewVmessInboundConfig(in)
 	if err != nil {
 		return err
 	}
 
 	for index := range vmessConfig.Users {
-		var vmessUser protocolP.V2rayInboundUser
+		var vmessUser config.V2rayInboundUser
 		json.Unmarshal(vmessConfig.Users[index], &vmessUser)
 		if vmessUser.Email == user.Email {
 			vmessConfig.Users = append(vmessConfig.Users[:index], vmessConfig.Users[index+1:]...)
@@ -250,14 +250,14 @@ func removeVmessUser(in *protocolP.InboundDetourConfig, user *User) error {
 	return nil
 }
 
-func removeVlessUser(in *protocolP.InboundDetourConfig, user *User) error {
+func removeVlessUser(in *config.InboundDetourConfig, user *User) error {
 	vlessConfig, err := NewVlessInboundConfig(in)
 	if err != nil {
 		return err
 	}
 
 	for index := range vlessConfig.Clients {
-		var vlessUser protocolP.V2rayInboundUser
+		var vlessUser config.V2rayInboundUser
 		json.Unmarshal(vlessConfig.Clients[index], &vlessUser)
 		if vlessUser.Email == user.Email {
 			vlessConfig.Clients = append(vlessConfig.Clients[:index], vlessConfig.Clients[index+1:]...)
@@ -277,7 +277,7 @@ func removeVlessUser(in *protocolP.InboundDetourConfig, user *User) error {
 	return nil
 }
 
-func removeTrojanUser(in *protocolP.InboundDetourConfig, user *User) error {
+func removeTrojanUser(in *config.InboundDetourConfig, user *User) error {
 	trojanConfig, err := NewTrojanInboundConfig(in)
 	if err != nil {
 		return err
@@ -337,7 +337,7 @@ func CompleteUserInformation(user *User, inbound *Inbound) error {
 	return SetUserAccount(user)
 }
 
-func GetInboundUsers(in *protocolP.InboundDetourConfig) []string {
+func GetInboundUsers(in *config.InboundDetourConfig) []string {
 	switch strings.ToLower(in.Protocol) {
 	case VlessProtocolName:
 		return getVlessUsers(in)
@@ -350,7 +350,7 @@ func GetInboundUsers(in *protocolP.InboundDetourConfig) []string {
 	}
 }
 
-func getVmessUsers(in *protocolP.InboundDetourConfig) []string {
+func getVmessUsers(in *config.InboundDetourConfig) []string {
 	users := []string{}
 	vmessConfig, err := NewVmessInboundConfig(in)
 	if err != nil {
@@ -358,7 +358,7 @@ func getVmessUsers(in *protocolP.InboundDetourConfig) []string {
 	}
 
 	for _, user := range vmessConfig.Users {
-		vUser := protocolP.V2rayInboundUser{}
+		vUser := config.V2rayInboundUser{}
 		err := json.Unmarshal(user, &vUser)
 		if err != nil {
 			continue
@@ -368,7 +368,7 @@ func getVmessUsers(in *protocolP.InboundDetourConfig) []string {
 	return users
 }
 
-func getVlessUsers(in *protocolP.InboundDetourConfig) []string {
+func getVlessUsers(in *config.InboundDetourConfig) []string {
 	users := []string{}
 	vlessConfig, err := NewVlessInboundConfig(in)
 	if err != nil {
@@ -376,7 +376,7 @@ func getVlessUsers(in *protocolP.InboundDetourConfig) []string {
 	}
 
 	for _, user := range vlessConfig.Clients {
-		vUser := protocolP.V2rayInboundUser{}
+		vUser := config.V2rayInboundUser{}
 		err := json.Unmarshal(user, &vUser)
 		if err != nil {
 			continue
@@ -386,7 +386,7 @@ func getVlessUsers(in *protocolP.InboundDetourConfig) []string {
 	return users
 }
 
-func getTrojanUsers(in *protocolP.InboundDetourConfig) []string {
+func getTrojanUsers(in *config.InboundDetourConfig) []string {
 	users := []string{}
 	trojanConfig, err := NewTrojanInboundConfig(in)
 	if err != nil {
@@ -399,11 +399,11 @@ func getTrojanUsers(in *protocolP.InboundDetourConfig) []string {
 	return users
 }
 
-func NewVlessInboundConfig(in *protocolP.InboundDetourConfig) (*protocolP.VLessInboundConfig, error) {
+func NewVlessInboundConfig(in *config.InboundDetourConfig) (*config.VLessInboundConfig, error) {
 	if strings.ToLower(in.Protocol) != VlessProtocolName {
 		return nil, fmt.Errorf("wrong protocol, need %s, but %s", VlessProtocolName, in.Protocol)
 	}
-	vlessInboundConfig := new(protocolP.VLessInboundConfig)
+	vlessInboundConfig := new(config.VLessInboundConfig)
 	err := json.Unmarshal([]byte(*(in.Settings)), vlessInboundConfig)
 	if err != nil {
 		return nil, err
@@ -411,7 +411,7 @@ func NewVlessInboundConfig(in *protocolP.InboundDetourConfig) (*protocolP.VLessI
 	return vlessInboundConfig, nil
 }
 
-func NewVmessInboundConfig(in *protocolP.InboundDetourConfig) (*conf.VMessInboundConfig, error) {
+func NewVmessInboundConfig(in *config.InboundDetourConfig) (*conf.VMessInboundConfig, error) {
 	if strings.ToLower(in.Protocol) != VmessProtocolName {
 		return nil, fmt.Errorf("wrong protocol, need %s, but %s", VmessProtocolName, in.Protocol)
 	}
@@ -423,7 +423,7 @@ func NewVmessInboundConfig(in *protocolP.InboundDetourConfig) (*conf.VMessInboun
 	return vmessInboundConfig, nil
 }
 
-func NewTrojanInboundConfig(in *protocolP.InboundDetourConfig) (*conf.TrojanServerConfig, error) {
+func NewTrojanInboundConfig(in *config.InboundDetourConfig) (*conf.TrojanServerConfig, error) {
 	if strings.ToLower(in.Protocol) != TrojanProtocolName {
 		return nil, fmt.Errorf("wrong protocol, need %s, but %s", TrojanProtocolName, in.Protocol)
 	}

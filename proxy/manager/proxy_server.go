@@ -15,6 +15,8 @@ import (
 	"github.com/google/go-github/v48/github"
 )
 
+const execPath = "./" + FileName
+
 type ProxyServer struct {
 	configFile     string
 	path           string
@@ -22,18 +24,39 @@ type ProxyServer struct {
 	isRunning      bool
 	cancel         context.CancelFunc
 	currentVersion string
+	expectVersion  string
 	stdout         io.ReadCloser
 }
 
-func NewProxyServer(file, path string) *ProxyServer {
+func NewProxyServer(file, version string) *ProxyServer {
 	return &ProxyServer{
-		configFile: file,
-		path:       path,
-		isRunning:  false,
+		configFile:    file,
+		path:          execPath,
+		isRunning:     false,
+		expectVersion: version,
 	}
 }
 
+func initExecFile(s *ProxyServer) error {
+	_, err := os.Stat(s.path)
+	if err == nil {
+		return nil
+	}
+	// download v2ray/xray exec
+	if err := s.UpdateByTagName(s.expectVersion); err != nil {
+		return err
+	}
+	err = SwitchExec(FileName+tempShuffix, s.path)
+	return err
+}
+
 func (s *ProxyServer) Start() error {
+	if s.isRunning {
+		return nil
+	}
+	if err := initExecFile(s); err != nil {
+		return err
+	}
 	in, err := os.Open(s.configFile)
 	if err != nil {
 		return err
@@ -53,7 +76,8 @@ func (s *ProxyServer) Start() error {
 	}
 
 	if err := s.UpdateCurrentVersion(s.stdout); err != nil {
-		// 获取版本失败不会停止已启动的进程
+		// 停止已经启动的进程
+		s.cancel()
 		return err
 	}
 	s.isRunning = true
@@ -89,6 +113,9 @@ func (s *ProxyServer) UpdateCurrentVersion(stdout io.ReadCloser) error {
 
 // 参考: https://docs.github.com/cn/rest/releases/releases
 func (s *ProxyServer) UpdateByTagName(tag string) error {
+	if tag == "" {
+		tag = latestTagName
+	}
 	if tag[0] != 'v' && tag != latestTagName {
 		tag = "v" + tag
 	}
@@ -101,14 +128,25 @@ func (s *ProxyServer) UpdateByTagName(tag string) error {
 		return err
 	}
 
-	zipReader, err := s.Download(downloadUrl)
+	zipReader, err := Download(downloadUrl)
 	if err != nil {
 		return err
 	}
-	return s.Unzip(zipReader)
+	return Unzip(zipReader)
 }
 
-func (s *ProxyServer) Download(url string) (*zip.Reader, error) {
+func (s *ProxyServer) Update(tag string) error {
+	if err := s.UpdateByTagName(tag); err != nil {
+		return err
+	}
+	s.Stop()
+	if err := SwitchExec(FileName+tempShuffix, s.path); err != nil {
+		return err
+	}
+	return s.Start()
+}
+
+func Download(url string) (*zip.Reader, error) {
 	data, err := requestUrl(url)
 	if err != nil {
 		return nil, err
@@ -116,7 +154,7 @@ func (s *ProxyServer) Download(url string) (*zip.Reader, error) {
 	return zip.NewReader(bytes.NewReader(data), int64(len(data)))
 }
 
-func (s *ProxyServer) Unzip(zipReader *zip.Reader) error {
+func Unzip(zipReader *zip.Reader) error {
 	for _, file := range zipReader.File {
 		if file.Name == FileName {
 			reader, err := file.Open()
@@ -135,9 +173,9 @@ func (s *ProxyServer) Unzip(zipReader *zip.Reader) error {
 	return fmt.Errorf("not found file: %s in zip file", FileName)
 }
 
-func (s *ProxyServer) SwitchExec() error {
-	os.Chmod(FileName+tempShuffix, 0755)
-	return os.Rename(FileName+tempShuffix, s.path)
+func SwitchExec(src, dst string) error {
+	os.Chmod(src, 0755)
+	return os.Rename(src, dst)
 }
 
 func getReleaseByTagName(tag string) (*github.RepositoryRelease, error) {
