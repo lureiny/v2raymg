@@ -225,12 +225,12 @@ make xray  #  构建xray版本
   },
   "cert": {
     "email": "test@gmail.com",
-    "secrets": {
+    "secrets": { // dns api访问tokens, 参见https://go-acme.github.io/lego/dns/
       "key": "key",
-      "secret": "secert"
+      "secret": "secert" 
     },
-    "path": "/root/acme_test/",
-    "dns_provider": "alidns"
+    "path": "/root/acme_test/", // cert存储路径
+    "dns_provider": "alidns" // dns服务名称, 参见https://go-acme.github.io/lego/dns/
   },
   "users": {
     "user1": "passwd1|0" // 用户列表 key = {user name}, value = {passwrod}|{expire time}, expire time为过期时间的时间戳, 0时表示不过期,
