@@ -45,4 +45,10 @@ func init() {
 
 	fastAddInboundHandler := &FastAddInboundHandler{}
 	GlobalHttpServer.RegisterHandler("/fastAddInbound", fastAddInboundHandler)
+
+	transferCertHandler := &TransferCertHandler{}
+	GlobalHttpServer.RegisterHandler("/transferCert", transferCertHandler)
+
+	getCertsHandler := &GetCertsHandler{}
+	GlobalHttpServer.RegisterHandler("/getCerts", getCertsHandler)
 }

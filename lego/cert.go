@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"github.com/urfave/cli/v2"
 )
 
@@ -39,6 +40,7 @@ type Certificate struct {
 	CertificateFile string
 	KeyFile         string
 	ExpireTime      time.Time
+	ObtainedByLocal bool
 }
 
 func checkAndMakeDefaultPath() {
@@ -60,7 +62,7 @@ func CheckAndFullCertManager(certManager *CertManager) {
 	}
 }
 
-func paraseDomainCertFile(path, fileName string) *Certificate {
+func paraseDomainCertFile(path, fileName string, obtainedByLocal bool) *Certificate {
 	if len(fileName) < 4 {
 		return nil
 	}
@@ -69,11 +71,13 @@ func paraseDomainCertFile(path, fileName string) *Certificate {
 		return &Certificate{
 			Domain:          domain,
 			CertificateFile: filepath.Join(path, fileName),
+			ObtainedByLocal: obtainedByLocal,
 		}
 	} else if strings.HasSuffix(fileName, ".key") {
 		return &Certificate{
-			Domain:  domain,
-			KeyFile: filepath.Join(path, fileName),
+			Domain:          domain,
+			KeyFile:         filepath.Join(path, fileName),
+			ObtainedByLocal: obtainedByLocal,
 		}
 	}
 	return nil
@@ -102,6 +106,7 @@ func mergeCertificate(cert1, cert2 *Certificate) (*Certificate, error) {
 	} else {
 		certificate.CertificateFile = cert2.CertificateFile
 	}
+	certificate.ObtainedByLocal = cert1.ObtainedByLocal || cert2.ObtainedByLocal
 	if err := fullCertExpireTime(certificate); err != nil {
 		return nil, err
 	}
@@ -133,31 +138,70 @@ func (certManager *CertManager) checkCertFile() {
 
 // LoadCertificates 加载本地证书文件
 func (certManager *CertManager) LoadCertificates() error {
-	entires, err := os.ReadDir(filepath.Join(legoPath, subCertPath))
-	if err != nil {
-		return err
-	}
 	errMsg := ""
-	for _, entry := range entires {
-		cert1 := paraseDomainCertFile(certManager.Path, entry.Name())
-		if cert1 == nil {
+	certPaths := []string{filepath.Join(legoPath, subCertPath), certManager.Path}
+	for index, path := range certPaths {
+		entires, err := os.ReadDir(path)
+		if err != nil {
+			errMsg = errMsg + "|" + err.Error()
 			continue
 		}
-		if cert2, ok := certManager.Certs[cert1.Domain]; ok {
-			cert3, err := mergeCertificate(cert1, cert2)
-			if err != nil {
-				errMsg = fmt.Sprintf("%s\nLoad domain certificate err > %v", errMsg, err)
+		for _, entry := range entires {
+			cert1 := paraseDomainCertFile(certManager.Path, entry.Name(), index == 0)
+			if cert1 == nil {
 				continue
 			}
-			certManager.Certs[cert1.Domain] = cert3
-		} else {
-			certManager.Certs[cert1.Domain] = cert1
+			if cert2, ok := certManager.Certs[cert1.Domain]; ok {
+				cert3, err := mergeCertificate(cert1, cert2)
+				if err != nil {
+					errMsg = fmt.Sprintf("%s|Load domain certificate err > %v", errMsg, err)
+					continue
+				}
+				certManager.Certs[cert1.Domain] = cert3
+			} else {
+				certManager.Certs[cert1.Domain] = cert1
+			}
 		}
 	}
 	certManager.checkCertFile()
 	if errMsg != "" {
-		return fmt.Errorf("%v", err)
+		return fmt.Errorf("%s", errMsg)
 	}
+	return nil
+}
+
+func SaveFile(data []byte, filePath string) error {
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	return nil
+}
+
+// AddCertificates 加载外部证书文件
+func (certManager *CertManager) AddCertificates(domain string, keyData, certData []byte) error {
+	certManager.certMutex.Lock()
+	defer certManager.certMutex.Unlock()
+	certFileName := strings.ReplaceAll(domain, "*", "_") + ".crt"
+	keyFileName := strings.ReplaceAll(domain, "*", "_") + ".key"
+	if err := SaveFile(keyData, filepath.Join(certManager.Path, keyFileName)); err != nil {
+		return err
+	}
+	if err := SaveFile(certData, filepath.Join(certManager.Path, certFileName)); err != nil {
+		return err
+	}
+	certificate := &Certificate{
+		Domain:          domain,
+		CertificateFile: certFileName,
+		KeyFile:         keyFileName,
+		ObtainedByLocal: false,
+	}
+	fullCertExpireTime(certificate)
+	certManager.Certs[domain] = certificate
 	return nil
 }
 
@@ -269,6 +313,22 @@ func (certManager *CertManager) GetCert(domain string) *Certificate {
 	return certManager.Certs[getWildcardDomain(domain)]
 }
 
+// GetAllCert...
+func (certManager *CertManager) GetAllCert() []*proto.Cert {
+	certManager.certMutex.Lock()
+	defer certManager.certMutex.Unlock()
+	certs := []*proto.Cert{}
+	for _, cert := range certManager.Certs {
+		certs = append(certs, &proto.Cert{
+			Domain:     cert.Domain,
+			CertFile:   cert.CertificateFile,
+			KeyFile:    cert.KeyFile,
+			ExpireTime: cert.ExpireTime.String(),
+		})
+	}
+	return certs
+}
+
 func getWildcardDomain(domain string) string {
 	index := strings.Index(domain, ".")
 	if index == -1 {
@@ -278,6 +338,7 @@ func getWildcardDomain(domain string) string {
 }
 
 // AutoRenewCert... 根据指定时间周期定时renew
+// param cycle: 检查周期
 func (certManager *CertManager) AutoRenewCert(cycle int64) {
 	go func() {
 		for {

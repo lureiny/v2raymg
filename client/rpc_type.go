@@ -24,4 +24,6 @@ const (
 	SetGatewayModelReqType
 	ObtainNewCertType
 	FastAddInboundType
+	TransferCertType
+	GetCertsType
 )

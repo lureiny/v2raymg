@@ -880,6 +880,29 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 	return fastAddInboundRsp, nil
 }
 
+func (s *EndNodeServer) TransferCert(ctx context.Context, transferCertReq *proto.TransferCertReq) (*proto.TransferCertRsp, error) {
+	transferCertRsp := &proto.TransferCertRsp{
+		Code: 0,
+	}
+	if err := s.certManager.AddCertificates(
+		transferCertReq.Domain,
+		transferCertReq.KeyDatas,
+		transferCertReq.CertData,
+	); err != nil {
+		transferCertRsp.Code = 1030
+		transferCertRsp.Msg = err.Error()
+	}
+	return transferCertRsp, nil
+}
+
+func (s *EndNodeServer) GetCerts(ctx context.Context, getCertsReq *proto.GetCertsReq) (*proto.GetCertsRsp, error) {
+	getCertsRsp := &proto.GetCertsRsp{
+		Code: 0,
+	}
+	getCertsRsp.Certs = s.certManager.GetAllCert()
+	return getCertsRsp, nil
+}
+
 func newInbound(fastAddInboundReq *proto.FastAddInboundReq, c *lego.CertManager) (*manager.Inbound, error) {
 	if c.GetCert(fastAddInboundReq.GetDomain()) == nil {
 		return nil, fmt.Errorf("not found domain's[%s] cert", fastAddInboundReq.GetDomain())

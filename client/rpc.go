@@ -63,6 +63,10 @@ func init() {
 	registerReqToEndNodeFunc(SetGatewayModelReqType, reqSetGatewayModel)
 	// fast add inbound
 	registerReqToEndNodeFunc(FastAddInboundType, reqFastAddInbound)
+	// Transfer Cert
+	registerReqToEndNodeFunc(TransferCertType, reqTransferCert)
+	// get certs
+	registerReqToEndNodeFunc(GetCertsType, reqGetCerts)
 }
 
 func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
@@ -411,6 +415,37 @@ func reqFastAddInbound(reqData []byte, endNodeAccessClient proto.EndNodeAccessCl
 		return nil, err
 	}
 	return nil, nil
+}
+
+func reqTransferCert(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	transferCertReq := &proto.TransferCertReq{}
+	if err := pb.Unmarshal(reqData, transferCertReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to TransferCertReq > %v", reqData, err)
+	}
+
+	transferCertReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.TransferCert(context.Background(), transferCertReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func reqGetCerts(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	getCertsReq := &proto.GetCertsReq{}
+	if err := pb.Unmarshal(reqData, getCertsReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to GetCertsReq > %v", reqData, err)
+	}
+
+	getCertsReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.GetCerts(context.Background(), getCertsReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if err != nil {
+		return nil, err
+	}
+	return rsp.GetCerts(), nil
 }
 
 func getReqAndCallbakcFunc(reqType ReqToEndNodeType) ReqToEndNodeFunc {

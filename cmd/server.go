@@ -27,7 +27,10 @@ var serverCmd = &cobra.Command{
 
 var logger = common.LoggerImp
 
-var serverConfig = ""
+var (
+	serverConfig         = ""
+	certCheckCycle int64 = 5 // 5s
+)
 
 var configManager = common.GetGlobalConfigManager()
 
@@ -74,9 +77,9 @@ func initAndStartEndNodeServer(globalUserManager *common.UserManager, globalClus
 	go endNodeServer.Start()
 }
 
-func initAndStartHttpServer(globalUserManager *common.UserManager, globalClusterManager *common.EndNodeClusterManager) {
+func initAndStartHttpServer(globalUserManager *common.UserManager, globalClusterManager *common.EndNodeClusterManager, certManager *lego.CertManager) {
 	httpServer := http.GlobalHttpServer
-	httpServer.Init(globalUserManager, globalClusterManager)
+	httpServer.Init(globalUserManager, globalClusterManager, certManager)
 	if configManager.GetBool(common.SupportPrometheus) {
 		http.RegisterPrometheus()
 	}
@@ -117,6 +120,7 @@ func initCertManager() *lego.CertManager {
 		Path:        configManager.GetString(common.CertPath),
 	}
 	lego.CheckAndFullCertManager(certManager)
+	certManager.AutoRenewCert(certCheckCycle)
 	return certManager
 }
 
@@ -140,7 +144,7 @@ func startServer(cmd *cobra.Command, args []string) {
 	globalUserManager := common.NewUserManager()
 	globalClusterManager := common.NewEndNodeClusterManager()
 	initAndStartEndNodeServer(globalUserManager, globalClusterManager, certManager)
-	initAndStartHttpServer(globalUserManager, globalClusterManager)
+	initAndStartHttpServer(globalUserManager, globalClusterManager, certManager)
 
 	// listen signal
 	c := make(chan os.Signal)
