@@ -285,6 +285,9 @@ func (certManager *CertManager) RenewCert(domain string) error {
 	if !ok {
 		return fmt.Errorf("no cert of domain[%s], should Obtain new cert first", domain)
 	}
+	if !cert.ObtainedByLocal {
+		return nil
+	}
 	if time.Now().Before(cert.ExpireTime) {
 		return nil
 	}
