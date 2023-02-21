@@ -218,6 +218,18 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 		registerNodeRsp.Msg = errMsg
 		return registerNodeRsp, nil
 	}
+	if node.Name == s.Name {
+		errMsg := "remote node has same name with local node"
+		logger.Error(
+			"Err=%s|Src=%s:%d",
+			errMsg,
+			node.Host,
+			node.Port,
+		)
+		registerNodeRsp.Code = 103
+		registerNodeRsp.Msg = errMsg
+		return registerNodeRsp, nil
+	}
 
 	if err := s.clusterManager.IsSameCluster(node.GetClusterName(), clusterToken); err != nil {
 		errMsg := err.Error()

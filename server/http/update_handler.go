@@ -54,6 +54,11 @@ func (handler *UpdateHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *UpdateHandler) getRelativePath() string {
+	return "/update"
+}
+
+
 func (handler *UpdateHandler) help() string {
 	usage := `/update
 	更新目标节点的proxy版本

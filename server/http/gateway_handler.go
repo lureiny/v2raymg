@@ -49,6 +49,10 @@ func (handler *GatewayHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *GatewayHandler) getRelativePath() string {
+	return "/gateway"
+}
+
 func (handler *GatewayHandler) help() string {
 	usage := `/gateway
 	/gateway?token={token}&target={target}&enable_gateway_model={enable_gateway_model}

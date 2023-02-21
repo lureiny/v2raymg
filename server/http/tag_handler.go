@@ -46,6 +46,10 @@ func (handler *TagHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *TagHandler) getRelativePath() string {
+	return "/tag"
+}
+
 func (handler *TagHandler) help() string {
 	usage := `/tag
 	获取目标节点的所有inbound tag

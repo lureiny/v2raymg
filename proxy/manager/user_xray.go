@@ -54,6 +54,7 @@ func NewUser(email, boundTag string, options ...UserOption) (*User, error) {
 		AlterId:  0,
 		UUID:     uuid.New().String(),
 		Protocol: VmessProtocolName,
+		IsXtls:   false,
 	}
 
 	for _, option := range options {
@@ -97,7 +98,8 @@ func SetUserAccount(user *User) error {
 			Id: user.UUID,
 		}
 		if user.IsXtls {
-			vlessAccount.Flow = "xtls-rprx-direct"
+			user.Flow = "xtls-rprx-direct"
+			vlessAccount.Flow = user.Flow
 		}
 		user.Account = vlessAccount
 	case TrojanProtocolName:
@@ -105,7 +107,8 @@ func SetUserAccount(user *User) error {
 			Password: user.UUID,
 		}
 		if user.IsXtls {
-			trojanAccount.Flow = "xtls-rprx-direct"
+			user.Flow = "xtls-rprx-direct"
+			trojanAccount.Flow = user.Flow
 		}
 		user.Account = trojanAccount
 	default:
@@ -156,7 +159,10 @@ func addVlessUser(in *config.InboundDetourConfig, user *User) error {
 		return err
 	}
 
-	c := config.V2rayInboundUser{Email: user.Email, ID: user.UUID, Flow: user.Flow}
+	c := config.V2rayInboundUser{Email: user.Email, ID: user.UUID}
+	if user.IsXtls {
+		c.Flow = user.Flow
+	}
 	cb, err := json.Marshal(c)
 	if err != nil {
 		return err
@@ -182,7 +188,9 @@ func addTrojanUser(in *config.InboundDetourConfig, user *User) error {
 		Password: user.UUID,
 		Email:    user.Email,
 		Level:    byte(user.Level),
-		Flow:     user.Flow,
+	}
+	if user.IsXtls {
+		trojanUser.Flow = user.Flow
 	}
 
 	trojanConfig.Clients = append(trojanConfig.Clients, &trojanUser)

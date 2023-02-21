@@ -109,6 +109,10 @@ func (handler *FastAddInboundHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *FastAddInboundHandler) getRelativePath() string {
+	return "/fastAddInbound"
+}
+
 func (handler *FastAddInboundHandler) help() string {
 	usage := `/fastAddInbound
 	/fastAddInbound?token={token}&target={target}&tag={tag}&protocol={protocol}&port={port}&stream={stream}&isXtls={isXtls}&domain={domain}

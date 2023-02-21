@@ -56,8 +56,11 @@ func (handler *MetricHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *MetricHandler) getRelativePath() string {
+	return "/metrics"
+}
+
 func RegisterPrometheus() {
 	prometheus.Register(trafficStats)
-	metricHandler := &MetricHandler{}
-	GlobalHttpServer.RegisterHandler("/metrics", metricHandler)
+	GlobalHttpServer.RegisterHandler(&MetricHandler{})
 }

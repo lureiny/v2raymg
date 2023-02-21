@@ -79,7 +79,8 @@ func (s *HttpServer) GetTargetNodes(target string) *[]*common.Node {
 	}
 }
 
-func (s *HttpServer) RegisterHandler(relativePath string, handler HttpHandlerInterface) {
+func (s *HttpServer) RegisterHandler(handler HttpHandlerInterface) {
+	relativePath := handler.getRelativePath()
 	handler.setHttpServer(s)
 	s.handlersMap[relativePath] = handler
 	handlers := handler.getHandlers()

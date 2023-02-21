@@ -70,6 +70,10 @@ func (handler *AdaptiveOpHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *AdaptiveOpHandler) getRelativePath() string {
+	return "/adaptiveOp"
+}
+
 func (handler *AdaptiveOpHandler) help() string {
 	usage := `/adaptiveOp
 	修改端口区间

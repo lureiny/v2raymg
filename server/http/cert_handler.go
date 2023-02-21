@@ -46,6 +46,10 @@ func (handler *CertHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *CertHandler) getRelativePath() string {
+	return "/cert"
+}
+
 func (handler *CertHandler) help() string {
 	usage := `/cert
 	/cert?target={target}&domain={domain}&token={token}

@@ -83,6 +83,10 @@ func (handler *TransferCertHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *TransferCertHandler) getRelativePath() string {
+	return "/transferCert"
+}
+
 func (handler *TransferCertHandler) help() string {
 	usage := `/transferCert
 	将本机证书文件传输到指定节点上

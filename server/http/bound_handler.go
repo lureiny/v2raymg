@@ -116,6 +116,10 @@ func (handler *BoundHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *BoundHandler) getRelativePath() string {
+	return "/bound"
+}
+
 func (handler *BoundHandler) help() string {
 	usage := `/bound
 	inbound操作接口, 支持添加, 删除, 迁移, 复制inbound, inbound间复制用户, 获取inbound

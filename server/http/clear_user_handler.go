@@ -55,6 +55,10 @@ func (handler *ClearUserHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *ClearUserHandler) getRelativePath() string {
+	return "/clearUsers"
+}
+
 func (handler *ClearUserHandler) help() string {
 	usage := `/clearUsers
 	清理用户, 用户级别删除, delete接口是在tag级别删除用户

@@ -59,6 +59,10 @@ func (handler *StatHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *StatHandler) getRelativePath() string {
+	return "/stat"
+}
+
 func (handler *StatHandler) help() string {
 	usage := `/stat
 	获取指定节点的统计信息, 需要proxy配置中开启统计

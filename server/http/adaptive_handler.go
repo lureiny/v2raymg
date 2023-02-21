@@ -55,6 +55,10 @@ func (handler *AdaptiveHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *AdaptiveHandler) getRelativePath() string {
+	return "/adaptive"
+}
+
 func (handler *AdaptiveHandler) help() string {
 	usage := `/adaptive
 	对每一个指定tag的inbound, 从配置的port库中随机选择一个, 更新指定tag的端口

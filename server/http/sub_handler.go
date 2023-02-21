@@ -86,6 +86,10 @@ func (handler *SubHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *SubHandler) getRelativePath() string {
+	return "/sub"
+}
+
 func (handler *SubHandler) help() string {
 	usage := `/sub
 	获取订阅

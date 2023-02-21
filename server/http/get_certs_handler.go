@@ -47,6 +47,10 @@ func (handler *GetCertsHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *GetCertsHandler) getRelativePath() string {
+	return "/getCerts"
+}
+
 func (handler *GetCertsHandler) help() string {
 	usage := `/getCerts
 	获取订阅
