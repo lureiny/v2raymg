@@ -39,7 +39,11 @@ type EndNodeServer struct {
 	server.ServerConfig
 }
 
-const rpcServerKeyLen = 32
+const (
+	rpcServerKeyLen          = 32
+	heartbeatInterval        = 10 * time.Second
+	clearInvalidNodeInterval = 20 * time.Second
+)
 
 func GetEndNodeServer() *EndNodeServer {
 	return endNodeServer
@@ -1181,8 +1185,7 @@ func addRemoteNode(rsp *proto.HeartBeatRsp, s *EndNodeServer, remoteServerType s
 }
 
 func (s *EndNodeServer) heartBeatAndRegisterToNodeOrCenterNode() {
-	// 5s上报一次
-	ticker := time.NewTicker(time.Second * 5)
+	ticker := time.NewTicker(heartbeatInterval)
 	for {
 		s.heartbeatToCenterNode()
 		s.registerOrHeartBeatToEndNode()
@@ -1192,9 +1195,7 @@ func (s *EndNodeServer) heartBeatAndRegisterToNodeOrCenterNode() {
 
 // 过滤无效节点和无效用户
 func (s *EndNodeServer) filter() {
-	// 10s 过滤一次
-	clearCycle := 10 * time.Second
-	timeTicker := time.NewTicker(clearCycle)
+	timeTicker := time.NewTicker(clearInvalidNodeInterval)
 	for {
 		<-timeTicker.C
 		logger.Info("Msg=fliter invalid node and expire user")
