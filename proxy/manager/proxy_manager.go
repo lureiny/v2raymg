@@ -600,8 +600,7 @@ func (proxyManager *ProxyManager) CycleAdaptive() {
 		}
 	}
 	if _, err := proxyManager.adaptive.Cron.AddFunc(proxyManager.adaptive.CronRule, cycleFunc); err != nil {
-		log.Printf("Err=add adaptive cycle func err > %v, use default cronrule\n", err)
-	} else {
+		log.Printf("Err=add adaptive cycle func err > %v, use default cronrule: %s\n", err, defalutCron)
 		proxyManager.adaptive.CronRule = defalutCron
 		proxyManager.adaptive.Cron.AddFunc(proxyManager.adaptive.CronRule, cycleFunc)
 	}
