@@ -1,6 +1,7 @@
 package http
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -17,6 +18,7 @@ func (handler *HelpHandler) handlerFunc(c *gin.Context) {
 				helpInfos = append(helpInfos, handler.help())
 			}
 		}
+		sort.Strings(helpInfos)
 		c.String(200, strings.Join(helpInfos, "\n"))
 	} else {
 		c.String(200, h.help())
