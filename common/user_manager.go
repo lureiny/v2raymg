@@ -229,8 +229,10 @@ func (um *UserManager) Update(user *proto.User) error {
 	var err error = nil
 	// 只更新存在的用户
 	um.lock.Lock()
-	if _, ok := (um.users)[user.Name]; ok {
-		um.users[user.Name] = user
+	if u, ok := (um.users)[user.Name]; ok {
+		// TODO: 需要细化变更类型, 否则每次都需要传递passwd
+		u.ExpireTime = user.GetExpireTime()
+		u.Passwd = user.GetPasswd()
 	} else {
 		err = fmt.Errorf("user[%s] is not exist", user.Name)
 	}
@@ -282,6 +284,7 @@ func (um *UserManager) ClearInvalideUser() {
 		}
 		// 强制删除, 不论proxy中是否删除成功
 		delete(um.users, user.Name)
+		logger.Info("clear invalide user: %v", user)
 	}
 	um.lock.Unlock()
 	um.FlushUser()
@@ -314,7 +317,7 @@ func (um *UserManager) FlushUser() {
 }
 
 // 获取用户订阅信息
-func (um *UserManager) GetUserSub(user *proto.User) ([]string, error) {
+func (um *UserManager) GetUserSub(user *proto.User, excludeProtocols *StringList, useSNI bool) ([]string, error) {
 	if _, ok := um.users[user.Name]; !ok {
 		return nil, fmt.Errorf("user[%s] is not exist", user.Name)
 	}
@@ -335,17 +338,22 @@ func (um *UserManager) GetUserSub(user *proto.User) ([]string, error) {
 			user.Tags = defaultTags
 		}
 	}
-	return getUserSubUri(user)
+	return getUserSubUri(user, excludeProtocols, useSNI)
 }
 
-func getUserSubUri(user *proto.User) ([]string, error) {
+func getSubUriHead(uri string) string {
+	subs := strings.Split(uri, ":")
+	return subs[0]
+}
+
+func getUserSubUri(user *proto.User, excludeProtocols *StringList, useSNI bool) ([]string, error) {
 	proxyHost := configManager.GetString(ProxyHost)
 	proxyPort := configManager.GetInt(ProxyPort)
 
 	// get sub不会返回错误, 只会打印日志
 	uris := StringList{}
 	for _, tag := range user.Tags {
-		uri, err := sub.GetUserSubUri(user.Name, tag, proxyHost, GlobalLocalNode.Name, uint32(proxyPort))
+		uri, err := sub.GetUserSubUri(user.Name, tag, proxyHost, GlobalLocalNode.Name, uint32(proxyPort), useSNI)
 		if err != nil {
 			logger.Error(
 				"Err=%v|User=%s|Tag=%s",
@@ -355,7 +363,9 @@ func getUserSubUri(user *proto.User) ([]string, error) {
 			)
 			continue
 		}
-		uris = append(uris, uri)
+		if !excludeProtocols.Contains(getSubUriHead(uri)) {
+			uris = append(uris, uri)
+		}
 	}
 	uris = uris.Filter(func(u string) bool {
 		return len(u) > 0

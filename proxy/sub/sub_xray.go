@@ -26,7 +26,7 @@ const (
 )
 
 // GetUserSubUri 获取某个指定用户的订阅uri
-func GetUserSubUri(user, tag, host, nodeName string, port uint32) (string, error) {
+func GetUserSubUri(user, tag, host, nodeName string, port uint32, useSNI bool) (string, error) {
 	inbound := proxyManager.GetInbound(tag)
 	if inbound == nil {
 		return "", fmt.Errorf("inbound with tag(%s) is not exist", tag)
@@ -37,44 +37,50 @@ func GetUserSubUri(user, tag, host, nodeName string, port uint32) (string, error
 
 	switch strings.ToLower(inbound.Config.Protocol) {
 	case manager.VlessProtocolName:
-		return GetVlessSub(&inbound.Config, user, host, nodeName, port)
+		return GetVlessSub(&inbound.Config, user, host, nodeName, port, useSNI)
 	case manager.VmessProtocolName:
-		return GetVmessSub(&inbound.Config, user, host, nodeName, port)
+		return GetVmessSub(&inbound.Config, user, host, nodeName, port, useSNI)
 	case manager.TrojanProtocolName:
-		return GetTrojanSub(&inbound.Config, user, host, nodeName, port)
+		return GetTrojanSub(&inbound.Config, user, host, nodeName, port, useSNI)
 	default:
 		return "", fmt.Errorf("not support protocol: %s", inbound.Config.Protocol)
 	}
 }
 
-func GetVlessSub(in *config.InboundDetourConfig, user, host, nodeName string, port uint32) (string, error) {
+func GetVlessSub(in *config.InboundDetourConfig, user, host, nodeName string, port uint32, useSNI bool) (string, error) {
 	u, err := NewVlessShareConfig(in, user, host, port)
 	if err != nil {
 		return "", err
 	}
 	u.NodeName = nodeName
+	u.UseSNI = useSNI
 	return getVlessUri(u)
 }
 
-func GetVmessSub(in *config.InboundDetourConfig, user, host, nodeName string, port uint32) (string, error) {
+func GetVmessSub(in *config.InboundDetourConfig, user, host, nodeName string, port uint32, useSNI bool) (string, error) {
 	u, err := NewVmessShareConfig(in, user, host, port)
 	if err != nil {
 		return "", err
 	}
 	u.PS = nodeName
+	u.UseSNI = useSNI
 	return getVmessUri(u)
 }
 
-func GetTrojanSub(in *config.InboundDetourConfig, user, host, nodeName string, port uint32) (string, error) {
+func GetTrojanSub(in *config.InboundDetourConfig, user, host, nodeName string, port uint32, useSNI bool) (string, error) {
 	u, err := NewTrojanShareConfig(in, user, host, port)
 	if err != nil {
 		return "", err
 	}
 	u.NodeName = nodeName
+	u.UseSNI = useSNI
 	return getTrojanUri(u)
 }
 
 func getVmessUri(u *VmessShareConfig) (string, error) {
+	if !u.UseSNI {
+		u.Sni = ""
+	}
 	b, err := json.Marshal(u)
 	if err != nil {
 		return "", nil

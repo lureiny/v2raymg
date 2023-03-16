@@ -54,6 +54,8 @@ message UserOpRsp {
 message GetSubReq {
     NodeAuthInfo node_auth_info = 1;
     User user = 2;
+    repeated string exclude_protocols = 3;
+    bool use_sni = 4;
 }
 
 message GetSubRsp {

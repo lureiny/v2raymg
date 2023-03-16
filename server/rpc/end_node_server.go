@@ -441,8 +441,10 @@ func (s *EndNodeServer) GetSub(ctx context.Context, getSubReq *proto.GetSubReq) 
 	}
 
 	user := getSubReq.GetUser()
+	var excludeProtocols common.StringList = getSubReq.GetExcludeProtocols()
+	useSNI := getSubReq.UseSni
 	// 判断用户是否存在/合法
-	uris, err := s.userManager.GetUserSub(user)
+	uris, err := s.userManager.GetUserSub(user, &excludeProtocols, useSNI)
 	if err != nil || len(uris) == 0 {
 		errMsg := fmt.Sprintf("get sub err > %v", err)
 		logger.Error(

@@ -17,8 +17,10 @@ func (handler *SubHandler) parseParam(c *gin.Context) map[string]string {
 	// sub  这里需要变更下token的问题
 	parasMap["user"] = c.Query("user")
 	parasMap["pwd"] = c.Query("pwd")
-	parasMap["tags"] = c.DefaultQuery("tags", "") // 按照","分割
+	parasMap["tags"] = c.DefaultQuery("tags", "")                          // 按照","分隔
+	parasMap["excludeProtocols"] = c.DefaultQuery("exclude_protocols", "") // 按照","分隔
 	parasMap["target"] = c.DefaultQuery("target", handler.getHttpServer().Name)
+	parasMap["useSNI"] = c.DefaultQuery("use_sni", "true")
 	return parasMap
 }
 
@@ -28,6 +30,8 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 
 	tagList := common.StringList{}
 	tagList = strings.Split(parasMap["tags"], ",")
+	excludeProtocols := common.StringList{}
+	excludeProtocols = strings.Split(parasMap["excludeProtocols"], ",")
 	// 需要根据target做路由
 	userPoint := &proto.User{
 		Name:   parasMap["user"],
@@ -57,18 +61,21 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
 		client.GetSubReqType,
 		&proto.GetSubReq{
-			User: userPoint,
+			User:             userPoint,
+			ExcludeProtocols: excludeProtocols.Filter(func(t string) bool { return len(t) > 0 }),
+			UseSni:           parasMap["useSNI"] == "true",
 		},
 	)
 
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
 		logger.Error(
-			"Err=%s|User=%s|Passwd=%s|Target=%s",
+			"Err=%s|User=%s|Passwd=%s|Target=%s|ExincludeProtocols=%s",
 			errMsg,
 			parasMap["user"],
 			parasMap["pwd"],
 			parasMap["target"],
+			parasMap["excludeProtocols"],
 		)
 	}
 	uris := []string{}
@@ -93,11 +100,13 @@ func (handler *SubHandler) getRelativePath() string {
 func (handler *SubHandler) help() string {
 	usage := `/sub
 	获取订阅
-	/sub?target={target}&user={user}&pwd={pwd}&tags={tags}
+	/sub?target={target}&user={user}&pwd={pwd}&tags={tags}&exclude_protocols={exclude_protocols}&use_sni={use_sni}
 	target: 目标节点
 	user: user name
 	pwd: password
 	tags: inbound的tag列表, 使用","分隔
+	exclude_protocols: 过滤掉的协议订阅, 使用","分隔
+	use_sni: 是否包含sni信息, 解决sni封锁问题
 	`
 	return usage
 }

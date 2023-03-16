@@ -25,9 +25,13 @@ type VlessShareConfig struct {
 	TransportConfig *VlessTransportConfig
 	TLSConfig       *VlessTLSConfig
 	NodeName        string
+	UseSNI          bool
 }
 
 func (c *VlessShareConfig) Build() string {
+	if !c.UseSNI {
+		c.TLSConfig.SNI = ""
+	}
 	params := []string{c.ProtocolConfig.Build(), c.TransportConfig.Build(), c.TLSConfig.Build()}
 	if c.BaseConfig.Flow != "" {
 		params = append(params, fmt.Sprintf("flow=%s", c.BaseConfig.Flow))

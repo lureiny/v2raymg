@@ -25,9 +25,13 @@ type VlessShareConfig struct {
 	TransportConfig *VlessTransportConfig
 	TLSConfig       *VlessTLSConfig
 	NodeName        string
+	UseSNI          bool
 }
 
 func (c *VlessShareConfig) Build() string {
+	if !c.UseSNI {
+		c.TLSConfig.SNI = ""
+	}
 	params := []string{c.ProtocolConfig.Build(), c.TransportConfig.Build(), c.TLSConfig.Build()}
 	paramsURI := strings.Join(params, "&")
 	return fmt.Sprintf("%s?%s#%s", c.BaseConfig.Build(), fixUri(paramsURI), url.QueryEscape(c.NodeName))

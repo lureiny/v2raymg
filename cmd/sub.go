@@ -26,7 +26,7 @@ func init() {
 }
 
 func getSubURI(cmd *cobra.Command, args []string) {
-	uri, err := sub.GetUserSubUri(email, tag, host, nodeName, uint32(port))
+	uri, err := sub.GetUserSubUri(email, tag, host, nodeName, uint32(port), true)
 	if err != nil {
 		log.Fatal(err)
 	}
