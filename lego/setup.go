@@ -49,11 +49,11 @@ func newClient(ctx *cli.Context, acc registration.User, keyType certcrypto.KeyTy
 
 	client, err := lego.NewClient(config)
 	if err != nil {
-		log.Fatalf("Could not create client: %v", err)
+		log.Printf("Could not create client: %v", err)
 	}
 
 	if client.GetExternalAccountRequired() && !ctx.IsSet("eab") {
-		log.Fatal("Server requires External Account Binding. Use --eab with --kid and --hmac.")
+		log.Printf("Server requires External Account Binding. Use --eab with --kid and --hmac.")
 	}
 
 	return client
@@ -75,14 +75,14 @@ func getKeyType(ctx *cli.Context) certcrypto.KeyType {
 		return certcrypto.EC384
 	}
 
-	log.Fatalf("Unsupported KeyType: %s", keyType)
+	log.Printf("Unsupported KeyType: %s", keyType)
 	return ""
 }
 
 func getEmail(ctx *cli.Context) string {
 	email := ctx.String("email")
 	if email == "" {
-		log.Fatal("You have to pass an account (email address) to the program using --email or -m")
+		log.Printf("You have to pass an account (email address) to the program using --email or -m")
 	}
 	return email
 }

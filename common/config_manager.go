@@ -36,6 +36,7 @@ const (
 	CertSecrets     = "cert.secrets"
 	CertDnsProvider = "cert.dns_provider"
 	CertPath        = "cert.path"
+	CertArgs        = "cert.args"
 )
 
 // 管理进程本身配置

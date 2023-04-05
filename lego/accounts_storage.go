@@ -73,7 +73,8 @@ func NewAccountsStorage(ctx *cli.Context) *AccountsStorage {
 
 	serverURL, err := url.Parse(ctx.String("server"))
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("%v\n", err)
+		return nil
 	}
 
 	rootPath := filepath.Join(ctx.String("path"), baseAccountsRootFolderName)
@@ -96,7 +97,8 @@ func (s *AccountsStorage) ExistsAccountFilePath() bool {
 	if _, err := os.Stat(accountFile); os.IsNotExist(err) {
 		return false
 	} else if err != nil {
-		log.Fatal(err)
+		log.Printf("%v\n", err)
+		return false
 	}
 	return true
 }
@@ -125,13 +127,13 @@ func (s *AccountsStorage) Save(account *Account) error {
 func (s *AccountsStorage) LoadAccount(privateKey crypto.PrivateKey) *Account {
 	fileBytes, err := os.ReadFile(s.accountFilePath)
 	if err != nil {
-		log.Fatalf("Could not load file for account %s: %v", s.userID, err)
+		log.Printf("Could not load file for account %s: %v", s.userID, err)
 	}
 
 	var account Account
 	err = json.Unmarshal(fileBytes, &account)
 	if err != nil {
-		log.Fatalf("Could not parse file for account %s: %v", s.userID, err)
+		log.Printf("Could not parse file for account %s: %v", s.userID, err)
 	}
 
 	account.key = privateKey
@@ -139,13 +141,13 @@ func (s *AccountsStorage) LoadAccount(privateKey crypto.PrivateKey) *Account {
 	if account.Registration == nil || account.Registration.Body.Status == "" {
 		reg, err := tryRecoverRegistration(s.ctx, privateKey)
 		if err != nil {
-			log.Fatalf("Could not load account for %s. Registration is nil: %#v", s.userID, err)
+			log.Printf("Could not load account for %s. Registration is nil: %#v", s.userID, err)
 		}
 
 		account.Registration = reg
 		err = s.Save(&account)
 		if err != nil {
-			log.Fatalf("Could not save account for %s. Registration is nil: %#v", s.userID, err)
+			log.Printf("Could not save account for %s. Registration is nil: %#v", s.userID, err)
 		}
 	}
 
@@ -161,7 +163,7 @@ func (s *AccountsStorage) GetPrivateKey(keyType certcrypto.KeyType) crypto.Priva
 
 		privateKey, err := generatePrivateKey(accKeyPath, keyType)
 		if err != nil {
-			log.Fatalf("Could not generate RSA private account key for account %s: %v", s.userID, err)
+			log.Printf("Could not generate RSA private account key for account %s: %v", s.userID, err)
 		}
 
 		log.Printf("Saved key to %s", accKeyPath)
@@ -170,7 +172,7 @@ func (s *AccountsStorage) GetPrivateKey(keyType certcrypto.KeyType) crypto.Priva
 
 	privateKey, err := loadPrivateKey(accKeyPath)
 	if err != nil {
-		log.Fatalf("Could not load RSA private key from file %s: %v", accKeyPath, err)
+		log.Printf("Could not load RSA private key from file %s: %v", accKeyPath, err)
 	}
 
 	return privateKey
@@ -178,7 +180,7 @@ func (s *AccountsStorage) GetPrivateKey(keyType certcrypto.KeyType) crypto.Priva
 
 func (s *AccountsStorage) createKeysFolder() {
 	if err := createNonExistingFolder(s.keysPath); err != nil {
-		log.Fatalf("Could not check/create directory for account %s: %v", s.userID, err)
+		log.Printf("Could not check/create directory for account %s: %v", s.userID, err)
 	}
 }
 

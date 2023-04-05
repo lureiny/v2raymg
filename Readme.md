@@ -293,7 +293,8 @@ make xray  #  构建xray版本
       "secret": "secert" 
     },
     "path": "/root/acme_test/", // cert存储路径
-    "dns_provider": "alidns" // dns服务名称, 参见https://go-acme.github.io/lego/dns/
+    "dns_provider": "alidns", // dns服务名称, 参见https://go-acme.github.io/lego/dns/
+	"args": [] // lego额外参数
   },
   "users": {
     "user1": "passwd1|0" // 用户列表 key = {user name}, value = {passwrod}|{expire time}, expire time为过期时间的时间戳, 0时表示不过期,

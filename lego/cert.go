@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-acme/lego/v4/log"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"github.com/urfave/cli/v2"
 )
@@ -28,6 +29,7 @@ type CertManager struct {
 	DnsProvider string                  `json:"dns_provider"`
 	Path        string                  `json:"path,omitempty"`
 	Certs       map[string]*Certificate `json:"certs,omitempty"`
+	Args        []string                `json:"args,omitempty"`
 	certMutex   sync.Mutex
 }
 
@@ -239,7 +241,10 @@ func (certManager *CertManager) ObtainNewCert(domain string) error {
 		return fmt.Errorf("domian can't be empty")
 	}
 	SetEnvs(certManager.Secrets)
-	args := []string{"lego", "--accept-tos", "--email", certManager.Email, "--domains", domain, "--dns", certManager.DnsProvider, runCmd}
+	args := []string{"lego", "--accept-tos", "--email", certManager.Email, "--domains", domain, "--dns", certManager.DnsProvider}
+	args = append(args, certManager.Args...)
+	args = append(args, runCmd)
+	log.Infof("obtain new cert args: %v", args)
 	if err := ObtainNewCertWithDNS(args); err != nil {
 		return err
 	}
@@ -292,7 +297,10 @@ func (certManager *CertManager) RenewCert(domain string) error {
 		return nil
 	}
 	SetEnvs(certManager.Secrets)
-	args := []string{"lego", "--email", certManager.Email, "--domains", domain, "--dns", certManager.DnsProvider, renewCmd}
+	args := []string{"lego", "--email", certManager.Email, "--domains", domain, "--dns", certManager.DnsProvider}
+	args = append(args, certManager.Args...)
+	args = append(args, renewCmd)
+	log.Infof("renew cert args: %v", args)
 	if err := RenewCert(args); err != nil {
 		return err
 	}

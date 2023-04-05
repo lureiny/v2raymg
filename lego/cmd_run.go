@@ -22,10 +22,10 @@ func createRun() *cli.Command {
 			hasDomains := len(ctx.StringSlice("domains")) > 0
 			hasCsr := len(ctx.String("csr")) > 0
 			if hasDomains && hasCsr {
-				log.Fatal("Please specify either --domains/-d or --csr/-c, but not both")
+				log.Printf("Please specify either --domains/-d or --csr/-c, but not both")
 			}
 			if !hasDomains && !hasCsr {
-				log.Fatal("Please specify --domains/-d (or --csr/-c if you already have a CSR)")
+				log.Printf("Please specify --domains/-d (or --csr/-c if you already have a CSR)")
 			}
 			return nil
 		},
@@ -77,12 +77,14 @@ func run(ctx *cli.Context) error {
 	if account.Registration == nil {
 		reg, err := register(ctx, client)
 		if err != nil {
-			log.Fatalf("Could not complete registration\n\t%v", err)
+			log.Printf("Could not complete registration\n\t%v", err)
+			return err
 		}
 
 		account.Registration = reg
 		if err = accountsStorage.Save(account); err != nil {
-			log.Fatal(err)
+			log.Printf("%v\n", err)
+			return err
 		}
 
 		fmt.Printf(rootPathWarningMessage, accountsStorage.GetRootPath())
@@ -95,7 +97,8 @@ func run(ctx *cli.Context) error {
 	if err != nil {
 		// Make sure to return a non-zero exit code if ObtainSANCertificate returned at least one error.
 		// Due to us not returning partial certificate we can just exit here instead of at the end.
-		log.Fatalf("Could not obtain certificates:\n\t%v", err)
+		log.Printf("Could not obtain certificates:\n\t%v", err)
+		return err
 	}
 
 	certsStorage.SaveResource(cert)
@@ -123,7 +126,7 @@ func handleTOS(ctx *cli.Context, client *lego.Client) bool {
 		fmt.Println("Do you accept the TOS? Y/n")
 		text, err := reader.ReadString('\n')
 		if err != nil {
-			log.Fatalf("Could not read from console: %v", err)
+			log.Printf("Could not read from console: %v", err)
 		}
 
 		text = strings.Trim(text, "\r\n")
@@ -141,7 +144,7 @@ func handleTOS(ctx *cli.Context, client *lego.Client) bool {
 func register(ctx *cli.Context, client *lego.Client) (*registration.Resource, error) {
 	accepted := handleTOS(ctx, client)
 	if !accepted {
-		log.Fatal("You did not accept the TOS. Unable to proceed.")
+		log.Printf("You did not accept the TOS. Unable to proceed.")
 	}
 
 	if ctx.Bool("eab") {
@@ -149,7 +152,7 @@ func register(ctx *cli.Context, client *lego.Client) (*registration.Resource, er
 		hmacEncoded := ctx.String("hmac")
 
 		if kid == "" || hmacEncoded == "" {
-			log.Fatalf("Requires arguments --kid and --hmac.")
+			log.Printf("Requires arguments --kid and --hmac.")
 		}
 
 		return client.Registration.RegisterWithExternalAccountBinding(registration.RegisterEABOptions{

@@ -118,6 +118,7 @@ func initCertManager() *lego.CertManager {
 		Secrets:     configManager.GetStringMapString(common.CertSecrets),
 		DnsProvider: configManager.GetString(common.CertDnsProvider),
 		Path:        configManager.GetString(common.CertPath),
+		Args:        configManager.GetStringSlice(common.CertArgs),
 	}
 	lego.CheckAndFullCertManager(certManager)
 	certManager.AutoRenewCert(certCheckCycle)

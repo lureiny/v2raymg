@@ -35,7 +35,7 @@ func revoke(ctx *cli.Context) error {
 	acc, client := setup(ctx, NewAccountsStorage(ctx))
 
 	if acc.Registration == nil {
-		log.Fatalf("Account %s is not registered. Use 'run' to register a new account.\n", acc.Email)
+		log.Printf("Account %s is not registered. Use 'run' to register a new account.\n", acc.Email)
 	}
 
 	certsStorage := NewCertificatesStorage(ctx)
@@ -46,14 +46,14 @@ func revoke(ctx *cli.Context) error {
 
 		certBytes, err := certsStorage.ReadFile(domain, ".crt")
 		if err != nil {
-			log.Fatalf("Error while revoking the certificate for domain %s\n\t%v", domain, err)
+			log.Printf("Error while revoking the certificate for domain %s\n\t%v", domain, err)
 		}
 
 		reason := ctx.Uint("reason")
 
 		err = client.Certificate.RevokeWithReason(certBytes, &reason)
 		if err != nil {
-			log.Fatalf("Error while revoking the certificate for domain %s\n\t%v", domain, err)
+			log.Printf("Error while revoking the certificate for domain %s\n\t%v", domain, err)
 		}
 
 		log.Println("Certificate was revoked.")
