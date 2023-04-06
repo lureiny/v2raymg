@@ -190,7 +190,13 @@ func (um *UserManager) Delete(user *proto.User) error {
 	if user.Name == "" {
 		return fmt.Errorf("Empty user name")
 	}
-	checkUserTag(user)
+	um.lock.RLock()
+	if localUser, ok := um.users[user.Name]; !ok {
+		return nil
+	} else if len(user.Tags) == 0 {
+		user.Tags = localUser.Tags
+	}
+	um.lock.RUnlock()
 	succTags, _, err := proxyUserOp(user, "delete")
 	if len(succTags) == 0 && err != nil {
 		return err
@@ -330,13 +336,7 @@ func (um *UserManager) GetUserSub(user *proto.User, excludeProtocols *StringList
 	}
 
 	if len(user.Tags) == 0 {
-		if len(defaultTags) == 0 {
-			// 获取全部sub
-			user = um.Get(user.Name)
-		} else {
-			// 根据默认tag获取sub
-			user.Tags = defaultTags
-		}
+		user.Tags = localUser.Tags
 	}
 	return getUserSubUri(user, excludeProtocols, useSNI)
 }
