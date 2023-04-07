@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
 	"github.com/lureiny/v2raymg/common"
-	"github.com/lureiny/v2raymg/proxy/sub"
+	"github.com/lureiny/v2raymg/component/converter"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -83,7 +83,10 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 		uris = append(uris, u.([]string)...)
 	}
 
-	uri := sub.TransferSubUri(uris, userAgent)
+	uri, err := converter.ConvertSubUri(strings.ToLower(userAgent), uris)
+	if err != nil {
+		logger.Error("Err=%s|URI=%s", err.Error(), uri)
+	}
 	c.String(200, uri)
 }
 
