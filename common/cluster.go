@@ -13,7 +13,7 @@ const HeartBeatTimeout = 60
 type Cluster struct {
 	Name           string
 	Token          string // 集群的token, 用于校验节点是否可以注册
-	NodeManager     NodeManager
+	NodeManager    NodeManager
 	WrongTokenNode NodeManager // 存储注册到本地但是拥有wrongtoken的节点 key = node_name:token
 }
 

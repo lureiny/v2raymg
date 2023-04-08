@@ -26,9 +26,11 @@ const (
 	tcpNet      = "tcp"
 	originalNet = "original"
 
-	proxiesKey = "proxies"
+	proxiesKey     = "proxies"
 	proxyGroupsKey = "proxy-groups"
 )
+
+var defaultAlterId int = 0
 
 func decodeStandardUri(standardUri string) string {
 	// vmess因为内容经过base64编码

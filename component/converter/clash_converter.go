@@ -12,11 +12,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var subConverterMap = map[string]string{
-	"xeton":    "https://sub.xeton.dev/sub?target=clash&new_name=true&url=%20&insert=true&emoji=true",
-	"lhie1":    "https://api.dler.io/sub?target=clash&new_name=true&url=%20&insert=true&emoji=true",
-	"xiongmao": "https://sub.maoxiongnet.com/sub?target=clash&new_name=true&url=%20&insert=true&emoji=true",
-	"id9":      "https://sub.id9.cc/sub?target=clash&new_name=true&url=%20&insert=false&emoji=true",
+var subConverterMap = []string{
+	"https://sub.xeton.dev/sub?target=clash&new_name=true&url=%20&insert=true&emoji=true",
+	"https://api.dler.io/sub?target=clash&new_name=true&url=%20&insert=true&emoji=true",
+	"https://sub.maoxiongnet.com/sub?target=clash&new_name=true&url=%20&insert=true&emoji=true",
+	"https://sub.id9.cc/sub?target=clash&new_name=true&url=%20&insert=false&emoji=true",
 }
 
 type ClashConverter struct{}
@@ -44,10 +44,10 @@ func (c *ClashConverter) Convert(standardUris []string) (string, error) {
 	}
 	nodeMap, err := getTemplate()
 	if err != nil {
-		return "",err
+		return "", err
 	}
 	if _, ok := nodeMap[proxiesKey]; !ok {
-		return "",err 
+		return "", err
 	}
 	nodeMap[proxiesKey] = *proxyNode.Content[0]
 	addToProxyGroup(&nodeMap, "", clashProxies)
@@ -200,6 +200,7 @@ func getClashVmessUri(vmessShareConfig *sub.VmessShareConfig) *ClashProxy {
 	clashProxy.Port, _ = strconv.Atoi(vmessShareConfig.Port)
 	clashProxy.UUID = vmessShareConfig.ID
 	clashProxy.Cipher = "auto"
+	clashProxy.AlterId = &defaultAlterId
 	if vmessShareConfig.Sni != "" {
 		clashProxy.Servername = vmessShareConfig.Sni
 	}
@@ -212,7 +213,9 @@ func getClashVmessUri(vmessShareConfig *sub.VmessShareConfig) *ClashProxy {
 			Path: vmessShareConfig.Path,
 		}
 		if vmessShareConfig.Host != "" {
-			wsOpts.Headers.Host = vmessShareConfig.Host
+			wsOpts.Headers = &WSHeaders{
+				Host: vmessShareConfig.Host,
+			}
 		}
 		clashProxy.WSOpts = wsOpts
 	} else if vmessShareConfig.Net == h2Net {
@@ -243,6 +246,7 @@ type ClashProxy struct {
 	Type           string      `yaml:"type"`
 	Server         string      `yaml:"server"`
 	Port           int         `yaml:"port"`
+	AlterId        *int        `yaml:"alterId,omitempty"`
 	Password       string      `yaml:"password,omitempty"`
 	UUID           string      `yaml:"uuid,omitempty"`
 	Cipher         string      `yaml:"cipher,omitempty"`

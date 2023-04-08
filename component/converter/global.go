@@ -12,7 +12,7 @@ func registerConverter(c Converter) {
 
 func ConvertSubUri(client string, standardUris []string) (string, error) {
 	for k, c := range globalConverters {
-		if strings.Contains(k, client) {
+		if strings.Contains(client, k) {
 			return c.Convert(standardUris)
 		}
 	}
