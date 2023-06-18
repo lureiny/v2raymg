@@ -31,7 +31,6 @@ func NewUserManager() *UserManager {
 	return um
 }
 
-// TODO: init global user manager
 func (um *UserManager) Init(proxyManager *manager.ProxyManager) {
 	um.proxyManager = proxyManager
 	um.LoadUser()

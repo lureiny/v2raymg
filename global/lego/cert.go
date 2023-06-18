@@ -11,7 +11,7 @@ var certManager *lego.CertManager = nil
 const certCheckCycle int64 = 5 // 5s
 
 func InitCertManager() error {
-	certManager := &lego.CertManager{
+	certManager = &lego.CertManager{
 		Email:       config.GetString(common.ConfigCertEmail),
 		Secrets:     config.GetStringMapString(common.ConfigCertSecrets),
 		DnsProvider: config.GetString(common.ConfigCertDnsProvider),

@@ -30,6 +30,11 @@ func InitProxyManager(configFile, version string, cm *lego.CertManager) error {
 	return nil
 }
 
+// GetProxyManager ...
+func GetProxyManager() *manager.ProxyManager {
+	return proxyManager
+}
+
 // AddInbound ...
 func AddInbound(inboud *manager.Inbound) error {
 	return proxyManager.AddInbound(inboud)

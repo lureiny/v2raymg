@@ -9,6 +9,7 @@ import (
 	"github.com/lureiny/v2raymg/global/lego"
 	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/global/proxy"
+	"github.com/lureiny/v2raymg/global/user"
 )
 
 func initConfig(configFile string) error {
@@ -44,7 +45,6 @@ func initCluster() error {
 	return cluster.InitCluster()
 }
 
-//TODO: init global certManager
 func initProxyManager() error {
 	if err := proxy.InitProxyManager(config.GetString(common.ConfigProxyConfigFile),
 		config.GetString(common.ConfigProxyVersion), lego.GetCertManager()); err != nil {
@@ -55,6 +55,10 @@ func initProxyManager() error {
 
 func initCertManager() error {
 	return lego.InitCertManager()
+}
+
+func initUserManager() error {
+	return user.InitUserManager()
 }
 
 func InitGlobalInfra(configFile string) error {
@@ -71,6 +75,9 @@ func InitGlobalInfra(configFile string) error {
 		return err
 	}
 	if err := initProxyManager(); err != nil {
+		return err
+	}
+	if err := initUserManager(); err != nil {
 		return err
 	}
 	return nil

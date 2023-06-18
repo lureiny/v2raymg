@@ -16,6 +16,7 @@ import (
 	globalLego "github.com/lureiny/v2raymg/global/lego"
 	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/global/proxy"
+	"github.com/lureiny/v2raymg/global/user"
 	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/proxy/manager"
 	"github.com/lureiny/v2raymg/server/http"
@@ -103,9 +104,8 @@ func startServer(cmd *cobra.Command, args []string) {
 	// 1s检查刷新一次
 	config.AutoFlush(1)
 
-	globalUserManager := cluster.NewUserManager()
-	initAndStartEndNodeServer(globalUserManager, globalLego.GetCertManager())
-	initAndStartHttpServer(globalUserManager, globalLego.GetCertManager())
+	initAndStartEndNodeServer(user.GetUserManager(), globalLego.GetCertManager())
+	initAndStartHttpServer(user.GetUserManager(), globalLego.GetCertManager())
 
 	// listen signal
 	c := make(chan os.Signal)

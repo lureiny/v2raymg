@@ -72,7 +72,7 @@ func (logger *Logger) Fatalf(format string, a ...interface{}) {
 
 func (logger *Logger) baseLogOut(logLevel int, format string, a ...interface{}) {
 	if logLevel >= logger.logLevel {
-		pc, file, line, _ := runtime.Caller(2)
+		pc, file, line, _ := runtime.Caller(3)
 		file = filepath.Base(file)
 		longFuncName := filepath.Base(runtime.FuncForPC(pc).Name())
 		index := strings.Index(longFuncName, ".")
