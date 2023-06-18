@@ -1,9 +1,10 @@
-package common
+package cluster
 
 import (
 	"fmt"
 	"time"
 
+	"github.com/lureiny/v2raymg/common"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
@@ -21,9 +22,6 @@ type Node struct {
 
 	grpcClientConn *grpc.ClientConn
 }
-
-// node连续60s没有更新则认为无效
-const NodeTimeOut int64 = 60
 
 // 比较两个node是否相同, 相同返回true
 func (n1 *Node) Compare(n2 *Node) bool {
@@ -46,19 +44,19 @@ func (n *Node) IsLocal() bool {
 // 有效返回true
 func (node *Node) IsValid() bool {
 	currentTime := time.Now().Unix()
-	return node.GetHeartBeatTime+NodeTimeOut > currentTime ||
-		node.ReportHeartBeatTime+NodeTimeOut > currentTime ||
-		node.CreateTime+NodeTimeOut > currentTime
+	return node.GetHeartBeatTime+common.NodeTimeOut > currentTime ||
+		node.ReportHeartBeatTime+common.NodeTimeOut > currentTime ||
+		node.CreateTime+common.NodeTimeOut > currentTime
 }
 
 // 本地是否已经在node上注册
 func (node *Node) RegisteredRemote() bool {
-	return node.OutToken != "" && node.ReportHeartBeatTime+NodeTimeOut > time.Now().Unix()
+	return node.OutToken != "" && node.ReportHeartBeatTime+common.NodeTimeOut > time.Now().Unix()
 }
 
 // 节点node在本地注册过
 func (node *Node) RegisteredLocal() bool {
-	return node.InToken != "" && node.GetHeartBeatTime+NodeTimeOut > time.Now().Unix()
+	return node.InToken != "" && node.GetHeartBeatTime+common.NodeTimeOut > time.Now().Unix()
 }
 
 func (node *Node) IsComplete() bool {
@@ -71,16 +69,21 @@ type staticNode struct {
 	Port int32  `json:"port,omitempty"`
 }
 
-// 静态节点不应该和本地节点重名
+// IsValide 判断静态节点是否有效, 静态节点与输入参数节点不应具有相同host及name
 func (sn *staticNode) IsValide(node *Node) bool {
 	return sn.Host != "" && sn.Host != node.Host &&
 		sn.Port > 1000 &&
 		sn.Name != node.Name
 }
 
-var GlobalLocalNode = &LocalNode{}
+var globalLocalNode = &LocalNode{}
 
 type LocalNode struct {
 	proto.Node
 	Token string // for req local rpc server
+}
+
+// GetLocalNode return global local node
+func GetLocalNode() *LocalNode {
+	return globalLocalNode
 }

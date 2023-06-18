@@ -8,7 +8,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
-	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/util"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -74,7 +75,7 @@ func (handler *UserHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	tagList := common.StringList{}
+	tagList := util.StringList{}
 	tagList = strings.Split(parasMap["tags"], ",")
 	userPoint := &proto.User{
 		Name:       parasMap["user"],
@@ -89,7 +90,7 @@ func (handler *UserHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	rpcClient := client.NewEndNodeClient(nodes, localNode)
+	rpcClient := client.NewEndNodeClient(nodes, nil)
 
 	if opName, ok := userOpMap[parasMap["type"]]; ok {
 		req := &proto.UserOpReq{

@@ -8,15 +8,14 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/lureiny/v2raymg/global/proxy"
 	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/lureiny/v2raymg/proxy/manager"
 )
 
-var proxyManager = manager.GetProxyManager()
-
 // GetUserSubUri 获取某个指定用户的订阅uri
 func GetUserSubUri(user, tag, host, nodeName string, port uint32, useSNI bool) (string, error) {
-	inbound := proxyManager.GetInbound(tag)
+	inbound := proxy.GetInbound(tag)
 	if inbound == nil {
 		return "", fmt.Errorf("inbound with tag(%s) is not exist", tag)
 	}

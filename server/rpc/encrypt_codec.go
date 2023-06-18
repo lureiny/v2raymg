@@ -3,7 +3,7 @@ package rpc
 import (
 	"fmt"
 
-	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/util"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -15,11 +15,11 @@ func (e *EncryptMessageCodec) Marshal(v interface{}) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return common.EncryptWithAES(byteReq, RpcServerKey)
+	return util.EncryptWithAES(byteReq, RpcServerKey)
 }
 
 func (e *EncryptMessageCodec) Unmarshal(data []byte, v interface{}) error {
-	decryptMessage, err := common.DecryptWithAES(data, RpcServerKey)
+	decryptMessage, err := util.DecryptWithAES(data, RpcServerKey)
 	if err != nil {
 		return err
 	}

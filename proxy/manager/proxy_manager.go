@@ -40,18 +40,16 @@ type ProxyManager struct {
 	certManager    *lego.CertManager
 }
 
-var proxyManager = &ProxyManager{
-	rwmutex:        sync.RWMutex{},
-	InboundManager: NewInboundManager(),
-	adaptiveMutex:  sync.Mutex{},
-	adaptive: Adaptive{
-		Tags:  map[string]bool{},
-		Ports: map[int64]bool{},
-	},
-}
-
-func GetProxyManager() *ProxyManager {
-	return proxyManager
+func NewProxyManager() *ProxyManager {
+	return &ProxyManager{
+		rwmutex:        sync.RWMutex{},
+		InboundManager: NewInboundManager(),
+		adaptiveMutex:  sync.Mutex{},
+		adaptive: Adaptive{
+			Tags:  map[string]bool{},
+			Ports: map[int64]bool{},
+		},
+	}
 }
 
 func (proxyManager *ProxyManager) Init(configFile, version string, cm *lego.CertManager) error {
@@ -118,6 +116,7 @@ func (proxyManager *ProxyManager) initApiConfig() *Inbound {
 	return inbound
 }
 
+// AddInbound ...
 func (proxyManager *ProxyManager) AddInbound(inbound *Inbound) error {
 	if inbound.Tag == apiTag {
 		return fmt.Errorf("api inbound can not add")
@@ -147,6 +146,7 @@ func (proxyManager *ProxyManager) AddInbound(inbound *Inbound) error {
 	return nil
 }
 
+// DeleteInbound ...
 func (proxyManager *ProxyManager) DeleteInbound(tag string) error {
 	if tag == apiTag {
 		return fmt.Errorf("api inbound can not delete")
@@ -167,7 +167,7 @@ func (proxyManager *ProxyManager) DeleteInbound(tag string) error {
 	return nil
 }
 
-// 根据tag获取inbound, 不存在返回nil
+// GetInbound 根据tag获取inbound, 不存在返回nil
 func (proxyManager *ProxyManager) GetInbound(tag string) *Inbound {
 	proxyManager.rwmutex.RLock()
 	defer proxyManager.rwmutex.RUnlock()
@@ -175,7 +175,7 @@ func (proxyManager *ProxyManager) GetInbound(tag string) *Inbound {
 	return proxyManager.InboundManager.Get(tag)
 }
 
-// 从指定的配置文件中加载config
+// LoadConfig 从指定的配置文件中加载config
 func (proxyManager *ProxyManager) LoadConfig() error {
 	proxyManager.rwmutex.Lock()
 	defer proxyManager.rwmutex.Unlock()
@@ -230,7 +230,7 @@ func (proxyManager *ProxyManager) Flush() error {
 	return nil
 }
 
-// cycle 刷新周期  单位 秒/s
+// AutoFlush cycle 刷新周期  单位 秒/s
 func (proxyManager *ProxyManager) AutoFlush(cycle int64) {
 	go func() {
 		timeTicker := time.NewTicker(time.Second * time.Duration(cycle))
@@ -243,6 +243,7 @@ func (proxyManager *ProxyManager) AutoFlush(cycle int64) {
 	}()
 }
 
+// AddUser ...
 func (proxyManager *ProxyManager) AddUser(user *User) error {
 	err := CompleteUserInformation(user, proxyManager.GetInbound(user.Tag))
 	if err != nil {
@@ -281,6 +282,7 @@ func (proxyManager *ProxyManager) addUserToFile(user *User) error {
 	return err
 }
 
+// RemoveUser ...
 func (proxyManager *ProxyManager) RemoveUser(user *User) error {
 	err := CompleteUserInformation(user, proxyManager.GetInbound(user.Tag))
 	if err != nil {
@@ -319,6 +321,7 @@ func (proxyManager *ProxyManager) removeUserFromFile(user *User) error {
 	return err
 }
 
+// ResetUser reset user inbound uuid/password
 func (proxyManager *ProxyManager) ResetUser(user *User) error {
 	err := proxyManager.RemoveUser(user)
 	if err != nil {
@@ -328,11 +331,12 @@ func (proxyManager *ProxyManager) ResetUser(user *User) error {
 	return proxyManager.AddUser(user)
 }
 
+// QueryStats query user/inbound stat
 func (proxyManager *ProxyManager) QueryStats(pattern string, reset bool) (*map[string]*proto.Stats, error) {
 	return QueryStats(pattern, proxyManager.RuntimeConfig.Host, proxyManager.RuntimeConfig.Port, reset)
 }
 
-// 搬迁inbound, 适用于修改端口的场景
+// TransferInbound 搬迁inbound, 适用于修改端口的场景
 func (proxyManager *ProxyManager) TransferInbound(tag string, newPort uint32) error {
 	if tag == apiTag {
 		return fmt.Errorf("api inbound can not transfer")
@@ -371,7 +375,7 @@ func (proxyManager *ProxyManager) TransferInbound(tag string, newPort uint32) er
 	return nil
 }
 
-// 复制inbound, 适用于快速创建相同inbound, 可选是否复制用户
+// CopyInbound 复制inbound, 适用于快速创建相同inbound, 可选是否复制用户
 func (proxyManager *ProxyManager) CopyInbound(srcTag, newTag, newProtocol string, newPort int) error {
 	if srcTag == apiTag {
 		return fmt.Errorf("api inbound can not copy")
@@ -398,7 +402,7 @@ func (proxyManager *ProxyManager) CopyInbound(srcTag, newTag, newProtocol string
 	return proxyManager.AddInbound(newInbound)
 }
 
-// 获取proxy中用户tag情况
+// GetUsersTag 获取proxy中用户tag情况
 func (proxyManager *ProxyManager) GetUsersTag() map[string][]string {
 	proxyManager.rwmutex.RLock()
 	defer proxyManager.rwmutex.RUnlock()
@@ -418,7 +422,7 @@ func (proxyManager *ProxyManager) GetUsersTag() map[string][]string {
 	return userTagMap
 }
 
-// 获取全部tag
+// GetTags 获取全部tag
 func (proxyManager *ProxyManager) GetTags() []string {
 	proxyManager.rwmutex.RLock()
 	defer proxyManager.rwmutex.RUnlock()
@@ -433,6 +437,7 @@ func (proxyManager *ProxyManager) GetTags() []string {
 	return tags
 }
 
+// GetUpstreamInbound get inbound which fallback to port
 func (proxyManager *ProxyManager) GetUpstreamInbound(port string) (config.InboundDetourConfig, error) {
 	proxyManager.rwmutex.RLock()
 	defer proxyManager.rwmutex.RUnlock()
@@ -491,37 +496,43 @@ func isUpstreamInbound(port string, inboundConfig *config.InboundDetourConfig) b
 	return false
 }
 
+// StartProxyServer ...
 func (proxyManager *ProxyManager) StartProxyServer() error {
 	return proxyManager.proxyServer.Start()
 }
 
+// StopProxyServer ...
 func (proxyManager *ProxyManager) StopProxyServer() {
 	proxyManager.proxyServer.Stop()
 }
 
-func (proxyManager *ProxyManager) ReStartProxyServer() error {
+// RestartProxyServer ...
+func (proxyManager *ProxyManager) RestartProxyServer() error {
 	proxyManager.proxyServer.Stop()
 	return proxyManager.proxyServer.Start()
 }
 
+// UpdateProxyServer update proxy server by git tag
 func (proxyManager *ProxyManager) UpdateProxyServer(tag string) error {
 	return proxyManager.proxyServer.Update(tag)
 }
 
+// GetProxyServerVersion ...
 func (proxyManager *ProxyManager) GetProxyServerVersion() string {
 	return proxyManager.proxyServer.currentVersion
 }
 
-// 添加port用于自动更换
+// AddAdaptivePort 添加port用于自动更换
 func (proxyManager *ProxyManager) AddAdaptivePort(port interface{}) error {
 	return proxyManager.adaptive.AddPort(port)
 }
 
+// DeleteAdaptivePort ...
 func (proxyManager *ProxyManager) DeleteAdaptivePort(port int64) {
 	proxyManager.adaptive.DeletePort(port)
 }
 
-// 添加需要自适应的tag, 返回添加新的接口后adaptive配置的字节组
+// AddAdaptiveTag 添加需要自适应变更端口的inbound tag, 返回添加新的接口后adaptive配置的字节组
 func (proxyManager *ProxyManager) AddAdaptiveTag(tag string) error {
 	if inbound := proxyManager.GetInbound(tag); inbound == nil {
 		return fmt.Errorf("inbound with tag(%s) not found", tag)
@@ -530,10 +541,12 @@ func (proxyManager *ProxyManager) AddAdaptiveTag(tag string) error {
 	return nil
 }
 
+// DeleteAdaptiveTag 删除tag对应inbound的自适应端口变更
 func (proxyManager *ProxyManager) DeleteAdaptiveTag(tag string) {
 	proxyManager.adaptive.DeleteTag(tag)
 }
 
+// GetRawAdaptive ...
 func (proxyManager *ProxyManager) GetRawAdaptive() *RawAdaptive {
 	return proxyManager.adaptive.Build()
 }
@@ -591,7 +604,7 @@ func (proxyManager *ProxyManager) AdaptiveOneInbound(tag string) (int64, int64, 
 	return oldPort, newPort, nil
 }
 
-// 自动更新端口的线程
+// CycleAdaptive 自动更新端口
 func (proxyManager *ProxyManager) CycleAdaptive() {
 	cycleFunc := func() {
 		for tag := range proxyManager.adaptive.Tags {

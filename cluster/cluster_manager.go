@@ -1,10 +1,10 @@
-package common
+package cluster
 
 import (
 	"sync"
 )
 
-func getNodeFilterByCurrentTime(currentTime int64) nodeFilter {
+func getNodeFilterByCurrentTime(currentTime int64) NodeFilter {
 	return func(n *Node) bool {
 		return n.IsValid()
 	}

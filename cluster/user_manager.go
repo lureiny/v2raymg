@@ -1,4 +1,4 @@
-package common
+package cluster
 
 import (
 	"fmt"
@@ -8,36 +8,39 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/util"
+	gc "github.com/lureiny/v2raymg/global/config"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/proxy/manager"
 	"github.com/lureiny/v2raymg/proxy/sub"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
-var logger = LoggerImp
-var configManager = GetGlobalConfigManager()
-var proxyManager = manager.GetProxyManager()
 var defaultTags = []string{}
 
 // 全局的管理全局的user
 type UserManager struct {
-	users map[string]*proto.User // key = name, value = User
-	lock  sync.RWMutex
+	users        map[string]*proto.User // key = name, value = User
+	lock         sync.RWMutex
+	proxyManager *manager.ProxyManager
 }
 
 func NewUserManager() *UserManager {
 	um := &UserManager{}
-	um.Init()
 	return um
 }
 
-func (um *UserManager) Init() {
+// TODO: init global user manager
+func (um *UserManager) Init(proxyManager *manager.ProxyManager) {
+	um.proxyManager = proxyManager
 	um.LoadUser()
 	// 不指定tag同时default_tag配置为空, 则获取全部tag的订阅
-	defaultTags = configManager.GetStringSlice(ProxyDefaultTags)
+	defaultTags = gc.GetStringSlice(common.ConfigProxyDefaultTags)
 
 	localDefaultTags := []string{}
 	if len(defaultTags) == 0 {
-		localDefaultTags = proxyManager.GetTags()
+		localDefaultTags = um.proxyManager.GetTags()
 	} else {
 		localDefaultTags = defaultTags
 	}
@@ -51,7 +54,7 @@ func (um *UserManager) Init() {
 					Email: name,
 				}
 				// 添加到默认tag的inbound中
-				err := proxyManager.AddUser(u)
+				err := um.proxyManager.AddUser(u)
 				if err != nil {
 					log.Printf(
 						"Err=Add user to default inbound err > %v|User=%s|Tag=%s",
@@ -71,11 +74,11 @@ func (um *UserManager) Init() {
 func (um *UserManager) LoadUser() {
 	um.users = map[string]*proto.User{}
 	um.lock = sync.RWMutex{}
-	usersLocal := configManager.GetStringMapString(Users)
+	usersLocal := gc.GetStringMapString(common.ConfigUsers)
 	um.lock.Lock()
 	defer um.lock.Unlock()
 
-	userTagMap := proxyManager.GetUsersTag()
+	userTagMap := um.proxyManager.GetUsersTag()
 	for k, v := range usersLocal {
 		l := strings.Split(v, "|")
 		passwd := ""
@@ -101,11 +104,11 @@ func (um *UserManager) LoadUser() {
 	}
 }
 
-func proxyUserOp(user *proto.User, opType string) (succTags, faileTags []string, err error) {
+func proxyUserOp(user *proto.User, opType string, proxyManager *manager.ProxyManager) (succTags, faileTags []string, err error) {
 	err = nil
 
 	if len(user.Tags) == 0 {
-		user.Tags = []string{configManager.GetString(ProxyDefaultTags)}
+		user.Tags = []string{gc.GetString(common.ConfigProxyDefaultTags)}
 	}
 
 	for _, tag := range user.Tags {
@@ -148,7 +151,7 @@ func proxyUserOp(user *proto.User, opType string) (succTags, faileTags []string,
 	return
 }
 
-func checkUserTag(user *proto.User) {
+func checkUserTag(user *proto.User, proxyManager *manager.ProxyManager) {
 	if len(user.Tags) == 0 {
 		if len(defaultTags) == 0 {
 			user.Tags = proxyManager.GetTags()
@@ -166,9 +169,9 @@ func (um *UserManager) Add(user *proto.User) error {
 		return fmt.Errorf("Empty passwd")
 	}
 
-	checkUserTag(user)
+	checkUserTag(user, um.proxyManager)
 	// 先尝试添加到proxy
-	succTags, _, err := proxyUserOp(user, "add")
+	succTags, _, err := proxyUserOp(user, "add", um.proxyManager)
 	if len(succTags) == 0 && err != nil {
 		return err
 	}
@@ -197,7 +200,7 @@ func (um *UserManager) Delete(user *proto.User) error {
 		user.Tags = localUser.Tags
 	}
 	um.lock.RUnlock()
-	succTags, _, err := proxyUserOp(user, "delete")
+	succTags, _, err := proxyUserOp(user, "delete", um.proxyManager)
 	if len(succTags) == 0 && err != nil {
 		return err
 	}
@@ -206,7 +209,7 @@ func (um *UserManager) Delete(user *proto.User) error {
 	um.lock.Lock()
 	if u, ok := (um.users)[user.Name]; ok {
 		// 删除对应tag
-		oldTags := StringList(u.Tags)
+		oldTags := util.StringList(u.Tags)
 		newTags := oldTags.Filter(
 			func(t string) bool {
 				for _, succTag := range succTags {
@@ -249,8 +252,8 @@ func (um *UserManager) Update(user *proto.User) error {
 
 // 重置用户proxy的uuid
 func (um *UserManager) Reset(user *proto.User) error {
-	checkUserTag(user)
-	_, _, err := proxyUserOp(user, "reset")
+	checkUserTag(user, um.proxyManager)
+	_, _, err := proxyUserOp(user, "reset", um.proxyManager)
 	return err
 }
 
@@ -283,7 +286,7 @@ func (um *UserManager) ClearInvalideUser() {
 	um.lock.Lock()
 	for _, user := range expireUser {
 		if len(user.Tags) > 0 {
-			_, _, err := proxyUserOp(user, "delete")
+			_, _, err := proxyUserOp(user, "delete", um.proxyManager)
 			if err != nil {
 				logger.Error("clear expire err > %v\n", err)
 			}
@@ -319,11 +322,11 @@ func (um *UserManager) FlushUser() {
 	}
 	um.lock.RUnlock()
 
-	configManager.Set("users", userMap)
+	gc.Set("users", userMap)
 }
 
 // 获取用户订阅信息
-func (um *UserManager) GetUserSub(user *proto.User, excludeProtocols *StringList, useSNI bool) ([]string, error) {
+func (um *UserManager) GetUserSub(user *proto.User, excludeProtocols *util.StringList, useSNI bool) ([]string, error) {
 	if _, ok := um.users[user.Name]; !ok {
 		return nil, fmt.Errorf("user[%s] is not exist", user.Name)
 	}
@@ -346,14 +349,14 @@ func getSubUriHead(uri string) string {
 	return subs[0]
 }
 
-func getUserSubUri(user *proto.User, excludeProtocols *StringList, useSNI bool) ([]string, error) {
-	proxyHost := configManager.GetString(ProxyHost)
-	proxyPort := configManager.GetInt(ProxyPort)
+func getUserSubUri(user *proto.User, excludeProtocols *util.StringList, useSNI bool) ([]string, error) {
+	proxyHost := gc.GetString(common.ConfigProxyHost)
+	proxyPort := gc.GetInt(common.ConfigProxyPort)
 
 	// get sub不会返回错误, 只会打印日志
-	uris := StringList{}
+	uris := util.StringList{}
 	for _, tag := range user.Tags {
-		uri, err := sub.GetUserSubUri(user.Name, tag, proxyHost, GlobalLocalNode.Name, uint32(proxyPort), useSNI)
+		uri, err := sub.GetUserSubUri(user.Name, tag, proxyHost, globalLocalNode.Name, uint32(proxyPort), useSNI)
 		if err != nil {
 			logger.Error(
 				"Err=%v|User=%s|Tag=%s",

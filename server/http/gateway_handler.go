@@ -3,6 +3,7 @@ package http
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -25,7 +26,7 @@ func (handler *GatewayHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	rpcClient := client.NewEndNodeClient(nodes, localNode)
+	rpcClient := client.NewEndNodeClient(nodes, nil)
 	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(client.SetGatewayModelReqType, &proto.SetGatewayModelReq{
 		EnableGatewayModel: parasMap["enableGatewayModel"] == "1",
 	})

@@ -1,4 +1,4 @@
-package common
+package cluster
 
 import (
 	"fmt"
@@ -22,6 +22,7 @@ func (cluster *Cluster) Init() {
 	cluster.WrongTokenNode = NewNodeManager()
 }
 
+// Get get node by name
 func (cluster *Cluster) Get(nodeName string) *Node {
 	return cluster.NodeManager.Get(nodeName)
 }
@@ -30,19 +31,22 @@ func (cluster *Cluster) LoadStaticNode() error {
 	return cluster.NodeManager.LoadStaticNode()
 }
 
+// Add add node
 func (cluster *Cluster) Add(node *Node) {
 	cluster.NodeManager.Add(node.Name, node)
 }
 
+// GetNodeFromWrongNodeList ...
 func (cluster *Cluster) GetNodeFromWrongNodeList(nodeName string) *Node {
 	return cluster.WrongTokenNode.Get(nodeName)
 }
 
+// AddToWrongNodeList 将节点添加异常节点列表中
 func (cluster *Cluster) AddToWrongNodeList(node *Node) {
 	cluster.WrongTokenNode.Add(node.Name, node)
 }
 
-// 根据clusterName和token验证该配置是否与本节点配置相同
+// IsSameCluster 根据clusterName和token验证该配置是否与本节点配置相同
 func (cluster *Cluster) IsSameCluster(clusterName, token string) error {
 	if cluster.Name != clusterName {
 		return fmt.Errorf("wrong cluster")
@@ -53,11 +57,10 @@ func (cluster *Cluster) IsSameCluster(clusterName, token string) error {
 	return nil
 }
 
-// GetNodes 获取proto Node列表
-// 返回满足过滤条件的node集合
-func (cluster *Cluster) GetNodes(f nodeFilter) map[string]*proto.Node {
+// GetProtoNodesWithFilter 获取proto Node列表, 返回满足过滤条件的node集合
+func (cluster *Cluster) GetProtoNodesWithFilter(f NodeFilter) map[string]*proto.Node {
 	nodeMap := map[string]*proto.Node{}
-	for key, node := range cluster.NodeManager.GetNodes() {
+	for key, node := range cluster.NodeManager.GetAllNode() {
 		if f(node) {
 			nodeMap[key] = node.Node
 		}
@@ -65,9 +68,14 @@ func (cluster *Cluster) GetNodes(f nodeFilter) map[string]*proto.Node {
 	return nodeMap
 }
 
+// GetNodesWithFilter 获取cluster Node列表, 返回满足过滤条件的node集合
+func (cluster *Cluster) GetNodesWithFilter(f NodeFilter) *[]*Node {
+	return cluster.NodeManager.GetNodesWithFilter(f)
+}
+
 // 获取全部node名称, 包含无效node
 func (cluster *Cluster) GetNodeNameList() []string {
-	nodes := cluster.GetNodes(func(node *Node) bool { return true })
+	nodes := cluster.GetProtoNodesWithFilter(func(node *Node) bool { return true })
 	nodeNameList := []string{}
 	for nodeName := range nodes {
 		nodeNameList = append(nodeNameList, nodeName)
@@ -79,7 +87,7 @@ func (cluster *Cluster) GetNodeNameList() []string {
 func (cluster *Cluster) AuthRemoteNode(node **Node) error {
 	// 验证token与node是否匹配
 	// n本地记录的Node, node: 根据远端访问参数构建的Node
-	if n, ok := cluster.NodeManager.HaveNode((*node).Name); !ok {
+	if n := cluster.NodeManager.Get((*node).Name); n == nil {
 		return fmt.Errorf("node not exist")
 	} else if (*node).InToken != n.InToken {
 		return fmt.Errorf("wrong token")
@@ -93,10 +101,12 @@ func (cluster *Cluster) AuthRemoteNode(node **Node) error {
 	return nil
 }
 
+// Delete delete node
 func (cluster *Cluster) Delete(nodeName string) {
 	cluster.NodeManager.Delete(nodeName)
 }
 
+// DeleteFromWrongTokenNodeList ...
 func (cluster *Cluster) DeleteFromWrongTokenNodeList(nodeName string) {
 	cluster.WrongTokenNode.Delete(nodeName)
 }
@@ -105,23 +115,38 @@ func (cluster *Cluster) Clear() {
 	cluster.NodeManager.Clear()
 }
 
-// 判断该节点是否有效
+// IsValid 判断该节点是否有效
 func (cluster *Cluster) IsValid(nodeName string) bool {
 	return cluster.NodeManager.Get(nodeName).IsValid()
 }
 
-// 判断节点node是否在本地注册过
+// RegisteredLocal 判断节点node是否在本地注册过
 func (cluster *Cluster) RegisteredLocal(nodeName string) bool {
 	return cluster.NodeManager.Get(nodeName).RegisteredLocal()
 }
 
-// 过滤超时未上报的节点
-func (cluster *Cluster) Filter() {
+// Filter 过滤超时未上报的节点
+func (cluster *Cluster) FilterTimeoutNode() {
 	currentTime := time.Now().Unix()
 	cluster.NodeManager.Filter(getNodeFilterByCurrentTime(currentTime))
 }
 
-// 判断本地是否已经在远端节点注册
+// RegisteredRemote 判断本地是否已经在远端节点注册
 func (cluster *Cluster) RegisteredRemote(nodeName string) bool {
 	return cluster.NodeManager.Get(nodeName).RegisteredRemote()
+}
+
+// HaveNode 判断是否存在该node
+func (cluster *Cluster) HaveNode(nodeName string) bool {
+	return cluster.NodeManager.HaveNode(nodeName)
+}
+
+// GetAllNode ...
+func (cluster *Cluster) GetAllNode() map[string]*Node {
+	return cluster.NodeManager.GetAllNode()
+}
+
+// Filter ...
+func (cluster *Cluster) Filter(f NodeFilter) {
+	cluster.NodeManager.Filter(f)
 }

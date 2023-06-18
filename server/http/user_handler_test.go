@@ -9,7 +9,8 @@ import (
 
 	gomonkey "github.com/agiledragon/gomonkey/v2"
 	"github.com/gin-gonic/gin"
-	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/cluster"
+
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -186,8 +187,8 @@ func TestUserHandleFunc(t *testing.T) {
 					patch2 := gomonkey.ApplyFunc(getExpireTime, func(map[string]string) (int64, error) {
 						return 0, nil
 					})
-					patch3 := gomonkey.ApplyPrivateMethod(&HttpServer{}, "getTargetNodes", func(target string) *[]*common.Node {
-						return &[]*common.Node{}
+					patch3 := gomonkey.ApplyPrivateMethod(&HttpServer{}, "getTargetNodes", func(target string) *[]*cluster.Node {
+						return &[]*cluster.Node{}
 					})
 					return func() {
 						patch1.Reset()

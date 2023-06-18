@@ -1,9 +1,12 @@
-package common
+package cluster
 
 import (
 	"sync"
 	"time"
 
+	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/global/config"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -11,8 +14,7 @@ type NodeManager struct {
 	nodes *map[string]*Node
 	lock  sync.RWMutex
 }
-
-type nodeFilter func(*Node) bool
+type NodeFilter func(*Node) bool
 
 func NewNodeManager() NodeManager {
 	return NodeManager{
@@ -21,41 +23,42 @@ func NewNodeManager() NodeManager {
 	}
 }
 
-// 添加新的节点
+// Add 添加新的节点
 func (nm *NodeManager) Add(key string, node *Node) {
 	nm.lock.Lock()
 	defer nm.lock.Unlock()
 	(*nm.nodes)[key] = node
 }
 
-// 判断是否存在该node
-func (nm *NodeManager) HaveNode(key string) (*Node, bool) {
-	node, ok := (*nm.nodes)[key]
-	return node, ok
+// HaveNode 判断是否存在该node
+func (nm *NodeManager) HaveNode(key string) bool {
+	_, ok := (*nm.nodes)[key]
+	return ok
 }
 
-// 删除指定key
+// Delete 删除指定key
 func (nm *NodeManager) Delete(key string) {
 	nm.lock.Lock()
 	defer nm.lock.Unlock()
 	delete((*nm.nodes), key)
 }
 
-// 加载本地配置文件中的node
+// LoadStaticNode 加载本地配置文件中的node
 func (nm *NodeManager) LoadStaticNode() error {
 	nm.lock.Lock()
 	defer nm.lock.Unlock()
 	nodeList := []staticNode{}
-	err := globalConfigManager.UnmarshalKey(ClusterNodes, &nodeList)
+	err := config.UnmarshalKey(common.ConfigClusterNodes, &nodeList)
 	if err != nil {
 		return err
 	}
 
 	localNode := &Node{
-		Node: &GlobalLocalNode.Node,
+		Node: &globalLocalNode.Node,
 	}
 
 	for _, node := range nodeList {
+		// 过滤掉与本地节点相同的节点
 		if node.IsValide(localNode) {
 			logger.Info(
 				"Msg=Load Static Node|Node=%s:%d|NodeName=%s",
@@ -78,13 +81,14 @@ func (nm *NodeManager) LoadStaticNode() error {
 	return nil
 }
 
-// 清空nodes
+// Clear 清空nodes
 func (nm *NodeManager) Clear() {
 	nm.lock.Lock()
 	defer nm.lock.Unlock()
 	nm.nodes = &map[string]*Node{}
 }
 
+// Get ...
 func (nm *NodeManager) Get(nodeName string) *Node {
 	if n, ok := (*nm.nodes)[nodeName]; ok {
 		return n
@@ -92,11 +96,12 @@ func (nm *NodeManager) Get(nodeName string) *Node {
 	return nil
 }
 
-func (nm *NodeManager) GetNodes() map[string]*Node {
+// GetAllNode ...
+func (nm *NodeManager) GetAllNode() map[string]*Node {
 	return *nm.nodes
 }
 
-func (nm *NodeManager) GetNodesWithFilter(filter nodeFilter) *[]*Node {
+func (nm *NodeManager) GetNodesWithFilter(filter NodeFilter) *[]*Node {
 	nodes := []*Node{}
 	nm.lock.RLock()
 	defer nm.lock.RUnlock()
@@ -109,7 +114,7 @@ func (nm *NodeManager) GetNodesWithFilter(filter nodeFilter) *[]*Node {
 }
 
 // 过滤掉不符合条件的Node
-func (nm *NodeManager) Filter(filter nodeFilter) {
+func (nm *NodeManager) Filter(filter NodeFilter) {
 	tmpNM := &map[string]*Node{}
 	nm.lock.RLock()
 	for key, node := range *nm.nodes {

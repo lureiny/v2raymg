@@ -5,7 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
-	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/util"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -29,9 +30,9 @@ func (handler *AdaptiveOpHandler) handlerFunc(c *gin.Context) {
 		c.String(200, "no avaliable node")
 		return
 	}
-	tagList := common.StringList{}
+	tagList := util.StringList{}
 	tagList = strings.Split(parasMap["tags"], ",")
-	portList := common.StringList{}
+	portList := util.StringList{}
 	portList = strings.Split(parasMap["ports"], ",")
 
 	req := &proto.AdaptiveOpReq{
@@ -46,7 +47,7 @@ func (handler *AdaptiveOpHandler) handlerFunc(c *gin.Context) {
 		reqType = client.AddAdaptiveConfigReqType
 	}
 
-	rpcClient := client.NewEndNodeClient(nodes, localNode)
+	rpcClient := client.NewEndNodeClient(nodes, nil)
 	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(reqType, req)
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)

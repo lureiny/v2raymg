@@ -3,7 +3,6 @@ package rpc
 import (
 	context "context"
 	"fmt"
-	"math"
 	"net"
 	"reflect"
 	"strconv"
@@ -12,7 +11,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lureiny/v2raymg/cluster"
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/util"
+	globalCluster "github.com/lureiny/v2raymg/global/cluster"
+	globalConfig "github.com/lureiny/v2raymg/global/config"
+	"github.com/lureiny/v2raymg/global/logger"
+	"github.com/lureiny/v2raymg/global/proxy"
 	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/lureiny/v2raymg/proxy/manager"
@@ -23,19 +28,16 @@ import (
 	"google.golang.org/grpc/encoding"
 )
 
-var proxyManager = manager.GetProxyManager()
-
 var RpcServerKey = []byte{}
 var endNodeServer = &EndNodeServer{}
 
-var localNode = common.GlobalLocalNode
+var localNode = cluster.GetLocalNode()
 
 type EndNodeServer struct {
 	proto.UnimplementedEndNodeAccessServer
-	clusterManager *common.EndNodeClusterManager
-	userManager    *common.UserManager
-	centerNode     *common.Node
-	certManager    *lego.CertManager
+	centerNode  *cluster.Node
+	userManager *cluster.UserManager
+	certManager *lego.CertManager
 	server.ServerConfig
 }
 
@@ -50,11 +52,12 @@ func GetEndNodeServer() *EndNodeServer {
 }
 
 func (s *EndNodeServer) initRpcServerKey() {
-	if len(s.clusterManager.Token) >= rpcServerKeyLen {
-		RpcServerKey = []byte(s.clusterManager.Token)[:32]
+	clusterToken := globalCluster.GetClusterToken()
+	if len(clusterToken) >= rpcServerKeyLen {
+		RpcServerKey = []byte(clusterToken)[:32]
 	} else {
 		// 如果密码为空, 则同样不具有安全性, 仅仅不会被抓包直接分析
-		RpcServerKey = common.PKCS7Padding([]byte(s.clusterManager.Token), rpcServerKeyLen)
+		RpcServerKey = util.PKCS7Padding([]byte(clusterToken), rpcServerKeyLen)
 	}
 }
 
@@ -103,11 +106,11 @@ func authRemoteNode(req interface{}, fullMethod string) (bool, interface{}, *pro
 	if fullMethod[methodPrefixLen:] == "RegisterNode" {
 		return true, nil, nodeAuthInfo.Node
 	}
-	node := &common.Node{
+	node := &cluster.Node{
 		Node:    nodeAuthInfo.Node,
 		InToken: nodeAuthInfo.Token,
 	}
-	if err := endNodeServer.clusterManager.AuthRemoteNode(&node); err != nil && localNode.Token != node.InToken {
+	if err := globalCluster.AuthRemoteNode(&node); err != nil && localNode.Token != node.InToken {
 		errMsg := fmt.Sprintf("auth err > %v", err)
 		logger.Error(
 			"Err=%s|Src=%s:%d|SrcName=%s|Api=%s",
@@ -127,7 +130,7 @@ func authRemoteNode(req interface{}, fullMethod string) (bool, interface{}, *pro
 
 func UnaryServerInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, hander grpc.UnaryHandler) (interface{}, error) {
 	// only gateway表示当前节点仅作为转发节点, 本身对外不提供代理服务
-	if configManager.GetBool(common.ServerRpcOnlyGateway) &&
+	if globalConfig.GetBool(common.ConfigServerRpcOnlyGateway) &&
 		!isOnlyGatewayMethod(info.FullMethod) {
 		return newEmptyRsp(info.FullMethod)
 	}
@@ -149,57 +152,26 @@ func UnaryServerInterceptor(ctx context.Context, req interface{}, info *grpc.Una
 	return rsp, err
 }
 
-func (s *EndNodeServer) Init(um *common.UserManager, cm *common.EndNodeClusterManager, certManager *lego.CertManager) {
-	s.clusterManager = cm
+func (s *EndNodeServer) Init(um *cluster.UserManager, certManager *lego.CertManager) {
 	s.userManager = um
 	s.certManager = certManager
-	s.Host = configManager.GetString(common.ServerListen)
-	s.Port = configManager.GetInt(common.ServerRpcPort)
-	s.Type = "End"
-	s.clusterManager.Name = configManager.GetString(common.ClusterName)
-	serverName := configManager.GetString(common.ServerName)
-	accessHost := configManager.GetString(common.ProxyHost)
-	if serverName == "" {
-		serverName = fmt.Sprintf("%s:%d", accessHost, s.Port)
-	}
+	s.Host = globalConfig.GetString(common.ConfigServerListen)
+	s.Port = globalConfig.GetInt(common.ConfigServerRpcPort)
+	s.Type = common.EndNodeType
+	serverName := globalConfig.GetString(common.ConfigServerName)
 	s.Name = serverName
-	localNode.Token = uuid.New().String()
-	localNode.Node = proto.Node{
-		Host:        configManager.GetString(common.ProxyHost),
-		Port:        int32(s.Port),
-		ClusterName: s.clusterManager.Name,
-		Name:        s.Name,
-	}
-	// 添加本地节点
-	cm.Add(&common.Node{
-		InToken:             localNode.Token,
-		OutToken:            localNode.Token,
-		Node:                &localNode.Node,
-		ReportHeartBeatTime: math.MaxInt64 - common.NodeTimeOut,
-		GetHeartBeatTime:    math.MaxInt64 - common.NodeTimeOut,
-		CreateTime:          time.Now().Unix(),
-	})
-	logger.Init()
-	logger.SetLogLevel(0)
-	logger.SetNodeType("End")
-	logger.SetServerName(serverName)
 
-	s.clusterManager.Token = configManager.GetString(common.ClusterToken)
-	err := s.clusterManager.LoadStaticNode()
 	s.initRpcServerKey()
-	if err != nil {
-		logger.Error("Err=Load Static Node > %v", err)
-	}
 
 	// init center node
-	s.centerNode = &common.Node{
+	s.centerNode = &cluster.Node{
 		Node: &proto.Node{
-			Host: configManager.GetString(common.CenterNodeHost),
-			Port: int32(configManager.GetInt(common.CenterNodePort)),
+			Host: globalConfig.GetString(common.ConfigCenterNodeHost),
+			Port: int32(globalConfig.GetInt(common.ConfigCenterNodePort)),
 		},
 	}
 
-	err = proxyManager.StartProxyServer()
+	err := proxy.StartProxyServer()
 	if err != nil {
 		logger.Error("Err=Start proxy server err > %v", err)
 	}
@@ -235,7 +207,7 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 		return registerNodeRsp, nil
 	}
 
-	if err := s.clusterManager.IsSameCluster(node.GetClusterName(), clusterToken); err != nil {
+	if err := globalCluster.IsSameCluster(node.GetClusterName(), clusterToken); err != nil {
 		errMsg := err.Error()
 		logger.Info(
 			"Err=%s|Src=%s:%d|LocalCuster=%s|RegisteredCluster=%s|Token=%s",
@@ -247,7 +219,7 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 			clusterToken,
 		)
 		// 记录注册到本地失败的node列表
-		s.clusterManager.AddToWrongNodeList(&common.Node{
+		globalCluster.AddToWrongNodeList(&cluster.Node{
 			Node:       node,
 			CreateTime: time.Now().Unix(),
 		})
@@ -259,9 +231,9 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 	nodeName := node.Name
 	token := ""
 	// 重新带有正确token验证后应该从wrong node list中清除
-	s.clusterManager.DeleteFromWrongTokenNodeList(nodeName)
+	globalCluster.DeleteFromWrongTokenNodeList(nodeName)
 
-	if n, ok := s.clusterManager.NodeManager.HaveNode(nodeName); ok {
+	if n := globalCluster.Get(nodeName); n != nil {
 		// 已经感知到的节点
 		if n.RegisteredLocal() {
 			errMsg := "repeated register"
@@ -292,7 +264,7 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 	} else {
 		// 新注册的节点
 		token = uuid.New().String()
-		newNode := &common.Node{
+		newNode := &cluster.Node{
 			Node:                node,
 			InToken:             token,
 			OutToken:            "",
@@ -300,7 +272,7 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 			CreateTime:          time.Now().Unix(),
 			ReportHeartBeatTime: 0,
 		}
-		s.clusterManager.Add(newNode)
+		globalCluster.Add(newNode)
 		logger.Info(
 			"Src=%s:%d|SrcName=%s|Cluster=%s|RegisterType=%s|Token=%s",
 			node.Host,
@@ -317,8 +289,8 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 
 func (s *EndNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.HeartBeatReq) (*proto.HeartBeatRsp, error) {
 	heartBeatRsp := &proto.HeartBeatRsp{}
-	heartBeatRsp.NodesMap = s.clusterManager.GetNodes(
-		func(node *common.Node) bool {
+	heartBeatRsp.NodesMap = globalCluster.GetProtoNodesWithFilter(
+		func(node *cluster.Node) bool {
 			return node.Name != s.Name && node.IsValid()
 		},
 	)
@@ -441,7 +413,7 @@ func (s *EndNodeServer) GetSub(ctx context.Context, getSubReq *proto.GetSubReq) 
 	}
 
 	user := getSubReq.GetUser()
-	var excludeProtocols common.StringList = getSubReq.GetExcludeProtocols()
+	var excludeProtocols util.StringList = getSubReq.GetExcludeProtocols()
 	useSNI := getSubReq.UseSni
 	// 判断用户是否存在/合法
 	uris, err := s.userManager.GetUserSub(user, &excludeProtocols, useSNI)
@@ -471,7 +443,7 @@ func (s *EndNodeServer) GetBandWidthStats(ctx context.Context, getBandwidthStats
 	pattern := getBandwidthStatsReq.GetPattern()
 	reset := getBandwidthStatsReq.GetReset_()
 
-	stats, err := proxyManager.QueryStats(pattern, reset)
+	stats, err := proxy.QueryStats(pattern, reset)
 
 	if err != nil {
 		errMsg := fmt.Sprintf("Get bandWidth stats err > %v", err)
@@ -509,7 +481,7 @@ func (s *EndNodeServer) AddInbound(ctx context.Context, inboundOpReq *proto.Inbo
 		return inboundOpRsp, nil
 	}
 
-	err = proxyManager.AddInbound(&newInbound)
+	err = proxy.AddInbound(&newInbound)
 	if err != nil {
 		errMsg := fmt.Sprintf("add inbound err > %v", err)
 		logger.Error(
@@ -536,7 +508,7 @@ func (s *EndNodeServer) DeleteInbound(ctx context.Context, inboundOpReq *proto.I
 	}
 	tag := inboundOpReq.GetInboundInfo()
 
-	dstInbound := proxyManager.GetInbound(tag)
+	dstInbound := proxy.GetInbound(tag)
 	if dstInbound != nil {
 		users := dstInbound.GetUsers()
 		for _, user := range users {
@@ -547,7 +519,7 @@ func (s *EndNodeServer) DeleteInbound(ctx context.Context, inboundOpReq *proto.I
 		}
 	}
 
-	err := proxyManager.DeleteInbound(tag)
+	err := proxy.DeleteInbound(tag)
 	if err != nil {
 		errMsg := fmt.Sprintf("delete inbound err > %v", err)
 		logger.Error(
@@ -567,7 +539,7 @@ func (s *EndNodeServer) TransferInbound(ctx context.Context, transferInboundReq 
 		Code: 0,
 	}
 
-	err := proxyManager.TransferInbound(transferInboundReq.GetTag(), uint32(transferInboundReq.GetNewPort()))
+	err := proxy.TransferInbound(transferInboundReq.GetTag(), uint32(transferInboundReq.GetNewPort()))
 	if err != nil {
 		errMsg := fmt.Sprintf("transfer inbound err > %v", err)
 		logger.Error(
@@ -588,7 +560,7 @@ func (s *EndNodeServer) CopyInbound(ctx context.Context, copyInboundReq *proto.C
 		Code: 0,
 	}
 
-	err := proxyManager.CopyInbound(
+	err := proxy.CopyInbound(
 		copyInboundReq.GetSrcTag(),
 		copyInboundReq.GetNewTag(),
 		copyInboundReq.GetNewProtocol(),
@@ -651,12 +623,12 @@ func (s *EndNodeServer) copyUser(srcTag, dstTag string) error {
 	if srcTag == dstTag {
 		return nil
 	}
-	srcInbound := proxyManager.GetInbound(srcTag)
+	srcInbound := proxy.GetInbound(srcTag)
 	if srcInbound == nil {
 		return fmt.Errorf("inbound with src tag(%s) is not exist", srcTag)
 	}
 
-	dstInbound := proxyManager.GetInbound(dstTag)
+	dstInbound := proxy.GetInbound(dstTag)
 	if dstInbound == nil {
 		return fmt.Errorf("inbound with dst tag(%s) is not exist", dstTag)
 	}
@@ -689,7 +661,7 @@ func (s *EndNodeServer) GetInbound(ctx context.Context, getInboundReq *proto.Get
 		Code: 0,
 	}
 
-	inbound := proxyManager.GetInbound(getInboundReq.GetTag())
+	inbound := proxy.GetInbound(getInboundReq.GetTag())
 	if inbound == nil {
 		errMsg := fmt.Sprintf("inbound with tag(%s) is not exist", getInboundReq.GetTag())
 		logger.Error(
@@ -723,7 +695,7 @@ func (s *EndNodeServer) GetTag(ctx context.Context, getTagReq *proto.GetTagReq) 
 	getTagRsp := &proto.GetTagRsp{
 		Code: 0,
 	}
-	getTagRsp.Tags = proxyManager.GetTags()
+	getTagRsp.Tags = proxy.GetTags()
 	return getTagRsp, nil
 }
 
@@ -732,13 +704,13 @@ func (s *EndNodeServer) UpdateProxy(ctx context.Context, updateProxyReq *proto.U
 		Code: 0,
 	}
 	tag := updateProxyReq.GetTag()
-	if tag == proxyManager.GetProxyServerVersion() ||
-		"v"+tag == proxyManager.GetProxyServerVersion() {
+	if tag == proxy.GetProxyServerVersion() ||
+		"v"+tag == proxy.GetProxyServerVersion() {
 		updateProxyRsp.Msg = "current version is same with dst version"
 		return updateProxyRsp, nil
 	}
 	// 下载对应版本
-	err := proxyManager.UpdateProxyServer(updateProxyReq.GetTag())
+	err := proxy.UpdateProxyServer(updateProxyReq.GetTag())
 	if err != nil {
 		errMsg := err.Error()
 		logger.Error(
@@ -750,7 +722,7 @@ func (s *EndNodeServer) UpdateProxy(ctx context.Context, updateProxyReq *proto.U
 		updateProxyRsp.Msg = errMsg
 		return updateProxyRsp, nil
 	}
-	newVersion := proxyManager.GetProxyServerVersion()
+	newVersion := proxy.GetProxyServerVersion()
 	logger.Info("CurrentProxyVersion=%s", newVersion)
 	return updateProxyRsp, nil
 }
@@ -763,18 +735,18 @@ func (s *EndNodeServer) AddAdaptiveConfig(ctx context.Context, adaptiveOpReq *pr
 	ports := adaptiveOpReq.GetPorts()
 	tags := adaptiveOpReq.GetTags()
 	for _, tag := range tags {
-		if err := proxyManager.AddAdaptiveTag(tag); err != nil {
+		if err := proxy.AddAdaptiveTag(tag); err != nil {
 			errs = append(errs, fmt.Sprintf("add tag err > %v", err))
 		}
 	}
 	for _, port := range ports {
-		if err := proxyManager.AddAdaptivePort(port); err != nil {
+		if err := proxy.AddAdaptivePort(port); err != nil {
 			errs = append(errs, fmt.Sprintf("add tag err > %v", err))
 		}
 	}
 
-	rawAdaptiveConfig := proxyManager.GetRawAdaptive()
-	configManager.Set("proxy.adaptive", rawAdaptiveConfig)
+	rawAdaptiveConfig := proxy.GetRawAdaptive()
+	globalConfig.Set("proxy.adaptive", rawAdaptiveConfig)
 
 	logger.Info(
 		"Err=%s|Ports=%s|Tags=%s",
@@ -797,18 +769,18 @@ func (s *EndNodeServer) DeleteAdaptiveConfig(ctx context.Context, adaptiveOpReq 
 	ports := adaptiveOpReq.GetPorts()
 	tags := adaptiveOpReq.GetTags()
 	for _, tag := range tags {
-		proxyManager.DeleteAdaptiveTag(tag)
+		proxy.DeleteAdaptiveTag(tag)
 	}
 	for _, port := range ports {
 		if p, err := strconv.ParseInt(port, 10, 64); err != nil {
 			errs = append(errs, fmt.Sprintf("invalid port: %s", port))
 			continue
 		} else {
-			proxyManager.DeleteAdaptivePort(p)
+			proxy.DeleteAdaptivePort(p)
 		}
 	}
-	rawAdaptiveConfig := proxyManager.GetRawAdaptive()
-	configManager.Set("proxy.adaptive", rawAdaptiveConfig)
+	rawAdaptiveConfig := proxy.GetRawAdaptive()
+	globalConfig.Set("proxy.adaptive", rawAdaptiveConfig)
 
 	logger.Info(
 		"Err=%s|Ports=%s|Tags=%s",
@@ -830,7 +802,7 @@ func (s *EndNodeServer) Adaptive(ctx context.Context, adaptiveReq *proto.Adaptiv
 	errs := []string{}
 	tags := adaptiveReq.GetTags()
 	for _, tag := range tags {
-		if oldPort, newPort, err := proxyManager.AdaptiveOneInbound(tag); err != nil {
+		if oldPort, newPort, err := proxy.AdaptiveOneInbound(tag); err != nil {
 			errs = append(errs, fmt.Sprintf("adaptive inbound with tag(%s) err > %v", tag, err))
 			logger.Error(
 				"Err=%s|Tag=%s|OldPort=%d|NewPort=%d",
@@ -873,11 +845,11 @@ func (s *EndNodeServer) SetGatewayModel(ctx context.Context, setGatewayModelReq 
 		Code: 0,
 	}
 	if setGatewayModelReq.GetEnableGatewayModel() {
-		proxyManager.StopProxyServer()
+		proxy.StopProxyServer()
 	} else {
-		proxyManager.StartProxyServer()
+		proxy.StartProxyServer()
 	}
-	configManager.Set(common.ServerRpcOnlyGateway, setGatewayModelReq.GetEnableGatewayModel())
+	globalConfig.Set(common.ConfigServerRpcOnlyGateway, setGatewayModelReq.GetEnableGatewayModel())
 	return setGatewayModelRsp, nil
 }
 
@@ -891,7 +863,7 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		fastAddInboundRsp.Msg = err.Error()
 		return fastAddInboundRsp, nil
 	}
-	if err := proxyManager.AddInbound(inbound); err != nil {
+	if err := proxy.AddInbound(inbound); err != nil {
 		fastAddInboundRsp.Code = 1021
 		fastAddInboundRsp.Msg = err.Error()
 	}
@@ -981,7 +953,7 @@ func (s *EndNodeServer) ClearUsers(ctx context.Context, clearUsersReq *proto.Cle
 	return clearUsersRsp, nil
 }
 
-func (s *EndNodeServer) registerToEndNode(node *common.Node, wg *sync.WaitGroup, ch chan struct{}) {
+func (s *EndNodeServer) registerToEndNode(node *cluster.Node, wg *sync.WaitGroup, ch chan struct{}) {
 	defer func() {
 		wg.Done()
 		<-ch
@@ -1002,7 +974,7 @@ func (s *EndNodeServer) registerToEndNode(node *common.Node, wg *sync.WaitGroup,
 	c := proto.NewEndNodeAccessClient(conn)
 	registerNodeReq := &proto.RegisterNodeReq{
 		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: s.clusterManager.Token,
+			Token: globalCluster.GetClusterToken(),
 			Node:  &localNode.Node,
 		},
 	}
@@ -1018,8 +990,8 @@ func (s *EndNodeServer) registerToEndNode(node *common.Node, wg *sync.WaitGroup,
 		// TODO:  本地节点不会从遍历列表清除, 后面需要对node持久化时可以将此作为落盘依据之一
 		// 102代表是已经注册过, 已经注册过的可以重新获取到token, 此时不需要删除, Error log仅做记录用
 		if !node.IsLocal() && rsp.GetCode() != 102 {
-			s.clusterManager.Delete(node.GetName())
-			s.clusterManager.AddToWrongNodeList(node)
+			globalCluster.Delete(node.GetName())
+			globalCluster.AddToWrongNodeList(node)
 		}
 		logger.Error(
 			"Err=%s|Dst=%s:%d|DstName=%s",
@@ -1036,7 +1008,7 @@ func (s *EndNodeServer) registerToEndNode(node *common.Node, wg *sync.WaitGroup,
 	}
 }
 
-func (s *EndNodeServer) heartbeatToEndNode(node *common.Node, wg *sync.WaitGroup, ch chan struct{}) {
+func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGroup, ch chan struct{}) {
 	defer func() {
 		wg.Done()
 		<-ch
@@ -1089,7 +1061,7 @@ func (s *EndNodeServer) registerOrHeartBeatToEndNode() {
 	// 并发数 10
 	ch := make(chan struct{}, 10)
 	wg := sync.WaitGroup{}
-	for _, node := range s.clusterManager.NodeManager.GetNodes() {
+	for _, node := range globalCluster.GetAllNode() {
 		if node.Name == s.Name {
 			continue
 		}
@@ -1161,8 +1133,8 @@ func addRemoteNode(rsp *proto.HeartBeatRsp, s *EndNodeServer, remoteServerType s
 	// 添加本地不存在的node
 	for key, remoteNode := range rsp.NodesMap {
 		remoteNodeName := remoteNode.GetName()
-		if node := s.clusterManager.Get(key); node == nil && remoteNode.Name != localNode.Name {
-			if wrongNode := s.clusterManager.GetNodeFromWrongNodeList(remoteNodeName); wrongNode != nil {
+		if node := globalCluster.Get(key); node == nil && remoteNode.Name != localNode.Name {
+			if wrongNode := globalCluster.GetNodeFromWrongNodeList(remoteNodeName); wrongNode != nil {
 				continue
 			}
 			logger.Info(
@@ -1172,8 +1144,8 @@ func addRemoteNode(rsp *proto.HeartBeatRsp, s *EndNodeServer, remoteServerType s
 				remoteNode.GetPort(),
 				remoteNode.GetName(),
 			)
-			s.clusterManager.Add(
-				&common.Node{
+			globalCluster.Add(
+				&cluster.Node{
 					Node:                remoteNode,
 					InToken:             "",
 					OutToken:            "",
@@ -1202,7 +1174,7 @@ func (s *EndNodeServer) filter() {
 		<-timeTicker.C
 		logger.Info("Msg=fliter invalid node and expire user")
 		// 过滤掉无效节点, 保留本地节点
-		s.clusterManager.NodeManager.Filter(func(n *common.Node) bool {
+		globalCluster.Filter(func(n *cluster.Node) bool {
 			return n.IsValid() || n.IsLocal()
 		})
 		// 过滤无效用户

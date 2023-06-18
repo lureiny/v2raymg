@@ -6,13 +6,13 @@ import (
 	"sync"
 
 	pb "github.com/golang/protobuf/proto"
-	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/cluster"
+	gc "github.com/lureiny/v2raymg/global/cluster"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"google.golang.org/grpc"
 )
-
-var logger = common.LoggerImp
 
 const MaxConcurrencyClientNum = 64
 
@@ -79,13 +79,18 @@ func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
 var ch = make(chan struct{}, MaxConcurrencyClientNum)
 
 type EndNodeClient struct {
-	nodes     *[]*common.Node
-	localNode *common.LocalNode
+	nodes     *[]*cluster.Node
+	localNode *cluster.LocalNode
 }
 
-func NewEndNodeClient(nodes *[]*common.Node, localNode *common.LocalNode) *EndNodeClient {
-	if nodes == nil || localNode == nil {
+// NewEndNodeClient ...
+func NewEndNodeClient(nodes *[]*cluster.Node, localNode *cluster.LocalNode) *EndNodeClient {
+	if nodes == nil {
 		return nil
+	}
+
+	if localNode == nil {
+		localNode = gc.LocalNode
 	}
 	endNodeClient := &EndNodeClient{}
 	endNodeClient.nodes = nodes
@@ -496,7 +501,7 @@ func (c *EndNodeClient) ReqToMultiEndNodeServer(reqType ReqToEndNodeType, req in
 		}
 		ch <- struct{}{}
 		wg.Add(1)
-		go func(n *common.Node) {
+		go func(n *cluster.Node) {
 			defer func() {
 				<-ch
 				wg.Done()

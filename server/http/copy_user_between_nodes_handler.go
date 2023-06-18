@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -38,8 +39,8 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	srcNodeRpcClient := client.NewEndNodeClient(srcNodes, localNode)
-	dstNodeRpcClient := client.NewEndNodeClient(dstNodes, localNode)
+	srcNodeRpcClient := client.NewEndNodeClient(srcNodes, nil)
+	dstNodeRpcClient := client.NewEndNodeClient(dstNodes, nil)
 
 	succList, failedList, _ := srcNodeRpcClient.ReqToMultiEndNodeServer(client.GetUsersReqType, &proto.GetUsersReq{})
 	if len(failedList) > 0 {

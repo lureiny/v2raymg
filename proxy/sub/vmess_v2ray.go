@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/lureiny/v2raymg/global/proxy"
 	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/v2fly/v2ray-core/v5/common/protocol"
 	conf "github.com/v2fly/v2ray-core/v5/infra/conf/v4"
@@ -58,7 +59,7 @@ func NewVmessShareConfig(in *config.InboundDetourConfig, email string, host stri
 		return nil, err
 	}
 
-	upstreamInbound, err := proxyManager.GetUpstreamInbound(v.Port)
+	upstreamInbound, err := proxy.GetUpstreamInbound(v.Port)
 	if err == nil {
 		// 如果有上游fallback的inbound, 需要替换对应的port和tls配置
 		v.Port = fmt.Sprintf("%d", upstreamInbound.PortRange)

@@ -5,8 +5,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
-	"github.com/lureiny/v2raymg/common"
-	"github.com/lureiny/v2raymg/component/converter"
+	"github.com/lureiny/v2raymg/cluster"
+	"github.com/lureiny/v2raymg/common/util"
+	"github.com/lureiny/v2raymg/global/logger"
+	"github.com/lureiny/v2raymg/proxy/sub/converter"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -28,9 +30,9 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 	parasMap := handler.parseParam(c)
 	userAgent := c.GetHeader("User-Agent")
 
-	tagList := common.StringList{}
+	tagList := util.StringList{}
 	tagList = strings.Split(parasMap["tags"], ",")
-	excludeProtocols := common.StringList{}
+	excludeProtocols := util.StringList{}
 	excludeProtocols = strings.Split(parasMap["excludeProtocols"], ",")
 	// 需要根据target做路由
 	userPoint := &proto.User{
@@ -39,7 +41,7 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 		Tags:   tagList.Filter(func(t string) bool { return len(t) > 0 }),
 	}
 
-	if !common.IsUserComplete(userPoint, true) {
+	if !cluster.IsUserComplete(userPoint, true) {
 		logger.Error(
 			"Err=%s|User=%s|Passwd=%s|Target=%s",
 			"invalid user",
@@ -57,7 +59,7 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	rpcClient := client.NewEndNodeClient(nodes, localNode)
+	rpcClient := client.NewEndNodeClient(nodes, nil)
 	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
 		client.GetSubReqType,
 		&proto.GetSubReq{

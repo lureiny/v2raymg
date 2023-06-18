@@ -2,4 +2,3 @@
 bin/
 *_test.go
 *.json
-log/

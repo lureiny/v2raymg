@@ -4,14 +4,15 @@ import (
 	"fmt"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lureiny/v2raymg/cluster"
 	"github.com/lureiny/v2raymg/common"
+	globalCluster "github.com/lureiny/v2raymg/global/cluster"
+	"github.com/lureiny/v2raymg/global/config"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/server"
 	"github.com/prometheus/client_golang/prometheus"
 )
-
-var configManager = common.GetGlobalConfigManager()
-var localNode = common.GlobalLocalNode
 
 var GlobalHttpServer = &HttpServer{}
 
@@ -26,28 +27,24 @@ var trafficStats = prometheus.NewGaugeVec(
 type HttpServer struct {
 	RestfulServer *gin.Engine
 	server.ServerConfig
-	userManager    *common.UserManager
-	clusterManager *common.EndNodeClusterManager
-	token          string // for admin op such as user op, stat op
-	handlersMap    map[string]HttpHandlerInterface
-	certManager    *lego.CertManager
+	userManager *cluster.UserManager
+	token       string // for admin op such as user op, stat op
+	handlersMap map[string]HttpHandlerInterface
+	certManager *lego.CertManager
 }
 
-var logger = common.LoggerImp
-
-func (s *HttpServer) SetUserManager(um *common.UserManager) {
+func (s *HttpServer) SetUserManager(um *cluster.UserManager) {
 	s.userManager = um
 }
 
-func (s *HttpServer) Init(um *common.UserManager, cm *common.EndNodeClusterManager, certManager *lego.CertManager) {
+func (s *HttpServer) Init(um *cluster.UserManager, certManager *lego.CertManager) {
 	s.userManager = um
-	s.clusterManager = cm
 	s.certManager = certManager
 
-	s.Host = configManager.GetString(common.ServerListen)
-	s.Port = configManager.GetInt(common.ServerHttpPort)
-	s.token = configManager.GetString(common.ServerHttpToken)
-	s.Name = configManager.GetString(common.ServerName)
+	s.Host = config.GetString(common.ConfigServerListen)
+	s.Port = config.GetInt(common.ConfigServerHttpPort)
+	s.token = config.GetString(common.ConfigServerHttpToken)
+	s.Name = config.GetString(common.ConfigServerName)
 }
 
 func (s *HttpServer) SetName(name string) {
@@ -64,18 +61,18 @@ func (s *HttpServer) Start() {
 }
 
 // 根据target查找路由的节点
-func (s *HttpServer) GetTargetNodes(target string) *[]*common.Node {
+func (s *HttpServer) GetTargetNodes(target string) *[]*cluster.Node {
 	if target == "all" {
-		filter := func(n *common.Node) bool {
+		filter := func(n *cluster.Node) bool {
 			return n.Name == s.Name || n.IsValid()
 		}
-		nodes := s.clusterManager.NodeManager.GetNodesWithFilter(filter)
+		nodes := globalCluster.GetNodesWithFilter(filter)
 		return nodes
 	} else {
-		filter := func(n *common.Node) bool {
+		filter := func(n *cluster.Node) bool {
 			return n.IsValid() && n.Name == target
 		}
-		return s.clusterManager.NodeManager.GetNodesWithFilter(filter)
+		return globalCluster.GetNodesWithFilter(filter)
 	}
 }
 

@@ -1,4 +1,4 @@
-package common
+package log
 
 import (
 	"fmt"
@@ -15,8 +15,6 @@ type Logger struct {
 	nodeType   string // node type: Center / End
 	logLevel   int
 }
-
-var LoggerImp = &Logger{}
 
 const (
 	DEBUG_LEVEL = 0
@@ -94,8 +92,4 @@ func (logger *Logger) baseLogOut(logLevel int, format string, a ...interface{}) 
 		)
 		logger.baseLogger.Printf(format, a...)
 	}
-}
-
-func init() {
-	logger.Init()
 }
