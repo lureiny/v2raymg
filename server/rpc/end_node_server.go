@@ -18,6 +18,7 @@ import (
 	globalConfig "github.com/lureiny/v2raymg/global/config"
 	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/global/proxy"
+	globalUserManager "github.com/lureiny/v2raymg/global/user"
 	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/lureiny/v2raymg/proxy/manager"
@@ -36,7 +37,6 @@ var localNode = cluster.GetLocalNode()
 type EndNodeServer struct {
 	proto.UnimplementedEndNodeAccessServer
 	centerNode  *cluster.Node
-	userManager *cluster.UserManager
 	certManager *lego.CertManager
 	server.ServerConfig
 }
@@ -152,8 +152,7 @@ func UnaryServerInterceptor(ctx context.Context, req interface{}, info *grpc.Una
 	return rsp, err
 }
 
-func (s *EndNodeServer) Init(um *cluster.UserManager, certManager *lego.CertManager) {
-	s.userManager = um
+func (s *EndNodeServer) Init(certManager *lego.CertManager) {
 	s.certManager = certManager
 	s.Host = globalConfig.GetString(common.ConfigServerListen)
 	s.Port = globalConfig.GetInt(common.ConfigServerRpcPort)
@@ -301,7 +300,7 @@ func (s *EndNodeServer) GetUsers(ctx context.Context, getUsersReq *proto.GetUser
 	getUsersRsp := &proto.GetUsersRsp{
 		Code: 0,
 	}
-	usersMap := s.userManager.GetUserList()
+	usersMap := globalUserManager.GetUserList()
 	sumStats := common.SumStats
 	sumStats.Mutex.Lock()
 	defer sumStats.Mutex.Unlock()
@@ -322,7 +321,7 @@ func (s *EndNodeServer) AddUsers(ctx context.Context, addUsersReq *proto.UserOpR
 	userList := ""
 	for _, user := range addUsersReq.GetUsers() {
 		userList = userList + ";" + user.Name
-		err := s.userManager.Add(user)
+		err := globalUserManager.Add(user)
 		if err != nil {
 			logger.Error(
 				"Err=%s|User=%s",
@@ -347,7 +346,7 @@ func (s *EndNodeServer) DeleteUsers(ctx context.Context, deleteUsersReq *proto.U
 	userList := ""
 	for _, user := range deleteUsersReq.GetUsers() {
 		userList = userList + ";" + user.Name
-		err := s.userManager.Delete(user)
+		err := globalUserManager.Delete(user)
 		if err != nil {
 			logger.Error(
 				"Err=%s|User=%s",
@@ -373,7 +372,7 @@ func (s *EndNodeServer) UpdateUsers(ctx context.Context, updateUsersReq *proto.U
 	userList := ""
 	for _, user := range updateUsersReq.GetUsers() {
 		userList = userList + ";" + user.Name
-		err = s.userManager.Update(user)
+		err = globalUserManager.Update(user)
 	}
 	if err != nil {
 		updateUsersRsp.Msg = err.Error()
@@ -390,7 +389,7 @@ func (s *EndNodeServer) ResetUser(ctx context.Context, resetUserReq *proto.UserO
 	userList := ""
 	for _, user := range resetUserReq.GetUsers() {
 		userList = userList + ";" + user.Name
-		err := s.userManager.Reset(user)
+		err := globalUserManager.Reset(user)
 		if err != nil {
 			logger.Error(
 				"Err=%s|User=%s",
@@ -416,7 +415,7 @@ func (s *EndNodeServer) GetSub(ctx context.Context, getSubReq *proto.GetSubReq) 
 	var excludeProtocols util.StringList = getSubReq.GetExcludeProtocols()
 	useSNI := getSubReq.UseSni
 	// 判断用户是否存在/合法
-	uris, err := s.userManager.GetUserSub(user, &excludeProtocols, useSNI)
+	uris, err := globalUserManager.GetUserSub(user, &excludeProtocols, useSNI)
 	if err != nil || len(uris) == 0 {
 		errMsg := fmt.Sprintf("get sub err > %v", err)
 		logger.Error(
@@ -495,7 +494,7 @@ func (s *EndNodeServer) AddInbound(ctx context.Context, inboundOpReq *proto.Inbo
 	}
 	// 如果本身不存在的user会被过滤掉
 	for _, u := range newInbound.GetUsers() {
-		if user := s.userManager.Get(u); user != nil {
+		if user := globalUserManager.Get(u); user != nil {
 			user.Tags = append(user.Tags, newInbound.Tag)
 		}
 	}
@@ -512,7 +511,7 @@ func (s *EndNodeServer) DeleteInbound(ctx context.Context, inboundOpReq *proto.I
 	if dstInbound != nil {
 		users := dstInbound.GetUsers()
 		for _, user := range users {
-			s.userManager.Delete(&proto.User{
+			globalUserManager.Delete(&proto.User{
 				Name: user,
 				Tags: []string{tag},
 			})
@@ -636,7 +635,7 @@ func (s *EndNodeServer) copyUser(srcTag, dstTag string) error {
 	succUser := []string{}
 	failedUser := []string{}
 	for _, user := range users {
-		err := s.userManager.Add(&proto.User{
+		err := globalUserManager.Add(&proto.User{
 			Name: user,
 			Tags: []string{dstTag},
 		})
@@ -930,14 +929,14 @@ func (s *EndNodeServer) ClearUsers(ctx context.Context, clearUsersReq *proto.Cle
 	}
 	users := []*proto.User{}
 	for _, user := range clearUsersReq.Users {
-		if u := s.userManager.Get(user); u != nil {
+		if u := globalUserManager.Get(user); u != nil {
 			users = append(users, u)
 		}
 	}
 	userList := ""
 	for _, user := range users {
 		userList = userList + ";" + user.Name
-		err := s.userManager.Delete(user)
+		err := globalUserManager.Delete(user)
 		if err != nil {
 			logger.Error(
 				"Err=%s|User=%s",
@@ -1178,7 +1177,7 @@ func (s *EndNodeServer) filter() {
 			return n.IsValid() || n.IsLocal()
 		})
 		// 过滤无效用户
-		s.userManager.ClearInvalideUser()
+		globalUserManager.ClearInvalideUser()
 	}
 }
 

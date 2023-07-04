@@ -27,18 +27,12 @@ var trafficStats = prometheus.NewGaugeVec(
 type HttpServer struct {
 	RestfulServer *gin.Engine
 	server.ServerConfig
-	userManager *cluster.UserManager
 	token       string // for admin op such as user op, stat op
 	handlersMap map[string]HttpHandlerInterface
 	certManager *lego.CertManager
 }
 
-func (s *HttpServer) SetUserManager(um *cluster.UserManager) {
-	s.userManager = um
-}
-
-func (s *HttpServer) Init(um *cluster.UserManager, certManager *lego.CertManager) {
-	s.userManager = um
+func (s *HttpServer) Init(certManager *lego.CertManager) {
 	s.certManager = certManager
 
 	s.Host = config.GetString(common.ConfigServerListen)

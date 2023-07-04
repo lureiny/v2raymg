@@ -9,14 +9,12 @@ import (
 	"time"
 
 	"github.com/lureiny/v2raymg/client"
-	"github.com/lureiny/v2raymg/cluster"
 	"github.com/lureiny/v2raymg/common"
 	"github.com/lureiny/v2raymg/global"
 	"github.com/lureiny/v2raymg/global/config"
 	globalLego "github.com/lureiny/v2raymg/global/lego"
 	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/global/proxy"
-	"github.com/lureiny/v2raymg/global/user"
 	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/proxy/manager"
 	"github.com/lureiny/v2raymg/server/http"
@@ -49,15 +47,15 @@ func initGlobalInfo() {
 	}
 }
 
-func initAndStartEndNodeServer(globalUserManager *cluster.UserManager, certManager *lego.CertManager) {
+func initAndStartEndNodeServer(certManager *lego.CertManager) {
 	endNodeServer := rpc.GetEndNodeServer()
-	endNodeServer.Init(globalUserManager, certManager)
+	endNodeServer.Init(certManager)
 	go endNodeServer.Start()
 }
 
-func initAndStartHttpServer(globalUserManager *cluster.UserManager, certManager *lego.CertManager) {
+func initAndStartHttpServer(certManager *lego.CertManager) {
 	httpServer := http.GlobalHttpServer
-	httpServer.Init(globalUserManager, certManager)
+	httpServer.Init(certManager)
 	if config.GetBool(common.ConfigSupportPrometheus) {
 		http.RegisterPrometheus()
 	}
@@ -104,8 +102,8 @@ func startServer(cmd *cobra.Command, args []string) {
 	// 1s检查刷新一次
 	config.AutoFlush(1)
 
-	initAndStartEndNodeServer(user.GetUserManager(), globalLego.GetCertManager())
-	initAndStartHttpServer(user.GetUserManager(), globalLego.GetCertManager())
+	initAndStartEndNodeServer(globalLego.GetCertManager())
+	initAndStartHttpServer(globalLego.GetCertManager())
 
 	// listen signal
 	c := make(chan os.Signal)

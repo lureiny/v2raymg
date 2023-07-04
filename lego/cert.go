@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-acme/lego/v4/log"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"github.com/urfave/cli/v2"
 )
@@ -244,7 +244,7 @@ func (certManager *CertManager) ObtainNewCert(domain string) error {
 	args := []string{"lego", "--accept-tos", "--email", certManager.Email, "--domains", domain, "--dns", certManager.DnsProvider}
 	args = append(args, certManager.Args...)
 	args = append(args, runCmd)
-	log.Infof("obtain new cert args: %v", args)
+	logger.Info("obtain new cert args: %v", args)
 	if err := ObtainNewCertWithDNS(args); err != nil {
 		return err
 	}
@@ -300,7 +300,7 @@ func (certManager *CertManager) RenewCert(domain string) error {
 	args := []string{"lego", "--email", certManager.Email, "--domains", domain, "--dns", certManager.DnsProvider}
 	args = append(args, certManager.Args...)
 	args = append(args, renewCmd)
-	log.Infof("renew cert args: %v", args)
+	logger.Info("renew cert args: %v", args)
 	if err := RenewCert(args); err != nil {
 		return err
 	}
@@ -310,7 +310,7 @@ func (certManager *CertManager) RenewCert(domain string) error {
 	if err := certManager.copyCertAndKeyFile(domain); err != nil {
 		return err
 	}
-	fmt.Printf("Cert of domain[%s] has been renew, new expire time is: %v", domain, cert.ExpireTime)
+	logger.Info("Cert of domain[%s] has been renew, new expire time is: %v", domain, cert.ExpireTime)
 	return nil
 }
 
@@ -355,7 +355,10 @@ func (certManager *CertManager) AutoRenewCert(cycle int64) {
 		for {
 			time.Sleep(time.Second * time.Duration(cycle))
 			for domain, _ := range certManager.Certs {
-				certManager.RenewCert(domain)
+				if err := certManager.RenewCert(domain); err != nil {
+					logger.Error("renew domain[%s] fail, err: %v", domain, err)
+					continue
+				}
 			}
 		}
 	}()
@@ -381,9 +384,6 @@ func fullCertExpireTime(ca *Certificate) error {
 var app *cli.App = nil
 
 func ObtainNewCertWithDNS(args []string) error {
-	app.Flags = CreateFlags(legoPath)
-	app.Before = Before
-	app.Commands = CreateCommands()
 	return app.Run(args)
 }
 
@@ -393,6 +393,10 @@ func initApp() {
 	app.HelpName = "lego"
 	app.Usage = "Let's Encrypt client written in Go"
 	app.EnableBashCompletion = true
+
+	app.Flags = CreateFlags(legoPath)
+	app.Before = Before
+	app.Commands = CreateCommands()
 
 	app.Version = ""
 	cli.VersionPrinter = func(c *cli.Context) {
@@ -412,6 +416,6 @@ func initCwd() {
 }
 
 func init() {
-	initApp()
 	initCwd()
+	initApp()
 }
