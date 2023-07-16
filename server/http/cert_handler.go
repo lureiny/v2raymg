@@ -3,6 +3,7 @@ package http
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -22,7 +23,7 @@ func (handler *CertHandler) handlerFunc(c *gin.Context) {
 		c.String(200, "no avaliable node")
 		return
 	}
-	rpcClient := client.NewEndNodeClient(nodes, localNode)
+	rpcClient := client.NewEndNodeClient(nodes, nil)
 	req := &proto.ObtainNewCertReq{
 		Domain: parasMap["domain"],
 	}
@@ -44,6 +45,10 @@ func (handler *CertHandler) getHandlers() []gin.HandlerFunc {
 		getAuthHandlerFunc(handler.httpServer),
 		handler.handlerFunc,
 	}
+}
+
+func (handler *CertHandler) getRelativePath() string {
+	return "/cert"
 }
 
 func (handler *CertHandler) help() string {

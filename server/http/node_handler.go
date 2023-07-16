@@ -2,13 +2,13 @@ package http
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/lureiny/v2raymg/global/cluster"
 )
 
 type NodeHandler struct{ HttpHandlerImp }
 
 func (handler *NodeHandler) handlerFunc(c *gin.Context) {
-	nodeList := handler.getHttpServer().clusterManager.GetNodeNameList()
-	nodeList = append(nodeList, localNode.Name)
+	nodeList := cluster.GetAllNode()
 	c.JSON(200, nodeList)
 }
 
@@ -17,6 +17,10 @@ func (handler *NodeHandler) getHandlers() []gin.HandlerFunc {
 		getAuthHandlerFunc(handler.httpServer),
 		handler.handlerFunc,
 	}
+}
+
+func (handler *NodeHandler) getRelativePath() string {
+	return "/node"
 }
 
 func (handler *NodeHandler) help() string {

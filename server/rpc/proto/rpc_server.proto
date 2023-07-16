@@ -54,6 +54,8 @@ message UserOpRsp {
 message GetSubReq {
     NodeAuthInfo node_auth_info = 1;
     User user = 2;
+    repeated string exclude_protocols = 3;
+    bool use_sni = 4;
 }
 
 message GetSubRsp {
@@ -253,11 +255,22 @@ message GetCertsRsp {
     repeated Cert certs = 2;
 }
 
+message ClearUsersReq {
+    NodeAuthInfo node_auth_info = 1;
+    repeated string users = 2;
+}
+
+message ClearUsersRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
 service EndNodeAccess {
     // user
     rpc GetUsers(GetUsersReq) returns (GetUsersRsp) {}
     rpc AddUsers(UserOpReq) returns (UserOpRsp) {}
-    rpc DeleteUsers(UserOpReq) returns (UserOpRsp) {}
+    rpc DeleteUsers(UserOpReq) returns (UserOpRsp) {} // 支持tag级删除
+    rpc ClearUsers(ClearUsersReq) returns (ClearUsersRsp) {} // 完全删除
     rpc UpdateUsers(UserOpReq) returns (UserOpRsp) {}
     rpc ResetUser(UserOpReq) returns (UserOpRsp) {}
     rpc GetSub(GetSubReq) returns (GetSubRsp) {}

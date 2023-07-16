@@ -8,6 +8,7 @@ type HttpHandlerInterface interface {
 	setHttpServer(*HttpServer)
 	getHttpServer() *HttpServer
 	getHandlers() []gin.HandlerFunc
+	getRelativePath() string
 	help() string
 }
 
@@ -28,6 +29,8 @@ func (handler *HttpHandlerImp) getHandlers() []gin.HandlerFunc {
 func (handler *HttpHandlerImp) setHttpServer(httpServer *HttpServer) {
 	handler.httpServer = httpServer
 }
+
+func (handler *HttpHandlerImp) getRelativePath(*gin.Context) string { return "" }
 
 func (handler *HttpHandlerImp) getHttpServer() *HttpServer { return handler.httpServer }
 

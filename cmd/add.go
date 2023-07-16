@@ -32,7 +32,7 @@ func init() {
 }
 
 func addUserLocal(cmd *cobra.Command, args []string) {
-	proxyManager := manager.GetProxyManager()
+	proxyManager := manager.NewProxyManager()
 	err := proxyManager.Init(configFile, "", nil)
 	if err != nil {
 		log.Fatalf("Failed to add user > %v", err)

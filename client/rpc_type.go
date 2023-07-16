@@ -26,4 +26,5 @@ const (
 	FastAddInboundType
 	TransferCertType
 	GetCertsType
+	ClearUsersType
 )

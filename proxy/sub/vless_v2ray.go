@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/lureiny/v2raymg/global/proxy"
 	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/v2fly/v2ray-core/v5/common/protocol"
 	"github.com/v2fly/v2ray-core/v5/infra/conf/v4"
@@ -25,9 +26,13 @@ type VlessShareConfig struct {
 	TransportConfig *VlessTransportConfig
 	TLSConfig       *VlessTLSConfig
 	NodeName        string
+	UseSNI          bool
 }
 
 func (c *VlessShareConfig) Build() string {
+	if !c.UseSNI {
+		c.TLSConfig.SNI = ""
+	}
 	params := []string{c.ProtocolConfig.Build(), c.TransportConfig.Build(), c.TLSConfig.Build()}
 	paramsURI := strings.Join(params, "&")
 	return fmt.Sprintf("%s?%s#%s", c.BaseConfig.Build(), fixUri(paramsURI), url.QueryEscape(c.NodeName))
@@ -89,7 +94,7 @@ func NewVlessShareConfig(in *config.InboundDetourConfig, email string, host stri
 
 	sharedConfig.TLSConfig = newTLSOrXTLSConfig(in.StreamSetting)
 
-	upstreamInbound, err := proxyManager.GetUpstreamInbound(fmt.Sprintf("%d", sharedConfig.BaseConfig.RemotePort))
+	upstreamInbound, err := proxy.GetUpstreamInbound(fmt.Sprintf("%d", sharedConfig.BaseConfig.RemotePort))
 	if err == nil {
 		// 如果有上游fallback的inbound, 需要替换对应的port和tls配置
 		sharedConfig.BaseConfig.RemotePort = upstreamInbound.PortRange

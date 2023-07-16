@@ -1,4 +1,4 @@
-package common
+package log
 
 import (
 	"fmt"
@@ -15,8 +15,6 @@ type Logger struct {
 	nodeType   string // node type: Center / End
 	logLevel   int
 }
-
-var LoggerImp = &Logger{}
 
 const (
 	DEBUG_LEVEL = 0
@@ -74,7 +72,7 @@ func (logger *Logger) Fatalf(format string, a ...interface{}) {
 
 func (logger *Logger) baseLogOut(logLevel int, format string, a ...interface{}) {
 	if logLevel >= logger.logLevel {
-		pc, file, line, _ := runtime.Caller(2)
+		pc, file, line, _ := runtime.Caller(3)
 		file = filepath.Base(file)
 		longFuncName := filepath.Base(runtime.FuncForPC(pc).Name())
 		index := strings.Index(longFuncName, ".")
@@ -94,8 +92,4 @@ func (logger *Logger) baseLogOut(logLevel int, format string, a ...interface{}) 
 		)
 		logger.baseLogger.Printf(format, a...)
 	}
-}
-
-func init() {
-	logger.Init()
 }

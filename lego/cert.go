@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"github.com/urfave/cli/v2"
 )
@@ -28,6 +29,7 @@ type CertManager struct {
 	DnsProvider string                  `json:"dns_provider"`
 	Path        string                  `json:"path,omitempty"`
 	Certs       map[string]*Certificate `json:"certs,omitempty"`
+	Args        []string                `json:"args,omitempty"`
 	certMutex   sync.Mutex
 }
 
@@ -67,6 +69,9 @@ func paraseDomainCertFile(path, fileName string, obtainedByLocal bool) *Certific
 		return nil
 	}
 	domain := fileName[0 : len(fileName)-4]
+	if strings.HasPrefix(domain, "_.") {
+		domain = strings.ReplaceAll(domain, "_.", "*.")
+	}
 	if strings.HasSuffix(fileName, ".crt") && !strings.HasSuffix(fileName, ".issuer.crt") {
 		return &Certificate{
 			Domain:          domain,
@@ -227,6 +232,8 @@ func copyFile(srcName, dstName string) (int64, error) {
 }
 
 func (certManager *CertManager) ObtainNewCert(domain string) error {
+	logger.Info("Start obtain cert of domain[%s]", domain)
+	defer logger.Info("Obtain cert of domain[%s] end", domain)
 	certManager.certMutex.Lock()
 	defer certManager.certMutex.Unlock()
 	if _, ok := certManager.Certs[domain]; ok {
@@ -239,7 +246,10 @@ func (certManager *CertManager) ObtainNewCert(domain string) error {
 		return fmt.Errorf("domian can't be empty")
 	}
 	SetEnvs(certManager.Secrets)
-	args := []string{"lego", "--accept-tos", "--email", certManager.Email, "--domains", domain, "--dns", certManager.DnsProvider, runCmd}
+	args := []string{"lego", "--accept-tos", "--email", certManager.Email, "--domains", domain, "--dns", certManager.DnsProvider}
+	args = append(args, certManager.Args...)
+	args = append(args, runCmd)
+	logger.Info("obtain new cert args: %v", args)
 	if err := ObtainNewCertWithDNS(args); err != nil {
 		return err
 	}
@@ -292,7 +302,10 @@ func (certManager *CertManager) RenewCert(domain string) error {
 		return nil
 	}
 	SetEnvs(certManager.Secrets)
-	args := []string{"lego", "--email", certManager.Email, "--domains", domain, "--dns", certManager.DnsProvider, renewCmd}
+	args := []string{"lego", "--email", certManager.Email, "--domains", domain, "--dns", certManager.DnsProvider}
+	args = append(args, certManager.Args...)
+	args = append(args, renewCmd)
+	logger.Info("renew cert args: %v", args)
 	if err := RenewCert(args); err != nil {
 		return err
 	}
@@ -302,7 +315,7 @@ func (certManager *CertManager) RenewCert(domain string) error {
 	if err := certManager.copyCertAndKeyFile(domain); err != nil {
 		return err
 	}
-	fmt.Printf("Cert of domain[%s] has been renew, new expire time is: %v", domain, cert.ExpireTime)
+	logger.Info("Cert of domain[%s] has been renew, new expire time is: %v", domain, cert.ExpireTime)
 	return nil
 }
 
@@ -347,7 +360,10 @@ func (certManager *CertManager) AutoRenewCert(cycle int64) {
 		for {
 			time.Sleep(time.Second * time.Duration(cycle))
 			for domain, _ := range certManager.Certs {
-				certManager.RenewCert(domain)
+				if err := certManager.RenewCert(domain); err != nil {
+					logger.Error("renew domain[%s] fail, err: %v", domain, err)
+					continue
+				}
 			}
 		}
 	}()
@@ -373,9 +389,6 @@ func fullCertExpireTime(ca *Certificate) error {
 var app *cli.App = nil
 
 func ObtainNewCertWithDNS(args []string) error {
-	app.Flags = CreateFlags(legoPath)
-	app.Before = Before
-	app.Commands = CreateCommands()
 	return app.Run(args)
 }
 
@@ -385,6 +398,10 @@ func initApp() {
 	app.HelpName = "lego"
 	app.Usage = "Let's Encrypt client written in Go"
 	app.EnableBashCompletion = true
+
+	app.Flags = CreateFlags(legoPath)
+	app.Before = Before
+	app.Commands = CreateCommands()
 
 	app.Version = ""
 	cli.VersionPrinter = func(c *cli.Context) {
@@ -404,6 +421,6 @@ func initCwd() {
 }
 
 func init() {
-	initApp()
 	initCwd()
+	initApp()
 }

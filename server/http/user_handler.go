@@ -8,7 +8,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
-	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/util"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -74,7 +75,7 @@ func (handler *UserHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	tagList := common.StringList{}
+	tagList := util.StringList{}
 	tagList = strings.Split(parasMap["tags"], ",")
 	userPoint := &proto.User{
 		Name:       parasMap["user"],
@@ -89,7 +90,7 @@ func (handler *UserHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	rpcClient := client.NewEndNodeClient(nodes, localNode)
+	rpcClient := client.NewEndNodeClient(nodes, nil)
 
 	if opName, ok := userOpMap[parasMap["type"]]; ok {
 		req := &proto.UserOpReq{
@@ -151,6 +152,10 @@ func (handler *UserHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *UserHandler) getRelativePath() string {
+	return "/user"
+}
+
 func (handler *UserHandler) help() string {
 	usage := `/user
 	user操作接口, 支持添加, 删除, 更新user信息, 重置用户proxy的密钥信息, 获取用户列表
@@ -174,7 +179,7 @@ func (handler *UserHandler) help() string {
 	expire: 过期时间, 过期时间的时间戳, 例如2022-11-27 12:00:00过期, 则expire=1669521600, 与下述ttl参数同时存在时, 优先使用ttl设置过期时间
 	ttl: 存活时间, 从添加时开始的有效存活时间, 单位为秒, 例如1个小时内有效, ttl=3600
 	3. 删除用户
-	/user?type=3&target={target}&user={user}&token={token}
+	/user?type=3&target={target}&user={user}&token={token}&tags={tags}
 	user: 用户名
 	4. 重置用户
 	/user?target={target}&type=4&user={user}&token={token}

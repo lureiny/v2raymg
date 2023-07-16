@@ -7,48 +7,21 @@ func init() {
 	GlobalHttpServer.RestfulServer = gin.Default()
 	GlobalHttpServer.handlersMap = map[string]HttpHandlerInterface{}
 
-	subHandler := &SubHandler{}
-	GlobalHttpServer.RegisterHandler("/sub", subHandler)
-
-	helpHandler := &HelpHandler{}
-	GlobalHttpServer.RegisterHandler("/help/*relativePath", helpHandler)
-
-	adaptiveHandler := &AdaptiveHandler{}
-	GlobalHttpServer.RegisterHandler("/adaptive", adaptiveHandler)
-
-	adaptiveOpHandler := &AdaptiveOpHandler{}
-	GlobalHttpServer.RegisterHandler("/adaptiveOp", adaptiveOpHandler)
-
-	boundHandler := &BoundHandler{}
-	GlobalHttpServer.RegisterHandler("/bound", boundHandler)
-
-	nodeHandler := &NodeHandler{}
-	GlobalHttpServer.RegisterHandler("/node", nodeHandler)
-
-	statHandler := &StatHandler{}
-	GlobalHttpServer.RegisterHandler("/stat", statHandler)
-
-	tagHandler := &TagHandler{}
-	GlobalHttpServer.RegisterHandler("/tag", tagHandler)
-
-	updateHandler := &UpdateHandler{}
-	GlobalHttpServer.RegisterHandler("/update", updateHandler)
-
-	userHandler := &UserHandler{}
-	GlobalHttpServer.RegisterHandler("/user", userHandler)
-
-	gatewayHandler := &GatewayHandler{}
-	GlobalHttpServer.RegisterHandler("/gateway", gatewayHandler)
-
-	certHandler := &CertHandler{}
-	GlobalHttpServer.RegisterHandler("/cert", certHandler)
-
-	fastAddInboundHandler := &FastAddInboundHandler{}
-	GlobalHttpServer.RegisterHandler("/fastAddInbound", fastAddInboundHandler)
-
-	transferCertHandler := &TransferCertHandler{}
-	GlobalHttpServer.RegisterHandler("/transferCert", transferCertHandler)
-
-	getCertsHandler := &GetCertsHandler{}
-	GlobalHttpServer.RegisterHandler("/getCerts", getCertsHandler)
+	GlobalHttpServer.RegisterHandler(&SubHandler{})
+	GlobalHttpServer.RegisterHandler(&HelpHandler{})
+	GlobalHttpServer.RegisterHandler(&AdaptiveHandler{})
+	GlobalHttpServer.RegisterHandler(&AdaptiveOpHandler{})
+	GlobalHttpServer.RegisterHandler(&BoundHandler{})
+	GlobalHttpServer.RegisterHandler(&NodeHandler{})
+	GlobalHttpServer.RegisterHandler(&StatHandler{})
+	GlobalHttpServer.RegisterHandler(&TagHandler{})
+	GlobalHttpServer.RegisterHandler(&UpdateHandler{})
+	GlobalHttpServer.RegisterHandler(&UserHandler{})
+	GlobalHttpServer.RegisterHandler(&GatewayHandler{})
+	GlobalHttpServer.RegisterHandler(&CertHandler{})
+	GlobalHttpServer.RegisterHandler(&FastAddInboundHandler{})
+	GlobalHttpServer.RegisterHandler(&TransferCertHandler{})
+	GlobalHttpServer.RegisterHandler(&GetCertsHandler{})
+	GlobalHttpServer.RegisterHandler(&ClearUserHandler{})
+	GlobalHttpServer.RegisterHandler(&CopyUserBetweenNodesHandler{})
 }

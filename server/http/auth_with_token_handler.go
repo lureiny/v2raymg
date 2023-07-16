@@ -2,6 +2,7 @@ package http
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/lureiny/v2raymg/global/logger"
 )
 
 func getAuthHandlerFunc(httpServer *HttpServer) gin.HandlerFunc {

@@ -22,7 +22,7 @@ func init() {
 
 // Reset reset user uuid
 func Reset(email string, tag string) error {
-	proxyManager := manager.GetProxyManager()
+	proxyManager := manager.NewProxyManager()
 
 	proxyManager.Init(configFile, "", nil)
 

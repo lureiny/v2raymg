@@ -7,28 +7,26 @@ import (
 	"time"
 
 	"github.com/lureiny/v2raymg/common"
+	gc "github.com/lureiny/v2raymg/global/config"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server"
 
+	c "github.com/lureiny/v2raymg/cluster"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 	grpc "google.golang.org/grpc"
 )
 
 type NodeMap map[string]*proto.Node
 
-var configManager = common.GetGlobalConfigManager()
-
 type CenterNodeServer struct {
 	proto.UnimplementedCenterNodeAccessServer
-	clusters common.CenterClusterManager
+	clusters c.CenterClusterManager
 	server.ServerConfig
-	localNode proto.Node
 }
-
-var logger = common.LoggerImp
 
 func (s *CenterNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.HeartBeatReq) (*proto.HeartBeatRsp, error) {
 	heartBeatRsp := &proto.HeartBeatRsp{}
-	node := &common.Node{
+	node := &c.Node{
 		Node:             heartBeatReq.GetNodeAuthInfo().GetNode(),
 		CreateTime:       time.Now().Unix(),
 		GetHeartBeatTime: time.Now().Unix(),
@@ -72,8 +70,8 @@ func (s *CenterNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.He
 			cluster.Add(node)
 		}
 		// 只返回有效节点
-		heartBeatRsp.NodesMap = cluster.GetNodes(
-			func(node *common.Node) bool {
+		heartBeatRsp.NodesMap = cluster.GetProtoNodesWithFilter(
+			func(node *c.Node) bool {
 				return node.IsValid()
 			},
 		)
@@ -106,17 +104,16 @@ func (s *CenterNodeServer) filter() {
 }
 
 func (s *CenterNodeServer) Init() {
-	s.Host = configManager.GetString(common.ServerListen)
-	s.Port = configManager.GetInt(common.ServerRpcPort)
+	s.Host = gc.GetString(common.ConfigServerListen)
+	s.Port = gc.GetInt(common.ConfigServerRpcPort)
 	s.Type = "Center"
-	serverName := configManager.GetString(common.ServerName)
-	accessHost := configManager.GetString(common.ProxyHost)
+	serverName := gc.GetString(common.ConfigServerName)
+	accessHost := gc.GetString(common.ConfigProxyHost)
 	if serverName == "" {
 		serverName = fmt.Sprintf("%s:%d", accessHost, s.Port)
 	}
 	s.Name = serverName
 	s.clusters.Init()
-	logger.Init()
 	logger.SetLogLevel(0)
 	logger.SetServerName(serverName)
 	logger.SetNodeType("Center")

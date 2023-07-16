@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/lureiny/v2raymg/global/proxy"
 	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/v2fly/v2ray-core/v5/common/protocol"
 	conf "github.com/v2fly/v2ray-core/v5/infra/conf/v4"
@@ -13,19 +14,20 @@ import (
 
 // https://github.com/2dust/v2rayN/wiki/%E5%88%86%E4%BA%AB%E9%93%BE%E6%8E%A5%E6%A0%BC%E5%BC%8F%E8%AF%B4%E6%98%8E(ver-2)
 type VmessShareConfig struct {
-	V    string `json:"v"`
-	PS   string `json:"ps"`
-	Add  string `json:"add"`
-	Port string `json:"port"`
-	ID   string `json:"id"`
-	Aid  string `json:"aid"`
-	Scy  string `json:"scy"`
-	Net  string `json:"net"`
-	Type string `json:"type"`
-	Host string `json:"host"`
-	Path string `json:"path"`
-	TLS  string `json:"tls"`
-	Sni  string `json:"sni"`
+	V      string `json:"v"`
+	PS     string `json:"ps"`
+	Add    string `json:"add"`
+	Port   string `json:"port"`
+	ID     string `json:"id"`
+	Aid    string `json:"aid"`
+	Scy    string `json:"scy"`
+	Net    string `json:"net"`
+	Type   string `json:"type"`
+	Host   string `json:"host"`
+	Path   string `json:"path"`
+	TLS    string `json:"tls"`
+	Sni    string `json:"sni"`
+	UseSNI bool   `json:"-"`
 }
 
 func NewVmessShareConfig(in *config.InboundDetourConfig, email string, host string, port uint32) (*VmessShareConfig, error) {
@@ -57,7 +59,7 @@ func NewVmessShareConfig(in *config.InboundDetourConfig, email string, host stri
 		return nil, err
 	}
 
-	upstreamInbound, err := proxyManager.GetUpstreamInbound(v.Port)
+	upstreamInbound, err := proxy.GetUpstreamInbound(v.Port)
 	if err == nil {
 		// 如果有上游fallback的inbound, 需要替换对应的port和tls配置
 		v.Port = fmt.Sprintf("%d", upstreamInbound.PortRange)

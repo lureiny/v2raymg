@@ -5,7 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
-	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/util"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -27,10 +28,10 @@ func (handler *AdaptiveHandler) handlerFunc(c *gin.Context) {
 		c.String(200, "no avaliable node")
 		return
 	}
-	tagList := common.StringList{}
+	tagList := util.StringList{}
 	tagList = strings.Split(parasMap["tags"], ",")
 
-	rpcClient := client.NewEndNodeClient(nodes, localNode)
+	rpcClient := client.NewEndNodeClient(nodes, nil)
 	req := &proto.AdaptiveReq{
 		Tags: tagList.Filter(func(t string) bool { return len(t) > 0 }),
 	}
@@ -53,6 +54,10 @@ func (handler *AdaptiveHandler) getHandlers() []gin.HandlerFunc {
 		getAuthHandlerFunc(handler.httpServer),
 		handler.handlerFunc,
 	}
+}
+
+func (handler *AdaptiveHandler) getRelativePath() string {
+	return "/adaptive"
 }
 
 func (handler *AdaptiveHandler) help() string {

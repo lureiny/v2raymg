@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -80,7 +81,7 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	rpcClient := client.NewEndNodeClient(nodes, localNode)
+	rpcClient := client.NewEndNodeClient(nodes, nil)
 	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(client.FastAddInboundType, &proto.FastAddInboundReq{
 		InboundBuilderType: getBuilderType(parasMap["protocol"]),
 		StreamBuilderType:  getBuilderType(parasMap["stream"]),
@@ -107,6 +108,10 @@ func (handler *FastAddInboundHandler) getHandlers() []gin.HandlerFunc {
 		getAuthHandlerFunc(handler.httpServer),
 		handler.handlerFunc,
 	}
+}
+
+func (handler *FastAddInboundHandler) getRelativePath() string {
+	return "/fastAddInbound"
 }
 
 func (handler *FastAddInboundHandler) help() string {

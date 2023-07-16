@@ -26,6 +26,7 @@ type EndNodeAccessClient interface {
 	GetUsers(ctx context.Context, in *GetUsersReq, opts ...grpc.CallOption) (*GetUsersRsp, error)
 	AddUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	DeleteUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
+	ClearUsers(ctx context.Context, in *ClearUsersReq, opts ...grpc.CallOption) (*ClearUsersRsp, error)
 	UpdateUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	ResetUser(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	GetSub(ctx context.Context, in *GetSubReq, opts ...grpc.CallOption) (*GetSubRsp, error)
@@ -83,6 +84,15 @@ func (c *endNodeAccessClient) AddUsers(ctx context.Context, in *UserOpReq, opts 
 func (c *endNodeAccessClient) DeleteUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error) {
 	out := new(UserOpRsp)
 	err := c.cc.Invoke(ctx, "/proto.EndNodeAccess/DeleteUsers", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *endNodeAccessClient) ClearUsers(ctx context.Context, in *ClearUsersReq, opts ...grpc.CallOption) (*ClearUsersRsp, error) {
+	out := new(ClearUsersRsp)
+	err := c.cc.Invoke(ctx, "/proto.EndNodeAccess/ClearUsers", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -295,6 +305,7 @@ type EndNodeAccessServer interface {
 	GetUsers(context.Context, *GetUsersReq) (*GetUsersRsp, error)
 	AddUsers(context.Context, *UserOpReq) (*UserOpRsp, error)
 	DeleteUsers(context.Context, *UserOpReq) (*UserOpRsp, error)
+	ClearUsers(context.Context, *ClearUsersReq) (*ClearUsersRsp, error)
 	UpdateUsers(context.Context, *UserOpReq) (*UserOpRsp, error)
 	ResetUser(context.Context, *UserOpReq) (*UserOpRsp, error)
 	GetSub(context.Context, *GetSubReq) (*GetSubRsp, error)
@@ -336,6 +347,9 @@ func (UnimplementedEndNodeAccessServer) AddUsers(context.Context, *UserOpReq) (*
 }
 func (UnimplementedEndNodeAccessServer) DeleteUsers(context.Context, *UserOpReq) (*UserOpRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteUsers not implemented")
+}
+func (UnimplementedEndNodeAccessServer) ClearUsers(context.Context, *ClearUsersReq) (*ClearUsersRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClearUsers not implemented")
 }
 func (UnimplementedEndNodeAccessServer) UpdateUsers(context.Context, *UserOpReq) (*UserOpRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateUsers not implemented")
@@ -466,6 +480,24 @@ func _EndNodeAccess_DeleteUsers_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(EndNodeAccessServer).DeleteUsers(ctx, req.(*UserOpReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EndNodeAccess_ClearUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearUsersReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).ClearUsers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/proto.EndNodeAccess/ClearUsers",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).ClearUsers(ctx, req.(*ClearUsersReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -884,6 +916,10 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteUsers",
 			Handler:    _EndNodeAccess_DeleteUsers_Handler,
+		},
+		{
+			MethodName: "ClearUsers",
+			Handler:    _EndNodeAccess_ClearUsers_Handler,
 		},
 		{
 			MethodName: "UpdateUsers",

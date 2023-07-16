@@ -34,10 +34,10 @@ func createRenew() *cli.Command {
 			hasDomains := len(ctx.StringSlice("domains")) > 0
 			hasCsr := len(ctx.String("csr")) > 0
 			if hasDomains && hasCsr {
-				log.Fatal("Please specify either --domains/-d or --csr/-c, but not both")
+				log.Printf("Please specify either --domains/-d or --csr/-c, but not both")
 			}
 			if !hasDomains && !hasCsr {
-				log.Fatal("Please specify --domains/-d (or --csr/-c if you already have a CSR)")
+				log.Printf("Please specify --domains/-d (or --csr/-c if you already have a CSR)")
 			}
 			return nil
 		},
@@ -87,7 +87,7 @@ func renew(ctx *cli.Context) error {
 	setupChallenges(ctx, client)
 
 	if account.Registration == nil {
-		log.Fatalf("Account %s is not registered. Use 'run' to register a new account.\n", account.Email)
+		log.Printf("Account %s is not registered. Use 'run' to register a new account.\n", account.Email)
 	}
 
 	certsStorage := NewCertificatesStorage(ctx)
@@ -114,7 +114,7 @@ func renewForDomains(ctx *cli.Context, client *lego.Client, certsStorage *Certif
 	// as web servers would not be able to work with a combined file.
 	certificates, err := certsStorage.ReadCertificate(domain, ".crt")
 	if err != nil {
-		log.Fatalf("Error while loading the certificate for domain %s\n\t%v", domain, err)
+		log.Printf("Error while loading the certificate for domain %s\n\t%v", domain, err)
 	}
 
 	cert := certificates[0]
@@ -133,7 +133,7 @@ func renewForDomains(ctx *cli.Context, client *lego.Client, certsStorage *Certif
 	if ctx.Bool("reuse-key") {
 		keyBytes, errR := certsStorage.ReadFile(domain, ".key")
 		if errR != nil {
-			log.Fatalf("Error while loading the private key for domain %s\n\t%v", domain, errR)
+			log.Printf("Error while loading the private key for domain %s\n\t%v", domain, errR)
 		}
 
 		privateKey, errR = certcrypto.ParsePEMPrivateKey(keyBytes)
@@ -164,7 +164,8 @@ func renewForDomains(ctx *cli.Context, client *lego.Client, certsStorage *Certif
 	}
 	certRes, err := client.Certificate.Obtain(request)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("%v\n", err)
+		return err
 	}
 
 	certsStorage.SaveResource(certRes)
@@ -181,7 +182,8 @@ func renewForDomains(ctx *cli.Context, client *lego.Client, certsStorage *Certif
 func renewForCSR(ctx *cli.Context, client *lego.Client, certsStorage *CertificatesStorage, bundle bool, meta map[string]string) error {
 	csr, err := readCSRFile(ctx.String("csr"))
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("%v\n", err)
+		return err
 	}
 
 	domain := csr.Subject.CommonName
@@ -191,7 +193,7 @@ func renewForCSR(ctx *cli.Context, client *lego.Client, certsStorage *Certificat
 	// as web servers would not be able to work with a combined file.
 	certificates, err := certsStorage.ReadCertificate(domain, ".crt")
 	if err != nil {
-		log.Fatalf("Error while loading the certificate for domain %s\n\t%v", domain, err)
+		log.Printf("Error while loading the certificate for domain %s\n\t%v", domain, err)
 	}
 
 	cert := certificates[0]
@@ -211,7 +213,7 @@ func renewForCSR(ctx *cli.Context, client *lego.Client, certsStorage *Certificat
 		AlwaysDeactivateAuthorizations: ctx.Bool("always-deactivate-authorizations"),
 	})
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("%v\n", err)
 	}
 
 	certsStorage.SaveResource(certRes)
@@ -225,7 +227,7 @@ func renewForCSR(ctx *cli.Context, client *lego.Client, certsStorage *Certificat
 
 func needRenewal(x509Cert *x509.Certificate, domain string, days int) bool {
 	if x509Cert.IsCA {
-		log.Fatalf("[%s] Certificate bundle starts with a CA certificate", domain)
+		log.Printf("[%s] Certificate bundle starts with a CA certificate", domain)
 	}
 
 	if days >= 0 {

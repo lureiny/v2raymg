@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -35,7 +36,7 @@ func (handler *BoundHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	rpcClient := client.NewEndNodeClient(nodes, localNode)
+	rpcClient := client.NewEndNodeClient(nodes, nil)
 
 	var req interface{} = nil
 	var reqType client.ReqToEndNodeType = -1
@@ -114,6 +115,10 @@ func (handler *BoundHandler) getHandlers() []gin.HandlerFunc {
 		getAuthHandlerFunc(handler.httpServer),
 		handler.handlerFunc,
 	}
+}
+
+func (handler *BoundHandler) getRelativePath() string {
+	return "/bound"
 }
 
 func (handler *BoundHandler) help() string {

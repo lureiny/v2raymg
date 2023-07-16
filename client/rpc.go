@@ -6,13 +6,13 @@ import (
 	"sync"
 
 	pb "github.com/golang/protobuf/proto"
-	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/cluster"
+	gc "github.com/lureiny/v2raymg/global/cluster"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"google.golang.org/grpc"
 )
-
-var logger = common.LoggerImp
 
 const MaxConcurrencyClientNum = 64
 
@@ -67,6 +67,8 @@ func init() {
 	registerReqToEndNodeFunc(TransferCertType, reqTransferCert)
 	// get certs
 	registerReqToEndNodeFunc(GetCertsType, reqGetCerts)
+	// clear users
+	registerReqToEndNodeFunc(ClearUsersType, reqClearUsers)
 }
 
 func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
@@ -77,13 +79,18 @@ func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
 var ch = make(chan struct{}, MaxConcurrencyClientNum)
 
 type EndNodeClient struct {
-	nodes     *[]*common.Node
-	localNode *common.LocalNode
+	nodes     *[]*cluster.Node
+	localNode *cluster.LocalNode
 }
 
-func NewEndNodeClient(nodes *[]*common.Node, localNode *common.LocalNode) *EndNodeClient {
-	if nodes == nil || localNode == nil {
+// NewEndNodeClient ...
+func NewEndNodeClient(nodes *[]*cluster.Node, localNode *cluster.LocalNode) *EndNodeClient {
+	if nodes == nil {
 		return nil
+	}
+
+	if localNode == nil {
+		localNode = gc.LocalNode
 	}
 	endNodeClient := &EndNodeClient{}
 	endNodeClient.nodes = nodes
@@ -448,6 +455,23 @@ func reqGetCerts(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, 
 	return rsp.GetCerts(), nil
 }
 
+func reqClearUsers(reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo) (interface{}, error) {
+	clearUsersReq := &proto.ClearUsersReq{}
+	if err := pb.Unmarshal(reqData, clearUsersReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to ClearUsersReq > %v", reqData, err)
+	}
+
+	clearUsersReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.ClearUsers(context.Background(), clearUsersReq, grpc.ForceCodec(&rpc.EncryptMessageCodec{}))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
 func getReqAndCallbakcFunc(reqType ReqToEndNodeType) ReqToEndNodeFunc {
 	if reqFunc, ok := reqFuncMap[reqType]; ok {
 		return reqFunc
@@ -477,7 +501,7 @@ func (c *EndNodeClient) ReqToMultiEndNodeServer(reqType ReqToEndNodeType, req in
 		}
 		ch <- struct{}{}
 		wg.Add(1)
-		go func(n *common.Node) {
+		go func(n *cluster.Node) {
 			defer func() {
 				<-ch
 				wg.Done()

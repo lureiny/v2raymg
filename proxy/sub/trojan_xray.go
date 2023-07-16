@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/lureiny/v2raymg/global/proxy"
 	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/xtls/xray-core/infra/conf"
 )
@@ -18,9 +19,13 @@ type TrojanShareConfig struct {
 	TransportConfig *VlessTransportConfig
 	TLSConfig       *VlessTLSConfig
 	NodeName        string
+	UseSNI          bool
 }
 
 func (c *TrojanShareConfig) Build() string {
+	if !c.UseSNI {
+		c.TLSConfig.SNI = ""
+	}
 	params := []string{c.ProtocolConfig.Build(), c.TransportConfig.Build(), c.TLSConfig.Build()}
 	if c.BaseConfig.Flow != "" {
 		params = append(params, fmt.Sprintf("flow=%s", c.BaseConfig.Flow))
@@ -86,7 +91,7 @@ func NewTrojanShareConfig(in *config.InboundDetourConfig, email string, host str
 
 	sharedConfig.TLSConfig = newTLSOrXTLSConfig(in.StreamSetting)
 
-	upstreamInbound, err := proxyManager.GetUpstreamInbound(fmt.Sprintf("%d", sharedConfig.BaseConfig.RemotePort))
+	upstreamInbound, err := proxy.GetUpstreamInbound(fmt.Sprintf("%d", sharedConfig.BaseConfig.RemotePort))
 	if err == nil {
 		// 如果有上游fallback的inbound, 需要替换对应的port和tls配置
 		sharedConfig.BaseConfig.RemotePort = upstreamInbound.PortRange

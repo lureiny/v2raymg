@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -38,8 +39,8 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	srcNodeRpcClient := client.NewEndNodeClient(srcNodes, localNode)
-	dstNodeRpcClient := client.NewEndNodeClient(dstNodes, localNode)
+	srcNodeRpcClient := client.NewEndNodeClient(srcNodes, nil)
+	dstNodeRpcClient := client.NewEndNodeClient(dstNodes, nil)
 
 	succList, failedList, _ := srcNodeRpcClient.ReqToMultiEndNodeServer(client.GetUsersReqType, &proto.GetUsersReq{})
 	if len(failedList) > 0 {
@@ -56,6 +57,8 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 	users := succList[parasMap["srcNode"]]
 	for _, u := range users.([]*proto.User) {
 		u.Tags = []string{}
+		u.Downlink = 0
+		u.Uplink = 0
 	}
 	_, failedList, _ = dstNodeRpcClient.ReqToMultiEndNodeServer(
 		client.AddUsersReqType,
@@ -78,14 +81,18 @@ func (handler *CopyUserBetweenNodesHandler) getHandlers() []gin.HandlerFunc {
 	}
 }
 
+func (handler *CopyUserBetweenNodesHandler) getRelativePath() string {
+	return "/copyUserBetweenNodes"
+}
+
 func (handler *CopyUserBetweenNodesHandler) help() string {
 	usage := `/copyUserBetweenNodes
 	节点间复制用户, 将源节点上的用户添加到目标节点的默认inbound上
-	请求示例: /copyUserBetweenNodes?src_target={src_target}&dst_target={dst_target}&token={token}
+	请求示例: /copyUserBetweenNodes?src_node={src_node}&dst_node={dst_node}&token={token}
 	参数列表: 
 	token: 用于验证操作权限
 	src_node: 源节点名称
-	dst_target: 目标节点名称
+	dst_node: 目标节点名称
 	`
 	return usage
 }

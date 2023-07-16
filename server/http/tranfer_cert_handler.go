@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/client"
+	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
@@ -56,7 +57,7 @@ func (handler *TransferCertHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
-	rpcClient := client.NewEndNodeClient(nodes, localNode)
+	rpcClient := client.NewEndNodeClient(nodes, nil)
 	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
 		client.TransferCertType,
 		&proto.TransferCertReq{
@@ -81,6 +82,10 @@ func (handler *TransferCertHandler) getHandlers() []gin.HandlerFunc {
 		getAuthHandlerFunc(handler.httpServer),
 		handler.handlerFunc,
 	}
+}
+
+func (handler *TransferCertHandler) getRelativePath() string {
+	return "/transferCert"
 }
 
 func (handler *TransferCertHandler) help() string {
