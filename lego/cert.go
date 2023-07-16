@@ -69,6 +69,9 @@ func paraseDomainCertFile(path, fileName string, obtainedByLocal bool) *Certific
 		return nil
 	}
 	domain := fileName[0 : len(fileName)-4]
+	if strings.HasPrefix(domain, "_.") {
+		domain = strings.ReplaceAll(domain, "_.", "*.")
+	}
 	if strings.HasSuffix(fileName, ".crt") && !strings.HasSuffix(fileName, ".issuer.crt") {
 		return &Certificate{
 			Domain:          domain,
@@ -229,6 +232,8 @@ func copyFile(srcName, dstName string) (int64, error) {
 }
 
 func (certManager *CertManager) ObtainNewCert(domain string) error {
+	logger.Info("Start obtain cert of domain[%s]", domain)
+	defer logger.Info("Obtain cert of domain[%s] end", domain)
 	certManager.certMutex.Lock()
 	defer certManager.certMutex.Unlock()
 	if _, ok := certManager.Certs[domain]; ok {

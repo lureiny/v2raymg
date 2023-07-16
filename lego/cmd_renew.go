@@ -165,6 +165,7 @@ func renewForDomains(ctx *cli.Context, client *lego.Client, certsStorage *Certif
 	certRes, err := client.Certificate.Obtain(request)
 	if err != nil {
 		log.Printf("%v\n", err)
+		return err
 	}
 
 	certsStorage.SaveResource(certRes)
@@ -182,6 +183,7 @@ func renewForCSR(ctx *cli.Context, client *lego.Client, certsStorage *Certificat
 	csr, err := readCSRFile(ctx.String("csr"))
 	if err != nil {
 		log.Printf("%v\n", err)
+		return err
 	}
 
 	domain := csr.Subject.CommonName
