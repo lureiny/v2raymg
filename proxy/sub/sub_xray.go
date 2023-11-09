@@ -52,7 +52,7 @@ func GetVmessSub(in *config.InboundDetourConfig, user, host, nodeName string, po
 	}
 	u.PS = nodeName
 	u.UseSNI = useSNI
-	return getVmessUri(u)
+	return GetVmessUri(u)
 }
 
 func GetTrojanSub(in *config.InboundDetourConfig, user, host, nodeName string, port uint32, useSNI bool) (string, error) {
@@ -65,7 +65,7 @@ func GetTrojanSub(in *config.InboundDetourConfig, user, host, nodeName string, p
 	return getTrojanUri(u)
 }
 
-func getVmessUri(u *VmessShareConfig) (string, error) {
+func GetVmessUri(u *VmessShareConfig) (string, error) {
 	if !u.UseSNI {
 		u.Sni = ""
 	}

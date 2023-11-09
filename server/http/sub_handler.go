@@ -84,12 +84,20 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 	for _, u := range succList {
 		uris = append(uris, u.([]string)...)
 	}
-
-	uri, err := converter.ConvertSubUri(strings.ToLower(userAgent), uris)
+	opts := getConvertOpts(c, parasMap["useSNI"] == "true")
+	uri, err := converter.ConvertSubUri(strings.ToLower(userAgent), uris, opts...)
 	if err != nil {
 		logger.Error("Err=%s|URI=%s", err.Error(), uri)
 	}
 	c.String(200, uri)
+}
+
+func getConvertOpts(c *gin.Context, useSNI bool) []converter.Opt {
+	opts := make([]converter.Opt, 0)
+	if getIpLocation(c.ClientIP()) == "Fujian" || !useSNI {
+		opts = append(opts, converter.WithOutSni())
+	}
+	return opts
 }
 
 func (handler *SubHandler) getHandlers() []gin.HandlerFunc {

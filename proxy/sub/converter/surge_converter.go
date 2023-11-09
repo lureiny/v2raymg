@@ -20,7 +20,10 @@ func (c *SurgeConverter) Name() string {
 	return surgeClientKeyWord
 }
 
-func (c *SurgeConverter) Convert(standardUris []string) (string, error) {
+func (c *SurgeConverter) Convert(standardUris []string, opts ...Opt) (string, error) {
+	for _, opt := range opts {
+		standardUris = opt(standardUris)
+	}
 	surgeSubUris := []string{}
 	for _, uri := range standardUris {
 		if strings.HasPrefix(uri, vlessUriHeader) {
@@ -100,6 +103,8 @@ func getSurgeTrojanUri(parsedUri *url.URL) string {
 
 	if parsedUri.Query().Get("sni") != "" {
 		surgeTrojanUriParts = append(surgeTrojanUriParts, fmt.Sprintf("sni=%s", parsedUri.Query().Get("sni")))
+	} else {
+		surgeTrojanUriParts = append(surgeTrojanUriParts, "skip-cert-verify=true")
 	}
 
 	return strings.Join(surgeTrojanUriParts, ", ")

@@ -29,7 +29,10 @@ func (c *ClashConverter) Name() string {
 	return clashClientKeyWord
 }
 
-func (c *ClashConverter) Convert(standardUris []string) (string, error) {
+func (c *ClashConverter) Convert(standardUris []string, opts ...Opt) (string, error) {
+	for _, opt := range opts {
+		standardUris = opt(standardUris)
+	}
 	// 1. parse uri to ClashProxy
 	// 2. downlaod and unmarshal template
 	// 3. marshal config
