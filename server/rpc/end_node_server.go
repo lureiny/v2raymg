@@ -908,7 +908,7 @@ func newInbound(fastAddInboundReq *proto.FastAddInboundReq, c *lego.CertManager)
 	}
 	streamBuilder.Mutex.Lock()
 	defer streamBuilder.Mutex.Unlock()
-	streamBuilder.Init(fastAddInboundReq.GetDomain(), c, fastAddInboundReq.GetIsXtls())
+	streamBuilder.Init(fastAddInboundReq.GetDomain(), c, fastAddInboundReq.GetIsReality())
 	inboundConfig := config.InboundDetourConfig{}
 	inboundConfig.StreamSetting = streamBuilder.Build()
 	inboundConfig.Protocol = inboundBuilder.GetProtocol()

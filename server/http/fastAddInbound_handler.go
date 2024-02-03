@@ -21,7 +21,7 @@ func (handler *FastAddInboundHandler) parseParam(c *gin.Context) map[string]stri
 	parasMap["protocol"] = c.DefaultQuery("protocol", "vless")
 	parasMap["port"] = c.DefaultQuery("port", "0")
 	parasMap["stream"] = c.DefaultQuery("stream", "tcp")
-	parasMap["isXtls"] = c.DefaultQuery("isXtls", "false")
+	parasMap["isReality"] = c.DefaultQuery("isReality", "false")
 	parasMap["domain"] = c.DefaultQuery("domain", "")
 	return parasMap
 }
@@ -87,7 +87,7 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		StreamBuilderType:  getBuilderType(parasMap["stream"]),
 		Port:               int32(port),
 		Domain:             parasMap["domain"],
-		IsXtls:             parasMap["isXtls"] == "true",
+		IsReality:          parasMap["isReality"] == "true",
 		Tag:                parasMap["tag"],
 	})
 	if len(failedList) != 0 {

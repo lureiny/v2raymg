@@ -18,7 +18,7 @@ import (
 	"github.com/xtls/xray-core/proxy/trojan"
 	"github.com/xtls/xray-core/proxy/vless"
 	"github.com/xtls/xray-core/proxy/vmess"
-	"google.golang.org/protobuf/runtime/protoiface"
+	"google.golang.org/protobuf/proto"
 )
 
 type User struct {
@@ -27,7 +27,7 @@ type User struct {
 	Email    string // 必填
 	AlterId  uint32
 	UUID     string
-	Account  protoiface.MessageV1
+	Account  proto.Message
 	Protocol string
 	IsXtls   bool
 	Flow     string // for xtls
@@ -39,6 +39,8 @@ const (
 	VmessProtocolName  = "vmess"
 
 	XTLSName = "xtls"
+
+	RealityFlow = "xtls-rprx-vision"
 )
 
 type UserOption func(*User)
@@ -90,7 +92,6 @@ func SetUserAccount(user *User) error {
 	case VmessProtocolName:
 		user.Account = &vmess.Account{
 			Id:               user.UUID,
-			AlterId:          user.AlterId,
 			SecuritySettings: &protocol.SecurityConfig{Type: protocol.SecurityType_AUTO},
 		}
 	case VlessProtocolName:
@@ -98,17 +99,13 @@ func SetUserAccount(user *User) error {
 			Id: user.UUID,
 		}
 		if user.IsXtls {
-			user.Flow = "xtls-rprx-direct"
+			user.Flow = RealityFlow
 			vlessAccount.Flow = user.Flow
 		}
 		user.Account = vlessAccount
 	case TrojanProtocolName:
 		trojanAccount := &trojan.Account{
 			Password: user.UUID,
-		}
-		if user.IsXtls {
-			user.Flow = "xtls-rprx-direct"
-			trojanAccount.Flow = user.Flow
 		}
 		user.Account = trojanAccount
 	default:

@@ -218,7 +218,7 @@ message FastAddInboundReq {
     BuilderType streamBuilderType = 3;
     int32 port = 4;
     string domain = 5;
-    bool isXtls = 6;
+    bool isReality = 6;
     string tag = 7;
 }
 

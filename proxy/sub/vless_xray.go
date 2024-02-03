@@ -96,13 +96,13 @@ func NewVlessShareConfig(in *config.InboundDetourConfig, email string, host stri
 	}
 	sharedConfig.TransportConfig = t
 
-	sharedConfig.TLSConfig = newTLSOrXTLSConfig(in.StreamSetting)
+	sharedConfig.TLSConfig = newTLSOrRealityConfig(in.StreamSetting)
 
 	upstreamInbound, err := proxy.GetUpstreamInbound(fmt.Sprintf("%d", sharedConfig.BaseConfig.RemotePort))
 	if err == nil {
 		// 如果有上游fallback的inbound, 需要替换对应的port和tls配置
 		sharedConfig.BaseConfig.RemotePort = upstreamInbound.PortRange
-		sharedConfig.TLSConfig = newTLSOrXTLSConfig(upstreamInbound.StreamSetting)
+		sharedConfig.TLSConfig = newTLSOrRealityConfig(upstreamInbound.StreamSetting)
 	}
 
 	// 根据sni和host设置remote host

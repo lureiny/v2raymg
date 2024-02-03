@@ -16,9 +16,11 @@ import (
 )
 
 const (
-	chacha20     = "chacha20-poly1395"
-	SecurityXTLS = "xtls"
-	SecurityTLS  = "tls"
+	chacha20        = "chacha20-poly1395"
+	SecurityReality = "reality"
+	SecurityTLS     = "tls"
+
+	realityDest = "news.ycombinator.com:443"
 )
 
 var inboundSettingBuilders = map[proto.BuilderType]*InboundSettingBuilderWithMutex{}
@@ -106,18 +108,19 @@ func NewTLSConfig(domain string, certManager *lego.CertManager) *conf.TLSConfig 
 	return tlsConfig
 }
 
-func NewXTLSConfig(domain string, certManager *lego.CertManager) *conf.XTLSConfig {
-	xtlsConfig := &conf.XTLSConfig{}
-	xtlsConfig.ServerName = domain
-	xtlsConfig.Certs = make([]*conf.XTLSCertConfig, 0)
-	certificate := certManager.GetCert(domain)
-	if certificate != nil {
-		xtlsConfig.Certs = append(xtlsConfig.Certs, &conf.XTLSCertConfig{
-			CertFile: certificate.CertificateFile,
-			KeyFile:  certificate.KeyFile,
-		})
+func NewRealityConfig(domain string, certManager *lego.CertManager) *conf.REALITYConfig {
+	realityConfig := &conf.REALITYConfig{
+		Dest: json.RawMessage(realityDest),
 	}
-	return xtlsConfig
+	realityConfig.Dest = json.RawMessage(domain)
+	realityConfig.ServerNames = []string{domain}
+	keys, err := genx25591()
+	if err != nil {
+		return realityConfig
+	}
+	realityConfig.PrivateKey = keys[0]
+	realityConfig.ShortIds = []string{"0"}
+	return realityConfig
 }
 
 func NewRandomStringWithTime() string {
@@ -127,10 +130,10 @@ func NewRandomStringWithTime() string {
 	return fmt.Sprintf("%x", data)
 }
 
-func FullTlsXtlsConfig(streamConfig *conf.StreamConfig, domain string, certManager *lego.CertManager, isXtls bool) {
-	if isXtls {
-		streamConfig.Security = SecurityXTLS
-		streamConfig.XTLSSettings = NewXTLSConfig(domain, certManager)
+func FullTlsRealityConfig(streamConfig *conf.StreamConfig, domain string, certManager *lego.CertManager, isReality bool) {
+	if isReality {
+		streamConfig.Security = SecurityReality
+		streamConfig.REALITYSettings = NewRealityConfig(domain, certManager)
 	} else {
 		streamConfig.Security = SecurityTLS
 		streamConfig.TLSSettings = NewTLSConfig(domain, certManager)
@@ -140,7 +143,7 @@ func FullTlsXtlsConfig(streamConfig *conf.StreamConfig, domain string, certManag
 type TCPBuilder struct {
 	Domain      string
 	CertManager *lego.CertManager
-	IsXtls      bool
+	IsReality   bool
 }
 
 func (b *TCPBuilder) Build() *conf.StreamConfig {
@@ -148,20 +151,20 @@ func (b *TCPBuilder) Build() *conf.StreamConfig {
 	transportProtocol := (conf.TransportProtocol)("tcp")
 	streamConfig.Network = &transportProtocol
 	streamConfig.TCPSettings = nil
-	FullTlsXtlsConfig(streamConfig, b.Domain, b.CertManager, b.IsXtls)
+	FullTlsRealityConfig(streamConfig, b.Domain, b.CertManager, b.IsReality)
 	return streamConfig
 }
 
-func (b *TCPBuilder) Init(domain string, c *lego.CertManager, isXtls bool) {
+func (b *TCPBuilder) Init(domain string, c *lego.CertManager, isReality bool) {
 	b.Domain = domain
 	b.CertManager = c
-	b.IsXtls = isXtls
+	b.IsReality = isReality
 }
 
 type WSBuilder struct {
 	Domain      string
 	CertManager *lego.CertManager
-	IsXtls      bool
+	IsReality   bool
 }
 
 func NewWebSocketHeaders() map[string]string {
@@ -179,14 +182,14 @@ func (b *WSBuilder) Build() *conf.StreamConfig {
 		Path:    "/" + NewRandomStringWithTime(),
 		Headers: NewWebSocketHeaders(),
 	}
-	FullTlsXtlsConfig(streamConfig, b.Domain, b.CertManager, b.IsXtls)
+	FullTlsRealityConfig(streamConfig, b.Domain, b.CertManager, b.IsReality)
 	return streamConfig
 }
 
-func (b *WSBuilder) Init(domain string, c *lego.CertManager, isXtls bool) {
+func (b *WSBuilder) Init(domain string, c *lego.CertManager, IsReality bool) {
 	b.Domain = domain
 	b.CertManager = c
-	b.IsXtls = isXtls
+	b.IsReality = IsReality
 }
 
 func NewFakeHeader() json.RawMessage {
@@ -196,7 +199,7 @@ func NewFakeHeader() json.RawMessage {
 type QuicBuilder struct {
 	Domain      string
 	CertManager *lego.CertManager
-	IsXtls      bool
+	IsReality   bool
 }
 
 func (b *QuicBuilder) Build() *conf.StreamConfig {
@@ -208,20 +211,20 @@ func (b *QuicBuilder) Build() *conf.StreamConfig {
 		Key:      NewRandomStringWithTime(),
 		Header:   NewFakeHeader(),
 	}
-	FullTlsXtlsConfig(streamConfig, b.Domain, b.CertManager, b.IsXtls)
+	FullTlsRealityConfig(streamConfig, b.Domain, b.CertManager, b.IsReality)
 	return streamConfig
 }
 
-func (b *QuicBuilder) Init(domain string, c *lego.CertManager, isXtls bool) {
+func (b *QuicBuilder) Init(domain string, c *lego.CertManager, IsReality bool) {
 	b.Domain = domain
 	b.CertManager = c
-	b.IsXtls = isXtls
+	b.IsReality = IsReality
 }
 
 type MkcpBuilder struct {
 	Domain      string
 	CertManager *lego.CertManager
-	IsXtls      bool
+	IsReality   bool
 }
 
 func (b *MkcpBuilder) Build() *conf.StreamConfig {
@@ -235,20 +238,20 @@ func (b *MkcpBuilder) Build() *conf.StreamConfig {
 		HeaderConfig: NewFakeHeader(),
 		Seed:         &seed,
 	}
-	FullTlsXtlsConfig(streamConfig, b.Domain, b.CertManager, b.IsXtls)
+	FullTlsRealityConfig(streamConfig, b.Domain, b.CertManager, b.IsReality)
 	return streamConfig
 }
 
-func (b *MkcpBuilder) Init(domain string, c *lego.CertManager, isXtls bool) {
+func (b *MkcpBuilder) Init(domain string, c *lego.CertManager, IsReality bool) {
 	b.Domain = domain
 	b.CertManager = c
-	b.IsXtls = isXtls
+	b.IsReality = IsReality
 }
 
 type GrpcBuilder struct {
 	Domain      string
 	CertManager *lego.CertManager
-	IsXtls      bool
+	IsReality   bool
 }
 
 func (b *GrpcBuilder) Build() *conf.StreamConfig {
@@ -258,20 +261,20 @@ func (b *GrpcBuilder) Build() *conf.StreamConfig {
 	streamConfig.GRPCConfig = &conf.GRPCConfig{
 		ServiceName: NewRandomStringWithTime(),
 	}
-	FullTlsXtlsConfig(streamConfig, b.Domain, b.CertManager, b.IsXtls)
+	FullTlsRealityConfig(streamConfig, b.Domain, b.CertManager, b.IsReality)
 	return streamConfig
 }
 
-func (b *GrpcBuilder) Init(domain string, c *lego.CertManager, isXtls bool) {
+func (b *GrpcBuilder) Init(domain string, c *lego.CertManager, IsReality bool) {
 	b.Domain = domain
 	b.CertManager = c
-	b.IsXtls = isXtls
+	b.IsReality = IsReality
 }
 
 type HttpBuilder struct {
 	Domain      string
 	CertManager *lego.CertManager
-	IsXtls      bool
+	IsReality   bool
 }
 
 func (b *HttpBuilder) Build() *conf.StreamConfig {
@@ -285,14 +288,14 @@ func (b *HttpBuilder) Build() *conf.StreamConfig {
 		Path: "/" + NewRandomStringWithTime(),
 		Host: (*conf.StringList)(&hosts),
 	}
-	FullTlsXtlsConfig(streamConfig, b.Domain, b.CertManager, b.IsXtls)
+	FullTlsRealityConfig(streamConfig, b.Domain, b.CertManager, b.IsReality)
 	return streamConfig
 }
 
-func (b *HttpBuilder) Init(domain string, c *lego.CertManager, isXtls bool) {
+func (b *HttpBuilder) Init(domain string, c *lego.CertManager, IsReality bool) {
 	b.Domain = domain
 	b.CertManager = c
-	b.IsXtls = isXtls
+	b.IsReality = IsReality
 }
 
 func init() {

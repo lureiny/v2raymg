@@ -6,11 +6,18 @@ import (
 	"strings"
 
 	"github.com/xtls/xray-core/infra/conf"
+	"golang.org/x/crypto/curve25519"
+)
+
+const (
+	defaultFingerPrint = "chrome"
 )
 
 type VlessTLSConfig struct {
 	SNI  string
 	ALPN string
+	FP   string
+	PBK  string
 }
 
 func (c *VlessTLSConfig) Build() string {
@@ -21,10 +28,16 @@ func (c *VlessTLSConfig) Build() string {
 	if len(c.ALPN) > 0 {
 		params = append(params, "alpn="+c.ALPN)
 	}
+	if len(c.FP) > 0 {
+		params = append(params, "fp="+c.FP)
+	}
+	if len(c.PBK) > 0 {
+		params = append(params, "pbk="+c.PBK)
+	}
 	return strings.Join(params, "&")
 }
 
-func newTLSOrXTLSConfig(s *conf.StreamConfig) *VlessTLSConfig {
+func newTLSOrRealityConfig(s *conf.StreamConfig) *VlessTLSConfig {
 	tlsConfig := &VlessTLSConfig{}
 	switch strings.ToLower(s.Security) {
 	case "tls":
@@ -34,13 +47,10 @@ func newTLSOrXTLSConfig(s *conf.StreamConfig) *VlessTLSConfig {
 			}
 			tlsConfig.SNI = s.TLSSettings.ServerName
 		}
-	case "xtls":
-		if s.XTLSSettings != nil {
-			if s.XTLSSettings.ALPN != nil {
-				tlsConfig.ALPN = strings.Join(*s.XTLSSettings.ALPN, ",")
-			}
-			tlsConfig.SNI = s.XTLSSettings.ServerName
-		}
+	case "reality":
+		tlsConfig.FP = defaultFingerPrint
+		pbk, _ := curve25519.X25519([]byte(s.REALITYSettings.PrivateKey), curve25519.Basepoint)
+		tlsConfig.PBK = string(pbk)
 	}
 	return tlsConfig
 }

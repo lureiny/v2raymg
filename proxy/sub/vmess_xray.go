@@ -146,7 +146,7 @@ func parseVmessAccountInfo(in *config.InboundDetourConfig, email string, sharedC
 		account := new(conf.VMessAccount)
 		json.Unmarshal(rawData, account)
 		sharedConfig.ID = account.ID
-		sharedConfig.Aid = fmt.Sprint(account.AlterIds)
+		sharedConfig.Aid = fmt.Sprint(0)
 		return nil
 
 	}
@@ -161,9 +161,6 @@ func insertVmessTlsSetting(v *VmessShareConfig, streamSetting *conf.StreamConfig
 	case "tls":
 		v.TLS = "tls"
 		v.Sni = streamSetting.TLSSettings.ServerName
-	case "xtls":
-		v.TLS = "xtls"
-		v.Sni = streamSetting.XTLSSettings.ServerName
 	default:
 		return fmt.Errorf("Unsupport Security protocol %s", streamSetting.Security)
 	}
