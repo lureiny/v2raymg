@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lureiny/v2raymg/global/logger"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"github.com/urfave/cli/v2"
 )

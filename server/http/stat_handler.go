@@ -2,8 +2,8 @@ package http
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/lureiny/v2raymg/client"
-	"github.com/lureiny/v2raymg/global/logger"
+	client "github.com/lureiny/v2raymg/client/rpc"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -30,10 +30,7 @@ func (handler *StatHandler) handlerFunc(c *gin.Context) {
 	rpcClient := client.NewEndNodeClient(nodes, nil)
 	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
 		client.GetBandWidthStatsReqType,
-		&proto.GetBandwidthStatsReq{
-			Pattern: parasMap["pattern"],
-			Reset_:  parasMap["reset"] == "1",
-		},
+		&proto.GetBandwidthStatsReq{},
 	)
 
 	if len(succList) > 0 {

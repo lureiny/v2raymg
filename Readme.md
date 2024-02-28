@@ -236,68 +236,51 @@ make xray  #  构建xray版本
 
 ## 配置文件说明
 
-```json
-{
-  "cluster": {
-    "center_node": { // 中心节点相关配置
-      "host": "localhost",
-      "port": 0 // 为0时不会使用中心节点
-    },
-    "token": "", // 集群内节点间验证用的token, 可以为空, 但不建议设置为空
-    "name": "test", // 集群名字, 相同集群的节点需要具有相同集群名称
-    "nodes": [ // 集群内其他节点信息, 不使用中心节点时可以使用此种方式搭建集群, 只要集群中不存在孤岛节点, 集群内的节点即可全部互相感知
-      {
-        "name": "node1", // 节点名称, 不可以重名
-        "port": 10000,
-        "host": "127.0.0.1"
-      }
-    ]
-  },
-  "proxy": {
-    "config_file": "/usr/local/etc/xray/config.json", // xray/v2ray配置文件路径
-    "default_tags": [
-      "vless"
-    ], // 默认操作的inbound  tag, 为空时会在全部外部inbound上操作
-    "host": "127.0.0.1", // 本地的ip/host, 生成订阅时需要用到
-    "port": 443, // proxy的端口, 不填时会使用proxy config中的监听端口, 不支持port range
-    "version": "", // v2ray/xray server端版本, 默认为最新版
-    "adaptive": { // 自适应配置
-      "ports": [
-        10000,
-        "20000-21000"
-      ], // 端口范围, 自动更换时会从该端口范围内随机选择一个
-      "tags": [
-        "vless"
-      ], // 需要自动更换端口的inbound tag
-      "cron": "0 5 * * *" // 自动更换端口任务的执行周期规则, 采用cron进行调度, 默认为"0 5 * * *"
-    }
-  },
-  "server": {
-    "http": {
-      "port": 23155, // http服务监听端口
-      "token": "iiiii", // 访问http服务时的token, 每个节点的token可以不同
-      "support_prometheus": true
-    },
-    "listen": "0.0.0.0", // http与rpc服务监听地址
-    "name": "end_node1", // 本地节点名称
-    "rpc": {
-      "only_gateway": false, // 为true时表示当前节点仅负责转发, 不负责proxy管理等工作
-      "port": 23156, // 本地监听的rpc端口
-      "type": "end" // 节点类型, center|end
-    }
-  },
-  "cert": {
-    "email": "test@gmail.com",
-    "secrets": { // dns api访问tokens, 参见https://go-acme.github.io/lego/dns/
-      "key": "key",
-      "secret": "secert" 
-    },
-    "path": "/root/acme_test/", // cert存储路径
-    "dns_provider": "alidns", // dns服务名称, 参见https://go-acme.github.io/lego/dns/
-	"args": [] // lego额外参数
-  },
-  "users": {
-    "user1": "passwd1|0" // 用户列表 key = {user name}, value = {passwrod}|{expire time}, expire time为过期时间的时间戳, 0时表示不过期,
-  }
-}
+```yaml
+cluster: # 中心节点相关配置
+  center_node:
+    host: localhost
+    port: 0 # 为0时不会使用中心节点
+  token: "" # 集群内节点间验证用的token, 可以为空, 但不建议设置为空
+  name: test # 集群名字, 相同集群的节点需要具有相同集群名称
+  nodes: #  集群内其他节点信息, 不使用中心节点时可以使用此种方式搭建集群, 只要集群中不存在孤岛节点, 集群内的节点即可全部互相感知
+    - name: node1 # 节点名称, 不可以重名
+      port: 10000
+      host: 127.0.0.1
+proxy:
+  config_file: "/usr/local/etc/xray/config.json" #  xray/v2ray配置文件路径
+  default_tags: # 默认操作的inbound  tag, 为空时会在全部外部inbound上操作
+    - vless
+  host: 127.0.0.1 # 本地的ip/host, 生成订阅时需要用到
+  port: 443 # proxy的端口, 不填时会使用proxy config中的监听端口, 不支持port range
+  version: "" #  v2ray/xray server端版本, 默认为最新版
+  adaptive: # 自适应配置
+    ports: # 端口范围, 自动更换时会从该端口范围内随机选择一个
+      - 10000
+      - 20000-21000
+    tags: # 需要自动更换端口的inbound tag
+      - vless
+    cron: 0 5 * * * # 自动更换端口任务的执行周期规则, 采用cron进行调度, 默认为"0 5 * * *"
+server:
+  http:
+    port: 23155 # http服务监听端口
+    token: iiiii # 访问http服务时的token, 每个节点的token可以不同
+    support_prometheus: true
+  listen: 0.0.0.0 # http与rpc服务监听地址
+  name: end_node1 # 本地节点名称
+  rpc:
+    only_gateway: false # 为true时表示当前节点仅负责转发, 不负责proxy管理等工作
+    port: 23156 # 本地监听的rpc端口
+    type: end # 节点类型, center|end
+cert:
+  email: test@gmail.com
+  secrets: # dns api访问tokens, 参见https://go-acme.github.io/lego/dns/
+    key: key
+    secret: secert
+  path: "/root/acme_test/" # cert存储路径
+  dns_provider: alidns # dns服务名称, 参见https://go-acme.github.io/lego/dns/
+  args: [] # lego额外参数
+users:
+  user1: passwd1|0 # 用户列表 key = {user name}, value = {passwrod}|{expire time}, expire time为过期时间的时间戳, 0时表示不过期
+
 ```

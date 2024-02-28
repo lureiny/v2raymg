@@ -8,8 +8,8 @@ import (
 
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/lego"
-	"github.com/go-acme/lego/v4/log"
 	"github.com/go-acme/lego/v4/registration"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/urfave/cli/v2"
 )
 
@@ -22,10 +22,10 @@ func createRun() *cli.Command {
 			hasDomains := len(ctx.StringSlice("domains")) > 0
 			hasCsr := len(ctx.String("csr")) > 0
 			if hasDomains && hasCsr {
-				log.Printf("Please specify either --domains/-d or --csr/-c, but not both")
+				logger.Debug("Please specify either --domains/-d or --csr/-c, but not both")
 			}
 			if !hasDomains && !hasCsr {
-				log.Printf("Please specify --domains/-d (or --csr/-c if you already have a CSR)")
+				logger.Debug("Please specify --domains/-d (or --csr/-c if you already have a CSR)")
 			}
 			return nil
 		},
@@ -77,13 +77,13 @@ func run(ctx *cli.Context) error {
 	if account.Registration == nil {
 		reg, err := register(ctx, client)
 		if err != nil {
-			log.Printf("Could not complete registration\n\t%v", err)
+			logger.Error("Could not complete registration\n\t%v", err)
 			return err
 		}
 
 		account.Registration = reg
 		if err = accountsStorage.Save(account); err != nil {
-			log.Printf("%v\n", err)
+			logger.Error("%v\n", err)
 			return err
 		}
 
@@ -97,7 +97,7 @@ func run(ctx *cli.Context) error {
 	if err != nil {
 		// Make sure to return a non-zero exit code if ObtainSANCertificate returned at least one error.
 		// Due to us not returning partial certificate we can just exit here instead of at the end.
-		log.Printf("Could not obtain certificates:\n\t%v", err)
+		logger.Error("Could not obtain certificates:\n\t%v", err)
 		return err
 	}
 
@@ -120,13 +120,13 @@ func handleTOS(ctx *cli.Context, client *lego.Client) bool {
 	}
 
 	reader := bufio.NewReader(os.Stdin)
-	log.Printf("Please review the TOS at %s", client.GetToSURL())
+	logger.Debug("Please review the TOS at %s", client.GetToSURL())
 
 	for {
 		fmt.Println("Do you accept the TOS? Y/n")
 		text, err := reader.ReadString('\n')
 		if err != nil {
-			log.Printf("Could not read from console: %v", err)
+			logger.Error("Could not read from console: %v", err)
 		}
 
 		text = strings.Trim(text, "\r\n")
@@ -144,7 +144,7 @@ func handleTOS(ctx *cli.Context, client *lego.Client) bool {
 func register(ctx *cli.Context, client *lego.Client) (*registration.Resource, error) {
 	accepted := handleTOS(ctx, client)
 	if !accepted {
-		log.Printf("You did not accept the TOS. Unable to proceed.")
+		logger.Debug("You did not accept the TOS. Unable to proceed.")
 	}
 
 	if ctx.Bool("eab") {
@@ -152,7 +152,7 @@ func register(ctx *cli.Context, client *lego.Client) (*registration.Resource, er
 		hmacEncoded := ctx.String("hmac")
 
 		if kid == "" || hmacEncoded == "" {
-			log.Printf("Requires arguments --kid and --hmac.")
+			logger.Debug("Requires arguments --kid and --hmac.")
 		}
 
 		return client.Registration.RegisterWithExternalAccountBinding(registration.RegisterEABOptions{

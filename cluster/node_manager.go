@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/global/config"
-	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 

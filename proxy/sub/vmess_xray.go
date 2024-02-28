@@ -14,19 +14,19 @@ import (
 
 // https://github.com/2dust/v2rayN/wiki/%E5%88%86%E4%BA%AB%E9%93%BE%E6%8E%A5%E6%A0%BC%E5%BC%8F%E8%AF%B4%E6%98%8E(ver-2)
 type VmessShareConfig struct {
-	V      string `json:"v"`
-	PS     string `json:"ps"`
+	V      string `json:"v,omitempty"`
+	PS     string `json:"ps,omitempty"`
 	Add    string `json:"add"`
 	Port   string `json:"port"`
 	ID     string `json:"id"`
-	Aid    string `json:"aid"`
-	Scy    string `json:"scy"`
+	Aid    uint16 `json:"aid"`
+	Scy    string `json:"scy,omitempty"`
 	Net    string `json:"net"`
 	Type   string `json:"type"`
-	Host   string `json:"host"`
-	Path   string `json:"path"`
+	Host   string `json:"host,omitempty"`
+	Path   string `json:"path,omitempty"`
 	TLS    string `json:"tls"`
-	Sni    string `json:"sni"`
+	Sni    string `json:"sni,omitempty"`
 	UseSNI bool   `json:"-"`
 }
 
@@ -146,7 +146,7 @@ func parseVmessAccountInfo(in *config.InboundDetourConfig, email string, sharedC
 		account := new(conf.VMessAccount)
 		json.Unmarshal(rawData, account)
 		sharedConfig.ID = account.ID
-		sharedConfig.Aid = fmt.Sprint(account.AlterIds)
+		sharedConfig.Aid = account.AlterIds
 		return nil
 
 	}

@@ -3,12 +3,13 @@ package converter
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/url"
 	"strconv"
 	"strings"
 
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/proxy/sub"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -125,11 +126,11 @@ func getClashProxies(standardUris []string) []*ClashProxy {
 			// clash不支持vless
 			continue
 		} else if strings.HasPrefix(uri, vmessUriHeader) {
-			rawUri := decodeStandardUri(uri)
+			rawUri := decodeVmessStandardUri(uri)
 			vmessShareConfig := sub.NewDefaultVmessShareConfig()
 			err := json.Unmarshal([]byte(rawUri), vmessShareConfig)
 			if err != nil {
-				log.Printf("parse vmess shared config err > %v\n", err)
+				logger.Error("parse vmess shared config err > %v", err)
 				continue
 			}
 			if clashProxy := getClashVmessUri(vmessShareConfig); clashProxy != nil {
@@ -139,10 +140,28 @@ func getClashProxies(standardUris []string) []*ClashProxy {
 		} else if strings.HasPrefix(uri, trojanUriHeader) {
 			u, err := url.Parse(uri)
 			if err != nil {
-				log.Printf("parse trojan shared uri err > %v\n", err)
+				logger.Error("parse trojan shared uri err > %v", err)
 				continue
 			}
 			if clashProxy := getClashTrojanUri(u); clashProxy != nil {
+				clashProxies = append(clashProxies, clashProxy)
+			}
+			// } else if strings.HasPrefix(uri, hysteriaUriHeader) {
+			// 	u, err := url.Parse(uri)
+			// 	if err != nil {
+			// 		logger.Error("parse trojan shared uri err > %v\n", err)
+			// 		continue
+			// 	}
+			// 	if clashProxy := getClashHysteriaUri(u); clashProxy != nil {
+			// 		clashProxies = append(clashProxies, clashProxy)
+			// 	}
+		} else if strings.HasPrefix(uri, shadowsockesUriHeader) {
+			u, err := url.Parse(uri)
+			if err != nil {
+				logger.Error("parse shadowsocks shared uri[%s] err > %v", uri, err)
+				continue
+			}
+			if clashProxy := getClashSSUri(u); clashProxy != nil {
 				clashProxies = append(clashProxies, clashProxy)
 			}
 		}
@@ -168,7 +187,7 @@ func getClashTrojanUri(parsedUri *url.URL) *ClashProxy {
 	if transferType == wsNet {
 		clashProxy.Network = wsNet
 		if parsedUri.Query().Get("path") == "" {
-			log.Printf("Err=trojan ws path is empty\n")
+			logger.Error("Err=trojan ws path is empty")
 			return nil
 		}
 		clashProxy.WSOpts = &WSOpts{
@@ -189,6 +208,35 @@ func getClashTrojanUri(parsedUri *url.URL) *ClashProxy {
 	} else {
 		return nil
 	}
+	return clashProxy
+}
+
+func getClashHysteriaUri(parsedUri *url.URL) *ClashProxy {
+	clashProxy := &ClashProxy{}
+	clashProxy.Name = fmt.Sprintf("🌿 TROJAN_%s", parsedUri.Fragment)
+	clashProxy.Type = "hysteria"
+	clashProxy.Server = parsedUri.Hostname()
+	clashProxy.Port, _ = strconv.Atoi(parsedUri.Port())
+	clashProxy.Password = parsedUri.User.Username()
+	if parsedUri.Query().Get("sni") != "" {
+		clashProxy.SNI = parsedUri.Query().Get("sni")
+	}
+	return clashProxy
+}
+
+func getClashSSUri(parsedUri *url.URL) *ClashProxy {
+	method, port, password, server, err := decodeShadowsocksUrl(parsedUri)
+	if err != nil {
+		logger.Error("parse ss uri fail > err: %v", err)
+		return nil
+	}
+	clashProxy := &ClashProxy{}
+	clashProxy.Name = fmt.Sprintf("🌿 SS_%s", parsedUri.Fragment)
+	clashProxy.Type = "ss"
+	clashProxy.Server = server
+	clashProxy.Port, _ = strconv.Atoi(port)
+	clashProxy.Password = password
+	clashProxy.Cipher = method
 	return clashProxy
 }
 

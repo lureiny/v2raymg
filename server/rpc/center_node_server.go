@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	gc "github.com/lureiny/v2raymg/global/config"
-	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server"
 
 	c "github.com/lureiny/v2raymg/cluster"
@@ -106,7 +106,7 @@ func (s *CenterNodeServer) filter() {
 func (s *CenterNodeServer) Init() {
 	s.Host = gc.GetString(common.ConfigServerListen)
 	s.Port = gc.GetInt(common.ConfigServerRpcPort)
-	s.Type = "Center"
+	s.Type = common.CenterNodeType
 	serverName := gc.GetString(common.ConfigServerName)
 	accessHost := gc.GetString(common.ConfigProxyHost)
 	if serverName == "" {
@@ -116,7 +116,7 @@ func (s *CenterNodeServer) Init() {
 	s.clusters.Init()
 	logger.SetLogLevel(0)
 	logger.SetServerName(serverName)
-	logger.SetNodeType("Center")
+	logger.SetNodeType(s.Type)
 }
 
 func (s *CenterNodeServer) Start() {

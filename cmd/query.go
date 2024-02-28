@@ -45,9 +45,9 @@ func queryStats(cmd *cobra.Command, args []string) {
 		log.Fatal(err)
 	}
 
-	if len(*statsResult) > 0 {
+	if len(statsResult) > 0 {
 		fmt.Printf("%20s%21s%21s\n", "User", "Downlink", "Uplink")
-		for key, value := range *statsResult {
+		for key, value := range statsResult {
 			if value.Type != "user" {
 				continue
 			}

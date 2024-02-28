@@ -97,8 +97,6 @@ message RegisterNodeRsp {
 
 message GetBandwidthStatsReq {
     NodeAuthInfo node_auth_info = 1;
-    string pattern = 2;
-    bool reset = 3;
 }
 
 message Stats {
@@ -106,6 +104,9 @@ message Stats {
     string type = 2;
     int64 downlink = 3;
     int64 uplink = 4;
+    string proxy = 5; // proxy name
+    string source = 6;
+    // int64 timestamp = 7; // 记录统计的时间
 }
 
 message GetBandwidthStatsRsp {
@@ -265,6 +266,33 @@ message ClearUsersRsp {
     string msg = 2;
 }
 
+message PingMetric {
+    string host = 1; // ip or domain
+    string source = 2;
+    repeated PingResult results = 3;
+}
+
+message PingResult {
+    string geo = 1; // location
+    string isp = 2; // provider
+    float max_delay = 10;
+    float min_delay = 11;
+    float st_dev_delay = 12;
+    float avg_delay = 13;
+    float loss = 14; // 丢包率
+    float latest_delay = 15;
+}
+
+message GetPingMetricReq {
+    NodeAuthInfo node_auth_info = 1;
+}
+
+message GetPingMetricRsp {
+    int32 code = 1;
+    string msg = 2;
+    PingMetric metric = 3;
+}
+
 service EndNodeAccess {
     // user
     rpc GetUsers(GetUsersReq) returns (GetUsersRsp) {}
@@ -301,6 +329,9 @@ service EndNodeAccess {
     rpc ObtainNewCert(ObtainNewCertReq) returns (ObtainNewCertRsp) {}
     rpc TransferCert(TransferCertReq) returns (TransferCertRsp) {}
     rpc GetCerts(GetCertsReq) returns (GetCertsRsp) {}
+
+    /// metric
+    rpc GetPingMetric(GetPingMetricReq) returns (GetPingMetricRsp) {}
 }
 
 message GetClutersReq {

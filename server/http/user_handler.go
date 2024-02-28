@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lureiny/v2raymg/client"
+	client "github.com/lureiny/v2raymg/client/rpc"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/common/util"
-	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 

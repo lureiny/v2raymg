@@ -11,29 +11,33 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strings"
 
 	"github.com/google/go-github/v48/github"
 )
 
-const execPath = "./" + FileName
+const execPath = "./"
 
 type ProxyServer struct {
-	configFile     string
-	path           string
-	cmd            *exec.Cmd
-	isRunning      bool
-	cancel         context.CancelFunc
-	currentVersion string
-	expectVersion  string
-	stdout         io.ReadCloser
+	configFile         string
+	path               string
+	cmd                *exec.Cmd
+	isRunning          bool
+	cancel             context.CancelFunc
+	currentVersion     string
+	expectVersion      string
+	stdout             io.ReadCloser
+	softwareName       string // xray/v2ray/hysteria
+	softwareGithubInfo *SoftwareGithubInfo
 }
 
-func NewProxyServer(file, version string) *ProxyServer {
+func NewProxyServer(file, version, softwareName string) *ProxyServer {
 	return &ProxyServer{
-		configFile:    file,
-		path:          execPath,
-		isRunning:     false,
-		expectVersion: version,
+		configFile:         file,
+		isRunning:          false,
+		expectVersion:      version,
+		softwareName:       softwareName,
+		softwareGithubInfo: softwareGithubInfoMap[softwareName],
 	}
 }
 
@@ -42,11 +46,15 @@ func initExecFile(s *ProxyServer) error {
 	if err == nil {
 		return nil
 	}
+	if s.softwareGithubInfo == nil {
+		return fmt.Errorf("softname[%v] is wrong", s.softwareName)
+	}
+	s.path = execPath + s.softwareGithubInfo.FileName
 	// download v2ray/xray exec
 	if err := s.UpdateByTagName(s.expectVersion); err != nil {
 		return err
 	}
-	err = SwitchExec(FileName+tempShuffix, s.path)
+	err = SwitchExec(s.softwareGithubInfo.FileName+tempShuffix, s.path)
 	return err
 }
 
@@ -57,6 +65,17 @@ func (s *ProxyServer) Start() error {
 	if err := initExecFile(s); err != nil {
 		return err
 	}
+	if s.softwareName == "hysteria" {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.cmd = exec.CommandContext(ctx, s.path, "server", "-c", s.configFile)
+		s.cancel = cancel
+		if err := s.cmd.Start(); err != nil {
+			return err
+		}
+		s.isRunning = true
+		return nil
+	}
+
 	in, err := os.Open(s.configFile)
 	if err != nil {
 		return err
@@ -102,7 +121,7 @@ func (s *ProxyServer) UpdateCurrentVersion(stdout io.ReadCloser) error {
 		return err
 	}
 
-	versionRegex := regexp.MustCompile(VersionRegex)
+	versionRegex := regexp.MustCompile(s.softwareGithubInfo.VersionRegex)
 	result := versionRegex.FindSubmatch(outInfo)
 	if len(result) == 0 {
 		return fmt.Errorf("can not get current version > %s", outInfo)
@@ -119,20 +138,28 @@ func (s *ProxyServer) UpdateByTagName(tag string) error {
 	if tag[0] != 'v' && tag != latestTagName {
 		tag = "v" + tag
 	}
-	repositoryRelease, err := getReleaseByTagName(tag)
+	useUnzip := false
+	if strings.HasSuffix(s.softwareGithubInfo.ReleaseFileName, "tar.gz") ||
+		strings.HasSuffix(s.softwareGithubInfo.ReleaseFileName, ".zip") {
+		useUnzip = true
+	}
+	repositoryRelease, err := getReleaseByTagName(tag, s.softwareGithubInfo.Owner, s.softwareGithubInfo.Repo)
 	if err != nil {
 		return err
 	}
-	downloadUrl, err := getDownloadUrl(repositoryRelease)
+	downloadUrl, err := getDownloadUrl(repositoryRelease, s.softwareGithubInfo.ReleaseFileName)
 	if err != nil {
 		return err
 	}
 
-	zipReader, err := Download(downloadUrl)
+	zipReader, err := Download(downloadUrl, s.softwareGithubInfo.FileName, useUnzip)
 	if err != nil {
 		return err
 	}
-	return Unzip(zipReader)
+	if useUnzip {
+		return Unzip(zipReader, s.softwareGithubInfo.FileName)
+	}
+	return nil
 }
 
 func (s *ProxyServer) Update(tag string) error {
@@ -140,28 +167,38 @@ func (s *ProxyServer) Update(tag string) error {
 		return err
 	}
 	s.Stop()
-	if err := SwitchExec(FileName+tempShuffix, s.path); err != nil {
+	if err := SwitchExec(s.softwareGithubInfo.FileName+tempShuffix, s.path); err != nil {
 		return err
 	}
 	return s.Start()
 }
 
-func Download(url string) (*zip.Reader, error) {
+func Download(url, fileName string, useUnzip bool) (*zip.Reader, error) {
 	data, err := requestUrl(url)
 	if err != nil {
 		return nil, err
 	}
+	if !useUnzip {
+		// 不需要解压
+		writer, err := os.Create(fileName + tempShuffix)
+		if err != nil {
+			return nil, err
+		}
+		defer writer.Close()
+		writer.Write(data)
+		return nil, nil
+	}
 	return zip.NewReader(bytes.NewReader(data), int64(len(data)))
 }
 
-func Unzip(zipReader *zip.Reader) error {
+func Unzip(zipReader *zip.Reader, fileName string) error {
 	for _, file := range zipReader.File {
-		if file.Name == FileName {
+		if file.Name == fileName {
 			reader, err := file.Open()
 			if err != nil {
 				return err
 			}
-			writer, err := os.Create(FileName + tempShuffix)
+			writer, err := os.Create(fileName + tempShuffix)
 			if err != nil {
 				return err
 			}
@@ -170,7 +207,7 @@ func Unzip(zipReader *zip.Reader) error {
 			return err
 		}
 	}
-	return fmt.Errorf("not found file: %s in zip file", FileName)
+	return fmt.Errorf("not found file: %s in zip file", fileName)
 }
 
 func SwitchExec(src, dst string) error {
@@ -178,26 +215,26 @@ func SwitchExec(src, dst string) error {
 	return os.Rename(src, dst)
 }
 
-func getReleaseByTagName(tag string) (*github.RepositoryRelease, error) {
+func getReleaseByTagName(tag, owner, repo string) (*github.RepositoryRelease, error) {
 	client := github.NewClient(nil)
 	repositoriesService := client.Repositories
 	var release *github.RepositoryRelease = nil
 	var err error = nil
 	if tag != latestTagName {
-		release, _, err = repositoriesService.GetReleaseByTag(context.Background(), Owner, Repo, tag)
+		release, _, err = repositoriesService.GetReleaseByTag(context.Background(), owner, repo, tag)
 	} else {
-		release, _, err = repositoriesService.GetLatestRelease(context.Background(), Owner, Repo)
+		release, _, err = repositoriesService.GetLatestRelease(context.Background(), owner, repo)
 	}
 	return release, err
 }
 
-func getDownloadUrl(release *github.RepositoryRelease) (string, error) {
+func getDownloadUrl(release *github.RepositoryRelease, releaseFileName string) (string, error) {
 	for _, asset := range release.Assets {
-		if *asset.Name == ReleaseFileName {
+		if *asset.Name == releaseFileName {
 			return asset.GetBrowserDownloadURL(), nil
 		}
 	}
-	return "", fmt.Errorf("not found release file: %s", ReleaseFileName)
+	return "", fmt.Errorf("not found release file: %s", releaseFileName)
 }
 
 func requestUrl(url string) ([]byte, error) {

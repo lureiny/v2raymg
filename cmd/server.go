@@ -6,20 +6,17 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
-	"github.com/lureiny/v2raymg/client"
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/global"
+	"github.com/lureiny/v2raymg/global/collecter"
 	"github.com/lureiny/v2raymg/global/config"
 	globalLego "github.com/lureiny/v2raymg/global/lego"
-	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/global/proxy"
 	"github.com/lureiny/v2raymg/lego"
-	"github.com/lureiny/v2raymg/proxy/manager"
 	"github.com/lureiny/v2raymg/server/http"
 	"github.com/lureiny/v2raymg/server/rpc"
-	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"github.com/spf13/cobra"
 )
 
@@ -34,14 +31,12 @@ var (
 	serverConfig = ""
 )
 
-const collectCycle = 30 * time.Second
-
 func init() {
-	serverCmd.Flags().StringVar(&serverConfig, "conf", "/usr/local/etc/v2raymg/config.json", "V2raymg server config file")
+	serverCmd.Flags().StringVar(&serverConfig, "conf", "/usr/local/etc/v2raymg/config.yaml", "V2raymg server config file")
 }
 
 func initGlobalInfo() {
-	log.Printf("Start v2raymg which manage %s", manager.FileName)
+	// log.Printf("Start v2raymg which manage %s", manager.FileName)
 	if err := global.InitGlobalInfra(serverConfig); err != nil {
 		log.Fatal(err)
 	}
@@ -60,39 +55,17 @@ func initAndStartHttpServer(certManager *lego.CertManager) {
 		http.RegisterPrometheus()
 	}
 	go httpServer.Start()
-	go collectStats(httpServer)
 }
 
-func collectStats(httpServer *http.HttpServer) {
-	ticker := time.NewTicker(collectCycle)
-	nodes := httpServer.GetTargetNodes(httpServer.Name)
-	rpcClient := client.NewEndNodeClient(nodes, nil)
-	req := &proto.GetBandwidthStatsReq{
-		Pattern: "",
-		Reset_:  true,
-	}
-	for range ticker.C {
-		succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
-			client.GetBandWidthStatsReqType,
-			req,
-		)
-		if len(succList) == 0 {
-			logger.Error("Err=Get local node stat error > %s", failedList[httpServer.Name])
-			continue
-		}
-		stats := succList[httpServer.Name].([]*proto.Stats)
-		for _, stat := range stats {
-			common.StatsForPrometheus.Ch <- stat
-			common.SumStats.Ch <- stat
-		}
-	}
+func startCollector() {
+	go collecter.CollectStats()
+	go collecter.StartPing()
 }
 
 func startServer(cmd *cobra.Command, args []string) {
 	initGlobalInfo()
 	// center node
-	serverType := config.GetString(common.ConfigRpcServerType)
-	if strings.ToLower(serverType) == common.CenterNodeType {
+	if strings.EqualFold(config.GetString(common.ConfigRpcServerType), common.CenterNodeType) {
 		centerNodeServer := &rpc.CenterNodeServer{}
 		centerNodeServer.Init()
 		centerNodeServer.Start()
@@ -104,6 +77,8 @@ func startServer(cmd *cobra.Command, args []string) {
 
 	initAndStartEndNodeServer(globalLego.GetCertManager())
 	initAndStartHttpServer(globalLego.GetCertManager())
+
+	startCollector()
 
 	// listen signal
 	c := make(chan os.Signal)

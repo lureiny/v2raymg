@@ -89,6 +89,9 @@ func (cluster *Cluster) AuthRemoteNode(node **Node) error {
 	// n本地记录的Node, node: 根据远端访问参数构建的Node
 	if n := cluster.NodeManager.Get((*node).Name); n == nil {
 		return fmt.Errorf("node not exist")
+	} else if !(*node).Compare(n) {
+		// node的meta info指 host+port+cluster+name, 这四个值可以指定唯一一个node
+		return fmt.Errorf("there at least two node with same name[%s], but have different meta info.", n.GetName())
 	} else if (*node).InToken != n.InToken {
 		return fmt.Errorf("wrong token")
 	} else if n.GetHeartBeatTime != 0 && n.GetHeartBeatTime+int64(HeartBeatTimeout) < time.Now().Unix() {

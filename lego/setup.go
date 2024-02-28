@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/lego"
-	"github.com/go-acme/lego/v4/log"
 	"github.com/go-acme/lego/v4/registration"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/urfave/cli/v2"
 )
 
@@ -49,11 +49,11 @@ func newClient(ctx *cli.Context, acc registration.User, keyType certcrypto.KeyTy
 
 	client, err := lego.NewClient(config)
 	if err != nil {
-		log.Printf("Could not create client: %v", err)
+		logger.Error("Could not create client: %v", err)
 	}
 
 	if client.GetExternalAccountRequired() && !ctx.IsSet("eab") {
-		log.Printf("Server requires External Account Binding. Use --eab with --kid and --hmac.")
+		logger.Debug("Server requires External Account Binding. Use --eab with --kid and --hmac.")
 	}
 
 	return client
@@ -75,14 +75,14 @@ func getKeyType(ctx *cli.Context) certcrypto.KeyType {
 		return certcrypto.EC384
 	}
 
-	log.Printf("Unsupported KeyType: %s", keyType)
+	logger.Debug("Unsupported KeyType: %s", keyType)
 	return ""
 }
 
 func getEmail(ctx *cli.Context) string {
 	email := ctx.String("email")
 	if email == "" {
-		log.Printf("You have to pass an account (email address) to the program using --email or -m")
+		logger.Debug("You have to pass an account (email address) to the program using --email or -m")
 	}
 	return email
 }
