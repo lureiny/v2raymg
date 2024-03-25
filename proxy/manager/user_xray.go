@@ -6,10 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/xtls/xray-core/app/proxyman/command"
 	"github.com/xtls/xray-core/common/protocol"
@@ -217,7 +217,7 @@ func addUserToRuntime(runtimeConfig *RuntimeConfig, user *User) error {
 		return err
 	}
 
-	log.Printf("Add user to runtime, user: %v", user)
+	logger.Debug("Add user to runtime, user: %v", user)
 	return nil
 }
 
@@ -328,7 +328,7 @@ func removeUserFromRuntime(runtimeConfig *RuntimeConfig, user *User) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("Remove User from runtime: [Email] %s from [Bound] %s", user.Email, user.Tag)
+	logger.Debug("Remove User from runtime: [Email] %s from [Bound] %s", user.Email, user.Tag)
 
 	return nil
 }

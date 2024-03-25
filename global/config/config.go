@@ -2,7 +2,7 @@ package config
 
 import (
 	"fmt"
-	"os"
+	"strings"
 
 	"github.com/lureiny/v2raymg/common"
 	"github.com/lureiny/v2raymg/common/config"
@@ -27,6 +27,9 @@ func CheckConfig() error {
 	if globalConfigManager == nil {
 		return fmt.Errorf("global config is not init")
 	}
+	if strings.EqualFold(GetString(common.ConfigRpcServerType), common.CenterNodeType) {
+		return nil
+	}
 	if err := checkProxyConfig(globalConfigManager); err != nil {
 		return err
 	}
@@ -37,33 +40,7 @@ func CheckConfig() error {
 	return nil
 }
 
-// func checkStaticNodes(cm *ConfigManager) error {
-// 	nodeList := []staticNode{}
-// 	if err := cm.UnmarshalKey(ClusterNodes, &nodeList); err != nil {
-// 		return err
-// 	}
-// 	nodeMap := make(map[string]bool)
-// 	for _, n := range nodeList {
-// 		if _, ok := nodeMap[n.Name]; ok {
-// 			return fmt.Errorf("node name[%s] repeat", n.Name)
-// 		}
-// 		nodeMap[n.Name] = true
-// 	}
-// 	return nil
-// }
-
 func checkProxyConfig(cm *config.ConfigManager) error {
-	if err := checkProxyConfigFile(cm); err != nil {
-		return err
-	}
-	return nil
-}
-
-func checkProxyConfigFile(cm *config.ConfigManager) error {
-	fileName := cm.GetString(common.ConfigProxyConfigFile)
-	if _, err := os.Stat(fileName); err != nil {
-		return fmt.Errorf("check proxy config fail: %v", err)
-	}
 	return nil
 }
 

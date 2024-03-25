@@ -14,8 +14,8 @@ import (
 var proxyManager = manager.NewProxyManager()
 
 // InitProxyManager ...
-func InitProxyManager(configFile, version string, cm *lego.CertManager) error {
-	if err := proxyManager.Init(configFile, version, cm); err != nil {
+func InitProxyManager(xrayOrV2rayConfigFile, hysteriaConfig, version string, cm *lego.CertManager) error {
+	if err := proxyManager.Init(xrayOrV2rayConfigFile, hysteriaConfig, version, cm); err != nil {
 		return err
 	}
 	rawAdaptive := &manager.RawAdaptive{}
@@ -66,7 +66,7 @@ func ResetUser(user *manager.User) error {
 }
 
 // QueryStats query user, inbound, outbound stat with pattern
-func QueryStats(pattern string, reset bool) (*map[string]*proto.Stats, error) {
+func QueryStats(pattern string, reset bool) (map[string]*proto.Stats, error) {
 	return proxyManager.QueryStats(pattern, reset)
 }
 

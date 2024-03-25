@@ -73,7 +73,7 @@ func getVmessUri(u *VmessShareConfig) (string, error) {
 	if err != nil {
 		return "", nil
 	}
-	return fmt.Sprintf("vmess://%s", base64.StdEncoding.EncodeToString(b)), nil
+	return fmt.Sprintf("vmess://%s", base64.RawURLEncoding.EncodeToString(b)), nil
 }
 
 func getVlessUri(v *VlessShareConfig) (string, error) {

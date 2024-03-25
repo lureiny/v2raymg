@@ -3,10 +3,10 @@ package converter
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/url"
 	"strings"
 
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/proxy/sub"
 )
 
@@ -27,11 +27,11 @@ func (c *SurgeConverter) Convert(standardUris []string) (string, error) {
 			// surge不支持vless
 			continue
 		} else if strings.HasPrefix(uri, vmessUriHeader) {
-			rawUri := decodeStandardUri(uri)
+			rawUri := decodeVmessStandardUri(uri)
 			vmessShareConfig := sub.NewDefaultVmessShareConfig()
 			err := json.Unmarshal([]byte(rawUri), vmessShareConfig)
 			if err != nil {
-				log.Printf("parse vmess shared config err > %v\n", err)
+				logger.Error("parse vmess shared config[%s] err > %v", uri, err)
 				continue
 			}
 			if surgeUri := getSurgeVmessUri(vmessShareConfig); surgeUri != "" {
@@ -41,10 +41,28 @@ func (c *SurgeConverter) Convert(standardUris []string) (string, error) {
 		} else if strings.HasPrefix(uri, trojanUriHeader) {
 			u, err := url.Parse(uri)
 			if err != nil {
-				log.Printf("parse trojan shared uri err > %v\n", err)
+				logger.Error("parse trojan shared uri[%s] err > %v", uri, err)
 				continue
 			}
 			if surgeUri := getSurgeTrojanUri(u); surgeUri != "" {
+				surgeSubUris = append(surgeSubUris, surgeUri)
+			}
+		} else if strings.HasPrefix(uri, hysteriaUriHeader) {
+			u, err := url.Parse(uri)
+			if err != nil {
+				logger.Error("parse hysteria2 shared uri[%s] err > %v", uri, err)
+				continue
+			}
+			if surgeUri := getSurgeHysteriaUri(u); surgeUri != "" {
+				surgeSubUris = append(surgeSubUris, surgeUri)
+			}
+		} else if strings.HasPrefix(uri, shadowsockesUriHeader) {
+			u, err := url.Parse(uri)
+			if err != nil {
+				logger.Error("parse shadowsocks shared uri[%s] err > %v", uri, err)
+				continue
+			}
+			if surgeUri := getSurgeSSUri(u); surgeUri != "" {
 				surgeSubUris = append(surgeSubUris, surgeUri)
 			}
 		}
@@ -58,7 +76,6 @@ func getSurgeVmessUri(vmessShareConfig *sub.VmessShareConfig) string {
 		vmessShareConfig.Add,
 		vmessShareConfig.Port,
 		fmt.Sprintf("username=%s", vmessShareConfig.ID),
-		"tls=true, tfo=true, vmess-aead=true", // 默认打开tls
 	}
 	if vmessShareConfig.Sni != "" {
 		surgeVmessUriParts = append(surgeVmessUriParts, fmt.Sprintf("sni=%s", vmessShareConfig.Sni))
@@ -69,6 +86,12 @@ func getSurgeVmessUri(vmessShareConfig *sub.VmessShareConfig) string {
 		if vmessShareConfig.Host != "" {
 			surgeVmessUriParts = append(surgeVmessUriParts, fmt.Sprintf("ws-headers=Host:\"%s\"", vmessShareConfig.Host))
 		}
+	}
+	if vmessShareConfig.TLS == "tls" {
+		surgeVmessUriParts = append(surgeVmessUriParts, "tls=true")
+	}
+	if vmessShareConfig.Aid == 0 {
+		surgeVmessUriParts = append(surgeVmessUriParts, "vmess-aead=true")
 	}
 	return strings.Join(surgeVmessUriParts, ", ")
 }
@@ -89,7 +112,7 @@ func getSurgeTrojanUri(parsedUri *url.URL) string {
 	if transferType == "ws" {
 		surgeTrojanUriParts = append(surgeTrojanUriParts, "ws=true")
 		if parsedUri.Query().Get("path") == "" {
-			log.Printf("Err=trojan ws path is empty\n")
+			logger.Error("Err=trojan ws path is empty")
 			return ""
 		}
 		surgeTrojanUriParts = append(surgeTrojanUriParts, fmt.Sprintf("ws-path=%s", parsedUri.Query().Get("path")))
@@ -103,6 +126,35 @@ func getSurgeTrojanUri(parsedUri *url.URL) string {
 	}
 
 	return strings.Join(surgeTrojanUriParts, ", ")
+}
+
+func getSurgeHysteriaUri(parsedUri *url.URL) string {
+	surgeHysteriaUriParts := []string{
+		fmt.Sprintf("🌿 HYSTERIA2_%s=hysteria2", parsedUri.Fragment),
+		parsedUri.Hostname(),
+		parsedUri.Port(),
+		fmt.Sprintf("password=%s", parsedUri.User.Username()),
+		"download-bandwidth=1000",
+		"ecn=true",
+	}
+	return strings.Join(surgeHysteriaUriParts, ", ")
+}
+
+func getSurgeSSUri(parsedUri *url.URL) string {
+	method, port, password, server, err := decodeShadowsocksUrl(parsedUri)
+	if err != nil {
+		logger.Error("parse ss uri fail > err: %v", err)
+		return ""
+	}
+
+	surgeSSUriParts := []string{
+		fmt.Sprintf("🌿 SS_%s=ss", parsedUri.Fragment),
+		server,
+		port,
+		fmt.Sprintf("encrypt-method=%s", method),
+		fmt.Sprintf("password=%s", password),
+	}
+	return strings.Join(surgeSSUriParts, ", ")
 }
 
 func init() {

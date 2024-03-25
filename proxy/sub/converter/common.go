@@ -5,15 +5,19 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"strings"
 
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	vlessUriHeader  = "vless://"
-	vmessUriHeader  = "vmess://"
-	trojanUriHeader = "trojan://"
+	vlessUriHeader        = "vless://"
+	vmessUriHeader        = "vmess://"
+	trojanUriHeader       = "trojan://"
+	hysteriaUriHeader     = "hysteria2://"
+	shadowsockesUriHeader = "ss://"
 
 	surgeClientKeyWord  = "surge"
 	qv2rayClientKeyWrod = "qv2ray"
@@ -32,11 +36,12 @@ const (
 
 var defaultAlterId int = 0
 
-func decodeStandardUri(standardUri string) string {
-	// vmess因为内容经过base64编码
+func decodeVmessStandardUri(standardUri string) string {
+	// vmess内容经过base64编码
 	if strings.HasPrefix(standardUri, vmessUriHeader) {
-		plaintext, err := base64.StdEncoding.DecodeString(standardUri[len(vmessUriHeader):])
+		plaintext, err := base64.RawURLEncoding.DecodeString(standardUri[len(vmessUriHeader):])
 		if err != nil {
+			logger.Error("use base64 url encoding decode vmess uri[%s] fail > err: %v", standardUri[len(vmessUriHeader):], err)
 			return standardUri
 		}
 		return string(plaintext)
@@ -58,3 +63,32 @@ func httpGet(url string) ([]byte, error) {
 }
 
 type NodeMap map[string]yaml.Node
+
+func decodeShadowsocksUrl(parsedUri *url.URL) (method, port, password, server string, err error) {
+	err = nil
+	// ss订阅编码前格式为 ss://method:password@server:port
+	rawData, err := base64.RawStdEncoding.DecodeString(parsedUri.Host)
+	if err != nil {
+		logger.Error("decode ss url[%s] > err: %v", parsedUri.String(), err)
+		err = fmt.Errorf("decode ss url[%s] > err: %v", parsedUri.String(), err)
+		return
+	}
+	uriParts := strings.Split(string(rawData), ":")
+
+	if len(uriParts) != 3 {
+		logger.Error("ss url[%s] is not standard", string(rawData))
+		err = fmt.Errorf("ss url[%s] is not standard", string(rawData))
+		return
+	}
+	method = uriParts[0]
+	port = uriParts[2]
+	passwordAndServer := strings.Split(uriParts[1], "@")
+	if len(passwordAndServer) != 2 {
+		logger.Error("ss password and server part is not standard: %s", uriParts[1])
+		err = fmt.Errorf("ss password and server part is not standard: %s", uriParts[1])
+		return
+	}
+	password = passwordAndServer[0]
+	server = passwordAndServer[1]
+	return
+}

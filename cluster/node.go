@@ -28,6 +28,11 @@ func (n1 *Node) Compare(n2 *Node) bool {
 	return n1.Host == n2.Host && n1.Port == n2.Port && n1.ClusterName == n2.ClusterName && n1.Name == n2.Name
 }
 
+// 比较cluster node与proto node是否相同, 相同返回true
+func (n1 *Node) CompareWithProtoNode(n2 *proto.Node) bool {
+	return n1.Host == n2.Host && n1.Port == n2.Port && n1.ClusterName == n2.ClusterName && n1.Name == n2.Name
+}
+
 func (node *Node) GetGrpcClientConn() (*grpc.ClientConn, error) {
 	var err error = nil
 	if node.grpcClientConn == nil || node.grpcClientConn.GetState() != connectivity.Ready {

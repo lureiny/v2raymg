@@ -13,8 +13,8 @@ import (
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/lego"
-	"github.com/go-acme/lego/v4/log"
 	"github.com/go-acme/lego/v4/registration"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/urfave/cli/v2"
 )
 
@@ -73,7 +73,7 @@ func NewAccountsStorage(ctx *cli.Context) *AccountsStorage {
 
 	serverURL, err := url.Parse(ctx.String("server"))
 	if err != nil {
-		log.Printf("%v\n", err)
+		logger.Error("%v", err)
 		return nil
 	}
 
@@ -97,7 +97,7 @@ func (s *AccountsStorage) ExistsAccountFilePath() bool {
 	if _, err := os.Stat(accountFile); os.IsNotExist(err) {
 		return false
 	} else if err != nil {
-		log.Printf("%v\n", err)
+		logger.Error("%v", err)
 		return false
 	}
 	return true
@@ -127,13 +127,13 @@ func (s *AccountsStorage) Save(account *Account) error {
 func (s *AccountsStorage) LoadAccount(privateKey crypto.PrivateKey) *Account {
 	fileBytes, err := os.ReadFile(s.accountFilePath)
 	if err != nil {
-		log.Printf("Could not load file for account %s: %v", s.userID, err)
+		logger.Error("Could not load file for account %s: %v", s.userID, err)
 	}
 
 	var account Account
 	err = json.Unmarshal(fileBytes, &account)
 	if err != nil {
-		log.Printf("Could not parse file for account %s: %v", s.userID, err)
+		logger.Error("Could not parse file for account %s: %v", s.userID, err)
 	}
 
 	account.key = privateKey
@@ -141,13 +141,13 @@ func (s *AccountsStorage) LoadAccount(privateKey crypto.PrivateKey) *Account {
 	if account.Registration == nil || account.Registration.Body.Status == "" {
 		reg, err := tryRecoverRegistration(s.ctx, privateKey)
 		if err != nil {
-			log.Printf("Could not load account for %s. Registration is nil: %#v", s.userID, err)
+			logger.Error("Could not load account for %s. Registration is nil: %#v", s.userID, err)
 		}
 
 		account.Registration = reg
 		err = s.Save(&account)
 		if err != nil {
-			log.Printf("Could not save account for %s. Registration is nil: %#v", s.userID, err)
+			logger.Error("Could not save account for %s. Registration is nil: %#v", s.userID, err)
 		}
 	}
 
@@ -158,21 +158,21 @@ func (s *AccountsStorage) GetPrivateKey(keyType certcrypto.KeyType) crypto.Priva
 	accKeyPath := filepath.Join(s.keysPath, s.userID+".key")
 
 	if _, err := os.Stat(accKeyPath); os.IsNotExist(err) {
-		log.Printf("No key found for account %s. Generating a %s key.", s.userID, keyType)
+		logger.Debug("No key found for account %s. Generating a %s key.", s.userID, keyType)
 		s.createKeysFolder()
 
 		privateKey, err := generatePrivateKey(accKeyPath, keyType)
 		if err != nil {
-			log.Printf("Could not generate RSA private account key for account %s: %v", s.userID, err)
+			logger.Error("Could not generate RSA private account key for account %s: %v", s.userID, err)
 		}
 
-		log.Printf("Saved key to %s", accKeyPath)
+		logger.Debug("Saved key to %s", accKeyPath)
 		return privateKey
 	}
 
 	privateKey, err := loadPrivateKey(accKeyPath)
 	if err != nil {
-		log.Printf("Could not load RSA private key from file %s: %v", accKeyPath, err)
+		logger.Error("Could not load RSA private key from file %s: %v", accKeyPath, err)
 	}
 
 	return privateKey
@@ -180,7 +180,7 @@ func (s *AccountsStorage) GetPrivateKey(keyType certcrypto.KeyType) crypto.Priva
 
 func (s *AccountsStorage) createKeysFolder() {
 	if err := createNonExistingFolder(s.keysPath); err != nil {
-		log.Printf("Could not check/create directory for account %s: %v", s.userID, err)
+		logger.Error("Could not check/create directory for account %s: %v", s.userID, err)
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/lego"
-	"github.com/go-acme/lego/v4/log"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/mattn/go-isatty"
 	"github.com/urfave/cli/v2"
 )
@@ -34,10 +34,10 @@ func createRenew() *cli.Command {
 			hasDomains := len(ctx.StringSlice("domains")) > 0
 			hasCsr := len(ctx.String("csr")) > 0
 			if hasDomains && hasCsr {
-				log.Printf("Please specify either --domains/-d or --csr/-c, but not both")
+				logger.Debug("Please specify either --domains/-d or --csr/-c, but not both")
 			}
 			if !hasDomains && !hasCsr {
-				log.Printf("Please specify --domains/-d (or --csr/-c if you already have a CSR)")
+				logger.Debug("Please specify --domains/-d (or --csr/-c if you already have a CSR)")
 			}
 			return nil
 		},
@@ -87,7 +87,7 @@ func renew(ctx *cli.Context) error {
 	setupChallenges(ctx, client)
 
 	if account.Registration == nil {
-		log.Printf("Account %s is not registered. Use 'run' to register a new account.\n", account.Email)
+		logger.Debug("Account %s is not registered. Use 'run' to register a new account.", account.Email)
 	}
 
 	certsStorage := NewCertificatesStorage(ctx)
@@ -114,7 +114,7 @@ func renewForDomains(ctx *cli.Context, client *lego.Client, certsStorage *Certif
 	// as web servers would not be able to work with a combined file.
 	certificates, err := certsStorage.ReadCertificate(domain, ".crt")
 	if err != nil {
-		log.Printf("Error while loading the certificate for domain %s\n\t%v", domain, err)
+		logger.Error("Error while loading the certificate for domain %s\n\t%v", domain, err)
 	}
 
 	cert := certificates[0]
@@ -125,7 +125,7 @@ func renewForDomains(ctx *cli.Context, client *lego.Client, certsStorage *Certif
 
 	// This is just meant to be informal for the user.
 	timeLeft := cert.NotAfter.Sub(time.Now().UTC())
-	log.Infof("[%s] acme: Trying renewal with %d hours remaining", domain, int(timeLeft.Hours()))
+	logger.Debug("[%s] acme: Trying renewal with %d hours remaining", domain, int(timeLeft.Hours()))
 
 	certDomains := certcrypto.ExtractDomains(cert)
 
@@ -133,7 +133,7 @@ func renewForDomains(ctx *cli.Context, client *lego.Client, certsStorage *Certif
 	if ctx.Bool("reuse-key") {
 		keyBytes, errR := certsStorage.ReadFile(domain, ".key")
 		if errR != nil {
-			log.Printf("Error while loading the private key for domain %s\n\t%v", domain, errR)
+			logger.Error("Error while loading the private key for domain %s\n\t%v", domain, errR)
 		}
 
 		privateKey, errR = certcrypto.ParsePEMPrivateKey(keyBytes)
@@ -150,7 +150,7 @@ func renewForDomains(ctx *cli.Context, client *lego.Client, certsStorage *Certif
 		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 		sleepTime := time.Duration(rnd.Int63n(int64(jitter)))
 
-		log.Infof("renewal: random delay of %s", sleepTime)
+		logger.Info("renewal: random delay of %s", sleepTime)
 		time.Sleep(sleepTime)
 	}
 
@@ -164,7 +164,7 @@ func renewForDomains(ctx *cli.Context, client *lego.Client, certsStorage *Certif
 	}
 	certRes, err := client.Certificate.Obtain(request)
 	if err != nil {
-		log.Printf("%v\n", err)
+		logger.Error("%v", err)
 		return err
 	}
 
@@ -182,7 +182,7 @@ func renewForDomains(ctx *cli.Context, client *lego.Client, certsStorage *Certif
 func renewForCSR(ctx *cli.Context, client *lego.Client, certsStorage *CertificatesStorage, bundle bool, meta map[string]string) error {
 	csr, err := readCSRFile(ctx.String("csr"))
 	if err != nil {
-		log.Printf("%v\n", err)
+		logger.Error("%v", err)
 		return err
 	}
 
@@ -193,7 +193,7 @@ func renewForCSR(ctx *cli.Context, client *lego.Client, certsStorage *Certificat
 	// as web servers would not be able to work with a combined file.
 	certificates, err := certsStorage.ReadCertificate(domain, ".crt")
 	if err != nil {
-		log.Printf("Error while loading the certificate for domain %s\n\t%v", domain, err)
+		logger.Error("Error while loading the certificate for domain %s\n\t%v", domain, err)
 	}
 
 	cert := certificates[0]
@@ -204,7 +204,7 @@ func renewForCSR(ctx *cli.Context, client *lego.Client, certsStorage *Certificat
 
 	// This is just meant to be informal for the user.
 	timeLeft := cert.NotAfter.Sub(time.Now().UTC())
-	log.Infof("[%s] acme: Trying renewal with %d hours remaining", domain, int(timeLeft.Hours()))
+	logger.Info("[%s] acme: Trying renewal with %d hours remaining", domain, int(timeLeft.Hours()))
 
 	certRes, err := client.Certificate.ObtainForCSR(certificate.ObtainForCSRRequest{
 		CSR:                            csr,
@@ -213,7 +213,7 @@ func renewForCSR(ctx *cli.Context, client *lego.Client, certsStorage *Certificat
 		AlwaysDeactivateAuthorizations: ctx.Bool("always-deactivate-authorizations"),
 	})
 	if err != nil {
-		log.Printf("%v\n", err)
+		logger.Error("%v", err)
 	}
 
 	certsStorage.SaveResource(certRes)
@@ -227,13 +227,13 @@ func renewForCSR(ctx *cli.Context, client *lego.Client, certsStorage *Certificat
 
 func needRenewal(x509Cert *x509.Certificate, domain string, days int) bool {
 	if x509Cert.IsCA {
-		log.Printf("[%s] Certificate bundle starts with a CA certificate", domain)
+		logger.Debug("[%s] Certificate bundle starts with a CA certificate", domain)
 	}
 
 	if days >= 0 {
 		notAfter := int(time.Until(x509Cert.NotAfter).Hours() / 24.0)
 		if notAfter > days {
-			log.Printf("[%s] The certificate expires in %d days, the number of days defined to perform the renewal is %d: no renewal.",
+			logger.Debug("[%s] The certificate expires in %d days, the number of days defined to perform the renewal is %d: no renewal.",
 				domain, notAfter, days)
 			return false
 		}

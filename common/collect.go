@@ -12,17 +12,6 @@ type StatsWithMutex struct {
 	Mutex    sync.Mutex
 }
 
-const statsChSize = 100
-
-var StatsForPrometheus = &StatsWithMutex{
-	StatsMap: make(map[string]*proto.Stats),
-	Ch:       make(chan *proto.Stats, statsChSize),
-}
-var SumStats = &StatsWithMutex{
-	StatsMap: make(map[string]*proto.Stats),
-	Ch:       make(chan *proto.Stats, statsChSize),
-}
-
 type collectCallbackFunc func(*StatsWithMutex, *proto.Stats)
 
 func (s *StatsWithMutex) Collect(cb collectCallbackFunc) {
@@ -31,24 +20,24 @@ func (s *StatsWithMutex) Collect(cb collectCallbackFunc) {
 	}
 }
 
-func commonCollectCBFunc(s *StatsWithMutex, stat *proto.Stats) {
+func CollectCBFunc(s *StatsWithMutex, stat *proto.Stats) {
 	s.Mutex.Lock()
 	defer s.Mutex.Unlock()
 
-	if tmpStat, ok := s.StatsMap[stat.Name+"_"+stat.Type]; ok {
+	// 按照 name, type, source, proxy四个维度来聚合, 防止长时间没有采集时堆积
+	id := stat.Name + "_" + stat.Type + "_" + stat.Source + "_" + stat.Proxy
+
+	if tmpStat, ok := s.StatsMap[id]; ok {
 		tmpStat.Downlink += stat.Downlink
 		tmpStat.Uplink += stat.Uplink
 	} else {
-		s.StatsMap[stat.Name+"_"+stat.Type] = &proto.Stats{
+		s.StatsMap[id] = &proto.Stats{
 			Name:     stat.Name,
 			Type:     stat.Type,
 			Downlink: stat.Downlink,
 			Uplink:   stat.Uplink,
+			Proxy:    stat.Proxy,
+			Source:   stat.Source,
 		}
 	}
-}
-
-func init() {
-	go StatsForPrometheus.Collect(commonCollectCBFunc)
-	go SumStats.Collect(commonCollectCBFunc)
 }

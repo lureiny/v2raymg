@@ -1,13 +1,14 @@
 package http
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lureiny/v2raymg/client"
+	client "github.com/lureiny/v2raymg/client/rpc"
 	"github.com/lureiny/v2raymg/cluster"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/common/util"
-	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/proxy/sub/converter"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
@@ -81,8 +82,14 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 		)
 	}
 	uris := []string{}
-	for _, u := range succList {
-		uris = append(uris, u.([]string)...)
+	succNodes := []string{}
+	for node := range succList {
+		succNodes = append(succNodes, node)
+	}
+
+	sort.Strings(succNodes)
+	for _, n := range succNodes {
+		uris = append(uris, succList[n].([]string)...)
 	}
 
 	uri, err := converter.ConvertSubUri(strings.ToLower(userAgent), uris)

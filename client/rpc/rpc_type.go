@@ -1,4 +1,4 @@
-package client
+package rpc
 
 type ReqToEndNodeType int
 
@@ -27,4 +27,5 @@ const (
 	TransferCertType
 	GetCertsType
 	ClearUsersType
+	GetPingMetricType
 )

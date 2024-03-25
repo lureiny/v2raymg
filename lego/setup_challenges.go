@@ -10,29 +10,29 @@ import (
 	"github.com/go-acme/lego/v4/challenge/http01"
 	"github.com/go-acme/lego/v4/challenge/tlsalpn01"
 	"github.com/go-acme/lego/v4/lego"
-	"github.com/go-acme/lego/v4/log"
 	"github.com/go-acme/lego/v4/providers/dns"
 	"github.com/go-acme/lego/v4/providers/http/memcached"
 	"github.com/go-acme/lego/v4/providers/http/webroot"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/urfave/cli/v2"
 )
 
 func setupChallenges(ctx *cli.Context, client *lego.Client) {
 	if !ctx.Bool("http") && !ctx.Bool("tls") && !ctx.IsSet("dns") {
-		log.Printf("No challenge selected. You must specify at least one challenge: `--http`, `--tls`, `--dns`.")
+		logger.Debug("No challenge selected. You must specify at least one challenge: `--http`, `--tls`, `--dns`.")
 	}
 
 	if ctx.Bool("http") {
 		err := client.Challenge.SetHTTP01Provider(setupHTTPProvider(ctx))
 		if err != nil {
-			log.Printf("%v\n", err)
+			logger.Error("%v", err)
 		}
 	}
 
 	if ctx.Bool("tls") {
 		err := client.Challenge.SetTLSALPN01Provider(setupTLSProvider(ctx))
 		if err != nil {
-			log.Printf("%v\n", err)
+			logger.Error("%v", err)
 		}
 	}
 
@@ -46,24 +46,24 @@ func setupHTTPProvider(ctx *cli.Context) challenge.Provider {
 	case ctx.IsSet("http.webroot"):
 		ps, err := webroot.NewHTTPProvider(ctx.String("http.webroot"))
 		if err != nil {
-			log.Printf("%v\n", err)
+			logger.Error("%v", err)
 		}
 		return ps
 	case ctx.IsSet("http.memcached-host"):
 		ps, err := memcached.NewMemcachedProvider(ctx.StringSlice("http.memcached-host"))
 		if err != nil {
-			log.Printf("%v\n", err)
+			logger.Error("%v", err)
 		}
 		return ps
 	case ctx.IsSet("http.port"):
 		iface := ctx.String("http.port")
 		if !strings.Contains(iface, ":") {
-			log.Printf("The --http switch only accepts interface:port or :port for its argument.")
+			logger.Debug("The --http switch only accepts interface:port or :port for its argument.")
 		}
 
 		host, port, err := net.SplitHostPort(iface)
 		if err != nil {
-			log.Printf("%v\n", err)
+			logger.Error("%v", err)
 		}
 
 		srv := http01.NewProviderServer(host, port)
@@ -78,7 +78,7 @@ func setupHTTPProvider(ctx *cli.Context) challenge.Provider {
 		}
 		return srv
 	default:
-		log.Printf("Invalid HTTP challenge options.")
+		logger.Error("Invalid HTTP challenge options.")
 		return nil
 	}
 }
@@ -88,19 +88,19 @@ func setupTLSProvider(ctx *cli.Context) challenge.Provider {
 	case ctx.IsSet("tls.port"):
 		iface := ctx.String("tls.port")
 		if !strings.Contains(iface, ":") {
-			log.Printf("The --tls switch only accepts interface:port or :port for its argument.")
+			logger.Debug("The --tls switch only accepts interface:port or :port for its argument.")
 		}
 
 		host, port, err := net.SplitHostPort(iface)
 		if err != nil {
-			log.Printf("%v\n", err)
+			logger.Error("%v", err)
 		}
 
 		return tlsalpn01.NewProviderServer(host, port)
 	case ctx.Bool("tls"):
 		return tlsalpn01.NewProviderServer("", "")
 	default:
-		log.Printf("Invalid HTTP challenge options.")
+		logger.Error("Invalid HTTP challenge options.")
 		return nil
 	}
 }
@@ -108,7 +108,7 @@ func setupTLSProvider(ctx *cli.Context) challenge.Provider {
 func setupDNS(ctx *cli.Context, client *lego.Client) {
 	provider, err := dns.NewDNSChallengeProviderByName(ctx.String("dns"))
 	if err != nil {
-		log.Printf("%v\n", err)
+		logger.Error("%v", err)
 	}
 
 	servers := ctx.StringSlice("dns.resolvers")
@@ -121,6 +121,6 @@ func setupDNS(ctx *cli.Context, client *lego.Client) {
 			dns01.AddDNSTimeout(time.Duration(ctx.Int("dns-timeout"))*time.Second)),
 	)
 	if err != nil {
-		log.Printf("%v\n", err)
+		logger.Error("%v", err)
 	}
 }

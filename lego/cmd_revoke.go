@@ -2,7 +2,8 @@ package lego
 
 import (
 	"github.com/go-acme/lego/v4/acme"
-	"github.com/go-acme/lego/v4/log"
+	"github.com/lureiny/v2raymg/common/log/logger"
+
 	"github.com/urfave/cli/v2"
 )
 
@@ -35,28 +36,28 @@ func revoke(ctx *cli.Context) error {
 	acc, client := setup(ctx, NewAccountsStorage(ctx))
 
 	if acc.Registration == nil {
-		log.Printf("Account %s is not registered. Use 'run' to register a new account.\n", acc.Email)
+		logger.Debug("Account %s is not registered. Use 'run' to register a new account.", acc.Email)
 	}
 
 	certsStorage := NewCertificatesStorage(ctx)
 	certsStorage.CreateRootFolder()
 
 	for _, domain := range ctx.StringSlice("domains") {
-		log.Printf("Trying to revoke certificate for domain %s", domain)
+		logger.Debug("Trying to revoke certificate for domain %s", domain)
 
 		certBytes, err := certsStorage.ReadFile(domain, ".crt")
 		if err != nil {
-			log.Printf("Error while revoking the certificate for domain %s\n\t%v", domain, err)
+			logger.Error("Error while revoking the certificate for domain %s\n\t%v", domain, err)
 		}
 
 		reason := ctx.Uint("reason")
 
 		err = client.Certificate.RevokeWithReason(certBytes, &reason)
 		if err != nil {
-			log.Printf("Error while revoking the certificate for domain %s\n\t%v", domain, err)
+			logger.Error("Error while revoking the certificate for domain %s\n\t%v", domain, err)
 		}
 
-		log.Println("Certificate was revoked.")
+		logger.Debug("Certificate was revoked.")
 
 		if ctx.Bool("keep") {
 			return nil
@@ -69,7 +70,7 @@ func revoke(ctx *cli.Context) error {
 			return err
 		}
 
-		log.Println("Certificate was archived for domain:", domain)
+		logger.Debug("Certificate was archived for domain:", domain)
 	}
 
 	return nil

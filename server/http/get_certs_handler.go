@@ -2,8 +2,8 @@ package http
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/lureiny/v2raymg/client"
-	"github.com/lureiny/v2raymg/global/logger"
+	client "github.com/lureiny/v2raymg/client/rpc"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 

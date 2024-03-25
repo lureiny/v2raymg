@@ -2,12 +2,13 @@ package global
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/global/cluster"
 	"github.com/lureiny/v2raymg/global/config"
 	"github.com/lureiny/v2raymg/global/lego"
-	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/global/proxy"
 	"github.com/lureiny/v2raymg/global/user"
 )
@@ -46,7 +47,8 @@ func initCluster() error {
 }
 
 func initProxyManager() error {
-	if err := proxy.InitProxyManager(config.GetString(common.ConfigProxyConfigFile),
+	if err := proxy.InitProxyManager(config.GetString(common.ConfigXrayOrV2rayProxyConfigFile),
+		config.GetString(common.ConfigHysteriaProxyConfigFile),
 		config.GetString(common.ConfigProxyVersion), lego.GetCertManager()); err != nil {
 		return fmt.Errorf("Init proxy manager fail, err: %v", err)
 	}
@@ -67,6 +69,9 @@ func InitGlobalInfra(configFile string) error {
 	}
 	if err := initLogger(); err != nil {
 		return err
+	}
+	if strings.EqualFold(config.GetString(common.ConfigRpcServerType), common.CenterNodeType) {
+		return nil
 	}
 	if err := initCluster(); err != nil {
 		return err

@@ -6,23 +6,14 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/cluster"
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	globalCluster "github.com/lureiny/v2raymg/global/cluster"
 	"github.com/lureiny/v2raymg/global/config"
-	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/server"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 var GlobalHttpServer = &HttpServer{}
-
-var trafficStats = prometheus.NewGaugeVec(
-	prometheus.GaugeOpts{
-		Name: "v2raymg_traffic",
-		Help: "v2ray/xray traffic ",
-	},
-	[]string{"node", "name", "type", "direction"},
-)
 
 type HttpServer struct {
 	RestfulServer *gin.Engine
@@ -56,6 +47,9 @@ func (s *HttpServer) Start() {
 
 // 根据target查找路由的节点
 func (s *HttpServer) GetTargetNodes(target string) *[]*cluster.Node {
+	if target == "" {
+		target = s.Name
+	}
 	if target == "all" {
 		filter := func(n *cluster.Node) bool {
 			return n.Name == s.Name || n.IsValid()
@@ -70,10 +64,15 @@ func (s *HttpServer) GetTargetNodes(target string) *[]*cluster.Node {
 	}
 }
 
-func (s *HttpServer) RegisterHandler(handler HttpHandlerInterface) {
+func (s *HttpServer) RegisterHandler(handler HttpHandlerInterface, method string) {
 	relativePath := handler.getRelativePath()
 	handler.setHttpServer(s)
 	s.handlersMap[relativePath] = handler
 	handlers := handler.getHandlers()
-	s.RestfulServer.GET(relativePath, handlers...)
+	switch method {
+	case "GET":
+		s.RestfulServer.GET(relativePath, handlers...)
+	case "POST":
+		s.RestfulServer.POST(relativePath, handlers...)
+	}
 }

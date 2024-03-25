@@ -21,14 +21,17 @@ func queryStats(con command.StatsServiceClient, req *command.QueryStatsRequest) 
 	}
 }
 
-func parseQueryStats(resp *command.QueryStatsResponse) (*map[string]*proto.Stats, error) {
+const proxyName = "Xray/V2ray"
+
+func parseQueryStats(resp *command.QueryStatsResponse) (map[string]*proto.Stats, error) {
 	result := make(map[string]*proto.Stats)
 	for _, stat := range resp.GetStat() {
 		reResult := regexCompile.FindStringSubmatch(stat.GetName())
-		if _, ok := result[reResult[2]]; !ok {
+		if _, ok := result[proxyName+"_"+reResult[2]]; !ok {
 			result[reResult[2]] = &proto.Stats{
-				Name: reResult[2],
-				Type: reResult[1],
+				Name:  reResult[2],
+				Type:  reResult[1],
+				Proxy: proxyName,
 			}
 		}
 		// 填充数据流量
@@ -39,10 +42,10 @@ func parseQueryStats(resp *command.QueryStatsResponse) (*map[string]*proto.Stats
 			result[reResult[2]].Uplink = stat.GetValue()
 		}
 	}
-	return &result, nil
+	return result, nil
 }
 
-func QueryStats(pattern, host string, port int, reset bool) (*map[string]*proto.Stats, error) {
+func QueryStats(pattern, host string, port int, reset bool) (map[string]*proto.Stats, error) {
 	// 创建grpc client
 	cmdConn, err := GetProxyClient(host, port).GetGrpcClientConn()
 	if err != nil {

@@ -2,18 +2,18 @@ package cluster
 
 import (
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/common/util"
 	gc "github.com/lureiny/v2raymg/global/config"
-	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/proxy/manager"
 	"github.com/lureiny/v2raymg/proxy/sub"
+	"github.com/lureiny/v2raymg/proxy/sub/expand"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -55,7 +55,7 @@ func (um *UserManager) Init(proxyManager *manager.ProxyManager) {
 				// 添加到默认tag的inbound中
 				err := um.proxyManager.AddUser(u)
 				if err != nil {
-					log.Printf(
+					logger.Error(
 						"Err=Add user to default inbound err > %v|User=%s|Tag=%s",
 						err,
 						u.Email,
@@ -132,6 +132,9 @@ func proxyUserOp(user *proto.User, opType string, proxyManager *manager.ProxyMan
 		default:
 			err = fmt.Errorf("unsupport proxy user op[%s]", opType)
 		}
+		if tag == "" {
+			continue
+		}
 		if err != nil {
 			logger.Error(
 				"Err=%v|User=%s|Tag=%s",
@@ -188,13 +191,14 @@ func (um *UserManager) Add(user *proto.User) error {
 	return err
 }
 
+// Delete这里只是标记删除, 实际的清除逻辑会在5秒内生效
 func (um *UserManager) Delete(user *proto.User) error {
 	if user.Name == "" {
 		return fmt.Errorf("Empty user name")
 	}
 	um.lock.RLock()
 	if localUser, ok := um.users[user.Name]; !ok {
-		return nil
+		return fmt.Errorf("user[%s] is not exist", user.Name)
 	} else if len(user.Tags) == 0 {
 		user.Tags = localUser.Tags
 	}
@@ -220,6 +224,10 @@ func (um *UserManager) Delete(user *proto.User) error {
 			})
 		// 如果全部tag都被清除, 则在将作为无效用户清除
 		u.Tags = newTags
+		// 通过设置expire time让程序自动清除
+		if len(u.Tags) == 0 {
+			u.ExpireTime = 1
+		}
 	} else {
 		logger.Warn("user[%s] is not exist", user.Name)
 	}
@@ -276,7 +284,7 @@ func (um *UserManager) ClearInvalideUser() {
 	expireUser := []*proto.User{}
 	um.lock.RLock()
 	for _, v := range um.users {
-		if (v.ExpireTime > 0 && v.ExpireTime < currentTime) || len(v.Tags) == 0 {
+		if v.ExpireTime > 0 && v.ExpireTime < currentTime {
 			expireUser = append(expireUser, v)
 		}
 	}
@@ -285,6 +293,7 @@ func (um *UserManager) ClearInvalideUser() {
 	um.lock.Lock()
 	for _, user := range expireUser {
 		if len(user.Tags) > 0 {
+			// 重新删除一遍, 尽量保证用户真正被删除
 			_, _, err := proxyUserOp(user, "delete", um.proxyManager)
 			if err != nil {
 				logger.Error("clear expire err > %v\n", err)
@@ -340,7 +349,7 @@ func (um *UserManager) GetUserSub(user *proto.User, excludeProtocols *util.Strin
 	if len(user.Tags) == 0 {
 		user.Tags = localUser.Tags
 	}
-	return getUserSubUri(user, excludeProtocols, useSNI)
+	return getUserSubUri(user, excludeProtocols, useSNI, um)
 }
 
 func getSubUriHead(uri string) string {
@@ -348,7 +357,7 @@ func getSubUriHead(uri string) string {
 	return subs[0]
 }
 
-func getUserSubUri(user *proto.User, excludeProtocols *util.StringList, useSNI bool) ([]string, error) {
+func getUserSubUri(user *proto.User, excludeProtocols *util.StringList, useSNI bool, um *UserManager) ([]string, error) {
 	proxyHost := gc.GetString(common.ConfigProxyHost)
 	proxyPort := gc.GetInt(common.ConfigProxyPort)
 
@@ -369,6 +378,23 @@ func getUserSubUri(user *proto.User, excludeProtocols *util.StringList, useSNI b
 			uris = append(uris, uri)
 		}
 	}
+
+	// get thrid sub
+	thirdSubs, err := expand.GetSubFromThirdUrl()
+	if err != nil {
+		logger.Error("Err=Get Third subs fail > %v", err)
+	}
+	for _, u := range thirdSubs {
+		if !excludeProtocols.Contains(getSubUriHead(u)) {
+			uris = append(uris, u)
+		}
+	}
+
+	// get hysteria sub
+	if hysteriaUri := um.proxyManager.GetUserSub(user.Name, user.Passwd, globalLocalNode.Name); !excludeProtocols.Contains(getSubUriHead(hysteriaUri)) {
+		uris = append(uris, hysteriaUri)
+	}
+
 	uris = uris.Filter(func(u string) bool {
 		return len(u) > 0
 	})

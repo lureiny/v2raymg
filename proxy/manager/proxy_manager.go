@@ -1,21 +1,33 @@
 package manager
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"math"
 	"math/rand"
+	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/log/logger"
+	"github.com/lureiny/v2raymg/common/template"
+	gc "github.com/lureiny/v2raymg/global/config"
 	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/proxy/config"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
+	"github.com/mitchellh/mapstructure"
+	"gopkg.in/yaml.v3"
 )
+
+// TODO: proxymanager及proxy部分需要重构
 
 const apiTag = "api"
 const supportInboundProtocol = "vmess|vless|trojan|shadowsocks"
@@ -34,7 +46,10 @@ type ProxyManager struct {
 	InboundManager InboundManager
 	rwmutex        sync.RWMutex // bound操作锁
 	RuntimeConfig  RuntimeConfig
-	proxyServer    *ProxyServer
+	proxyServer    *ProxyServer // v2ray/xray server
+	hysteriaServer *ProxyServer
+	hyConfigFile   string
+	hyConfig       *serverConfig
 	adaptive       Adaptive
 	adaptiveMutex  sync.Mutex // 操作自适应变更时的锁
 	certManager    *lego.CertManager
@@ -52,15 +67,21 @@ func NewProxyManager() *ProxyManager {
 	}
 }
 
-func (proxyManager *ProxyManager) Init(configFile, version string, cm *lego.CertManager) error {
+func (proxyManager *ProxyManager) Init(xrayOrV2rayConfigFile, hysteriaConfig, version string, cm *lego.CertManager) error {
 	proxyManager.certManager = cm
-	proxyManager.ConfigFile = configFile
+	proxyManager.ConfigFile = xrayOrV2rayConfigFile
+	proxyManager.hyConfigFile = hysteriaConfig
+	if err := checkAndInitProxyConfig(xrayOrV2rayConfigFile, hysteriaConfig); err != nil {
+		return fmt.Errorf("check and init proxy config fai > err: %v", err)
+	}
 	err := proxyManager.LoadConfig()
 	if err != nil {
-		return err
+		return fmt.Errorf("load config fail > err: %v", err)
 	}
 
-	proxyManager.proxyServer = NewProxyServer(configFile, version)
+	proxyManager.proxyServer = NewProxyServer(xrayOrV2rayConfigFile, version, "xray")
+	// hysteria 使用用最新版
+	proxyManager.hysteriaServer = NewProxyServer(hysteriaConfig, "", "hysteria")
 	return proxyManager.InitRuntimeConfig(true)
 }
 
@@ -187,7 +208,7 @@ func (proxyManager *ProxyManager) LoadConfig() error {
 
 	err = json.Unmarshal(content, &proxyManager.Config)
 	if err != nil {
-		return err
+		return fmt.Errorf("unmarshal xray/v2ray config fail > err: %v", err)
 	}
 
 	for _, inbound := range proxyManager.Config.InboundConfigs {
@@ -203,6 +224,23 @@ func (proxyManager *ProxyManager) LoadConfig() error {
 			return err
 		}
 	}
+	// 加载hysteria config
+	if proxyManager.hyConfigFile != "" {
+		proxyManager.hyConfig = &serverConfig{}
+		data, err := os.ReadFile(proxyManager.hyConfigFile)
+		if err != nil {
+			return err
+		}
+
+		var dataMap map[string]interface{}
+		if err := yaml.Unmarshal(data, &dataMap); err != nil {
+			return err
+		}
+		if err := mapstructure.Decode(dataMap, proxyManager.hyConfig); err != nil {
+			return fmt.Errorf("mapstructure decode fail > %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -277,7 +315,7 @@ func (proxyManager *ProxyManager) addUserToFile(user *User) error {
 	}
 	if err == nil {
 		proxyManager.needFlush = true
-		log.Printf("Add user to config file, user: %v", user)
+		logger.Debug("Add user to config file, user: %v", user)
 	}
 	return err
 }
@@ -316,7 +354,7 @@ func (proxyManager *ProxyManager) removeUserFromFile(user *User) error {
 	}
 	if err == nil {
 		proxyManager.needFlush = true
-		log.Printf("Remove User from runtime: [Email] %s from [Bound] %s", user.Email, user.Tag)
+		logger.Debug("Remove User from runtime: [Email] %s from [Bound] %s", user.Email, user.Tag)
 	}
 	return err
 }
@@ -332,8 +370,31 @@ func (proxyManager *ProxyManager) ResetUser(user *User) error {
 }
 
 // QueryStats query user/inbound stat
-func (proxyManager *ProxyManager) QueryStats(pattern string, reset bool) (*map[string]*proto.Stats, error) {
-	return QueryStats(pattern, proxyManager.RuntimeConfig.Host, proxyManager.RuntimeConfig.Port, reset)
+func (proxyManager *ProxyManager) QueryStats(pattern string, reset bool) (map[string]*proto.Stats, error) {
+	errs := []error{}
+	result := map[string]*proto.Stats{}
+	if proxyManager.hyConfig != nil {
+		hyStats, err := QueryHysteriaStats(
+			proxyManager.hyConfig.TrafficStats.Listen,
+			proxyManager.hyConfig.TrafficStats.Secret,
+			reset)
+		errs = append(errs, err)
+		mergeStats(hyStats, result)
+	}
+
+	xrayV2rayStats, err := QueryStats(pattern, proxyManager.RuntimeConfig.Host, proxyManager.RuntimeConfig.Port, reset)
+	errs = append(errs, err)
+	mergeStats(xrayV2rayStats, result)
+	errMsg := ""
+	for _, e := range errs {
+		if e != nil {
+			errMsg += e.Error()
+		}
+	}
+	if errMsg == "" {
+		return result, nil
+	}
+	return result, fmt.Errorf(errMsg)
 }
 
 // TransferInbound 搬迁inbound, 适用于修改端口的场景
@@ -455,7 +516,7 @@ func isUpstreamInbound(port string, inboundConfig *config.InboundDetourConfig) b
 	if protocolName == VlessProtocolName {
 		vlessInboundConfig, err := NewVlessInboundConfig(inboundConfig)
 		if err != nil {
-			log.Printf("get upstream inbound err > %v\n", err)
+			logger.Error("get upstream inbound err > %v", err)
 		}
 		for _, fallback := range vlessInboundConfig.Fallbacks {
 			var i uint16
@@ -475,7 +536,7 @@ func isUpstreamInbound(port string, inboundConfig *config.InboundDetourConfig) b
 	} else if protocolName == TrojanProtocolName {
 		trojanInboundConfig, err := NewTrojanInboundConfig(inboundConfig)
 		if err != nil {
-			log.Printf("get upstream inbound err > %v\n", err)
+			logger.Error("get upstream inbound err > %v", err)
 		}
 		for _, fallback := range trojanInboundConfig.Fallbacks {
 			var i uint16
@@ -498,12 +559,21 @@ func isUpstreamInbound(port string, inboundConfig *config.InboundDetourConfig) b
 
 // StartProxyServer ...
 func (proxyManager *ProxyManager) StartProxyServer() error {
-	return proxyManager.proxyServer.Start()
+	if err := proxyManager.proxyServer.Start(); err != nil {
+		logger.Error("start v2ray/xray server fail, err: %v", err)
+		return err
+	}
+	if err := proxyManager.hysteriaServer.Start(); err != nil {
+		logger.Error("start hysteria server fail, err: %v", err)
+		return err
+	}
+	return proxyManager.hysteriaServer.Start()
 }
 
 // StopProxyServer ...
 func (proxyManager *ProxyManager) StopProxyServer() {
 	proxyManager.proxyServer.Stop()
+	proxyManager.hysteriaServer.Stop()
 }
 
 // RestartProxyServer ...
@@ -609,13 +679,290 @@ func (proxyManager *ProxyManager) CycleAdaptive() {
 	cycleFunc := func() {
 		for tag := range proxyManager.adaptive.Tags {
 			oldPort, newPort, err := proxyManager.AdaptiveOneInbound(tag)
-			log.Printf("INFO|Func=CycleAdaptive|Tag=%s|OldPort=%d|NewPort=%d|Err=%v\n", tag, oldPort, newPort, err)
+			logger.Info("Tag=%s|OldPort=%d|NewPort=%d|Err=%v", tag, oldPort, newPort, err)
 		}
 	}
 	if _, err := proxyManager.adaptive.Cron.AddFunc(proxyManager.adaptive.CronRule, cycleFunc); err != nil {
-		log.Printf("Err=add adaptive cycle func err > %v, use default cronrule: %s\n", err, defalutCron)
+		logger.Error("add adaptive cycle func err > %v, use default cronrule: %s", err, defalutCron)
 		proxyManager.adaptive.CronRule = defalutCron
 		proxyManager.adaptive.Cron.AddFunc(proxyManager.adaptive.CronRule, cycleFunc)
 	}
 	proxyManager.adaptive.Cron.Start()
+}
+
+// TODO: 暂时这么处理
+func (proxyManager *ProxyManager) GetUserSub(user, password, nodeName string) string {
+	// TODO: 临时兼容方案, 此处只考虑hysteria的订阅链接
+	if proxyManager.hysteriaServer != nil {
+		p := base64.RawStdEncoding.EncodeToString([]byte(password))
+		uri := "hysteria2://" + p + "@" + proxyManager.hyConfig.ACME.Domains[0] + ":443" + "#" + nodeName
+		return uri
+	}
+	return ""
+}
+
+func mergeStats(srcMap, dstMap map[string]*proto.Stats) {
+	for k, v := range srcMap {
+		dstMap[k] = v
+	}
+}
+
+type serverConfig struct {
+	Listen                string                      `mapstructure:"listen"`
+	Obfs                  serverConfigObfs            `mapstructure:"obfs"`
+	TLS                   *serverConfigTLS            `mapstructure:"tls"`
+	ACME                  *serverConfigACME           `mapstructure:"acme"`
+	QUIC                  serverConfigQUIC            `mapstructure:"quic"`
+	Bandwidth             serverConfigBandwidth       `mapstructure:"bandwidth"`
+	IgnoreClientBandwidth bool                        `mapstructure:"ignoreClientBandwidth"`
+	DisableUDP            bool                        `mapstructure:"disableUDP"`
+	UDPIdleTimeout        time.Duration               `mapstructure:"udpIdleTimeout"`
+	Auth                  serverConfigAuth            `mapstructure:"auth"`
+	Resolver              serverConfigResolver        `mapstructure:"resolver"`
+	ACL                   serverConfigACL             `mapstructure:"acl"`
+	Outbounds             []serverConfigOutboundEntry `mapstructure:"outbounds"`
+	TrafficStats          serverConfigTrafficStats    `mapstructure:"trafficStats"`
+	Masquerade            serverConfigMasquerade      `mapstructure:"masquerade"`
+}
+
+type serverConfigObfsSalamander struct {
+	Password string `mapstructure:"password"`
+}
+
+type serverConfigObfs struct {
+	Type       string                     `mapstructure:"type"`
+	Salamander serverConfigObfsSalamander `mapstructure:"salamander"`
+}
+
+type serverConfigTLS struct {
+	Cert string `mapstructure:"cert"`
+	Key  string `mapstructure:"key"`
+}
+
+type serverConfigACME struct {
+	Domains        []string `mapstructure:"domains"`
+	Email          string   `mapstructure:"email"`
+	CA             string   `mapstructure:"ca"`
+	DisableHTTP    bool     `mapstructure:"disableHTTP"`
+	DisableTLSALPN bool     `mapstructure:"disableTLSALPN"`
+	AltHTTPPort    int      `mapstructure:"altHTTPPort"`
+	AltTLSALPNPort int      `mapstructure:"altTLSALPNPort"`
+	Dir            string   `mapstructure:"dir"`
+}
+
+type serverConfigQUIC struct {
+	InitStreamReceiveWindow     uint64        `mapstructure:"initStreamReceiveWindow"`
+	MaxStreamReceiveWindow      uint64        `mapstructure:"maxStreamReceiveWindow"`
+	InitConnectionReceiveWindow uint64        `mapstructure:"initConnReceiveWindow"`
+	MaxConnectionReceiveWindow  uint64        `mapstructure:"maxConnReceiveWindow"`
+	MaxIdleTimeout              time.Duration `mapstructure:"maxIdleTimeout"`
+	MaxIncomingStreams          int64         `mapstructure:"maxIncomingStreams"`
+	DisablePathMTUDiscovery     bool          `mapstructure:"disablePathMTUDiscovery"`
+}
+
+type serverConfigBandwidth struct {
+	Up   string `mapstructure:"up"`
+	Down string `mapstructure:"down"`
+}
+
+type serverConfigAuthHTTP struct {
+	URL      string `mapstructure:"url"`
+	Insecure bool   `mapstructure:"insecure"`
+}
+
+type serverConfigAuth struct {
+	Type     string               `mapstructure:"type"`
+	Password string               `mapstructure:"password"`
+	UserPass map[string]string    `mapstructure:"userpass"`
+	HTTP     serverConfigAuthHTTP `mapstructure:"http"`
+	Command  string               `mapstructure:"command"`
+}
+
+type serverConfigResolverTCP struct {
+	Addr    string        `mapstructure:"addr"`
+	Timeout time.Duration `mapstructure:"timeout"`
+}
+
+type serverConfigResolverUDP struct {
+	Addr    string        `mapstructure:"addr"`
+	Timeout time.Duration `mapstructure:"timeout"`
+}
+
+type serverConfigResolverTLS struct {
+	Addr     string        `mapstructure:"addr"`
+	Timeout  time.Duration `mapstructure:"timeout"`
+	SNI      string        `mapstructure:"sni"`
+	Insecure bool          `mapstructure:"insecure"`
+}
+
+type serverConfigResolverHTTPS struct {
+	Addr     string        `mapstructure:"addr"`
+	Timeout  time.Duration `mapstructure:"timeout"`
+	SNI      string        `mapstructure:"sni"`
+	Insecure bool          `mapstructure:"insecure"`
+}
+
+type serverConfigResolver struct {
+	Type  string                    `mapstructure:"type"`
+	TCP   serverConfigResolverTCP   `mapstructure:"tcp"`
+	UDP   serverConfigResolverUDP   `mapstructure:"udp"`
+	TLS   serverConfigResolverTLS   `mapstructure:"tls"`
+	HTTPS serverConfigResolverHTTPS `mapstructure:"https"`
+}
+
+type serverConfigACL struct {
+	File    string   `mapstructure:"file"`
+	Inline  []string `mapstructure:"inline"`
+	GeoIP   string   `mapstructure:"geoip"`
+	GeoSite string   `mapstructure:"geosite"`
+}
+
+type serverConfigOutboundDirect struct {
+	Mode       string `mapstructure:"mode"`
+	BindIPv4   string `mapstructure:"bindIPv4"`
+	BindIPv6   string `mapstructure:"bindIPv6"`
+	BindDevice string `mapstructure:"bindDevice"`
+}
+
+type serverConfigOutboundSOCKS5 struct {
+	Addr     string `mapstructure:"addr"`
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
+}
+
+type serverConfigOutboundHTTP struct {
+	URL      string `mapstructure:"url"`
+	Insecure bool   `mapstructure:"insecure"`
+}
+
+type serverConfigOutboundEntry struct {
+	Name   string                     `mapstructure:"name"`
+	Type   string                     `mapstructure:"type"`
+	Direct serverConfigOutboundDirect `mapstructure:"direct"`
+	SOCKS5 serverConfigOutboundSOCKS5 `mapstructure:"socks5"`
+	HTTP   serverConfigOutboundHTTP   `mapstructure:"http"`
+}
+
+type serverConfigTrafficStats struct {
+	Listen string `mapstructure:"listen"`
+	Secret string `mapstructure:"secret"`
+}
+
+type serverConfigMasqueradeFile struct {
+	Dir string `mapstructure:"dir"`
+}
+
+type serverConfigMasqueradeProxy struct {
+	URL         string `mapstructure:"url"`
+	RewriteHost bool   `mapstructure:"rewriteHost"`
+}
+
+type serverConfigMasqueradeString struct {
+	Content    string            `mapstructure:"content"`
+	Headers    map[string]string `mapstructure:"headers"`
+	StatusCode int               `mapstructure:"statusCode"`
+}
+
+type serverConfigMasquerade struct {
+	Type        string                       `mapstructure:"type"`
+	File        serverConfigMasqueradeFile   `mapstructure:"file"`
+	Proxy       serverConfigMasqueradeProxy  `mapstructure:"proxy"`
+	String      serverConfigMasqueradeString `mapstructure:"string"`
+	ListenHTTP  string                       `mapstructure:"listenHTTP"`
+	ListenHTTPS string                       `mapstructure:"listenHTTPS"`
+	ForceHTTPS  bool                         `mapstructure:"forceHTTPS"`
+}
+
+func checkAndInitProxyConfig(xrayOrV2rayConfig, hysteriaConfig string) error {
+	var err error = nil
+	if rErr := initXrayOrV2rayConfig(xrayOrV2rayConfig); rErr != nil {
+		common.MergeError(err, rErr)
+	}
+	if rErr := initHysteriaConfig(hysteriaConfig); rErr != nil {
+		common.MergeError(err, rErr)
+	}
+	return err
+}
+
+func initXrayOrV2rayConfig(configFile string) error {
+	// 如果文件不存在, 则需要初始化
+	if isFileExist(configFile) {
+		return nil
+	}
+
+	templateVars := map[string]interface{}{
+		common.TemplateXrayV2rayApiPort: common.DefaultXrayV2rayApiPort,
+	}
+	result, err := template.RenderXrayOrV2rayConfigTemplate(templateVars)
+	if err != nil {
+		return fmt.Errorf("render xray or v2ray config fail > err: %v", err)
+	}
+	return writeToFile(configFile, result)
+}
+
+func initHysteriaConfig(configFile string) error {
+	// 如果文件不存在, 则需要初始化
+	if isFileExist(configFile) {
+		return nil
+	}
+	hysteriaAuthUrl := fmt.Sprintf("http://localhost:%d/authHysteria2", gc.GetInt(common.ConfigServerHttpPort))
+	email := gc.GetString(common.ConfigCertEmail)
+	domain := gc.GetString(common.ConfigProxyHost)
+	// 自动初始化时限制必须使用acme, 不支持自定义证书
+	if net.ParseIP(domain) != nil {
+		return fmt.Errorf("auto init hysteria must set proxy host with domain which is resolved to the current machine")
+	}
+	templateVars := map[string]interface{}{
+		common.TemplateHysteriaListen:                common.DefaultHysteriaListen,
+		common.TemplateHysteriaBandwidthUp:           common.DefaultHysteriaBandwidthUp,
+		common.TemplateHysteriaBandwidthDown:         common.DefaultHysteriaBandwidthDown,
+		common.TemplateHysteriaIgnoreClientBandwidth: common.DefaultIgnoreClientBandwidth,
+		common.TemplateHysteriaAuthUrl:               hysteriaAuthUrl,
+		common.TemplateHysteriaTrafficStatsListen:    common.DefaultHysteriaTrafficStatsListen,
+		common.TemplateHysteriaTrafficStatsSecret:    uuid.New(),
+		common.TemplateUseAcme:                       true,
+		common.TemplateDomains:                       []string{domain},
+		common.TemplateEmail:                         email,
+	}
+	result, err := template.RenderHysteriaConfigTemplate(templateVars)
+	if err != nil {
+		return fmt.Errorf("render hysteria config fail > err: %v", err)
+	}
+	return writeToFile(configFile, result)
+}
+
+func writeToFile(configFile, info string) error {
+	if err := mkdir(configFile); err != nil {
+		return err
+	}
+	f, err := os.Create(configFile)
+	if err != nil {
+		return fmt.Errorf("create fil[%s] fail > err: %v", configFile, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(info); err != nil {
+		return fmt.Errorf("write to file[%s] fail > err: %v", configFile, err)
+	}
+	return nil
+}
+
+func mkdir(filePath string) error {
+	// 获取文件所在目录
+	dir := filepath.Dir(filePath)
+
+	// 创建目录
+	err := os.MkdirAll(dir, os.ModePerm)
+	if err != nil {
+		return fmt.Errorf("create file[%s] dir fail > err: %v", filePath, err)
+	}
+	return nil
+}
+
+func isFileExist(file string) bool {
+	// 判断文件是否存在
+	_, err := os.Stat(file)
+	if err != nil {
+		return !os.IsNotExist(err)
+	}
+	return true
 }

@@ -13,10 +13,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/lureiny/v2raymg/cluster"
 	"github.com/lureiny/v2raymg/common"
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/common/util"
 	globalCluster "github.com/lureiny/v2raymg/global/cluster"
+	"github.com/lureiny/v2raymg/global/collecter"
 	globalConfig "github.com/lureiny/v2raymg/global/config"
-	"github.com/lureiny/v2raymg/global/logger"
 	"github.com/lureiny/v2raymg/global/proxy"
 	globalUserManager "github.com/lureiny/v2raymg/global/user"
 	"github.com/lureiny/v2raymg/lego"
@@ -64,7 +65,7 @@ func (s *EndNodeServer) initRpcServerKey() {
 var methodPrefixLen = len("/proto.EndNodeAccess/")
 
 // gateway模式下放行的接口列表
-var onlyGatewayMethods = "HeartBeat|RegisterNode|SetGatewayModel"
+var onlyGatewayMethods = "HeartBeat|RegisterNode|SetGatewayModel|GetPingMetric|GetBandWidthStats"
 
 func isOnlyGatewayMethod(fullMethod string) bool {
 	return strings.Contains(onlyGatewayMethods, fullMethod[methodPrefixLen:])
@@ -74,6 +75,7 @@ var methodRspMap = map[string]interface{}{
 	"GetUsers":             &proto.GetUsersRsp{},
 	"AddUsers":             &proto.UserOpRsp{},
 	"DeleteUsers":          &proto.UserOpRsp{},
+	"ClearUsers":           &proto.ClearUsersRsp{},
 	"UpdateUsers":          &proto.UserOpRsp{},
 	"ResetUser":            &proto.UserOpRsp{},
 	"GetSub":               &proto.GetSubRsp{},
@@ -91,9 +93,12 @@ var methodRspMap = map[string]interface{}{
 	"AddAdaptiveConfig":    &proto.AdaptiveRsp{},
 	"DeleteAdaptiveConfig": &proto.AdaptiveRsp{},
 	"Adaptive":             &proto.AdaptiveRsp{},
+	"FastAddInbound":       &proto.FastAddInboundReq{},
 	"SetGatewayModel":      &proto.SetGatewayModelRsp{},
 	"ObtainNewCert":        &proto.ObtainNewCertRsp{},
-	"FastAddInbound":       &proto.FastAddInboundReq{},
+	"TransferCert":         &proto.TransferCertRsp{},
+	"GetCerts":             &proto.GetCertsRsp{},
+	"GetPingMetric":        &proto.GetPingMetricRsp{},
 }
 
 func newEmptyRsp(fullMethod string) (interface{}, error) {
@@ -233,7 +238,18 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 	globalCluster.DeleteFromWrongTokenNodeList(nodeName)
 
 	if n := globalCluster.Get(nodeName); n != nil {
-		// 已经感知到的节点
+		// 校验已经感知到的节点是否与新注册节点一致, 要求host, port, cluster相同, 否则可能是同名的注册了
+		if !n.CompareWithProtoNode(node) {
+			errMsg := "repeated register, bug with different node"
+			logger.Error(
+				"Err=%s|SrcName=%s",
+				errMsg,
+				nodeName,
+			)
+			registerNodeRsp.Code = 105
+			registerNodeRsp.Msg = errMsg
+			return registerNodeRsp, nil
+		}
 		if n.RegisteredLocal() {
 			errMsg := "repeated register"
 			logger.Error(
@@ -288,6 +304,17 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 
 func (s *EndNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.HeartBeatReq) (*proto.HeartBeatRsp, error) {
 	heartBeatRsp := &proto.HeartBeatRsp{}
+	node := globalCluster.Get(heartBeatReq.GetNodeAuthInfo().Node.GetName())
+	if node == nil {
+		// node 可能已经过期被清理了
+		heartBeatRsp.Code = 104
+		heartBeatRsp.Msg = "node has been drop"
+		logger.Error(
+			"Err=node[%s] has been drop",
+			heartBeatReq.GetNodeAuthInfo().Node.GetName(),
+		)
+		return heartBeatRsp, nil
+	}
 	heartBeatRsp.NodesMap = globalCluster.GetProtoNodesWithFilter(
 		func(node *cluster.Node) bool {
 			return node.Name != s.Name && node.IsValid()
@@ -301,7 +328,7 @@ func (s *EndNodeServer) GetUsers(ctx context.Context, getUsersReq *proto.GetUser
 		Code: 0,
 	}
 	usersMap := globalUserManager.GetUserList()
-	sumStats := common.SumStats
+	sumStats := collecter.SumStats
 	sumStats.Mutex.Lock()
 	defer sumStats.Mutex.Unlock()
 	for _, u := range usersMap {
@@ -439,26 +466,14 @@ func (s *EndNodeServer) GetBandWidthStats(ctx context.Context, getBandwidthStats
 		Code: 0,
 	}
 
-	pattern := getBandwidthStatsReq.GetPattern()
-	reset := getBandwidthStatsReq.GetReset_()
+	prometheusStats := collecter.StatsForPrometheus
+	prometheusStats.Mutex.Lock()
+	defer prometheusStats.Mutex.Unlock()
 
-	stats, err := proxy.QueryStats(pattern, reset)
-
-	if err != nil {
-		errMsg := fmt.Sprintf("Get bandWidth stats err > %v", err)
-		logger.Error(
-			"Err=%s|Pattern=%s|Reset=%v",
-			errMsg,
-			pattern,
-			reset,
-		)
-		getBandWidthStatsRsp.Msg = errMsg
-		getBandWidthStatsRsp.Code = 500
-		return getBandWidthStatsRsp, nil
-	}
-	for _, s := range *stats {
+	for _, s := range prometheusStats.StatsMap {
 		getBandWidthStatsRsp.Stats = append(getBandWidthStatsRsp.Stats, s)
 	}
+	prometheusStats.StatsMap = map[string]*proto.Stats{}
 	return getBandWidthStatsRsp, nil
 }
 
@@ -856,6 +871,13 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 	fastAddInboundRsp := &proto.FastAddInboundRsp{
 		Code: 0,
 	}
+	if cert := s.certManager.GetCert(fastAddInboundReq.GetDomain()); cert == nil {
+		if err := s.certManager.ObtainNewCert(fastAddInboundReq.GetDomain()); err != nil {
+			fastAddInboundRsp.Code = 1022
+			fastAddInboundRsp.Msg = fmt.Sprintf("obtain new cert of domain[%s] fail > %v", fastAddInboundReq.GetDomain(), err)
+			return fastAddInboundRsp, nil
+		}
+	}
 	inbound, err := newInbound(fastAddInboundReq, s.certManager)
 	if err != nil {
 		fastAddInboundRsp.Code = 1020
@@ -931,6 +953,8 @@ func (s *EndNodeServer) ClearUsers(ctx context.Context, clearUsersReq *proto.Cle
 	for _, user := range clearUsersReq.Users {
 		if u := globalUserManager.Get(user); u != nil {
 			users = append(users, u)
+		} else {
+			logger.Debug("user[%s] is not exist", u)
 		}
 	}
 	userList := ""
@@ -950,6 +974,23 @@ func (s *EndNodeServer) ClearUsers(ctx context.Context, clearUsersReq *proto.Cle
 		clearUsersRsp.Code = 1040
 	}
 	return clearUsersRsp, nil
+}
+
+func (s *EndNodeServer) GetPingMetric(ctx context.Context, in *proto.GetPingMetricReq) (*proto.GetPingMetricRsp, error) {
+	getMetricRsp := &proto.GetPingMetricRsp{
+		Code: 0,
+	}
+	pingResults := collecter.GetPingResult()
+	pingMertic := &proto.PingMetric{
+		Host:    globalConfig.GetString(common.ConfigProxyHost),
+		Source:  s.Name,
+		Results: make([]*proto.PingResult, 0),
+	}
+	for _, r := range pingResults {
+		pingMertic.Results = append(pingMertic.Results, r.ConvertToProtoPingResult())
+	}
+	getMetricRsp.Metric = pingMertic
+	return getMetricRsp, nil
 }
 
 func (s *EndNodeServer) registerToEndNode(node *cluster.Node, wg *sync.WaitGroup, ch chan struct{}) {
@@ -1158,6 +1199,8 @@ func addRemoteNode(rsp *proto.HeartBeatRsp, s *EndNodeServer, remoteServerType s
 }
 
 func (s *EndNodeServer) heartBeatAndRegisterToNodeOrCenterNode() {
+	logger.Info("start heartbeat to center and end node or register to end node")
+	defer logger.Info("heartbeat and register exit")
 	ticker := time.NewTicker(heartbeatInterval)
 	for {
 		s.heartbeatToCenterNode()
