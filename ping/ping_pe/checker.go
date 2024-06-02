@@ -81,7 +81,7 @@ func (pc *PingPeChecker) StartPing(host string) error {
 				return
 			default:
 				if pingResults, err := getResult(streamId, pc.cookie); err != nil {
-					logger.Error("ping host[%s] with ping pe fail, err: %v", err)
+					logger.Error("ping host[%s] with ping pe fail, err: %v", host, err)
 				} else {
 					for _, d := range pingResults.Data {
 						if float64(d.Result)/1000 == -1 {

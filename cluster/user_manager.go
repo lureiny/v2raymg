@@ -379,6 +379,11 @@ func getUserSubUri(user *proto.User, excludeProtocols *util.StringList, useSNI b
 		}
 	}
 
+	// get hysteria sub
+	if hysteriaUri := um.proxyManager.GetUserSub(user.Name, user.Passwd, globalLocalNode.Name); !excludeProtocols.Contains(getSubUriHead(hysteriaUri)) {
+		uris = append(uris, hysteriaUri)
+	}
+
 	// get thrid sub
 	thirdSubs, err := expand.GetSubFromThirdUrl()
 	if err != nil {
@@ -388,11 +393,6 @@ func getUserSubUri(user *proto.User, excludeProtocols *util.StringList, useSNI b
 		if !excludeProtocols.Contains(getSubUriHead(u)) {
 			uris = append(uris, u)
 		}
-	}
-
-	// get hysteria sub
-	if hysteriaUri := um.proxyManager.GetUserSub(user.Name, user.Passwd, globalLocalNode.Name); !excludeProtocols.Contains(getSubUriHead(hysteriaUri)) {
-		uris = append(uris, hysteriaUri)
 	}
 
 	uris = uris.Filter(func(u string) bool {

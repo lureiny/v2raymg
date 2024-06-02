@@ -9,28 +9,27 @@ on:
       - v*
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Set up Go
-      uses: actions/setup-go@v3
-      with:
-        go-version: 1.19
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.19
 
-    - name: Build Xray
-      run: make xray && cd bin/ && tar czvf ../v2raymg-xray.tar.gz v2raymg
+      - name: Build Xray
+        run: make xray && cd bin/ && tar czvf ../v2raymg-xray.tar.gz v2raymg tools
 
-    - name: Build V2ray
-      run: make v2ray && cd bin/ && tar czvf ../v2raymg-v2ray.tar.gz v2raymg
-      
-    - name: auth
-      run: echo ${{ secrets.GITHUB_TOKEN }} | gh auth login --with-token 
-   
-    - name: create release
-      run: gh release create ${TAG} v2raymg-xray.tar.gz v2raymg-v2ray.tar.gz
-     
+      - name: Build V2ray
+        run: make v2ray && cd bin/ && tar czvf ../v2raymg-v2ray.tar.gz v2raymg tools
+
+      - name: auth
+        run: echo ${{ secrets.GITHUB_TOKEN }} | gh auth login --with-token
+
+      - name: create release
+        run: gh release create ${TAG} v2raymg-xray.tar.gz v2raymg-v2ray.tar.gz
+
     env:
       TAG: ${{ github.ref }}

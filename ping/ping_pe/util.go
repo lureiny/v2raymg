@@ -64,8 +64,7 @@ func getStreamIdAndDoc(host, cookie string) (string, string, error) {
 }
 
 type pingPeResult struct {
-	Data  []*pingPeResultData `json:"data"`
-	State *pingPeState        `json:"state"`
+	Data []*pingPeResultData `json:"data"`
 }
 
 type pingPeResultData struct {
@@ -73,10 +72,6 @@ type pingPeResultData struct {
 	TimestampMs int64  `json:"timestamp_ms"`
 	Result      int64  `json:"result"` // -2000 代表不可达, -1000代表还没有数据, 大于0表示正常探测
 	ResultText  string `json:"result_text"`
-}
-
-type pingPeState struct {
-	OutstandingNodeCount int64 `json:"outstandingNodeCount"`
 }
 
 func getResult(streamId, cookie string) (*pingPeResult, error) {
@@ -105,11 +100,11 @@ func getResult(streamId, cookie string) (*pingPeResult, error) {
 func getNodeGeoAndISP(rootNode *html.Node, id string) (string, string) {
 	geo, err := getNodeGeo(rootNode, id)
 	if err != nil {
-		logger.Error("get geo of id[%d] fail, err : %v", id, err)
+		return "", ""
 	}
 	isp, err := getNodeISP(rootNode, id)
 	if err != nil {
-		logger.Error("get isp of id[%d] fail, err : %v", id, err)
+		logger.Error("get isp of id[%s] fail, err : %v", id, err)
 	}
 	return geo, isp
 }

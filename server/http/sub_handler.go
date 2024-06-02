@@ -9,6 +9,7 @@ import (
 	"github.com/lureiny/v2raymg/cluster"
 	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/common/util"
+	globalCluster "github.com/lureiny/v2raymg/global/cluster"
 	"github.com/lureiny/v2raymg/proxy/sub/converter"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
@@ -61,13 +62,14 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, nil)
-	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
+	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(),
 		client.GetSubReqType,
 		&proto.GetSubReq{
 			User:             userPoint,
 			ExcludeProtocols: excludeProtocols.Filter(func(t string) bool { return len(t) > 0 }),
 			UseSni:           parasMap["useSNI"] == "true",
 		},
+		globalCluster.GetClusterToken(),
 	)
 
 	if len(failedList) != 0 {

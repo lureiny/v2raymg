@@ -28,4 +28,6 @@ const (
 	GetCertsType
 	ClearUsersType
 	GetPingMetricType
+	RegisterNodeType
+	HeartBeatType
 )

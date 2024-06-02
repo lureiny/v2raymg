@@ -7,7 +7,15 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type EncryptMessageCodec struct{}
+type EncryptMessageCodec struct {
+	key []byte
+}
+
+func NewEncryptMessageCodec(token string) *EncryptMessageCodec {
+	return &EncryptMessageCodec{
+		key: GetRpcKeyByToken(token),
+	}
+}
 
 func (e *EncryptMessageCodec) Marshal(v interface{}) ([]byte, error) {
 	m := v.(proto.Message)
@@ -15,11 +23,11 @@ func (e *EncryptMessageCodec) Marshal(v interface{}) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return util.EncryptWithAES(byteReq, RpcServerKey)
+	return util.EncryptWithAES(byteReq, e.key)
 }
 
 func (e *EncryptMessageCodec) Unmarshal(data []byte, v interface{}) error {
-	decryptMessage, err := util.DecryptWithAES(data, RpcServerKey)
+	decryptMessage, err := util.DecryptWithAES(data, e.key)
 	if err != nil {
 		return err
 	}
@@ -32,4 +40,15 @@ func (e *EncryptMessageCodec) Unmarshal(data []byte, v interface{}) error {
 
 func (e *EncryptMessageCodec) Name() string {
 	return "EncryptMessageCodec"
+}
+
+const rpcServerKeyLen = 32
+
+func GetRpcKeyByToken(token string) []byte {
+	if len(token) >= rpcServerKeyLen {
+		return []byte(token)[:32]
+	} else {
+		// 如果密码为空, 则同样不具有安全性, 仅仅不会被抓包直接分析
+		return util.PKCS7Padding([]byte(token), rpcServerKeyLen)
+	}
 }

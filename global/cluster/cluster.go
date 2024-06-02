@@ -90,7 +90,7 @@ func GetProtoNodesWithFilter(f cluster.NodeFilter) map[string]*proto.Node {
 }
 
 // GetNodesWithFilter 获取cluster Node列表, 返回满足过滤条件的node集合
-func GetNodesWithFilter(f cluster.NodeFilter) *[]*cluster.Node {
+func GetNodesWithFilter(f cluster.NodeFilter) []*cluster.Node {
 	return globalEndNodeClusterManager.GetNodesWithFilter(f)
 }
 

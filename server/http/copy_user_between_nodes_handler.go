@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	client "github.com/lureiny/v2raymg/client/rpc"
 	"github.com/lureiny/v2raymg/common/log/logger"
+	globalCluster "github.com/lureiny/v2raymg/global/cluster"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -28,13 +29,13 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 	}
 
 	srcNodes := handler.getHttpServer().GetTargetNodes(parasMap["srcNode"])
-	if len(*srcNodes) == 0 {
+	if len(srcNodes) == 0 {
 		c.String(200, "no avaliable src node")
 		return
 	}
 
 	dstNodes := handler.getHttpServer().GetTargetNodes(parasMap["dstNode"])
-	if len(*dstNodes) == 0 {
+	if len(dstNodes) == 0 {
 		c.String(200, "no avaliable dst node")
 		return
 	}
@@ -42,7 +43,8 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 	srcNodeRpcClient := client.NewEndNodeClient(srcNodes, nil)
 	dstNodeRpcClient := client.NewEndNodeClient(dstNodes, nil)
 
-	succList, failedList, _ := srcNodeRpcClient.ReqToMultiEndNodeServer(client.GetUsersReqType, &proto.GetUsersReq{})
+	succList, failedList, _ := srcNodeRpcClient.ReqToMultiEndNodeServer(
+		c.Request.Context(), client.GetUsersReqType, &proto.GetUsersReq{}, globalCluster.GetClusterToken())
 	if len(failedList) > 0 {
 		errMsg := fmt.Sprintf("get src node user list err > %v", failedList[parasMap["srcNode"]])
 		logger.Error(
@@ -61,10 +63,12 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 		u.Uplink = 0
 	}
 	_, failedList, _ = dstNodeRpcClient.ReqToMultiEndNodeServer(
+		c.Request.Context(),
 		client.AddUsersReqType,
 		&proto.UserOpReq{
 			Users: users.([]*proto.User),
 		},
+		globalCluster.GetClusterToken(),
 	)
 
 	if len(failedList) > 0 {
