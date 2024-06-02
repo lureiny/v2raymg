@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	rpcClient "github.com/lureiny/v2raymg/client/rpc"
 	"github.com/lureiny/v2raymg/cluster"
 	"github.com/lureiny/v2raymg/common"
 	"github.com/lureiny/v2raymg/common/log/logger"
+	"github.com/lureiny/v2raymg/common/rpc"
 	"github.com/lureiny/v2raymg/common/util"
 	globalCluster "github.com/lureiny/v2raymg/global/cluster"
 	"github.com/lureiny/v2raymg/global/collecter"
@@ -25,6 +27,7 @@ import (
 	"github.com/lureiny/v2raymg/proxy/manager"
 	"github.com/lureiny/v2raymg/server"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
+	pb "google.golang.org/protobuf/proto"
 
 	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/encoding"
@@ -43,23 +46,12 @@ type EndNodeServer struct {
 }
 
 const (
-	rpcServerKeyLen          = 32
 	heartbeatInterval        = 10 * time.Second
 	clearInvalidNodeInterval = 20 * time.Second
 )
 
 func GetEndNodeServer() *EndNodeServer {
 	return endNodeServer
-}
-
-func (s *EndNodeServer) initRpcServerKey() {
-	clusterToken := globalCluster.GetClusterToken()
-	if len(clusterToken) >= rpcServerKeyLen {
-		RpcServerKey = []byte(clusterToken)[:32]
-	} else {
-		// 如果密码为空, 则同样不具有安全性, 仅仅不会被抓包直接分析
-		RpcServerKey = util.PKCS7Padding([]byte(clusterToken), rpcServerKeyLen)
-	}
 }
 
 var methodPrefixLen = len("/proto.EndNodeAccess/")
@@ -164,8 +156,6 @@ func (s *EndNodeServer) Init(certManager *lego.CertManager) {
 	s.Type = common.EndNodeType
 	serverName := globalConfig.GetString(common.ConfigServerName)
 	s.Name = serverName
-
-	s.initRpcServerKey()
 
 	// init center node
 	s.centerNode = &cluster.Node{
@@ -1012,24 +1002,26 @@ func (s *EndNodeServer) registerToEndNode(node *cluster.Node, wg *sync.WaitGroup
 	}
 
 	c := proto.NewEndNodeAccessClient(conn)
-	registerNodeReq := &proto.RegisterNodeReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: globalCluster.GetClusterToken(),
-			Node:  &localNode.Node,
-		},
+	nodeAuthInfo := &proto.NodeAuthInfo{
+		Token: globalCluster.GetClusterToken(),
+		Node:  &localNode.Node,
 	}
-	rsp, err := c.RegisterNode(context.Background(), registerNodeReq, grpc.ForceCodec(&EncryptMessageCodec{}))
+	var registerNodeReq interface{} = &proto.RegisterNodeReq{}
+	reqData, _ := pb.Marshal(registerNodeReq.(pb.Message))
+	rsp, err := rpcClient.ReqRegisterNode(rpcClient.NewContext(), reqData, c, nodeAuthInfo, globalCluster.GetClusterToken())
+	registerRsp := rsp.(*proto.RegisterNodeRsp)
 	errMsg := ""
 	if err != nil {
 		errMsg = fmt.Sprintf("register to end node failed > %v", err)
-	} else if rsp.GetCode() != 0 {
-		errMsg = rsp.GetMsg()
+	} else if registerRsp.GetCode() != 0 {
+		errMsg = registerRsp.GetMsg()
 	}
 	if errMsg != "" {
 		// 从处理的节点中清除, 添加到wrong token node list
 		// TODO:  本地节点不会从遍历列表清除, 后面需要对node持久化时可以将此作为落盘依据之一
 		// 102代表是已经注册过, 已经注册过的可以重新获取到token, 此时不需要删除, Error log仅做记录用
-		if !node.IsLocal() && rsp.GetCode() != 102 {
+		// 非业务逻辑导致的失败不应该记录为wrong node
+		if !node.IsLocal() && (registerRsp.GetCode() > 0 && registerRsp.GetCode() != 102) && err == nil {
 			globalCluster.Delete(node.GetName())
 			globalCluster.AddToWrongNodeList(node)
 		}
@@ -1041,8 +1033,8 @@ func (s *EndNodeServer) registerToEndNode(node *cluster.Node, wg *sync.WaitGroup
 			node.Name,
 		)
 	}
-	if len(rsp.GetData()) != 0 {
-		token := string(rsp.GetData())
+	if len(registerRsp.GetData()) != 0 {
+		token := string(registerRsp.GetData())
 		node.OutToken = token
 		node.ReportHeartBeatTime = time.Now().Unix()
 	}
@@ -1067,17 +1059,18 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 	}
 
 	c := proto.NewEndNodeAccessClient(conn)
-	heartBeatReq := &proto.HeartBeatReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: node.OutToken,
-			Node:  &localNode.Node,
-		},
+	nodeAuthInfo := &proto.NodeAuthInfo{
+		Token: node.OutToken,
+		Node:  &localNode.Node,
 	}
-	rsp, err := c.HeartBeat(context.Background(), heartBeatReq, grpc.ForceCodec(&EncryptMessageCodec{}))
-	if err != nil || rsp.GetCode() != 0 {
+	var heartBeatReq interface{} = &proto.HeartBeatReq{}
+	reqData, _ := pb.Marshal(heartBeatReq.(pb.Message))
+	rsp, err := rpcClient.ReqHeartBeat(rpcClient.NewContext(), reqData, c, nodeAuthInfo, globalCluster.GetClusterToken())
+	heartBeatRsp := rsp.(*proto.HeartBeatRsp)
+	if err != nil || heartBeatRsp.GetCode() != 0 {
 		errMsg := fmt.Sprintf("heartbeat to end node failed > %v", err)
-		if rsp.GetCode() != 0 {
-			errMsg = rsp.GetMsg()
+		if heartBeatRsp.GetCode() != 0 {
+			errMsg = heartBeatRsp.GetMsg()
 			// 非网络问题应该更新上报时间, 延长节点有效时间
 			node.ReportHeartBeatTime = time.Now().Unix()
 		}
@@ -1092,7 +1085,7 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 		)
 	} else {
 		node.ReportHeartBeatTime = time.Now().Unix()
-		addRemoteNode(rsp, s, "End")
+		addRemoteNode(heartBeatRsp, s, "End")
 	}
 }
 
@@ -1156,7 +1149,7 @@ func (s *EndNodeServer) heartbeatToCenterNode() {
 			Node:  &localNode.Node,
 		},
 	}
-	rsp, err := c.HeartBeat(context.Background(), heartBeatReq)
+	rsp, err := c.HeartBeat(rpcClient.NewContext(), heartBeatReq)
 	if err != nil {
 		errMsg := fmt.Sprintf("heartbeat failed > %v", err)
 		logger.Error(
@@ -1175,6 +1168,13 @@ func addRemoteNode(rsp *proto.HeartBeatRsp, s *EndNodeServer, remoteServerType s
 		remoteNodeName := remoteNode.GetName()
 		if node := globalCluster.Get(key); node == nil && remoteNode.Name != localNode.Name {
 			if wrongNode := globalCluster.GetNodeFromWrongNodeList(remoteNodeName); wrongNode != nil {
+				logger.Debug(
+					"Msg=Skip Add Wrong Node From %s Node|Node=%s:%d|NodeName=%s",
+					remoteServerType,
+					remoteNode.GetHost(),
+					remoteNode.GetPort(),
+					remoteNode.GetName(),
+				)
 				continue
 			}
 			logger.Info(
@@ -1243,7 +1243,7 @@ func (s *EndNodeServer) Start() {
 		)
 		return
 	}
-	encoding.RegisterCodec(&EncryptMessageCodec{})
+	encoding.RegisterCodec(rpc.NewEncryptMessageCodec(globalCluster.GetClusterToken()))
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(UnaryServerInterceptor))
 	proto.RegisterEndNodeAccessServer(grpcServer, s)
 	go s.heartBeatAndRegisterToNodeOrCenterNode()

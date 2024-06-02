@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	client "github.com/lureiny/v2raymg/client/rpc"
 	"github.com/lureiny/v2raymg/common/log/logger"
+	globalCluster "github.com/lureiny/v2raymg/global/cluster"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -31,7 +32,7 @@ func (handler *BoundHandler) handlerFunc(c *gin.Context) {
 	parasMap := handler.parseParam(c)
 
 	nodes := handler.getHttpServer().GetTargetNodes(parasMap["target"])
-	if len(*nodes) == 0 {
+	if len(nodes) == 0 {
 		c.String(200, "no avaliable node")
 		return
 	}
@@ -91,7 +92,7 @@ func (handler *BoundHandler) handlerFunc(c *gin.Context) {
 		c.String(200, fmt.Sprintf("unsupport operation type %s", parasMap["type"]))
 		return
 	}
-	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(reqType, req)
+	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), reqType, req, globalCluster.GetClusterToken())
 	if reqType == client.GetInboundReqType && len(succList) > 0 {
 		c.JSON(200, succList)
 		return

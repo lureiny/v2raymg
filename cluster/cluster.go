@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/lureiny/v2raymg/common"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -20,6 +21,7 @@ type Cluster struct {
 func (cluster *Cluster) Init() {
 	cluster.NodeManager = NewNodeManager()
 	cluster.WrongTokenNode = NewNodeManager()
+	cluster.WrongTokenNode.SetName("WrongNodeManager")
 }
 
 // Get get node by name
@@ -69,7 +71,7 @@ func (cluster *Cluster) GetProtoNodesWithFilter(f NodeFilter) map[string]*proto.
 }
 
 // GetNodesWithFilter 获取cluster Node列表, 返回满足过滤条件的node集合
-func (cluster *Cluster) GetNodesWithFilter(f NodeFilter) *[]*Node {
+func (cluster *Cluster) GetNodesWithFilter(f NodeFilter) []*Node {
 	return cluster.NodeManager.GetNodesWithFilter(f)
 }
 
@@ -152,4 +154,8 @@ func (cluster *Cluster) GetAllNode() map[string]*Node {
 // Filter ...
 func (cluster *Cluster) Filter(f NodeFilter) {
 	cluster.NodeManager.Filter(f)
+	cluster.WrongTokenNode.Filter(func(n *Node) bool {
+		// 过滤掉注册时间很久的wrong node
+		return n.CreateTime+common.NodeTimeOut > time.Now().Unix()
+	})
 }

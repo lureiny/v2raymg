@@ -4,6 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 	client "github.com/lureiny/v2raymg/client/rpc"
 	"github.com/lureiny/v2raymg/common/log/logger"
+	globalCluster "github.com/lureiny/v2raymg/global/cluster"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -19,15 +20,16 @@ func (handler *TagHandler) handlerFunc(c *gin.Context) {
 	parasMap := handler.parseParam(c)
 
 	nodes := handler.getHttpServer().GetTargetNodes(parasMap["target"])
-	if len(*nodes) == 0 {
+	if len(nodes) == 0 {
 		c.String(200, "no avaliable node")
 		return
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, nil)
-	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
+	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(),
 		client.GetTagReqType,
 		&proto.GetTagReq{},
+		globalCluster.GetClusterToken(),
 	)
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)

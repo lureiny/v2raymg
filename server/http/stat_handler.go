@@ -4,6 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 	client "github.com/lureiny/v2raymg/client/rpc"
 	"github.com/lureiny/v2raymg/common/log/logger"
+	globalCluster "github.com/lureiny/v2raymg/global/cluster"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -28,9 +29,10 @@ func (handler *StatHandler) handlerFunc(c *gin.Context) {
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, nil)
-	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
+	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(),
 		client.GetBandWidthStatsReqType,
 		&proto.GetBandwidthStatsReq{},
+		globalCluster.GetClusterToken(),
 	)
 
 	if len(succList) > 0 {

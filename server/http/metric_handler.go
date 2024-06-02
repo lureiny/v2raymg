@@ -4,6 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 	client "github.com/lureiny/v2raymg/client/rpc"
 	"github.com/lureiny/v2raymg/common/log/logger"
+	globalCluster "github.com/lureiny/v2raymg/global/cluster"
 	prometheusdesc "github.com/lureiny/v2raymg/server/http/prometheus_desc"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"github.com/prometheus/client_golang/prometheus"
@@ -34,9 +35,10 @@ func prometheusHandler(metricHandler *MetricHandler) gin.HandlerFunc {
 		}
 		// stats
 		rpcClient := client.NewEndNodeClient(nodes, nil)
-		succList, _, _ := rpcClient.ReqToMultiEndNodeServer(
+		succList, _, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(),
 			client.GetBandWidthStatsReqType,
 			&proto.GetBandwidthStatsReq{},
+			globalCluster.GetClusterToken(),
 		)
 		stats := []*proto.Stats{}
 		for _, v := range succList {
@@ -48,9 +50,10 @@ func prometheusHandler(metricHandler *MetricHandler) gin.HandlerFunc {
 		trafficDesc.Stats = stats
 
 		// ping metrics
-		metricSuccList, _, _ := rpcClient.ReqToMultiEndNodeServer(
+		metricSuccList, _, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(),
 			client.GetPingMetricType,
 			&proto.GetPingMetricReq{},
+			globalCluster.GetClusterToken(),
 		)
 		metrics := []*proto.PingMetric{}
 		for _, v := range metricSuccList {

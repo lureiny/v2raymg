@@ -9,7 +9,8 @@ require (
 	github.com/golang/protobuf v1.5.4
 	github.com/google/go-github/v48 v48.0.0
 	github.com/google/uuid v1.3.0
-	github.com/mattn/go-isatty v0.0.17
+	github.com/lureiny/go-prompt v0.0.12
+	github.com/mattn/go-isatty v0.0.18
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/prometheus/client_golang v1.14.0
 	github.com/robfig/cron/v3 v3.0.1
@@ -45,13 +46,19 @@ require (
 	github.com/aliyun/alibaba-cloud-sdk-go v1.61.1755 // indirect
 	github.com/andres-erbsen/clock v0.0.0-20160526145045-9e14626cd129 // indirect
 	github.com/andybalholm/brotli v1.0.4 // indirect
+	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aws/aws-sdk-go v1.39.0 // indirect
+	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 	github.com/cenkalti/backoff/v4 v4.2.0 // indirect
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
+	github.com/charmbracelet/bubbles v0.17.1 // indirect
+	github.com/charmbracelet/bubbletea v0.25.0 // indirect
+	github.com/charmbracelet/lipgloss v0.9.1 // indirect
 	github.com/civo/civogo v0.3.11 // indirect
 	github.com/cloudflare/cloudflare-go v0.49.0 // indirect
+	github.com/containerd/console v1.0.4-0.20230313162750-1ae8d489ac81 // indirect
 	github.com/cpu/goacmedns v0.1.1 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -106,16 +113,23 @@ require (
 	github.com/liquidweb/liquidweb-cli v0.6.9 // indirect
 	github.com/liquidweb/liquidweb-go v1.6.3 // indirect
 	github.com/lucas-clemente/quic-go v0.29.0 // indirect
+	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/lunixbochs/struc v0.0.0-20200707160740-784aaebc1d40 // indirect
 	github.com/magiconair/properties v1.8.5 // indirect
 	github.com/marten-seemann/qtls-go1-18 v0.1.2 // indirect
 	github.com/marten-seemann/qtls-go1-19 v0.1.0 // indirect
+	github.com/mattn/go-localereader v0.0.1 // indirect
+	github.com/mattn/go-runewidth v0.0.15 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/miekg/dns v1.1.52 // indirect
 	github.com/mimuret/golang-iij-dpf v0.7.1 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/muesli/ansi v0.0.0-20211018074035-2e021307bc4b // indirect
+	github.com/muesli/cancelreader v0.2.2 // indirect
+	github.com/muesli/reflow v0.3.0 // indirect
+	github.com/muesli/termenv v0.15.2 // indirect
 	github.com/namedotcom/go v0.0.0-20180403034216-08470befbe04 // indirect
 	github.com/nrdcg/auroradns v1.1.0 // indirect
 	github.com/nrdcg/desec v0.6.0 // indirect
@@ -140,6 +154,7 @@ require (
 	github.com/rainycape/memcache v0.0.0-20150622160815-1031fa0ce2f2 // indirect
 	github.com/refraction-networking/utls v1.1.2 // indirect
 	github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3 // indirect
+	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/sacloud/api-client-go v0.2.1 // indirect
 	github.com/sacloud/go-http v0.1.2 // indirect
@@ -185,7 +200,9 @@ require (
 	golang.org/x/exp v0.0.0-20220916125017-b168a2c6b86b // indirect
 	golang.org/x/mod v0.8.0 // indirect
 	golang.org/x/oauth2 v0.4.0 // indirect
-	golang.org/x/sys v0.6.0 // indirect
+	golang.org/x/sync v0.1.0 // indirect
+	golang.org/x/sys v0.12.0 // indirect
+	golang.org/x/term v0.6.0 // indirect
 	golang.org/x/text v0.8.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 	golang.org/x/tools v0.6.0 // indirect

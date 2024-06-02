@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	client "github.com/lureiny/v2raymg/client/rpc"
 	"github.com/lureiny/v2raymg/common/log/logger"
+	globalCluster "github.com/lureiny/v2raymg/global/cluster"
 	"github.com/lureiny/v2raymg/lego"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
@@ -47,24 +48,25 @@ func (handler *TransferCertHandler) handlerFunc(c *gin.Context) {
 	}
 
 	nodes := handler.getHttpServer().GetTargetNodes(parasMap["target"])
-	for index, node := range *nodes {
+	for index, node := range nodes {
 		if node.Name == handler.getHttpServer().Name {
-			*nodes = append((*nodes)[0:index], (*nodes)[index+1:]...)
+			nodes = append((nodes)[0:index], (nodes)[index+1:]...)
 		}
 	}
-	if len(*nodes) == 0 {
+	if len(nodes) == 0 {
 		c.String(200, "no avaliable node")
 		return
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, nil)
-	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
+	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(),
 		client.TransferCertType,
 		&proto.TransferCertReq{
 			Domain:   parasMap["domain"],
 			CertData: certData,
 			KeyDatas: keyData,
 		},
+		globalCluster.GetClusterToken(),
 	)
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)

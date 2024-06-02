@@ -7,6 +7,7 @@ import (
 	client "github.com/lureiny/v2raymg/client/rpc"
 	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/common/util"
+	globalCluster "github.com/lureiny/v2raymg/global/cluster"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -26,7 +27,7 @@ func (handler *AdaptiveOpHandler) handlerFunc(c *gin.Context) {
 	parasMap := handler.parseParam(c)
 
 	nodes := handler.getHttpServer().GetTargetNodes(parasMap["target"])
-	if len(*nodes) == 0 {
+	if len(nodes) == 0 {
 		c.String(200, "no avaliable node")
 		return
 	}
@@ -48,7 +49,7 @@ func (handler *AdaptiveOpHandler) handlerFunc(c *gin.Context) {
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, nil)
-	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(reqType, req)
+	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), reqType, req, globalCluster.GetClusterToken())
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
 		logger.Error(

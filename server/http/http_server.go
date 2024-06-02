@@ -46,7 +46,7 @@ func (s *HttpServer) Start() {
 }
 
 // 根据target查找路由的节点
-func (s *HttpServer) GetTargetNodes(target string) *[]*cluster.Node {
+func (s *HttpServer) GetTargetNodes(target string) []*cluster.Node {
 	if target == "" {
 		target = s.Name
 	}

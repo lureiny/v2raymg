@@ -12,14 +12,19 @@ import (
 
 type NodeManager struct {
 	nodes *map[string]*Node
+	name  string
 	lock  sync.RWMutex
 }
+
+const defaultNodeManagerName = "NodeManager"
+
 type NodeFilter func(*Node) bool
 
 func NewNodeManager() NodeManager {
 	return NodeManager{
 		nodes: &map[string]*Node{},
 		lock:  sync.RWMutex{},
+		name:  defaultNodeManagerName,
 	}
 }
 
@@ -43,6 +48,13 @@ func (nm *NodeManager) Delete(key string) {
 	delete((*nm.nodes), key)
 }
 
+// SetName ...
+func (nm *NodeManager) SetName(name string) {
+	nm.lock.Lock()
+	defer nm.lock.Unlock()
+	nm.name = name
+}
+
 // LoadStaticNode 加载本地配置文件中的node
 func (nm *NodeManager) LoadStaticNode() error {
 	nm.lock.Lock()
@@ -61,7 +73,8 @@ func (nm *NodeManager) LoadStaticNode() error {
 		// 过滤掉与本地节点相同的节点
 		if node.IsValide(localNode) {
 			logger.Info(
-				"Msg=Load Static Node|Node=%s:%d|NodeName=%s",
+				"Msg=Load Static Node|ManagerName=%s|Node=%s:%d|NodeName=%s",
+				nm.name,
 				node.Host,
 				node.Port,
 				node.Name,
@@ -101,7 +114,7 @@ func (nm *NodeManager) GetAllNode() map[string]*Node {
 	return *nm.nodes
 }
 
-func (nm *NodeManager) GetNodesWithFilter(filter NodeFilter) *[]*Node {
+func (nm *NodeManager) GetNodesWithFilter(filter NodeFilter) []*Node {
 	nodes := []*Node{}
 	nm.lock.RLock()
 	defer nm.lock.RUnlock()
@@ -110,7 +123,7 @@ func (nm *NodeManager) GetNodesWithFilter(filter NodeFilter) *[]*Node {
 			nodes = append(nodes, n)
 		}
 	}
-	return &nodes
+	return nodes
 }
 
 // 过滤掉不符合条件的Node
@@ -122,7 +135,8 @@ func (nm *NodeManager) Filter(filter NodeFilter) {
 			(*tmpNM)[key] = node
 		} else {
 			logger.Info(
-				"Msg=drop node|Node=%s|Node=%s:%d",
+				"Msg=drop node|ManagerName=%s|Node=%s|Node=%s:%d",
+				nm.name,
 				node.Name,
 				node.Host,
 				node.Port,

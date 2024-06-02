@@ -10,6 +10,8 @@ import (
 const (
 	maxDelayNum  = 100
 	invalidDelay = -1
+
+	invalidResult = -1
 )
 
 type PingResult struct {
@@ -120,6 +122,9 @@ func calculateAvg(data []float64) float64 {
 			num += 1
 		}
 	}
+	if num == 0 {
+		return invalidResult
+	}
 	return float64(sum) / float64(num)
 }
 
@@ -154,6 +159,9 @@ func calculateStDev(data []float64) float64 {
 			num += 1
 		}
 	}
+	if num == 0 {
+		return invalidResult
+	}
 	return sumSquaredDiff / float64(num)
 }
 
@@ -168,6 +176,9 @@ func calculateLoss(data []float64) float64 {
 			lossNum++
 		}
 		validNum++
+	}
+	if validNum == 0 {
+		return invalidResult
 	}
 	return float64(lossNum) / float64(validNum) * 100
 }
