@@ -1,8 +1,10 @@
 package ping
 
 import (
+	"context"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
@@ -15,20 +17,24 @@ const (
 )
 
 type PingResult struct {
-	Geo        string // location
-	ISP        string // provider
-	delayList  [maxDelayNum]float64
-	delayIndex int64
+	Geo         string // location
+	ISP         string // provider
+	PingIp      string // dst to ping
+	PingChecker string // ping checker name
+	delayList   [maxDelayNum]float64
+	delayIndex  int64
 
 	mutex sync.RWMutex
 }
 
-func NewPingResult(geo, isp string) *PingResult {
+func NewPingResult(geo, isp, pingIp, pingChecker string) *PingResult {
 	return &PingResult{
-		Geo:        geo,
-		ISP:        isp,
-		delayList:  [maxDelayNum]float64{},
-		delayIndex: 0,
+		Geo:         geo,
+		ISP:         isp,
+		PingIp:      pingIp,
+		PingChecker: pingChecker,
+		delayList:   [maxDelayNum]float64{},
+		delayIndex:  0,
 	}
 }
 
@@ -77,6 +83,8 @@ func (r *PingResult) ConvertToProtoPingResult() *proto.PingResult {
 	return &proto.PingResult{
 		Geo:         r.Geo,
 		Isp:         r.ISP,
+		PingIp:      r.PingIp,
+		PingChecker: r.PingChecker,
 		MaxDelay:    float32(r.GetMax()),
 		MinDelay:    float32(r.GetMin()),
 		AvgDelay:    float32(r.GetAvg()),
@@ -89,7 +97,7 @@ func (r *PingResult) ConvertToProtoPingResult() *proto.PingResult {
 func (r *PingResult) Copy() *PingResult {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	newPingResult := NewPingResult(r.Geo, r.ISP)
+	newPingResult := NewPingResult(r.Geo, r.ISP, r.PingIp, r.PingChecker)
 	newPingResult.delayList = r.delayList
 	newPingResult.delayIndex = r.delayIndex
 	return newPingResult
@@ -184,10 +192,45 @@ func calculateLoss(data []float64) float64 {
 }
 
 type PingChecker interface {
-	Init() error
-	// ping host
-	StartPing(host string) error
-	StopPing()
+	Init(opts ...OptionFunc)
+	Start()
+	Stop()
 	IsRunning() bool
 	GetChan() <-chan *PingResult
+	Name() string
+	GetContext() context.Context
+}
+
+type basePingChecker struct {
+	resultChan chan *PingResult
+	cancel     context.CancelFunc
+	ctx        context.Context
+	isRunning  atomic.Bool
+}
+
+func newBasePingChecker() *basePingChecker {
+	bpc := &basePingChecker{}
+	bpc.resultChan = make(chan *PingResult, pingResultChanSize)
+	bpc.ctx, bpc.cancel = context.WithCancel(context.Background())
+	bpc.isRunning.Store(false)
+	return bpc
+}
+
+func (bpc *basePingChecker) Stop() {
+	if bpc.cancel != nil && bpc.isRunning.Load() {
+		bpc.cancel()
+		bpc.isRunning.Store(true)
+	}
+}
+
+func (bpc *basePingChecker) IsRunning() bool {
+	return bpc.isRunning.Load()
+}
+
+func (bpc *basePingChecker) GetChan() <-chan *PingResult {
+	return bpc.resultChan
+}
+
+func (bpc *basePingChecker) GetContext() context.Context {
+	return bpc.ctx
 }

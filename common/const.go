@@ -23,6 +23,8 @@ const (
 	ConfigSupportPrometheus    = "server.http.support_prometheus"
 	ConfigServerRpcPort        = "server.rpc.port"
 	ConfigServerRpcOnlyGateway = "server.rpc.only_gateway"
+	ConfigServerPingPeCheck    = "server.ping_pe_check"
+	ConfigServerICMPPingCheck  = "server.icmp_ping_check"
 
 	// cluster
 	ConfigClusterName    = "cluster.name"
@@ -108,4 +110,9 @@ const (
 
 	// xray or v2ray
 	TemplateXrayV2rayApiPort = "template_xray_v2ray_api_port"
+)
+
+// container name
+const (
+	HysteriaContainer = "hysteria"
 )

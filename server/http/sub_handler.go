@@ -10,6 +10,7 @@ import (
 	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/common/util"
 	globalCluster "github.com/lureiny/v2raymg/global/cluster"
+	"github.com/lureiny/v2raymg/proxy/sub"
 	"github.com/lureiny/v2raymg/proxy/sub/converter"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
@@ -25,11 +26,16 @@ func (handler *SubHandler) parseParam(c *gin.Context) map[string]string {
 	parasMap["excludeProtocols"] = c.DefaultQuery("exclude_protocols", "") // 按照","分隔
 	parasMap["target"] = c.DefaultQuery("target", handler.getHttpServer().Name)
 	parasMap["useSNI"] = c.DefaultQuery("use_sni", "true")
+	parasMap["fake"] = c.DefaultQuery("fake", "false")
 	return parasMap
 }
 
 func (handler *SubHandler) handlerFunc(c *gin.Context) {
 	parasMap := handler.parseParam(c)
+	if parasMap["fake"] == "true" {
+		c.String(200, sub.GenerateFakeSSSub())
+		return
+	}
 	userAgent := c.GetHeader("User-Agent")
 
 	tagList := util.StringList{}
@@ -114,13 +120,14 @@ func (handler *SubHandler) getRelativePath() string {
 func (handler *SubHandler) help() string {
 	usage := `/sub
 	获取订阅
-	/sub?target={target}&user={user}&pwd={pwd}&tags={tags}&exclude_protocols={exclude_protocols}&use_sni={use_sni}
+	/sub?target={target}&user={user}&pwd={pwd}&tags={tags}&exclude_protocols={exclude_protocols}&use_sni={use_sni}&fake={fake}
 	target: 目标节点
 	user: user name
 	pwd: password
 	tags: inbound的tag列表, 使用","分隔
 	exclude_protocols: 过滤掉的协议订阅, 使用","分隔
 	use_sni: 是否包含sni信息, 解决sni封锁问题
+	fake: 获取一个fake订阅
 	`
 	return usage
 }

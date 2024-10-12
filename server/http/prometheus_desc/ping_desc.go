@@ -21,7 +21,9 @@ type pingDesc struct {
 }
 
 var pingLabels []string = []string{
-	"node", "host", "geo", "isp",
+	"node", "host", // v2raymg node info
+	"geo", "isp", "ping_ip", // ping dst node info
+	"ping_checker",
 }
 
 func NewPingDesc() *pingDesc {
@@ -79,7 +81,7 @@ func (d *pingDesc) Collect(ch chan<- prometheus.Metric) {
 	for _, m := range d.Metrics {
 		for _, r := range m.GetResults() {
 			labels := []string{m.GetSource(),
-				m.GetHost(), r.GetGeo(), r.GetIsp()}
+				m.GetHost(), r.GetGeo(), r.GetIsp(), r.GetPingIp(), r.GetPingChecker()}
 
 			// max
 			ch <- prometheus.NewMetricWithTimestamp(

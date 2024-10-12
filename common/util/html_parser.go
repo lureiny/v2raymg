@@ -1,4 +1,4 @@
-package htmlparser
+package util
 
 import "golang.org/x/net/html"
 

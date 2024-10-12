@@ -272,6 +272,7 @@ server:
     only_gateway: false # 为true时表示当前节点仅负责转发, 不负责proxy管理等工作
     port: 23156 # 本地监听的rpc端口
     type: end # 节点类型, center|end
+  ping_check: false # 本机是否启用ping检测
 cert:
   email: test@gmail.com
   secrets: # dns api访问tokens, 参见https://go-acme.github.io/lego/dns/

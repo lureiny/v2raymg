@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"strings"
@@ -18,6 +18,12 @@ var (
 	enableGatewayModelSuggest = prompt.Suggest{
 		Text:        "enable_gateway_model",
 		Description: "gateway model node will not provide proxy",
+		Default:     false,
+	}
+
+	enablePingCheckSuggest = prompt.Suggest{
+		Text:        "enable_ping_check",
+		Description: "enable ping check",
 		Default:     false,
 	}
 

@@ -50,8 +50,17 @@ func decodeVmessStandardUri(standardUri string) string {
 	}
 }
 
-func httpGet(url string) ([]byte, error) {
-	resp, err := http.Get(url)
+func httpGet(reqUrl string) ([]byte, error) {
+	req, _ := http.NewRequest("GET", reqUrl, nil)
+
+	parsedUrl, err := url.Parse(reqUrl)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Add("Host", parsedUrl.Host)
+	req.Header.Add("Accept", "*/*")
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

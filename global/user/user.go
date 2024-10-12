@@ -41,8 +41,8 @@ func Reset(user *proto.User) error {
 }
 
 // HaveUser have user?
-func HaveUser(user *proto.User) bool {
-	return globalUserManager.HaveUser(user)
+func HaveUser(userName string) bool {
+	return globalUserManager.HaveUser(userName)
 }
 
 // ListUsers get user list, only user name
