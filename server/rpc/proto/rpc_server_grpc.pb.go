@@ -30,6 +30,7 @@ const (
 	EndNodeAccess_HeartBeat_FullMethodName            = "/proto.EndNodeAccess/HeartBeat"
 	EndNodeAccess_RegisterNode_FullMethodName         = "/proto.EndNodeAccess/RegisterNode"
 	EndNodeAccess_SetGatewayModel_FullMethodName      = "/proto.EndNodeAccess/SetGatewayModel"
+	EndNodeAccess_SetPingCheck_FullMethodName         = "/proto.EndNodeAccess/SetPingCheck"
 	EndNodeAccess_AddInbound_FullMethodName           = "/proto.EndNodeAccess/AddInbound"
 	EndNodeAccess_DeleteInbound_FullMethodName        = "/proto.EndNodeAccess/DeleteInbound"
 	EndNodeAccess_TransferInbound_FullMethodName      = "/proto.EndNodeAccess/TransferInbound"
@@ -65,6 +66,7 @@ type EndNodeAccessClient interface {
 	HeartBeat(ctx context.Context, in *HeartBeatReq, opts ...grpc.CallOption) (*HeartBeatRsp, error)
 	RegisterNode(ctx context.Context, in *RegisterNodeReq, opts ...grpc.CallOption) (*RegisterNodeRsp, error)
 	SetGatewayModel(ctx context.Context, in *SetGatewayModelReq, opts ...grpc.CallOption) (*SetGatewayModelRsp, error)
+	SetPingCheck(ctx context.Context, in *SetPingCheckReq, opts ...grpc.CallOption) (*SetPingCheckRsp, error)
 	// inbound
 	AddInbound(ctx context.Context, in *InboundOpReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
 	DeleteInbound(ctx context.Context, in *InboundOpReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
@@ -188,6 +190,15 @@ func (c *endNodeAccessClient) RegisterNode(ctx context.Context, in *RegisterNode
 func (c *endNodeAccessClient) SetGatewayModel(ctx context.Context, in *SetGatewayModelReq, opts ...grpc.CallOption) (*SetGatewayModelRsp, error) {
 	out := new(SetGatewayModelRsp)
 	err := c.cc.Invoke(ctx, EndNodeAccess_SetGatewayModel_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *endNodeAccessClient) SetPingCheck(ctx context.Context, in *SetPingCheckReq, opts ...grpc.CallOption) (*SetPingCheckRsp, error) {
+	out := new(SetPingCheckRsp)
+	err := c.cc.Invoke(ctx, EndNodeAccess_SetPingCheck_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -355,6 +366,7 @@ type EndNodeAccessServer interface {
 	HeartBeat(context.Context, *HeartBeatReq) (*HeartBeatRsp, error)
 	RegisterNode(context.Context, *RegisterNodeReq) (*RegisterNodeRsp, error)
 	SetGatewayModel(context.Context, *SetGatewayModelReq) (*SetGatewayModelRsp, error)
+	SetPingCheck(context.Context, *SetPingCheckReq) (*SetPingCheckRsp, error)
 	// inbound
 	AddInbound(context.Context, *InboundOpReq) (*InboundOpRsp, error)
 	DeleteInbound(context.Context, *InboundOpReq) (*InboundOpRsp, error)
@@ -414,6 +426,9 @@ func (UnimplementedEndNodeAccessServer) RegisterNode(context.Context, *RegisterN
 }
 func (UnimplementedEndNodeAccessServer) SetGatewayModel(context.Context, *SetGatewayModelReq) (*SetGatewayModelRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetGatewayModel not implemented")
+}
+func (UnimplementedEndNodeAccessServer) SetPingCheck(context.Context, *SetPingCheckReq) (*SetPingCheckRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetPingCheck not implemented")
 }
 func (UnimplementedEndNodeAccessServer) AddInbound(context.Context, *InboundOpReq) (*InboundOpRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddInbound not implemented")
@@ -670,6 +685,24 @@ func _EndNodeAccess_SetGatewayModel_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(EndNodeAccessServer).SetGatewayModel(ctx, req.(*SetGatewayModelReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EndNodeAccess_SetPingCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetPingCheckReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).SetPingCheck(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EndNodeAccess_SetPingCheck_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).SetPingCheck(ctx, req.(*SetPingCheckReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1012,6 +1045,10 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetGatewayModel",
 			Handler:    _EndNodeAccess_SetGatewayModel_Handler,
+		},
+		{
+			MethodName: "SetPingCheck",
+			Handler:    _EndNodeAccess_SetPingCheck_Handler,
 		},
 		{
 			MethodName: "AddInbound",

@@ -23,7 +23,7 @@ import (
 // serverCmd restful api
 var serverCmd = &cobra.Command{
 	Use:   "server",
-	Short: "Start restful api server.",
+	Short: "Start v2raymg server.",
 	Run:   startServer,
 }
 

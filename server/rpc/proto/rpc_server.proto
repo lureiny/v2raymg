@@ -275,6 +275,8 @@ message PingMetric {
 message PingResult {
     string geo = 1; // location
     string isp = 2; // provider
+    string ping_ip = 3; // ip to ping
+    string ping_checker = 4;
     float max_delay = 10;
     float min_delay = 11;
     float st_dev_delay = 12;
@@ -293,6 +295,15 @@ message GetPingMetricRsp {
     PingMetric metric = 3;
 }
 
+message SetPingCheckReq {
+    NodeAuthInfo node_auth_info = 1;
+    bool enable_ping_check = 2;
+}
+message SetPingCheckRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
 service EndNodeAccess {
     // user
     rpc GetUsers(GetUsersReq) returns (GetUsersRsp) {}
@@ -308,6 +319,7 @@ service EndNodeAccess {
     rpc HeartBeat(HeartBeatReq) returns (HeartBeatRsp) {}
     rpc RegisterNode(RegisterNodeReq) returns (RegisterNodeRsp) {}
     rpc SetGatewayModel(SetGatewayModelReq) returns (SetGatewayModelRsp) {}
+    rpc SetPingCheck(SetPingCheckReq) returns (SetPingCheckRsp) {}
     
     // inbound
     rpc AddInbound(InboundOpReq) returns (InboundOpRsp) {}

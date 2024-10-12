@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"fmt"
@@ -15,10 +15,13 @@ type config struct {
 
 var globalConfig = &config{}
 
-const configName = ".v2raymg-tools.yaml"
+const defaultConfigName = ".v2raymg-tools.yaml"
 
-func loadConfig() error {
-	data, err := os.ReadFile(configName)
+func LoadConfig(config string) error {
+	if config == "" {
+		config = defaultConfigName
+	}
+	data, err := os.ReadFile(config)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -35,7 +38,7 @@ func loadConfig() error {
 	if err != nil {
 		return fmt.Errorf("marshal config fail, err: %v", err)
 	}
-	return os.WriteFile(configName, d, 0666)
+	return os.WriteFile(config, d, 0666)
 }
 
 func inputConfig() {

@@ -57,7 +57,7 @@ func GetEndNodeServer() *EndNodeServer {
 var methodPrefixLen = len("/proto.EndNodeAccess/")
 
 // gateway模式下放行的接口列表
-var onlyGatewayMethods = "HeartBeat|RegisterNode|SetGatewayModel|GetPingMetric|GetBandWidthStats"
+var onlyGatewayMethods = "HeartBeat|RegisterNode|SetGatewayModel|GetPingMetric|GetBandWidthStats|SetPingCheck"
 
 func isOnlyGatewayMethod(fullMethod string) bool {
 	return strings.Contains(onlyGatewayMethods, fullMethod[methodPrefixLen:])
@@ -750,7 +750,7 @@ func (s *EndNodeServer) AddAdaptiveConfig(ctx context.Context, adaptiveOpReq *pr
 	}
 
 	rawAdaptiveConfig := proxy.GetRawAdaptive()
-	globalConfig.Set("proxy.adaptive", rawAdaptiveConfig)
+	globalConfig.Set(common.ConfigProxyAdaptive, rawAdaptiveConfig)
 
 	logger.Info(
 		"Err=%s|Ports=%s|Tags=%s",
@@ -784,7 +784,7 @@ func (s *EndNodeServer) DeleteAdaptiveConfig(ctx context.Context, adaptiveOpReq 
 		}
 	}
 	rawAdaptiveConfig := proxy.GetRawAdaptive()
-	globalConfig.Set("proxy.adaptive", rawAdaptiveConfig)
+	globalConfig.Set(common.ConfigProxyAdaptive, rawAdaptiveConfig)
 
 	logger.Info(
 		"Err=%s|Ports=%s|Tags=%s",
@@ -855,6 +855,17 @@ func (s *EndNodeServer) SetGatewayModel(ctx context.Context, setGatewayModelReq 
 	}
 	globalConfig.Set(common.ConfigServerRpcOnlyGateway, setGatewayModelReq.GetEnableGatewayModel())
 	return setGatewayModelRsp, nil
+}
+
+func (s *EndNodeServer) SetPingCheck(ctx context.Context, setPingCheckReq *proto.SetPingCheckReq) (*proto.SetPingCheckRsp, error) {
+	setPingCheckRsp := &proto.SetPingCheckRsp{
+		Code: 0,
+	}
+	if !setPingCheckReq.GetEnablePingCheck() {
+		collecter.StopPing()
+	}
+	globalConfig.Set(common.ConfigServerPingPeCheck, setPingCheckReq.GetEnablePingCheck())
+	return setPingCheckRsp, nil
 }
 
 func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *proto.FastAddInboundReq) (*proto.FastAddInboundRsp, error) {

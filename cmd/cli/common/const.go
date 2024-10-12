@@ -5,6 +5,7 @@ const (
 	ListCert    = "getCerts"
 
 	Gateway   = "gateway"
+	PingCheck = "pingCheck"
 	ApplyCert = "cert"
 
 	FastAddInbound = "fastAddInbound"

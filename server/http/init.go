@@ -19,6 +19,7 @@ func init() {
 	GlobalHttpServer.RegisterHandler(&UpdateHandler{}, "GET")
 	GlobalHttpServer.RegisterHandler(&UserHandler{}, "GET")
 	GlobalHttpServer.RegisterHandler(&GatewayHandler{}, "GET")
+	GlobalHttpServer.RegisterHandler(&PingCheckHandler{}, "GET")
 	GlobalHttpServer.RegisterHandler(&CertHandler{}, "GET")
 	GlobalHttpServer.RegisterHandler(&FastAddInboundHandler{}, "GET")
 	GlobalHttpServer.RegisterHandler(&TransferCertHandler{}, "GET")

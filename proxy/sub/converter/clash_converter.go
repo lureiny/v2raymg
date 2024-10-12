@@ -13,11 +13,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const fakeSubName = "FakeSub"
+
+var fakeSub = fmt.Sprintf(`ss://YWVzLTEyOC1nY206dGVzdA==@192.168.100.1:8888#%s`, fakeSubName)
+
 var subConverterMap = []string{
-	"https://sub.xeton.dev/sub?target=clash&new_name=true&url=%20&insert=true&emoji=true",
-	"https://api.dler.io/sub?target=clash&new_name=true&url=%20&insert=true&emoji=true",
-	"https://sub.maoxiongnet.com/sub?target=clash&new_name=true&url=%20&insert=true&emoji=true",
-	"https://sub.id9.cc/sub?target=clash&new_name=true&url=%20&insert=false&emoji=true",
+	"https://sub.xeton.dev/sub?target=clash&new_name=true&url=%s",
+	"https://api.dler.io/sub?target=clash&new_name=true&url=%s",
+	"https://sub.maoxiongnet.com/sub?target=clash&new_name=true&url=%s",
+	"https://sub.id9.cc/sub?target=clash&new_name=true&url=%s",
 }
 
 type ClashConverter struct{}
@@ -48,7 +52,7 @@ func (c *ClashConverter) Convert(standardUris []string) (string, error) {
 		return "", err
 	}
 	if _, ok := nodeMap[proxiesKey]; !ok {
-		return "", err
+		return "", fmt.Errorf("can't find %s of clash config", proxiesKey)
 	}
 	nodeMap[proxiesKey] = *proxyNode.Content[0]
 	addToProxyGroup(&nodeMap, "", clashProxies)
@@ -60,12 +64,15 @@ func (c *ClashConverter) Convert(standardUris []string) (string, error) {
 	return string(data), nil
 }
 
+// addToProxyGroup add all proxy to target group and empty group
 func addToProxyGroup(nodeMap *NodeMap, groupName string, clashProxies []*ClashProxy) {
 	proxyGroups, ok := (*nodeMap)[proxyGroupsKey]
 	if !ok {
 		return
 	}
-	targetIndex := 0
+	targetIndexs := map[int]struct{}{
+		0: struct{}{},
+	}
 	for i, n := range proxyGroups.Content {
 		data, err := yaml.Marshal(n)
 		if err != nil {
@@ -75,40 +82,44 @@ func addToProxyGroup(nodeMap *NodeMap, groupName string, clashProxies []*ClashPr
 		if err := yaml.Unmarshal(data, proxyGroupNode); err != nil {
 			continue
 		}
-		if proxyGroupNode.Name == groupName {
-			targetIndex = i
+		if proxyGroupNode.Name == groupName || len(proxyGroupNode.Proxies) == 0 {
+			targetIndexs[i] = struct{}{}
 		}
 	}
-	data, err := yaml.Marshal(proxyGroups.Content[targetIndex])
-	if err != nil {
-		return
+
+	for targetIndex := range targetIndexs {
+		data, err := yaml.Marshal(proxyGroups.Content[targetIndex])
+		if err != nil {
+			return
+		}
+		targetNode := &ProxyGroup{}
+		if err := yaml.Unmarshal(data, targetNode); err != nil {
+			return
+		}
+		for _, c := range clashProxies {
+			targetNode.Proxies = append(targetNode.Proxies, c.Name)
+		}
+		data, err = yaml.Marshal(targetNode)
+		if err != nil {
+			return
+		}
+		node := &yaml.Node{}
+		if err := yaml.Unmarshal(data, node); err != nil {
+			return
+		}
+		proxyGroups.Content[targetIndex] = node.Content[0]
 	}
-	targetNode := &ProxyGroup{}
-	if err := yaml.Unmarshal(data, targetNode); err != nil {
-		return
-	}
-	for _, c := range clashProxies {
-		targetNode.Proxies = append(targetNode.Proxies, c.Name)
-	}
-	data, err = yaml.Marshal(targetNode)
-	if err != nil {
-		return
-	}
-	node := &yaml.Node{}
-	if err := yaml.Unmarshal(data, node); err != nil {
-		return
-	}
-	(*nodeMap)[proxyGroupsKey].Content[targetIndex] = node.Content[0]
 }
 
 func getTemplate() (NodeMap, error) {
 	errMsg := ""
 	for _, v := range subConverterMap {
-		data, err := httpGet(v)
+		data, err := httpGet(fmt.Sprintf(v, url.QueryEscape(fakeSub)))
 		if err != nil {
 			errMsg = errMsg + "|" + err.Error()
 			continue
 		}
+		data = clearInvalidInfo(data)
 		nodeMap := NodeMap{}
 		if err := yaml.Unmarshal(data, nodeMap); err != nil {
 			errMsg = errMsg + "|" + err.Error()
@@ -117,6 +128,21 @@ func getTemplate() (NodeMap, error) {
 		return nodeMap, nil
 	}
 	return nil, fmt.Errorf("%v", errMsg)
+}
+
+func clearInvalidInfo(data []byte) []byte {
+	newDateString := []string{}
+	dataString := string(data)
+	for _, line := range strings.Split(dataString, "\n") {
+		if strings.Contains(line, fakeSubName) {
+			continue
+		}
+		// fix "MATCH,,\U0001F41F 漏网之鱼,dns-failed"
+		line = strings.ReplaceAll(line, ",,", ",")
+		line = strings.ReplaceAll(line, ",dns-failed", "")
+		newDateString = append(newDateString, line)
+	}
+	return []byte(strings.Join(newDateString, "\n"))
 }
 
 func getClashProxies(standardUris []string) []*ClashProxy {
@@ -349,7 +375,9 @@ type GrpcOpts struct {
 }
 
 type ProxyGroup struct {
-	Name    string   `yaml:"name"`
-	Type    string   `yaml:"type"`
-	Proxies []string `yaml:"proxies"`
+	Name     string   `yaml:"name"`
+	Type     string   `yaml:"type"`
+	Proxies  []string `yaml:"proxies"`
+	Url      string   `yaml:"url,omitempty"`
+	Interval int      `yaml:"interval,omitempty"`
 }

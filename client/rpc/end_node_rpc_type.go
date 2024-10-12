@@ -30,4 +30,5 @@ const (
 	GetPingMetricType
 	RegisterNodeType
 	HeartBeatType
+	SetPingCheckType
 )

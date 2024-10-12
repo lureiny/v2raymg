@@ -1,14 +1,17 @@
-package main
+package cli
 
 import (
 	"fmt"
+	"net/url"
 	"reflect"
+	"strings"
 
 	"github.com/lureiny/go-prompt"
-	"github.com/lureiny/v2raymg/cli/client"
+	"github.com/lureiny/v2raymg/cmd/cli/client"
+	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
-func initPromptAndRegister() *prompt.Prompt {
+func InitPromptAndRegister() *prompt.Prompt {
 	updateLocalNodeList()
 	updateLocalUserList()
 	m := prompt.NewPrompt(
@@ -93,10 +96,10 @@ func initPromptAndRegister() *prompt.Prompt {
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
-	m.RegisterHandler(deleteUser, "DeleteUser",
+	m.RegisterHandler(deleteUser, "DeleteUsers",
 		prompt.WithSuggests([]prompt.Suggest{
 			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
-			userNameSuggest,
+			userNamesSuggest,
 			tagsSuggest,
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
@@ -143,6 +146,33 @@ func initPromptAndRegister() *prompt.Prompt {
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
+	m.RegisterHandler(getUserSubUrl, "GetUserSubUrl",
+		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("all")),
+			userNameSuggest,
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	m.RegisterHandler(pingTarget, "PingTarget",
+		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
+			{
+				Text:        "times",
+				Description: "ping times",
+				Default:     int(10),
+			},
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	m.RegisterHandler(setPingCheck, "SetPingCheck",
+		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
+			enablePingCheckSuggest,
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
 	return m
 }
 
@@ -240,12 +270,16 @@ func updateUser(target, userName, password string, expire, ttl int) error {
 	return nil
 }
 
-func deleteUser(target, userName, tags string) error {
-	result, err := client.DeleteUser(getHost(), getToken(), target, userName, tags)
-	if err != nil {
-		return err
+func deleteUser(target, userNames, tags string) error {
+	users := strings.Split(userNames, ",")
+	for _, user := range users {
+		result, err := client.DeleteUser(getHost(), getToken(), target, user, tags)
+		if err != nil {
+			fmt.Printf("delete user[%s] fail > %v\n", user, err)
+		} else {
+			fmt.Printf("delete user[%s] succ: %v\n", user, result)
+		}
 	}
-	fmt.Println(result)
 	return nil
 }
 
@@ -313,5 +347,74 @@ func addAllUserToInbound(target, inboundTag string) error {
 			fmt.Printf("add user[%s] to inbound[%s] fail, err: %v\n", user.GetName(), inboundTag, err)
 		}
 	}
+	return nil
+}
+
+func getUserSubUrl(target, userName string) error {
+	uri, err := url.Parse(getHost())
+	if err != nil {
+		uri = &url.URL{
+			Host:   getHost(),
+			Scheme: "http",
+		}
+	}
+	uri.Path = "sub"
+	if len(localNodeList) == 0 {
+		listUser(target)
+	}
+	var targetUser *proto.User = nil
+	for _, users := range localUserList {
+		for _, user := range users {
+			if user.GetName() == userName {
+				targetUser = user
+			}
+		}
+	}
+	if targetUser == nil {
+		fmt.Printf("user[%s] not exist", userName)
+		return nil
+	}
+	query := uri.Query()
+	query.Add("target", target)
+	query.Add("user", targetUser.GetName())
+	query.Add("pwd", targetUser.GetPasswd())
+	uri.RawQuery = query.Encode()
+	fmt.Println(uri.String())
+	return nil
+}
+
+func pingTarget(target string, times int) error {
+	// node := localNodeList[target]
+	// if node == nil {
+	// 	return fmt.Errorf("target[%s] not exist", target)
+	// }
+	// pingChecker := pingpe.NewPingPeChekcer()
+	// if err := pingChecker.Init(ping.WithHost(target)); err != nil {
+	// 	return err
+	// }
+	// pingpe.SetPingPeTime(times)
+	// pingChecker.Start()
+
+	// ch := pingChecker.GetChan()
+	// needStop := false
+	// for !needStop {
+	// 	select {
+	// 	case result := <-ch:
+	// 		if result.GetLatestDelay() < 0 && result.Geo+result.ISP != "" {
+	// 			fmt.Printf("get invalid delay[%v] of geo[%s]\n", result.GetLatestDelay(), result.Geo)
+	// 		}
+	// 	default:
+	// 		needStop = !pingChecker.IsRunning()
+	// 	}
+	// }
+	return nil
+}
+
+func setPingCheck(target string, enable bool) error {
+	result, err := client.SetPingCheck(getHost(), getToken(), target, enable)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
 	return nil
 }

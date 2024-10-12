@@ -166,7 +166,7 @@ func checkUserTag(user *proto.User, proxyManager *manager.ProxyManager) {
 func (um *UserManager) Add(user *proto.User) error {
 	if user.Name == "" {
 		return fmt.Errorf("Empty user")
-	} else if !um.HaveUser(user) && user.Passwd == "" {
+	} else if !um.HaveUser(user.GetName()) && user.Passwd == "" {
 		// 第一次添加
 		return fmt.Errorf("Empty passwd")
 	}
@@ -264,8 +264,8 @@ func (um *UserManager) Reset(user *proto.User) error {
 	return err
 }
 
-func (um *UserManager) HaveUser(user *proto.User) bool {
-	_, ok := um.users[user.Name]
+func (um *UserManager) HaveUser(userName string) bool {
+	_, ok := um.users[userName]
 	return ok
 }
 

@@ -6,8 +6,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/lureiny/v2raymg/cli/common"
 	"github.com/lureiny/v2raymg/cluster"
+	"github.com/lureiny/v2raymg/cmd/cli/common"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 )
 
@@ -297,6 +297,28 @@ func DeleteInBound(host, token, target, srcTag string) (string, error) {
 	}
 
 	reqUrl := fmt.Sprintf("%s/%s", host, common.Bound)
+	err := DoGetRequest(reqUrl, headers, nil, getCallBackFunc(cb))
+	return result, err
+}
+
+func SetPingCheck(host, token, target string, enablePingCheck bool) (string, error) {
+	result := ""
+	headers := map[string]interface{}{
+		"token":             token,
+		"target":            target,
+		"enable_ping_check": enablePingCheck,
+	}
+	cb := func(resp *http.Response) error {
+		defer resp.Body.Close()
+		d, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+
+	reqUrl := fmt.Sprintf("%s/%s", host, common.PingCheck)
 	err := DoGetRequest(reqUrl, headers, nil, getCallBackFunc(cb))
 	return result, err
 }
