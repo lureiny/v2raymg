@@ -106,20 +106,6 @@ func NewTLSConfig(domain string, certManager *lego.CertManager) *conf.TLSConfig 
 	return tlsConfig
 }
 
-func NewXTLSConfig(domain string, certManager *lego.CertManager) *conf.XTLSConfig {
-	xtlsConfig := &conf.XTLSConfig{}
-	xtlsConfig.ServerName = domain
-	xtlsConfig.Certs = make([]*conf.XTLSCertConfig, 0)
-	certificate := certManager.GetCert(domain)
-	if certificate != nil {
-		xtlsConfig.Certs = append(xtlsConfig.Certs, &conf.XTLSCertConfig{
-			CertFile: certificate.CertificateFile,
-			KeyFile:  certificate.KeyFile,
-		})
-	}
-	return xtlsConfig
-}
-
 func NewRandomStringWithTime() string {
 	buffer := make([]byte, 8)
 	binary.BigEndian.PutUint64(buffer, uint64(time.Now().UnixNano()))
@@ -128,10 +114,7 @@ func NewRandomStringWithTime() string {
 }
 
 func FullTlsXtlsConfig(streamConfig *conf.StreamConfig, domain string, certManager *lego.CertManager, isXtls bool) {
-	if isXtls {
-		streamConfig.Security = SecurityXTLS
-		streamConfig.XTLSSettings = NewXTLSConfig(domain, certManager)
-	} else {
+	{
 		streamConfig.Security = SecurityTLS
 		streamConfig.TLSSettings = NewTLSConfig(domain, certManager)
 	}

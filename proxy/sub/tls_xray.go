@@ -34,13 +34,6 @@ func newTLSOrXTLSConfig(s *conf.StreamConfig) *VlessTLSConfig {
 			}
 			tlsConfig.SNI = s.TLSSettings.ServerName
 		}
-	case "xtls":
-		if s.XTLSSettings != nil {
-			if s.XTLSSettings.ALPN != nil {
-				tlsConfig.ALPN = strings.Join(*s.XTLSSettings.ALPN, ",")
-			}
-			tlsConfig.SNI = s.XTLSSettings.ServerName
-		}
 	}
 	return tlsConfig
 }
