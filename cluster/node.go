@@ -46,12 +46,19 @@ func (n *Node) IsLocal() bool {
 	return n.isLocal
 }
 
-// 有效返回true
+// IsValid 有效返回true
 func (node *Node) IsValid() bool {
 	currentTime := time.Now().Unix()
 	return node.GetHeartBeatTime+common.NodeTimeOut > currentTime ||
 		node.ReportHeartBeatTime+common.NodeTimeOut > currentTime ||
 		node.CreateTime+common.NodeTimeOut > currentTime
+}
+
+// IsCompleteRegister 是否完成双向注册
+func (node *Node) IsCompleteRegister() bool {
+	currentTime := time.Now().Unix()
+	return node.GetHeartBeatTime+common.NodeTimeOut > currentTime &&
+		node.ReportHeartBeatTime+common.NodeTimeOut > currentTime
 }
 
 // 本地是否已经在node上注册

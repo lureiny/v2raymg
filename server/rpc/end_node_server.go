@@ -307,7 +307,7 @@ func (s *EndNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.Heart
 	}
 	heartBeatRsp.NodesMap = globalCluster.GetProtoNodesWithFilter(
 		func(node *cluster.Node) bool {
-			return node.Name != s.Name && node.IsValid()
+			return node.Name != s.Name && node.IsCompleteRegister()
 		},
 	)
 	return heartBeatRsp, nil
