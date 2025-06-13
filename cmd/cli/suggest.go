@@ -59,7 +59,7 @@ var (
 
 	portSuggest = prompt.Suggest{
 		Text:        "port",
-		Description: "inbound port",
+		Description: "inbound port, if port == 0, will generate a random port in 10000-50000",
 		Default:     int(0),
 	}
 
