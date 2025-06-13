@@ -25,7 +25,10 @@ func updateLocalNodeList() {
 	nodeMutex.Lock()
 	defer nodeMutex.Unlock()
 	localNodeList, _ = client.ListNode(getHost(), getToken())
+}
 
+func getNode(nodeName string) *cluster.Node {
+	return localNodeList[nodeName]
 }
 
 func updateLocalUserList() {

@@ -2,9 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"math/rand"
 	"net/url"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/lureiny/go-prompt"
 	"github.com/lureiny/v2raymg/cmd/cli/client"
@@ -235,6 +237,18 @@ func applyCert(target, domain string) error {
 }
 
 func fastAddInbound(target, tag, protocol, stream, domain string, isXtls bool, port int) error {
+	node := getNode(target)
+	if domain == "" && node != nil {
+		domain = node.GetHost()
+	}
+	if tag == "" {
+		tag = protocol
+	}
+	if port == 0 {
+		rand.Seed(time.Now().UnixNano())
+		// 生成10000->50000的随机端口
+		port = 10000 + rand.Intn(40000)
+	}
 	result, err := client.FastAddInbound(getHost(), getToken(), target, tag, protocol, stream, domain, isXtls, port)
 	if err != nil {
 		return err
