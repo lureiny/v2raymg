@@ -1,9 +1,13 @@
 package config
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/spf13/viper"
 )
 
@@ -79,7 +83,20 @@ func (cm *ConfigManager) GetBool(key string) bool {
 func (cm *ConfigManager) Flush() {
 	cm.lock.RLock()
 	defer cm.lock.RUnlock()
-	cm.v.WriteConfig()
+	// WriteConfig is not atomic
+	currentConfigFilePath := cm.v.ConfigFileUsed()
+	configFileDir := filepath.Dir(currentConfigFilePath)
+	base := filepath.Base(currentConfigFilePath)
+	tempBase := fmt.Sprintf(".tmp.%s", base)
+	tempFilePath := filepath.Join(configFileDir, tempBase)
+	if err := cm.v.SafeWriteConfigAs(tempFilePath); err != nil {
+		logger.Error("write file to temp file[%s], fail > %v", err)
+		return
+	}
+	if err := os.Rename(tempFilePath, currentConfigFilePath); err != nil {
+		logger.Error("rename file from [%s] to [%s] fail > %v", tempFilePath, currentConfigFilePath, err)
+		return
+	}
 }
 
 // cycle 刷新周期  单位 秒/s
