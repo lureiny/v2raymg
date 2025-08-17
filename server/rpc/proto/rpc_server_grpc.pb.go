@@ -47,6 +47,7 @@ const (
 	EndNodeAccess_TransferCert_FullMethodName         = "/proto.EndNodeAccess/TransferCert"
 	EndNodeAccess_GetCerts_FullMethodName             = "/proto.EndNodeAccess/GetCerts"
 	EndNodeAccess_GetPingMetric_FullMethodName        = "/proto.EndNodeAccess/GetPingMetric"
+	EndNodeAccess_GetNodeMetric_FullMethodName        = "/proto.EndNodeAccess/GetNodeMetric"
 )
 
 // EndNodeAccessClient is the client API for EndNodeAccess service.
@@ -87,6 +88,7 @@ type EndNodeAccessClient interface {
 	GetCerts(ctx context.Context, in *GetCertsReq, opts ...grpc.CallOption) (*GetCertsRsp, error)
 	// / metric
 	GetPingMetric(ctx context.Context, in *GetPingMetricReq, opts ...grpc.CallOption) (*GetPingMetricRsp, error)
+	GetNodeMetric(ctx context.Context, in *GetNodeMetricReq, opts ...grpc.CallOption) (*GetNodeMetricRsp, error)
 }
 
 type endNodeAccessClient struct {
@@ -349,6 +351,15 @@ func (c *endNodeAccessClient) GetPingMetric(ctx context.Context, in *GetPingMetr
 	return out, nil
 }
 
+func (c *endNodeAccessClient) GetNodeMetric(ctx context.Context, in *GetNodeMetricReq, opts ...grpc.CallOption) (*GetNodeMetricRsp, error) {
+	out := new(GetNodeMetricRsp)
+	err := c.cc.Invoke(ctx, EndNodeAccess_GetNodeMetric_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EndNodeAccessServer is the server API for EndNodeAccess service.
 // All implementations must embed UnimplementedEndNodeAccessServer
 // for forward compatibility
@@ -387,6 +398,7 @@ type EndNodeAccessServer interface {
 	GetCerts(context.Context, *GetCertsReq) (*GetCertsRsp, error)
 	// / metric
 	GetPingMetric(context.Context, *GetPingMetricReq) (*GetPingMetricRsp, error)
+	GetNodeMetric(context.Context, *GetNodeMetricReq) (*GetNodeMetricRsp, error)
 	mustEmbedUnimplementedEndNodeAccessServer()
 }
 
@@ -477,6 +489,9 @@ func (UnimplementedEndNodeAccessServer) GetCerts(context.Context, *GetCertsReq) 
 }
 func (UnimplementedEndNodeAccessServer) GetPingMetric(context.Context, *GetPingMetricReq) (*GetPingMetricRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetPingMetric not implemented")
+}
+func (UnimplementedEndNodeAccessServer) GetNodeMetric(context.Context, *GetNodeMetricReq) (*GetNodeMetricRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetNodeMetric not implemented")
 }
 func (UnimplementedEndNodeAccessServer) mustEmbedUnimplementedEndNodeAccessServer() {}
 
@@ -995,6 +1010,24 @@ func _EndNodeAccess_GetPingMetric_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EndNodeAccess_GetNodeMetric_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNodeMetricReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).GetNodeMetric(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EndNodeAccess_GetNodeMetric_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).GetNodeMetric(ctx, req.(*GetNodeMetricReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EndNodeAccess_ServiceDesc is the grpc.ServiceDesc for EndNodeAccess service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1113,6 +1146,10 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPingMetric",
 			Handler:    _EndNodeAccess_GetPingMetric_Handler,
+		},
+		{
+			MethodName: "GetNodeMetric",
+			Handler:    _EndNodeAccess_GetNodeMetric_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

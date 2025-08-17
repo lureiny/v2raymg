@@ -304,6 +304,24 @@ message SetPingCheckRsp {
     string msg = 2;
 }
 
+message NodeMetrics {
+    string host = 1; // ip or domain
+    string source = 2;
+
+    repeated bytes serialized_metrics = 10;  // prometheus dto.MetricFamily
+}
+
+message GetNodeMetricReq {
+    NodeAuthInfo node_auth_info = 1;
+}
+
+message GetNodeMetricRsp {
+    int32 code = 1;
+    string msg = 2;
+
+    NodeMetrics node_metrics = 10;
+}
+
 service EndNodeAccess {
     // user
     rpc GetUsers(GetUsersReq) returns (GetUsersRsp) {}
@@ -344,6 +362,7 @@ service EndNodeAccess {
 
     /// metric
     rpc GetPingMetric(GetPingMetricReq) returns (GetPingMetricRsp) {}
+    rpc GetNodeMetric(GetNodeMetricReq) returns (GetNodeMetricRsp) {}
 }
 
 message GetClutersReq {

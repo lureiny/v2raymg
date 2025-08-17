@@ -1,9 +1,12 @@
 package prometheusdesc
 
 import (
+	"context"
 	"sync"
 	"time"
 
+	client "github.com/lureiny/v2raymg/client/rpc"
+	globalCluster "github.com/lureiny/v2raymg/global/cluster"
 	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -11,8 +14,8 @@ import (
 type v2raymgTrafficDesc struct {
 	traffic *prometheus.Desc
 
-	Stats []*proto.Stats
-	Mutex sync.Mutex
+	stats []*proto.Stats
+	mutex sync.RWMutex
 }
 
 func NewV2raymgTrafficDesc() *v2raymgTrafficDesc {
@@ -21,7 +24,7 @@ func NewV2raymgTrafficDesc() *v2raymgTrafficDesc {
 			"v2raymg_traffic",
 			"v2ray/xray traffic",
 			[]string{"node", "name", "type", "direction", "proxy"},
-			prometheus.Labels{},
+			nil,
 		),
 	}
 }
@@ -31,8 +34,10 @@ func (d *v2raymgTrafficDesc) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (d *v2raymgTrafficDesc) Collect(ch chan<- prometheus.Metric) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
 	currentTime := time.Now()
-	for _, stat := range d.Stats {
+	for _, stat := range d.stats {
 		labels := []string{stat.GetSource(),
 			stat.GetName(), stat.GetType(), "downlink", stat.GetProxy()}
 		ch <- prometheus.NewMetricWithTimestamp(
@@ -52,4 +57,22 @@ func (d *v2raymgTrafficDesc) Collect(ch chan<- prometheus.Metric) {
 			),
 		)
 	}
+}
+
+// Update ...
+func (d *v2raymgTrafficDesc) Update(ctx context.Context, rpcClient *client.EndNodeClient) error {
+	succList, _, _ := rpcClient.ReqToMultiEndNodeServer(ctx,
+		client.GetBandWidthStatsReqType,
+		&proto.GetBandwidthStatsReq{},
+		globalCluster.GetClusterToken(),
+	)
+	stats := []*proto.Stats{}
+	for _, v := range succList {
+		s, _ := v.([]*proto.Stats)
+		stats = append(stats, s...)
+	}
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+	d.stats = stats
+	return nil
 }

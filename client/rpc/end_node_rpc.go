@@ -75,6 +75,8 @@ func init() {
 	registerReqToEndNodeFunc(RegisterNodeType, ReqRegisterNode)
 	// register set ping chck
 	registerReqToEndNodeFunc(SetPingCheckType, ReqSetPingCheck)
+	// register get node metric
+	registerReqToEndNodeFunc(GetNodeMetricType, ReqGetNodeMetric)
 }
 
 func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
@@ -528,6 +530,22 @@ func ReqSetPingCheck(ctx context.Context, reqData []byte, endNodeAccessClient pr
 		return nil, err
 	}
 	return nil, nil
+}
+func ReqGetNodeMetric(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	getNodeMetricReq := &proto.GetNodeMetricReq{}
+	if err := pb.Unmarshal(reqData, getNodeMetricReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to getNodeMetricReq > %v", reqData, err)
+	}
+
+	getNodeMetricReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.GetNodeMetric(ctx, getNodeMetricReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	if err != nil {
+		return nil, err
+	}
+	return rsp.GetNodeMetrics(), nil
 }
 
 func getReqAndCallbakcFunc(reqType ReqToEndNodeType) ReqToEndNodeFunc {

@@ -1,12 +1,14 @@
 package http
 
 import (
+	"context"
+	"sync"
+	"time"
+
 	"github.com/gin-gonic/gin"
 	client "github.com/lureiny/v2raymg/client/rpc"
 	"github.com/lureiny/v2raymg/common/log/logger"
-	globalCluster "github.com/lureiny/v2raymg/global/cluster"
 	prometheusdesc "github.com/lureiny/v2raymg/server/http/prometheus_desc"
-	"github.com/lureiny/v2raymg/server/rpc/proto"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -14,13 +16,16 @@ import (
 type MetricHandler struct{ HttpHandlerImp }
 
 func prometheusHandler(metricHandler *MetricHandler) gin.HandlerFunc {
-	// create prometheus desc register
-	reg := prometheus.NewPedanticRegistry()
+	// create prometheus desc registe
+	reg := prometheus.NewRegistry()
 	trafficDesc := prometheusdesc.NewV2raymgTrafficDesc()
 	pingDesc := prometheusdesc.NewPingDesc()
+	nodeMetricDesc := prometheusdesc.NewNodeMetricDesc()
 
-	reg.MustRegister(trafficDesc)
-	reg.MustRegister(pingDesc)
+	reg.Register(trafficDesc)
+	reg.Register(pingDesc)
+	reg.Register(nodeMetricDesc)
+
 	handler := promhttp.HandlerFor(reg,
 		promhttp.HandlerOpts{
 			ErrorHandling: promhttp.ContinueOnError,
@@ -33,36 +38,24 @@ func prometheusHandler(metricHandler *MetricHandler) gin.HandlerFunc {
 			logger.Error("no avaliable node")
 			return
 		}
-		// stats
 		rpcClient := client.NewEndNodeClient(nodes, nil)
-		succList, _, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(),
-			client.GetBandWidthStatsReqType,
-			&proto.GetBandwidthStatsReq{},
-			globalCluster.GetClusterToken(),
-		)
-		stats := []*proto.Stats{}
-		for _, v := range succList {
-			s, _ := v.([]*proto.Stats)
-			stats = append(stats, s...)
-		}
-		trafficDesc.Mutex.Lock()
-		defer trafficDesc.Mutex.Unlock()
-		trafficDesc.Stats = stats
-
-		// ping metrics
-		metricSuccList, _, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(),
-			client.GetPingMetricType,
-			&proto.GetPingMetricReq{},
-			globalCluster.GetClusterToken(),
-		)
-		metrics := []*proto.PingMetric{}
-		for _, v := range metricSuccList {
-			m, _ := v.(*proto.PingMetric)
-			metrics = append(metrics, m)
-		}
-		pingDesc.Mutex.Lock()
-		defer pingDesc.Mutex.Unlock()
-		pingDesc.Metrics = metrics
+		ctx, cancel := context.WithTimeout(c.Request.Context(), time.Second)
+		defer cancel()
+		wg := &sync.WaitGroup{}
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			trafficDesc.Update(ctx, rpcClient)
+		}()
+		go func() {
+			defer wg.Done()
+			pingDesc.Update(ctx, rpcClient)
+		}()
+		go func() {
+			defer wg.Done()
+			nodeMetricDesc.Update(ctx, rpcClient)
+		}()
+		wg.Wait()
 
 		handler.ServeHTTP(c.Writer, c.Request)
 	}
