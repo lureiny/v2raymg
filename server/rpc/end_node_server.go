@@ -43,6 +43,8 @@ type EndNodeServer struct {
 	centerNode  *cluster.Node
 	certManager *lego.CertManager
 	server.ServerConfig
+
+	nodeCollector *collecter.NodeCollector
 }
 
 const (
@@ -57,7 +59,7 @@ func GetEndNodeServer() *EndNodeServer {
 var methodPrefixLen = len("/proto.EndNodeAccess/")
 
 // gateway模式下放行的接口列表
-var onlyGatewayMethods = "HeartBeat|RegisterNode|SetGatewayModel|GetPingMetric|GetBandWidthStats|SetPingCheck"
+var onlyGatewayMethods = "HeartBeat|RegisterNode|SetGatewayModel|GetPingMetric|GetNodeMetric|GetBandWidthStats|SetPingCheck"
 
 func isOnlyGatewayMethod(fullMethod string) bool {
 	return strings.Contains(onlyGatewayMethods, fullMethod[methodPrefixLen:])
@@ -91,6 +93,7 @@ var methodRspMap = map[string]interface{}{
 	"TransferCert":         &proto.TransferCertRsp{},
 	"GetCerts":             &proto.GetCertsRsp{},
 	"GetPingMetric":        &proto.GetPingMetricRsp{},
+	"GetNodeMetric":        &proto.GetNodeMetricRsp{},
 }
 
 func newEmptyRsp(fullMethod string) (interface{}, error) {
@@ -169,6 +172,7 @@ func (s *EndNodeServer) Init(certManager *lego.CertManager) {
 	if err != nil {
 		logger.Error("Err=Start proxy server err > %v", err)
 	}
+	s.nodeCollector = collecter.DefauleNodeCollector()
 }
 
 func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto.RegisterNodeReq) (*proto.RegisterNodeRsp, error) {
@@ -991,6 +995,30 @@ func (s *EndNodeServer) GetPingMetric(ctx context.Context, in *proto.GetPingMetr
 		pingMertic.Results = append(pingMertic.Results, r.ConvertToProtoPingResult())
 	}
 	getMetricRsp.Metric = pingMertic
+	return getMetricRsp, nil
+}
+
+// GetNodeMetric ...
+func (s *EndNodeServer) GetNodeMetric(ctx context.Context, in *proto.GetNodeMetricReq) (*proto.GetNodeMetricRsp, error) {
+	getMetricRsp := &proto.GetNodeMetricRsp{
+		Code: 0,
+	}
+
+	mfs, err := s.nodeCollector.Collect()
+	if err != nil {
+		getMetricRsp.Code = 1050
+		getMetricRsp.Msg = fmt.Sprintf("collect node metric fail, err: %v", err)
+		return getMetricRsp, nil
+	}
+	nodeMetrics := &proto.NodeMetrics{
+		Host:   globalConfig.GetString(common.ConfigProxyHost),
+		Source: s.Name,
+	}
+	for _, mf := range mfs {
+		data, _ := pb.Marshal(mf)
+		nodeMetrics.SerializedMetrics = append(nodeMetrics.SerializedMetrics, data)
+	}
+	getMetricRsp.NodeMetrics = nodeMetrics
 	return getMetricRsp, nil
 }
 

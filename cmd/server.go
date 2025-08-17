@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/alecthomas/kingpin/v2"
 	"github.com/lureiny/v2raymg/common"
 	"github.com/lureiny/v2raymg/common/log/logger"
 	"github.com/lureiny/v2raymg/global"
@@ -62,7 +63,15 @@ func startCollector() {
 	go collecter.StartPing()
 }
 
+func initKingpin() {
+	args := os.Args
+	os.Args = os.Args[:1]
+	kingpin.Parse()
+	os.Args = args
+}
+
 func startServer(cmd *cobra.Command, args []string) {
+	initKingpin()
 	initGlobalInfo()
 	// center node
 	if strings.EqualFold(config.GetString(common.ConfigRpcServerType), common.CenterNodeType) {
