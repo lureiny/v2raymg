@@ -77,9 +77,6 @@ func NewTrojanShareConfig(in *config.InboundDetourConfig, email string, host str
 	if err != nil {
 		return nil, err
 	}
-	if p.Type == "tcp" {
-		p.Type = "original"
-	}
 
 	sharedConfig.ProtocolConfig = p
 
