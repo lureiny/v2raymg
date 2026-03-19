@@ -1,0 +1,295 @@
+package profilegen
+
+import (
+	"testing"
+
+	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestGenerateTrojanTLSInboundSpec_HostRequired(t *testing.T) {
+	// Host is empty - should fail
+	_, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "host is required")
+}
+
+func TestGenerateTrojanTLSInboundSpec_DefaultTCP(t *testing.T) {
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host: "example.com",
+	})
+	require.NoError(t, err)
+
+	// Validate basic fields
+	assert.NotEmpty(t, spec.Tag)
+	assert.GreaterOrEqual(t, spec.Port, uint32(100))
+	assert.LessOrEqual(t, spec.Port, uint32(65535))
+	assert.Equal(t, contracts.ProtocolTrojan, spec.Protocol)
+
+	// Validate extensions - must have TLS (hard constraint)
+	security, ok := spec.Extensions["security"].(string)
+	require.True(t, ok, "security should be set")
+	assert.Equal(t, "tls", security, "security must be TLS for trusted channel")
+
+	// Validate transport default
+	transport, ok := spec.Extensions["transport"].(string)
+	require.True(t, ok, "transport should be set")
+	assert.Equal(t, "tcp", transport)
+
+	// Validate server_name
+	serverName, ok := spec.Extensions["server_name"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "example.com", serverName)
+
+	// Validate user exists
+	users, ok := spec.Extensions["users"].([]contracts.UserSpec)
+	require.True(t, ok, "users should be in extensions")
+	require.Len(t, users, 1)
+	assert.NotEmpty(t, users[0].Password)
+	assert.Equal(t, contracts.ProtocolTrojan, users[0].Protocol)
+
+	// Verify no security=none
+	assert.NotEqual(t, "none", security)
+}
+
+func TestGenerateTrojanTLSInboundSpec_WithGRPC(t *testing.T) {
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host:      "example.com",
+		Transport: "grpc",
+	})
+	require.NoError(t, err)
+
+	// Validate transport
+	transport, ok := spec.Extensions["transport"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "grpc", transport)
+
+	// Validate grpc_service_name default
+	grpcServiceName, ok := spec.Extensions["grpc_service_name"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "grpc", grpcServiceName)
+
+	// TLS must still be set
+	security, ok := spec.Extensions["security"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "tls", security)
+}
+
+func TestGenerateTrojanTLSInboundSpec_WithCustomGRPCServiceName(t *testing.T) {
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host:            "example.com",
+		Transport:       "grpc",
+		GRPCServiceName: "my-trojan-service",
+	})
+	require.NoError(t, err)
+
+	grpcServiceName, ok := spec.Extensions["grpc_service_name"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "my-trojan-service", grpcServiceName)
+}
+
+func TestGenerateTrojanTLSInboundSpec_PortAssignment(t *testing.T) {
+	// Test with specific port
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host: "example.com",
+		Port: 12345,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint32(12345), spec.Port)
+}
+
+func TestGenerateTrojanTLSInboundSpec_RandomPort(t *testing.T) {
+	// Port = 0 should generate random port
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host: "example.com",
+		Port: 0,
+	})
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, spec.Port, uint32(100))
+	assert.LessOrEqual(t, spec.Port, uint32(65535))
+}
+
+func TestGenerateTrojanTLSInboundSpec_Randomness(t *testing.T) {
+	// Generate two specs and verify they have different passwords and tags
+	spec1, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host: "example.com",
+	})
+	require.NoError(t, err)
+
+	spec2, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host: "example.com",
+	})
+	require.NoError(t, err)
+
+	// Passwords should be different
+	users1 := spec1.Extensions["users"].([]contracts.UserSpec)
+	users2 := spec2.Extensions["users"].([]contracts.UserSpec)
+	assert.NotEqual(t, users1[0].Password, users2[0].Password)
+
+	// Tags should be different (or at least one should be auto-generated differently)
+	assert.NotEqual(t, spec1.Tag, spec2.Tag)
+}
+
+func TestGenerateTrojanTLSInboundSpec_CustomTag(t *testing.T) {
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host: "example.com",
+		Tag:  "my-custom-tag",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "my-custom-tag", spec.Tag)
+}
+
+func TestGenerateTrojanTLSInboundSpec_CustomPassword(t *testing.T) {
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host:     "example.com",
+		Password: "my-custom-password",
+	})
+	require.NoError(t, err)
+
+	users := spec.Extensions["users"].([]contracts.UserSpec)
+	require.Len(t, users, 1)
+	assert.Equal(t, "my-custom-password", users[0].Password)
+}
+
+func TestGenerateTrojanTLSInboundSpec_PasswordAutoGenerated(t *testing.T) {
+	// When password is empty, it should be auto-generated
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host:     "example.com",
+		Password: "",
+	})
+	require.NoError(t, err)
+
+	users := spec.Extensions["users"].([]contracts.UserSpec)
+	require.Len(t, users, 1)
+	assert.NotEmpty(t, users[0].Password, "password should be auto-generated when empty")
+}
+
+func TestGenerateTrojanTLSInboundSpec_InvalidTransport(t *testing.T) {
+	_, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host:      "example.com",
+		Transport: "invalid",
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid transport")
+}
+
+func TestGenerateTrojanTLSInboundSpec_InvalidPort(t *testing.T) {
+	_, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host: "example.com",
+		Port: 99, // Below valid range
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "port")
+
+	_, err = GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host: "example.com",
+		Port: 65536, // Above valid range
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "port")
+}
+
+func TestGenerateTrojanTLSInboundSpec_NoInsecure(t *testing.T) {
+	// tls_allow_insecure must be false for trusted channel
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host: "example.com",
+	})
+	require.NoError(t, err)
+
+	allowInsecure, ok := spec.Extensions["tls_allow_insecure"].(bool)
+	require.True(t, ok, "tls_allow_insecure should be set")
+	assert.False(t, allowInsecure, "tls_allow_insecure must be false for trusted channel")
+}
+
+func TestGenerateTrojanTLSInboundSpec_ListenAddr(t *testing.T) {
+	// Test default listen address
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host: "example.com",
+	})
+	require.NoError(t, err)
+	// Default should not include listen_addr in extensions (Adapter handles default)
+	_, hasDefaultListen := spec.Extensions["listen_addr"]
+	assert.False(t, hasDefaultListen, "default listen_addr should not be in extensions")
+
+	// Test custom listen address
+	spec2, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host:       "example.com",
+		ListenAddr: "192.168.1.1",
+	})
+	require.NoError(t, err)
+	listenAddr, ok := spec2.Extensions["listen_addr"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "192.168.1.1", listenAddr)
+}
+
+func TestGenerateTrojanTLSInboundSpec_UserExtensions(t *testing.T) {
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host: "example.com",
+	})
+	require.NoError(t, err)
+
+	users := spec.Extensions["users"].([]contracts.UserSpec)
+	require.Len(t, users, 1)
+
+	user := users[0]
+	assert.Equal(t, "auto@trojan.local", user.Username)
+	assert.Equal(t, uint32(0), user.Level)
+	// Check Trojan-specific password field
+	assert.NotEmpty(t, user.Password, "password should be set")
+}
+
+func TestGenerateTrojanTLSInboundSpec_GRPCServiceNameDefault(t *testing.T) {
+	// Verify default grpc_service_name is set when transport is grpc
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host:      "example.com",
+		Transport: "grpc",
+	})
+	require.NoError(t, err)
+
+	grpcServiceName, ok := spec.Extensions["grpc_service_name"].(string)
+	require.True(t, ok, "grpc_service_name should be set for grpc transport")
+	assert.Equal(t, "grpc", grpcServiceName)
+}
+
+func TestGenerateTrojanTLSInboundSpec_TransportTCPWithGRPCServiceNameIgnored(t *testing.T) {
+	// grpc_service_name should not be included when transport is tcp
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host:            "example.com",
+		Transport:       "tcp",
+		GRPCServiceName: "should-be-ignored",
+	})
+	require.NoError(t, err)
+
+	_, hasGRPCServiceName := spec.Extensions["grpc_service_name"]
+	assert.False(t, hasGRPCServiceName, "grpc_service_name should not be set for tcp transport")
+}
+
+func TestGenerateTrojanTLSInboundSpec_WithCert(t *testing.T) {
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host:     "example.com",
+		CertFile: "/etc/certs/example.com.crt",
+		KeyFile:  "/etc/certs/example.com.key",
+	})
+	require.NoError(t, err)
+
+	certFile, ok := spec.Extensions["cert_file"].(string)
+	require.True(t, ok, "cert_file should be set")
+	assert.Equal(t, "/etc/certs/example.com.crt", certFile)
+
+	keyFile, ok := spec.Extensions["key_file"].(string)
+	require.True(t, ok, "key_file should be set")
+	assert.Equal(t, "/etc/certs/example.com.key", keyFile)
+}
+
+func TestGenerateTrojanTLSInboundSpec_NoCertWhenEmpty(t *testing.T) {
+	spec, err := GenerateTrojanTLSInboundSpec(GenerateTrojanTLSParams{
+		Host: "example.com",
+	})
+	require.NoError(t, err)
+
+	_, hasCertFile := spec.Extensions["cert_file"]
+	assert.False(t, hasCertFile, "cert_file should not be set when CertFile is empty")
+	_, hasKeyFile := spec.Extensions["key_file"]
+	assert.False(t, hasKeyFile, "key_file should not be set when KeyFile is empty")
+}

@@ -1,5 +1,5 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
+# Build and release on tag push
+# https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
 
 name: build
 
@@ -12,21 +12,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
-          go-version: 1.24.4
+          go-version: "1.24"
 
-      - name: Build Xray
-        run: make xray && cd bin/ && tar czvf ../v2raymg-xray.tar.gz v2raymg tools
+      - name: Build
+        run: go build -o bin/v2raymg .
 
-      - name: auth
-        run: echo ${{ secrets.GITHUB_TOKEN }} | gh auth login --with-token
+      - name: Package
+        run: cd bin/ && tar czvf ../v2raymg.tar.gz v2raymg
 
-      - name: create release
-        run: gh release create ${TAG} v2raymg-xray.tar.gz v2raymg-v2ray.tar.gz
-
-    env:
-      TAG: ${{ github.ref }}
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "${TAG}" v2raymg.tar.gz

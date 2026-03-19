@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package xray.core;
+
+// InboundHandlerConfig - defined in app.proxyman.config in generated code
+// This is a placeholder that will be replaced by the actual type
+message InboundHandlerConfig {
+  string tag = 1;
+}
+
+// OutboundHandlerConfig - placeholder
+message OutboundHandlerConfig {
+  string tag = 1;
+}

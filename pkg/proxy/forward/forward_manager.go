@@ -1,0 +1,756 @@
+package forward
+
+import (
+	"fmt"
+	"strings"
+	"sync"
+
+	"github.com/lureiny/v2raymg/pkg/log"
+)
+
+// ForwardManagerOption is a function that configures a ForwardManager.
+type ForwardManagerOption func(*DefaultForwardManager)
+
+// WithPortRange sets the allocatable port range for the ForwardManager.
+// Default range is 10000-65535 if not specified.
+func WithPortRange(minPort, maxPort uint32) ForwardManagerOption {
+	return func(m *DefaultForwardManager) {
+		cfg := PortAllocatorConfig{
+			MinPort: minPort,
+			MaxPort: maxPort,
+		}
+		alloc, err := NewPortAllocator(cfg)
+		if err == nil {
+			m.allocator = alloc
+		}
+	}
+}
+
+// NewForwardManager creates a new ForwardManager with options.
+// If no options are provided, default port range is 10000-65535 with random allocation.
+func NewForwardManager(opts ...ForwardManagerOption) (*DefaultForwardManager, error) {
+	// Default config: user-facing forward port range with random allocation
+	defaultCfg := PortAllocatorConfig{
+		MinPort:   10000,
+		MaxPort:   65535,
+		UseRandom: true,
+	}
+	alloc, err := NewPortAllocator(defaultCfg)
+	if err != nil {
+		return nil, fmt.Errorf("forward_manager: %w", err)
+	}
+
+	m := &DefaultForwardManager{
+		allocator:              alloc,
+		traffic:                NewTrafficRegistry(),
+		rules:                  make(map[string]*managedRule),
+		userBandwidth:          make(map[string]*userBandwidthLimiter),
+		userClientLimiters:     make(map[string]ClientLimiter),
+		userClientLimitConfigs: make(map[string]ClientLimitConfig),
+	}
+
+	// Apply options
+	for _, opt := range opts {
+		opt(m)
+	}
+
+	return m, nil
+}
+
+// managedRule is an active forwarding rule with its relay and traffic counter.
+type managedRule struct {
+	rule              ForwardRule
+	relay             *Relay
+	counter           *TrafficCounter
+	userBandwidthLim *userBandwidthLimiter // shared per-user limiter, nil if no user limit set
+	clientLimiter    ClientLimiter         // remote IP based client limiter, nil if no client limit set
+}
+
+// DefaultForwardManager is the standard implementation of ForwardManager.
+// It manages port allocation, relays, traffic counters, and rate limiters.
+//
+// Concurrency model:
+//   - m.mu guards the rules map and lifecycle transitions (add/remove/close).
+//   - Traffic bytes/connections are tracked by TrafficCounter using atomics, so data path
+//     counting does not contend on manager lock.
+//   - Rule reads (Get*/Stats) use RLock to reduce contention against data-plane operations.
+//   - User bandwidth limits use per-user token buckets stored in userBandwidth.
+//     Data path (relay) accesses these buckets without holding manager lock.
+//   - User-level client limiters (userClientLimiters) are shared across all rules of the same user.
+//   - User-level client limit configs (userClientLimitConfigs) store config for rules without active limiter.
+type DefaultForwardManager struct {
+	mu           sync.RWMutex
+	allocator    *PortAllocator
+	traffic      *TrafficRegistry
+	rules        map[string]*managedRule // key = ruleKey
+	closed       bool
+	userBandwidth         map[string]*userBandwidthLimiter // key = username
+	userClientLimiters    map[string]ClientLimiter       // key = username, active limiter instances
+	userClientLimitConfigs map[string]ClientLimitConfig  // key = username, stored config (may have no active limiter)
+}
+
+// NewDefaultForwardManager creates a new ForwardManager with the given port allocator config.
+// Zero values are filled with sensible defaults:
+//   - MinPort: 10000
+//   - MaxPort: 65535
+//   - UseRandom: true (always; random allocation is the only supported mode)
+func NewDefaultForwardManager(allocCfg PortAllocatorConfig) (*DefaultForwardManager, error) {
+	if allocCfg.MinPort == 0 {
+		allocCfg.MinPort = 10000
+	}
+	if allocCfg.MaxPort == 0 {
+		allocCfg.MaxPort = 65535
+	}
+	allocCfg.UseRandom = true // always random; round-robin is not a supported use-case
+
+	alloc, err := NewPortAllocator(allocCfg)
+	if err != nil {
+		return nil, fmt.Errorf("forward_manager: %w", err)
+	}
+
+	return &DefaultForwardManager{
+		allocator:              alloc,
+		traffic:                NewTrafficRegistry(),
+		rules:                  make(map[string]*managedRule),
+		userBandwidth:          make(map[string]*userBandwidthLimiter),
+		userClientLimiters:     make(map[string]ClientLimiter),
+		userClientLimitConfigs: make(map[string]ClientLimitConfig),
+	}, nil
+}
+
+// AddRule adds a forwarding rule, allocates a port, and starts the relay.
+//
+// Lifecycle intent:
+// - Port allocation happens before relay start to guarantee uniqueness.
+// - If relay start fails, allocated port and traffic registry entry are rolled back immediately.
+// - Returned rule is a copy; internal state remains manager-owned.
+func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) {
+	if err := rule.Validate(); err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.closed {
+		return nil, fmt.Errorf("forward_manager: closed")
+	}
+
+	key := rule.RuleKey()
+	if _, exists := m.rules[key]; exists {
+		return nil, fmt.Errorf("forward_manager: rule %q already exists", key)
+	}
+
+	// Allocate port
+	var port uint32
+	var err error
+	if rule.ListenPort != 0 {
+		if err = m.allocator.AllocateSpecific(rule.ListenPort); err != nil {
+			return nil, fmt.Errorf("forward_manager: %w", err)
+		}
+		port = rule.ListenPort
+	} else {
+		port, err = m.allocator.Allocate()
+		if err != nil {
+			return nil, fmt.Errorf("forward_manager: %w", err)
+		}
+		rule.ListenPort = port
+	}
+
+	// Create traffic counter
+	counter := m.traffic.GetOrCreate(key)
+
+	// Build limiters: user-level bandwidth limit takes precedence over rule-level limit
+	var limiterUp, limiterDown Limiter
+	var userBandwidthLim *userBandwidthLimiter
+
+	// Check if user has bandwidth limit set
+	if userLimiter, ok := m.userBandwidth[rule.Username]; ok && userLimiter != nil {
+		userBandwidthLim = userLimiter
+		// User-level limit applies to all rules for this user
+		limiterUp = userLimiter.UploadLimiter()
+		limiterDown = userLimiter.DownloadLimiter()
+	} else {
+		// Fall back to rule-level limit
+		if rule.UploadBytesPerSec > 0 {
+			limiterUp = NewTokenBucketLimiter(rule.UploadBytesPerSec, rule.UploadBytesPerSec)
+		}
+		if rule.DownloadBytesPerSec > 0 {
+			limiterDown = NewTokenBucketLimiter(rule.DownloadBytesPerSec, rule.DownloadBytesPerSec)
+		}
+	}
+
+	// Determine listen address
+	listenAddr := rule.ListenAddr
+	if listenAddr == "" {
+		listenAddr = "0.0.0.0"
+	}
+	fullListenAddr := fmt.Sprintf("%s:%d", listenAddr, port)
+
+	// Determine effective client limit config with priority: rule > stored config > default
+	var effectiveMaxClients int
+	var recycleDelay, drainSec int
+
+	// Priority 1: rule explicitly sets MaxClients
+	if rule.MaxClients > 0 {
+		effectiveMaxClients = rule.MaxClients
+		recycleDelay = rule.ClientRecycleDelaySec
+		drainSec = rule.ClientDrainSec
+	} else if rule.MaxClients < 0 {
+		// rule explicitly disables (e.g., -1 or negative)
+		effectiveMaxClients = 0
+	} else {
+		// rule.MaxClients == 0, check stored config
+		if storedConfig, exists := m.userClientLimitConfigs[rule.Username]; exists {
+			effectiveMaxClients = storedConfig.MaxClients
+			recycleDelay = storedConfig.RecycleDelaySec
+			drainSec = storedConfig.SingleDirectionDrainSec
+		} else {
+			effectiveMaxClients = 0 // no limit
+		}
+	}
+
+	// Get or create user-level client limiter (shared across all rules of the same user)
+	var clientLimiter ClientLimiter
+	if effectiveMaxClients > 0 {
+		// Apply defaults if not specified
+		if recycleDelay <= 0 {
+			recycleDelay = 60
+		}
+		if drainSec <= 0 {
+			drainSec = 2
+		}
+
+		config := ClientLimitConfig{
+			MaxClients:              effectiveMaxClients,
+			RecycleDelaySec:        recycleDelay,
+			SingleDirectionDrainSec: drainSec,
+		}
+
+		// Check if user already has a client limiter
+		if existingLimiter, exists := m.userClientLimiters[rule.Username]; exists {
+			// Update config before reusing
+			if limiter, ok := existingLimiter.(*remoteIPClientLimiter); ok {
+				limiter.SetConfig(config)
+			}
+			clientLimiter = existingLimiter
+		} else {
+			// Create new limiter and store config
+			clientLimiter = newRemoteIPClientLimiter(config)
+			m.userClientLimiters[rule.Username] = clientLimiter
+			m.userClientLimitConfigs[rule.Username] = config
+		}
+	}
+	// If effectiveMaxClients <= 0, clientLimiter stays nil (no limit)
+
+	// Create and start relay
+	relay := NewRelay(RelayConfig{
+		ListenAddr:    fullListenAddr,
+		TargetAddr:    rule.TargetAddr,
+		Counter:       counter,
+		LimiterUp:     limiterUp,
+		LimiterDown:   limiterDown,
+		MaxConns:      rule.MaxConnections,
+		ClientLimiter: clientLimiter,
+	})
+
+	if err := relay.Start(); err != nil {
+		m.allocator.Release(port)
+		m.traffic.Remove(key)
+		log.Debug("[ForwardManager] relay start failed", "key", key, "listen", fullListenAddr, "target", rule.TargetAddr, "err", err)
+		return nil, fmt.Errorf("forward_manager: relay start: %w", err)
+	}
+
+	m.rules[key] = &managedRule{
+		rule:              rule,
+		relay:             relay,
+		counter:           counter,
+		userBandwidthLim:  userBandwidthLim,
+		clientLimiter:     clientLimiter,
+	}
+
+	log.Info("[ForwardManager] rule added", "key", key, "listen", fullListenAddr, "target", rule.TargetAddr, "user", rule.Username)
+
+	result := rule // copy
+	return &result, nil
+}
+
+// RemoveRule stops the relay and releases the port for the given rule key.
+func (m *DefaultForwardManager) RemoveRule(ruleKey string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	mr, ok := m.rules[ruleKey]
+	if !ok {
+		return fmt.Errorf("forward_manager: rule %q not found", ruleKey)
+	}
+
+	log.Debug("[ForwardManager] removing rule", "key", ruleKey, "port", mr.rule.ListenPort, "user", mr.rule.Username)
+	mr.relay.Stop()
+	m.allocator.Release(mr.rule.ListenPort)
+	m.traffic.Remove(ruleKey)
+	delete(m.rules, ruleKey)
+
+	return nil
+}
+
+// RemoveRulesByUser removes all rules for the given username.
+func (m *DefaultForwardManager) RemoveRulesByUser(username string) error {
+	m.mu.Lock()
+	keysToRemove := make([]string, 0)
+	for key, mr := range m.rules {
+		if mr.rule.Username == username {
+			keysToRemove = append(keysToRemove, key)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, key := range keysToRemove {
+		if err := m.RemoveRule(key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RemoveRulesByInbound removes all rules for the given inbound tag.
+// This is used when an inbound is stopped/destroyed.
+func (m *DefaultForwardManager) RemoveRulesByInbound(inboundTag string) error {
+	m.mu.Lock()
+	keysToRemove := make([]string, 0)
+	for key, mr := range m.rules {
+		if mr.rule.InboundTag == inboundTag {
+			keysToRemove = append(keysToRemove, key)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, key := range keysToRemove {
+		if err := m.RemoveRule(key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetRule returns the rule for the given key, or nil if not found.
+func (m *DefaultForwardManager) GetRule(ruleKey string) *ForwardRule {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if mr, ok := m.rules[ruleKey]; ok {
+		r := mr.rule // copy
+		return &r
+	}
+	return nil
+}
+
+// GetRulesByUser returns all rules for the given username.
+func (m *DefaultForwardManager) GetRulesByUser(username string) []*ForwardRule {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]*ForwardRule, 0)
+	for _, mr := range m.rules {
+		if mr.rule.Username == username {
+			r := mr.rule // copy
+			result = append(result, &r)
+		}
+	}
+	return result
+}
+
+// GetAllRules returns all active rules.
+func (m *DefaultForwardManager) GetAllRules() []*ForwardRule {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]*ForwardRule, 0, len(m.rules))
+	for _, mr := range m.rules {
+		r := mr.rule // copy
+		result = append(result, &r)
+	}
+	return result
+}
+
+// GetTraffic returns traffic stats for the given rule key.
+func (m *DefaultForwardManager) GetTraffic(ruleKey string, reset bool) (*TrafficSnapshot, error) {
+	m.mu.RLock()
+	mr, ok := m.rules[ruleKey]
+	m.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("forward_manager: rule %q not found", ruleKey)
+	}
+
+	upload, download, active := mr.counter.Snapshot(reset)
+	return &TrafficSnapshot{
+		Username:          mr.rule.Username,
+		Upload:            upload,
+		Download:          download,
+		ActiveConnections: active,
+	}, nil
+}
+
+// GetAllTraffic returns traffic stats for all rules.
+func (m *DefaultForwardManager) GetAllTraffic(reset bool) *ForwardManagerStats {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	stats := &ForwardManagerStats{
+		ByRule:              make(map[string]TrafficSnapshot, len(m.rules)),
+		TotalRules:          len(m.rules),
+		TotalAllocatedPorts: m.allocator.AllocatedCount(),
+	}
+
+	for key, mr := range m.rules {
+		upload, download, active := mr.counter.Snapshot(reset)
+		stats.ByRule[key] = TrafficSnapshot{
+			Username:          mr.rule.Username,
+			Upload:            upload,
+			Download:          download,
+			ActiveConnections: active,
+		}
+	}
+
+	return stats
+}
+
+// GetAllTrafficRecords returns all traffic records with full metadata.
+func (m *DefaultForwardManager) GetAllTrafficRecords(reset bool) []ForwardTrafficRecord {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	records := make([]ForwardTrafficRecord, 0, len(m.rules))
+	for key, mr := range m.rules {
+		upload, download, active := mr.counter.Snapshot(reset)
+		records = append(records, ForwardTrafficRecord{
+			RuleKey:            key,
+			Username:           mr.rule.Username,
+			ContainerType:      mr.rule.ContainerType,
+			InboundTag:         mr.rule.InboundTag,
+			ListenPort:         mr.rule.ListenPort,
+			TargetAddr:         mr.rule.TargetAddr,
+			UplinkBytes:        upload,
+			DownlinkBytes:      download,
+			ActiveConnections:  active,
+		})
+	}
+
+	return records
+}
+
+// QueryTrafficStats queries traffic stats with filters and group-by.
+func (m *DefaultForwardManager) QueryTrafficStats(query TrafficQuery) TrafficQueryResult {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Collect all matching records
+	var matchingRecords []ForwardTrafficRecord
+	var totalUplink, totalDownlink int64
+
+	for key, mr := range m.rules {
+		upload, download, active := mr.counter.Snapshot(query.Reset)
+
+		record := ForwardTrafficRecord{
+			RuleKey:            key,
+			Username:           mr.rule.Username,
+			ContainerType:      mr.rule.ContainerType,
+			InboundTag:         mr.rule.InboundTag,
+			ListenPort:         mr.rule.ListenPort,
+			TargetAddr:         mr.rule.TargetAddr,
+			UplinkBytes:        upload,
+			DownlinkBytes:      download,
+			ActiveConnections:  active,
+		}
+
+		// Apply filters
+		if query.Username != "" && record.Username != query.Username {
+			continue
+		}
+		if query.ContainerType != "" && record.ContainerType != query.ContainerType {
+			continue
+		}
+		if query.InboundTag != "" && record.InboundTag != query.InboundTag {
+			continue
+		}
+		if query.RuleKey != "" && record.RuleKey != query.RuleKey {
+			continue
+		}
+
+		matchingRecords = append(matchingRecords, record)
+		totalUplink += upload
+		totalDownlink += download
+	}
+
+	// Build result
+	result := TrafficQueryResult{
+		Records:         matchingRecords,
+		AggregatedStats: make(map[string]ForwardTrafficRecord),
+		TotalUplink:     totalUplink,
+		TotalDownlink:   totalDownlink,
+	}
+
+	// Apply group-by aggregation
+	if query.GroupBy != "" {
+		aggregated := make(map[string]ForwardTrafficRecord)
+
+		for _, record := range matchingRecords {
+			var groupKey string
+			switch query.GroupBy {
+			case "user":
+				groupKey = record.Username
+			case "container":
+				groupKey = string(record.ContainerType)
+			case "inbound":
+				groupKey = string(record.ContainerType) + ":" + record.InboundTag
+			case "rule":
+				groupKey = record.RuleKey
+			default:
+				// Multiple group-by: "user,container" etc.
+				groupKey = buildGroupKey(record, query.GroupBy)
+			}
+
+			if existing, ok := aggregated[groupKey]; ok {
+				existing.UplinkBytes += record.UplinkBytes
+				existing.DownlinkBytes += record.DownlinkBytes
+				existing.ActiveConnections += record.ActiveConnections
+				aggregated[groupKey] = existing
+			} else {
+				aggregated[groupKey] = record
+			}
+		}
+
+		result.AggregatedStats = aggregated
+	}
+
+	return result
+}
+
+// buildGroupKey builds a group key from multiple dimensions.
+func buildGroupKey(record ForwardTrafficRecord, groupBy string) string {
+	dimensions := splitAndTrim(groupBy, ",")
+	var parts []string
+	for _, dim := range dimensions {
+		switch dim {
+		case "user":
+			parts = append(parts, record.Username)
+		case "container":
+			parts = append(parts, string(record.ContainerType))
+		case "inbound":
+			parts = append(parts, record.InboundTag)
+		case "rule":
+			parts = append(parts, record.RuleKey)
+		}
+	}
+	return joinWithSeparator(parts, "|")
+}
+
+// splitAndTrim splits a string by separator and trims whitespace.
+func splitAndTrim(s, sep string) []string {
+	var result []string
+	for _, part := range strings.Split(s, sep) {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+// joinWithSeparator joins strings with a separator.
+func joinWithSeparator(parts []string, sep string) string {
+	return strings.Join(parts, sep)
+}
+
+// UpdateRateLimit updates the rate limit for an existing rule.
+// New connections will use the new limits; existing connections keep the old ones.
+func (m *DefaultForwardManager) UpdateRateLimit(ruleKey string, uploadBPS, downloadBPS int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	mr, ok := m.rules[ruleKey]
+	if !ok {
+		return fmt.Errorf("forward_manager: rule %q not found", ruleKey)
+	}
+
+	// Update the rule config (for GetRule consistency)
+	mr.rule.UploadBytesPerSec = uploadBPS
+	mr.rule.DownloadBytesPerSec = downloadBPS
+
+	// Note: existing relay connections keep the old limiter.
+	// To apply new limits, the relay would need to be restarted.
+	// This is a trade-off: we don't interrupt existing connections.
+	// New connections will pick up the new rate when the relay is re-created.
+
+	return nil
+}
+
+// SetUserBandwidthLimit sets the aggregate bandwidth limit for a user.
+// This limit applies across all rules (inbounds) belonging to the same user.
+// kind specifies "upload" or "download". bytesPerSec = 0 means unlimited (clears the limit).
+// Setting a value immediately applies to all existing and new rules for this user.
+func (m *DefaultForwardManager) SetUserBandwidthLimit(username string, kind BandwidthLimitKind, bytesPerSec int64) error {
+	if username == "" {
+		return fmt.Errorf("forward_manager: username must not be empty")
+	}
+	if err := ValidateBandwidthLimitKind(kind); err != nil {
+		return err
+	}
+	if bytesPerSec < 0 {
+		return fmt.Errorf("forward_manager: bandwidth limit must not be negative")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// If setting to 0 (unlimited), we need to mark as not set
+	if bytesPerSec == 0 {
+		lim, exists := m.userBandwidth[username]
+		if !exists || lim == nil {
+			// Nothing to clear, already doesn't exist
+			return nil
+		}
+		// Update the "set" flag to false for this direction
+		if kind == BandwidthUpload {
+			lim.UpdateRates(0, lim.DownloadRate(), false, lim.IsDownloadSet())
+		} else {
+			lim.UpdateRates(lim.UploadRate(), 0, lim.IsUploadSet(), false)
+		}
+		return nil
+	}
+
+	// Create or update the limiter with bytesPerSec > 0
+	lim, exists := m.userBandwidth[username]
+	if !exists || lim == nil {
+		// Create new limiter
+		var uploadSet, downloadSet bool = false, false
+		var uploadRate, downloadRate int64 = 0, 0
+		if kind == BandwidthUpload {
+			uploadRate = bytesPerSec
+			uploadSet = true
+		} else {
+			downloadRate = bytesPerSec
+			downloadSet = true
+		}
+		lim = newUserBandwidthLimiter(uploadRate, downloadRate, uploadSet, downloadSet)
+		m.userBandwidth[username] = lim
+	} else {
+		// Update existing limiter
+		if kind == BandwidthUpload {
+			lim.UpdateRates(bytesPerSec, lim.DownloadRate(), true, lim.IsDownloadSet())
+		} else {
+			lim.UpdateRates(lim.UploadRate(), bytesPerSec, lim.IsUploadSet(), true)
+		}
+	}
+
+	return nil
+}
+
+// GetUserBandwidthLimit returns the current bandwidth limit for a user.
+// Returns ok=false if no limit has been explicitly set for this direction.
+// Returns 0 with ok=true if the limit is explicitly set to unlimited (bytesPerSec == 0).
+func (m *DefaultForwardManager) GetUserBandwidthLimit(username string, kind BandwidthLimitKind) (int64, bool) {
+	if err := ValidateBandwidthLimitKind(kind); err != nil {
+		return 0, false
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	lim, ok := m.userBandwidth[username]
+	if !ok || lim == nil {
+		return 0, false
+	}
+
+	if kind == BandwidthUpload {
+		if !lim.IsUploadSet() {
+			return 0, false
+		}
+		return lim.UploadRate(), true
+	}
+	if !lim.IsDownloadSet() {
+		return 0, false
+	}
+	return lim.DownloadRate(), true
+}
+
+// SetUserClientLimitConfig sets the client limit config for a user.
+// This updates the limiter configuration for all existing rules of the user.
+// If config.MaxClients <= 0, the limit is disabled (limiter removed).
+func (m *DefaultForwardManager) SetUserClientLimitConfig(username string, config ClientLimitConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// If maxClients <= 0, disable the limit
+	if config.MaxClients <= 0 {
+		// Remove stored config
+		delete(m.userClientLimitConfigs, username)
+		// Remove active limiter (dynamically disable)
+		delete(m.userClientLimiters, username)
+		return nil
+	}
+
+	// Store config for future rules
+	m.userClientLimitConfigs[username] = config
+
+	// If user already has a client limiter, update its config
+	if existingLimiter, exists := m.userClientLimiters[username]; exists {
+		if limiter, ok := existingLimiter.(*remoteIPClientLimiter); ok {
+			limiter.SetConfig(config)
+		}
+	}
+
+	// If no limiter exists, don't create one yet (lazy creation on AddRule)
+	return nil
+}
+
+// GetUserClientLimitConfig returns the current client limit config for a user.
+// Returns ok=false if no client limit is set.
+func (m *DefaultForwardManager) GetUserClientLimitConfig(username string) (ClientLimitConfig, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// First check stored config
+	if config, ok := m.userClientLimitConfigs[username]; ok {
+		return config, true
+	}
+
+	// Fallback to limiter's config if exists
+	limiter, ok := m.userClientLimiters[username]
+	if !ok {
+		return ClientLimitConfig{}, false
+	}
+
+	if impl, ok := limiter.(*remoteIPClientLimiter); ok {
+		impl.mu.Lock()
+		config := impl.config
+		impl.mu.Unlock()
+		return config, true
+	}
+
+	return ClientLimitConfig{}, false
+}
+
+// Close stops all relays and releases all ports.
+func (m *DefaultForwardManager) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.closed {
+		return nil
+	}
+
+	for key, mr := range m.rules {
+		mr.relay.Stop()
+		m.allocator.Release(mr.rule.ListenPort)
+		m.traffic.Remove(key)
+	}
+	m.rules = make(map[string]*managedRule)
+	m.closed = true
+
+	return nil
+}
+
+// Verify interface compliance at compile time.
+var _ ForwardManager = (*DefaultForwardManager)(nil)

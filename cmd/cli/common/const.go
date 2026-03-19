@@ -3,27 +3,20 @@ package common
 const (
 	ListNodeURI = "node"
 	ListCert    = "getCerts"
+	ListTag     = "tag"
 
 	Gateway   = "gateway"
 	PingCheck = "pingCheck"
 	ApplyCert = "cert"
 
-	FastAddInbound = "fastAddInbound"
+	FastAddInbound = "inbound/fast"
+	Inbound        = "inbound"
 
 	CopyUserBetweenNodes = "copyUserBetweenNodes"
 	User                 = "user"
-	ClearUsers           = "clearUsers"
+	UserReset            = "user/reset"
+	Users                = "users"
 
-	Bound = "bound"
-)
-
-// user op type
-type UserOpType int
-
-const (
-	AddUser UserOpType = iota + 1
-	UpdateUser
-	DeleteUser
-	ResetUser
-	ListUser
+	Stat   = "stat"
+	Update = "update"
 )

@@ -1,13 +1,19 @@
-v2ray:
-	go build -tags v2ray -o bin/v2raymg main.go
+.PHONY: build build-full clean proto
 
-xray:
-	go build -tags xray -o bin/v2raymg main.go
+# Default build: slim DNS providers (alidns/cloudflare/dnspod/route53/tencentcloud/namecheap/godaddy)
+build:
+	go build -ldflags="-s -w" -o bin/v2raymg .
+
+# Full build: all lego DNS providers (larger binary)
+build-full:
+	go build -ldflags="-s -w" -tags full_dns -o bin/v2raymg-full .
+
+clean:
+	rm -rf bin/
 
 proto:
-	cd server/rpc/proto
-	protoc  --plugin=/root/go/bin/protoc-gen-go --plugin=/root/go/bin/protoc-gen-go-grpc --go_out=. --go-grpc_out=. rpc_server.proto
-	mv github.com/lureiny/v2raymg/server/proto/* ./
-	rm -rf proto/github.com
-	cd -
-
+	cd pkg/rpc/proto && \
+	protoc \
+		--go_out=. --go_opt=paths=source_relative \
+		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
+		rpc_server.proto

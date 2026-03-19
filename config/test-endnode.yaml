@@ -1,0 +1,47 @@
+# v2raymg test configuration for endnode with snell
+
+node_type: end
+
+log:
+  level: debug
+  format: text
+  output: stderr
+  add_source: true
+
+store:
+  dsn: /tmp/v2raymg-test-data.db
+
+forward:
+  minport: 10000
+  maxport: 60000
+  userandom: true
+  reserved: []
+
+containers:
+  containers:
+    - type: xray
+      enabled: true
+      config:
+        binary_path: ./tmp/xray-bin/xray
+        config_file_path: /tmp/xray-test.json
+        grpc_address: 127.0.0.1:62790
+    - type: snell
+      enabled: true
+      config:
+        binary_path: /tmp/snell-server
+        config_file_path: /tmp/snell-test.conf
+        listen: 127.0.0.1
+        port: 16160
+        psk: test-snell-psk-12345
+        version: v5.0.1
+
+end_node:
+  name: test-node
+  proxy_host: 127.0.0.1
+  listen: 127.0.0.1
+  rpc_port: 19090
+  http_port: 18080
+  http_token: testtoken123
+  enable_prometheus: false
+  enable_ping_check: false
+  only_gateway: false

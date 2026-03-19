@@ -1,4 +1,10 @@
 .vscode/
 bin/
-*_test.go
 *.json
+*.db
+*.db-shm
+*.db-wal
+data/
+tmp/
+/xraydemo
+xraydemo*

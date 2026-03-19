@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net/url"
@@ -10,7 +11,7 @@ import (
 
 	"github.com/lureiny/go-prompt"
 	"github.com/lureiny/v2raymg/cmd/cli/client"
-	"github.com/lureiny/v2raymg/server/rpc/proto"
+	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
 func InitPromptAndRegister() *prompt.Prompt {
@@ -22,8 +23,11 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithHelpMsg(),
 		prompt.WithDefaultHandlerCallback(handlerCallback),
 	)
+
+	// --- Node ---
 	m.RegisterHandler(listNode, "ListNode")
 
+	// --- Cert ---
 	m.RegisterHandler(listCert, "ListCert",
 		prompt.WithSuggests([]prompt.Suggest{
 			getSuggestWithTemplate(targetSuggest, WihtDefault("all")),
@@ -47,6 +51,7 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
+	// --- Inbound ---
 	m.RegisterHandler(fastAddInbound, "FastAddInbound",
 		prompt.WithSuggests([]prompt.Suggest{
 			targetSuggest,
@@ -54,12 +59,45 @@ func InitPromptAndRegister() *prompt.Prompt {
 			protocolSuggest,
 			streamSuggest,
 			domainSuggest,
+			containerSuggest,
 			isXtlsSuggest,
 			portSuggest,
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
+	m.RegisterHandler(addInbound, "AddInbound",
+		prompt.WithSuggests([]prompt.Suggest{
+			targetSuggest,
+			boundRawStringSuggest,
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	m.RegisterHandler(deleteInbound, "DeleteInbound",
+		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
+			srcTagSuggest,
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	m.RegisterHandler(getInbound, "GetInbound",
+		prompt.WithSuggests([]prompt.Suggest{
+			targetSuggest,
+			srcTagSuggest,
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	m.RegisterHandler(listTag, "ListTag",
+		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("all")),
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	// --- User ---
 	m.RegisterHandler(copyUserBetweenNodes, "CopyUserBetweenNodes",
 		prompt.WithSuggests([]prompt.Suggest{
 			srcNodeSuggest,
@@ -123,23 +161,6 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
-	m.RegisterHandler(copyUserInbound, "CopyUserInbound",
-		prompt.WithSuggests([]prompt.Suggest{
-			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
-			srcTagSuggest,
-			dstTagSuggest,
-		}),
-		prompt.WithGetSuggestMethod(GetSuggest),
-	)
-
-	m.RegisterHandler(deleteInbound, "DeleteInbound",
-		prompt.WithSuggests([]prompt.Suggest{
-			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
-			srcTagSuggest,
-		}),
-		prompt.WithGetSuggestMethod(GetSuggest),
-	)
-
 	m.RegisterHandler(addAllUserToInbound, "AddAllUserToInbound",
 		prompt.WithSuggests([]prompt.Suggest{
 			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
@@ -152,6 +173,24 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithSuggests([]prompt.Suggest{
 			getSuggestWithTemplate(targetSuggest, WihtDefault("all")),
 			userNameSuggest,
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	// --- Stats & Misc ---
+	m.RegisterHandler(getStat, "GetStat",
+		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("all")),
+			patternSuggest,
+			resetSuggest,
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	m.RegisterHandler(updateProxy, "UpdateProxy",
+		prompt.WithSuggests([]prompt.Suggest{
+			targetSuggest,
+			versionTagSuggest,
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
@@ -175,6 +214,7 @@ func InitPromptAndRegister() *prompt.Prompt {
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
+
 	return m
 }
 
@@ -190,6 +230,8 @@ func handlerCallback(results []reflect.Value) {
 	}
 }
 
+// ---- Node ----
+
 func listNode() error {
 	var err error = nil
 	nodeMutex.Lock()
@@ -203,6 +245,8 @@ func listNode() error {
 	}
 	return nil
 }
+
+// ---- Cert ----
 
 func listCert(target string) error {
 	certList, err := client.ListCert(getHost(), getToken(), target)
@@ -236,7 +280,9 @@ func applyCert(target, domain string) error {
 	return nil
 }
 
-func fastAddInbound(target, tag, protocol, stream, domain string, isXtls bool, port int) error {
+// ---- Inbound ----
+
+func fastAddInbound(target, tag, protocol, stream, domain, container string, isXtls bool, port int) error {
 	node := getNode(target)
 	if domain == "" && node != nil {
 		domain = node.GetHost()
@@ -246,16 +292,53 @@ func fastAddInbound(target, tag, protocol, stream, domain string, isXtls bool, p
 	}
 	if port == 0 {
 		rand.Seed(time.Now().UnixNano())
-		// 生成10000->50000的随机端口
 		port = 10000 + rand.Intn(40000)
 	}
-	result, err := client.FastAddInbound(getHost(), getToken(), target, tag, protocol, stream, domain, isXtls, port)
+	result, err := client.FastAddInbound(getHost(), getToken(), target, tag, protocol, stream, domain, container, isXtls, port)
 	if err != nil {
 		return err
 	}
 	fmt.Println(result)
 	return nil
 }
+
+func addInbound(target, boundRawString string) error {
+	result, err := client.AddInBound(getHost(), getToken(), target, boundRawString)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+func deleteInbound(target, srcTag string) error {
+	result, err := client.DeleteInBound(getHost(), getToken(), target, srcTag)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+func getInbound(target, srcTag string) error {
+	result, err := client.GetInBound(getHost(), getToken(), target, srcTag)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+func listTag(target string) error {
+	result, err := client.ListTag(getHost(), getToken(), target)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+// ---- User ----
 
 func copyUserBetweenNodes(srcNode, dstNode string) error {
 	result, err := client.CopyUserBetweenNodes(getHost(), getToken(), srcNode, dstNode)
@@ -332,24 +415,6 @@ func clearUsers(target, users string) error {
 	return nil
 }
 
-func copyUserInbound(target, srcTag, dstTag string) error {
-	result, err := client.CopyUserInBound(getHost(), getToken(), target, srcTag, dstTag)
-	if err != nil {
-		return err
-	}
-	fmt.Println(result)
-	return nil
-}
-
-func deleteInbound(target, srcTag string) error {
-	result, err := client.DeleteInBound(getHost(), getToken(), target, srcTag)
-	if err != nil {
-		return err
-	}
-	fmt.Println(result)
-	return nil
-}
-
 func addAllUserToInbound(target, inboundTag string) error {
 	result, err := client.ListUser(getHost(), getToken(), target)
 	if err != nil {
@@ -397,30 +462,34 @@ func getUserSubUrl(target, userName string) error {
 	return nil
 }
 
-func pingTarget(target string, times int) error {
-	// node := localNodeList[target]
-	// if node == nil {
-	// 	return fmt.Errorf("target[%s] not exist", target)
-	// }
-	// pingChecker := pingpe.NewPingPeChekcer()
-	// if err := pingChecker.Init(ping.WithHost(target)); err != nil {
-	// 	return err
-	// }
-	// pingpe.SetPingPeTime(times)
-	// pingChecker.Start()
+// ---- Stats & Misc ----
 
-	// ch := pingChecker.GetChan()
-	// needStop := false
-	// for !needStop {
-	// 	select {
-	// 	case result := <-ch:
-	// 		if result.GetLatestDelay() < 0 && result.Geo+result.ISP != "" {
-	// 			fmt.Printf("get invalid delay[%v] of geo[%s]\n", result.GetLatestDelay(), result.Geo)
-	// 		}
-	// 	default:
-	// 		needStop = !pingChecker.IsRunning()
-	// 	}
-	// }
+func getStat(target, pattern string, reset bool) error {
+	result, err := client.GetStat(getHost(), getToken(), target, pattern, reset)
+	if err != nil {
+		return err
+	}
+	// try pretty print JSON
+	var pretty interface{}
+	if jsonErr := json.Unmarshal([]byte(result), &pretty); jsonErr == nil {
+		b, _ := json.MarshalIndent(pretty, "", "  ")
+		fmt.Println(string(b))
+	} else {
+		fmt.Println(result)
+	}
+	return nil
+}
+
+func updateProxy(target, versionTag string) error {
+	result, err := client.UpdateProxy(getHost(), getToken(), target, versionTag)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+func pingTarget(target string, times int) error {
 	return nil
 }
 

@@ -1,99 +1,213 @@
 package cmd
 
 import (
-	"log"
+	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
-	"github.com/alecthomas/kingpin/v2"
-	"github.com/lureiny/v2raymg/common"
-	"github.com/lureiny/v2raymg/common/log/logger"
-	"github.com/lureiny/v2raymg/global"
-	"github.com/lureiny/v2raymg/global/collecter"
-	"github.com/lureiny/v2raymg/global/config"
-	globalLego "github.com/lureiny/v2raymg/global/lego"
-	"github.com/lureiny/v2raymg/global/proxy"
-	"github.com/lureiny/v2raymg/lego"
-	"github.com/lureiny/v2raymg/server/http"
-	"github.com/lureiny/v2raymg/server/rpc"
+	certmgmtservice "github.com/lureiny/v2raymg/pkg/certmgmt/service"
+	"github.com/lureiny/v2raymg/pkg/cluster"
+	"github.com/lureiny/v2raymg/pkg/collecter"
+	"github.com/lureiny/v2raymg/pkg/http"
+	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/appconfig"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription"
+	"github.com/lureiny/v2raymg/pkg/proxy/forward"
+	"github.com/lureiny/v2raymg/pkg/proxy/usermanager"
+	"github.com/lureiny/v2raymg/pkg/rpc/server"
+	"github.com/lureiny/v2raymg/pkg/store"
+	"github.com/lureiny/v2raymg/pkg/store/migrations"
+	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/hysteria"         // register hysteria factory
+	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/snell"           // register snell factory
+	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/xray"            // register xray factory
+	_ "github.com/lureiny/v2raymg/pkg/proxy/core/subscription/converter" // register converters
 	"github.com/spf13/cobra"
 )
 
-// serverCmd restful api
 var serverCmd = &cobra.Command{
 	Use:   "server",
-	Short: "Start v2raymg server.",
+	Short: "Start v2raymg server",
 	Run:   startServer,
 }
 
-var (
-	serverConfig = ""
-)
+var serverConfig string
+var serverMigrate bool
 
 func init() {
-	serverCmd.Flags().StringVar(&serverConfig, "conf", "/usr/local/etc/v2raymg/config.yaml", "V2raymg server config file")
-}
-
-func initGlobalInfo() {
-	// log.Printf("Start v2raymg which manage %s", manager.FileName)
-	if err := global.InitGlobalInfra(serverConfig); err != nil {
-		log.Fatal(err)
-	}
-}
-
-func initAndStartEndNodeServer(certManager *lego.CertManager) {
-	endNodeServer := rpc.GetEndNodeServer()
-	endNodeServer.Init(certManager)
-	go endNodeServer.Start()
-}
-
-func initAndStartHttpServer(certManager *lego.CertManager) {
-	httpServer := http.GlobalHttpServer
-	httpServer.Init(certManager)
-	if config.GetBool(common.ConfigSupportPrometheus) {
-		http.RegisterPrometheus()
-	}
-	go httpServer.Start()
-}
-
-func startCollector() {
-	go collecter.CollectStats()
-	go collecter.StartPing()
-}
-
-func initKingpin() {
-	args := os.Args
-	os.Args = os.Args[:1]
-	kingpin.Parse()
-	os.Args = args
+	serverCmd.Flags().StringVar(&serverConfig, "conf", "/usr/local/etc/v2raymg/config.yaml", "path to config file")
+	serverCmd.Flags().BoolVar(&serverMigrate, "migrate", false, "migrate legacy config to new format and overwrite the config file, then exit")
 }
 
 func startServer(cmd *cobra.Command, args []string) {
-	initKingpin()
-	initGlobalInfo()
-	// center node
-	if strings.EqualFold(config.GetString(common.ConfigRpcServerType), common.CenterNodeType) {
-		centerNodeServer := &rpc.CenterNodeServer{}
-		centerNodeServer.Init()
-		centerNodeServer.Start()
+	cfg, err := appconfig.LoadFromFile(serverConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// --migrate: save converted config back to file and exit
+	if serverMigrate {
+		if err := appconfig.SaveToFile(cfg, serverConfig); err != nil {
+			fmt.Fprintf(os.Stderr, "migrate: write config: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stdout, "config migrated and saved to %s\n", serverConfig)
 		return
 	}
-	// end node
-	// 1s检查刷新一次
-	config.AutoFlush(1)
 
-	initAndStartEndNodeServer(globalLego.GetCertManager())
-	initAndStartHttpServer(globalLego.GetCertManager())
+	logger := cfg.Log.ApplyToLogger()
+	log.SetDefault(logger)
 
-	startCollector()
+	if strings.EqualFold(cfg.NodeType, "center") {
+		runCenterNode(cfg)
+	} else {
+		runEndNode(cfg)
+	}
+}
 
-	// listen signal
-	c := make(chan os.Signal)
-	signal.Notify(c, syscall.SIGTERM, syscall.SIGKILL)
-	signal := <-c
-	logger.Info("Msg=Exit With signal: %v", signal)
-	// TODO: use context
-	proxy.StopProxyServer()
+func runCenterNode(cfg *appconfig.AppConfig) {
+	server := &server.CenterNodeServer{}
+	server.Init(cfg.CenterNode)
+	server.Start() // blocks
+}
+
+func runEndNode(cfg *appconfig.AppConfig) {
+	// 1. Store
+	storeMgr, err := store.NewStoreManager(cfg.Store.DSN, migrations.All)
+	if err != nil {
+		log.Error("init store failed", "err", err)
+		os.Exit(1)
+	}
+	defer storeMgr.Close()
+
+	// 2. Forward Manager
+	forwardMgr, err := forward.NewDefaultForwardManager(cfg.Forward)
+	if err != nil {
+		log.Error("init forward manager failed", "err", err)
+		os.Exit(1)
+	}
+	defer forwardMgr.Close()
+
+	// 3. User Manager
+	userMgr, err := usermanager.NewUserManagerWithStore(forwardMgr, storeMgr)
+	if err != nil {
+		log.Error("init user manager failed", "err", err)
+		os.Exit(1)
+	}
+
+	// 4. Container Manager (deferred to after certMgr init — see step 7)
+
+	// 6. Cluster Manager + LocalNode
+	clusterMgr, localNode, err := cluster.NewEndNodeClusterManagerFromConfig(
+		cluster.ClusterInitConfig{
+			ClusterName:  cfg.EndNode.Cluster.Name,
+			ClusterToken: cfg.EndNode.Cluster.Token,
+			StaticNodes:  convertStaticNodes(cfg.EndNode.Cluster.StaticNodes),
+		},
+		cluster.NodeInitConfig{
+			Name: cfg.EndNode.Name,
+			Host: cfg.EndNode.ProxyHost,
+			Port: int32(cfg.EndNode.RpcPort),
+		},
+	)
+	if err != nil {
+		log.Error("init cluster manager failed", "err", err)
+		os.Exit(1)
+	}
+
+	// 7. Cert Manager
+	certMgr := certmgmtservice.NewManager(cfg.CertMgmt)
+
+	// 4 (cont). Container Manager — needs certMgr and HTTPPort
+	containerMgr := container.NewContainerMgr(storeMgr, container.BuildOptions{
+		UserManager: userMgr,
+		CertManager: certMgr,
+		HTTPPort:    cfg.EndNode.HttpPort,
+	})
+	if err := containerMgr.LoadFromConfig(cfg.Containers); err != nil {
+		log.Error("load container config failed", "err", err)
+		os.Exit(1)
+	}
+
+	// 5. Subscription Manager
+	subMgr := subscription.NewManager(containerMgr, userMgr)
+
+	// 8. Collectors
+	statsCol := usermanager.NewBandwidthStatsCollector(userMgr)
+	pingCol := collecter.NewPingCollector(collecter.PingCollectorConfig{
+		Host:           cfg.EndNode.ProxyHost,
+		EnablePingPe:   cfg.EndNode.EnablePingCheck,
+		EnableICMPPing: false,
+	})
+	nodeMetricCol := collecter.DefaultNodeCollector()
+
+	// 9. End Node RPC Server
+	rpcServer := server.GetEndNodeServer()
+	rpcServer.Init(
+		cfg.EndNode,
+		certMgr,
+		clusterMgr,
+		userMgr,
+		containerMgr,
+		subMgr,
+		statsCol,
+		pingCol,
+		nodeMetricCol,
+	)
+	go rpcServer.Start()
+
+	// 10. HTTP Server
+	httpListen := cfg.EndNode.HttpListen
+	if httpListen == "" {
+		httpListen = "127.0.0.1"
+	}
+	httpServer := http.NewHttpServer()
+	httpServer.Init(
+		http.HttpServerConfig{
+			Listen: httpListen,
+			Port:   cfg.EndNode.HttpPort,
+			Token:  cfg.EndNode.HttpToken,
+			Name:   cfg.EndNode.Name,
+		},
+		localNode,
+		clusterMgr,
+		certMgr,
+		userMgr, // UserLister for Hysteria2 /authHysteria2 handler
+	)
+	if cfg.EndNode.EnablePrometheus {
+		http.RegisterPrometheus(httpServer)
+	}
+	go httpServer.Start()
+
+	// 11. Start traffic stats
+	userMgr.StartTrafficStats(0)
+
+	// 12. Start containers
+	if err := containerMgr.StartAll(context.Background()); err != nil {
+		log.Error("start containers failed", "err", err)
+	}
+
+	// 13. Wait for signal
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	sig := <-sigCh
+	log.Info("shutting down", "signal", sig.String())
+
+	containerMgr.StopAll()
+}
+
+func convertStaticNodes(nodes []appconfig.StaticNodeConfig) []cluster.StaticNode {
+	out := make([]cluster.StaticNode, len(nodes))
+	for i, n := range nodes {
+		out[i] = cluster.StaticNode{
+			Name: n.Name,
+			Host: n.Host,
+			Port: n.Port,
+		}
+	}
+	return out
 }
