@@ -1,0 +1,75 @@
+# v2raymg configuration
+# Copy to config.yaml and modify.
+
+# Node role: "center" or "end". Default: "end".
+node_type: end
+
+log:
+  level: info          # debug / info / warn / error
+  format: text         # text / json
+  output: stderr       # stdout / stderr / file path
+  add_source: true     # include caller file:line in log output
+
+store:
+  dsn: /var/lib/v2raymg/data.db
+
+forward:
+  minport: 10000
+  maxport: 60000
+  userandom: true
+  reserved: []
+
+cert_mgmt:
+  email: ""
+  path: /etc/v2raymg/certs
+  renewbeforedays: 30
+  challenge:
+    type: ""           # dns / http / leave empty to skip
+    dns:
+      providername: ""
+      credentials: {}
+      resolvers: []
+      disablecompletepropagation: false
+      timeoutsec: 0
+    http:
+      mode: ""             # webroot / standalone / memcached
+      listenaddr: ""       # listen address for standalone mode
+      webroot: ""          # webroot directory path
+      memcachedhosts: []   # memcached server addresses
+      proxyheader: ""      # proxy header for reverse proxy setups
+
+subscription:
+  remote_urls: []
+
+containers:
+  containers:
+    - type: xray
+      enabled: true
+      config:
+        binary_path: /usr/local/bin/xray
+        config_file_path: /etc/v2raymg/xray.json
+        grpc_address: 127.0.0.1:62789
+
+# End Node configuration (effective when node_type=end)
+end_node:
+  name: node-1
+  proxy_host: example.com
+  listen: 0.0.0.0
+  rpc_port: 9090
+  http_port: 8080
+  http_token: your-secret-token
+  enable_prometheus: false
+  enable_ping_check: false
+  only_gateway: false
+  cluster:
+    name: my-cluster
+    token: cluster-secret
+    center_node_host: ""
+    center_node_port: 0
+    static_nodes: []
+
+# Center Node configuration (effective when node_type=center)
+center_node:
+  name: center
+  listen: 0.0.0.0
+  rpc_port: 9090

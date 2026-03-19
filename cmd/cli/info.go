@@ -4,9 +4,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lureiny/v2raymg/cluster"
+	"github.com/lureiny/v2raymg/pkg/cluster"
 	"github.com/lureiny/v2raymg/cmd/cli/client"
-	"github.com/lureiny/v2raymg/server/rpc/proto"
+	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
 // info

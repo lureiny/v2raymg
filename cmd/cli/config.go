@@ -2,7 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -49,7 +51,19 @@ func inputConfig() {
 }
 
 func getHost() string {
-	return globalConfig.Host
+	host := strings.TrimSpace(globalConfig.Host)
+	if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+		host = "http://" + host
+	}
+	// Let net/url parse and reconstruct to ensure well-formed URL
+	u, err := url.Parse(host)
+	if err != nil {
+		return "http://" + strings.TrimSpace(globalConfig.Host)
+	}
+	if u.Scheme == "" {
+		u.Scheme = "http"
+	}
+	return u.String()
 }
 func getToken() string {
 	return globalConfig.Token

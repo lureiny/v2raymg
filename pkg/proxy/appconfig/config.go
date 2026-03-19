@@ -1,0 +1,154 @@
+package appconfig
+
+import (
+	"os"
+
+	certmgmtservice "github.com/lureiny/v2raymg/pkg/certmgmt/service"
+	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
+	"github.com/lureiny/v2raymg/pkg/proxy/forward"
+)
+
+// LogConfig holds logging configuration.
+type LogConfig struct {
+	// Level is the minimum log level: debug, info, warn, error. Default: info.
+	Level string `yaml:"level" json:"level"`
+	// Format is the output format: text or json. Default: text.
+	Format string `yaml:"format" json:"format"`
+	// Output is the output target: stdout, stderr, or a file path. Default: stderr.
+	Output string `yaml:"output" json:"output"`
+	// AddSource includes caller file and line number in log output. Default: false.
+	AddSource bool `yaml:"add_source" json:"add_source"`
+}
+
+// ApplyToLogger builds a log.Logger from LogConfig.
+// Zero values fall back to defaults (info level, text format, stderr).
+func (c LogConfig) ApplyToLogger() log.Logger {
+	var opts []log.Option
+
+	switch c.Level {
+	case "debug":
+		opts = append(opts, log.WithLevel(log.LevelDebug))
+	case "warn":
+		opts = append(opts, log.WithLevel(log.LevelWarn))
+	case "error":
+		opts = append(opts, log.WithLevel(log.LevelError))
+	default:
+		opts = append(opts, log.WithLevel(log.LevelInfo))
+	}
+
+	switch c.Format {
+	case "json":
+		opts = append(opts, log.WithFormat(log.FormatJSON))
+	default:
+		opts = append(opts, log.WithFormat(log.FormatText))
+	}
+
+	switch c.Output {
+	case "stdout":
+		opts = append(opts, log.WithOutput(os.Stdout))
+	case "", "stderr":
+		opts = append(opts, log.WithOutput(os.Stderr))
+	default:
+		// treat as file path
+		if f, err := os.OpenFile(c.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+			opts = append(opts, log.WithOutput(f))
+		}
+	}
+
+	if c.AddSource {
+		opts = append(opts, log.WithAddSource(true))
+	}
+
+	return log.New(opts...)
+}
+
+// StoreConfig holds persistence configuration.
+type StoreConfig struct {
+	// DSN is the SQLite database file path (e.g. "/var/lib/v2raymg/data.db").
+	DSN string `yaml:"dsn" json:"dsn"`
+}
+
+// SubscriptionConfig holds subscription-related configuration.
+type SubscriptionConfig struct {
+	// RemoteURLs is a list of remote subscription URLs to fetch and merge.
+	// Each URL should return a base64-encoded list of proxy URIs (common format).
+	RemoteURLs []string `yaml:"remote_urls" json:"remote_urls"`
+}
+
+// StaticNodeConfig is a statically configured peer node used for initial cluster discovery.
+type StaticNodeConfig struct {
+	Name string `yaml:"name" json:"name"`
+	Host string `yaml:"host" json:"host"`
+	Port int32  `yaml:"port" json:"port"`
+}
+
+// ClusterConfig holds cluster membership and authentication configuration.
+type ClusterConfig struct {
+	// Name is the cluster name. All nodes in the same cluster must share this value.
+	Name string `yaml:"name" json:"name"`
+	// Token is the shared secret used to authenticate cluster members and encrypt gRPC traffic.
+	Token string `yaml:"token" json:"token"`
+	// CenterNodeHost is the optional center node host for initial node discovery.
+	// Leave empty to operate in fully decentralized mode.
+	CenterNodeHost string `yaml:"center_node_host" json:"center_node_host"`
+	// CenterNodePort is the center node gRPC port.
+	CenterNodePort int `yaml:"center_node_port" json:"center_node_port"`
+	// StaticNodes is an optional list of known peer nodes for bootstrapping discovery
+	// without a center node.
+	StaticNodes []StaticNodeConfig `yaml:"static_nodes" json:"static_nodes"`
+}
+
+// NodeConfig holds configuration shared by both EndNode and CenterNode.
+type NodeConfig struct {
+	// Listen is the network interface to bind (e.g. "0.0.0.0" or "127.0.0.1").
+	Listen string `yaml:"listen" json:"listen"`
+	// RpcPort is the gRPC server port.
+	RpcPort int `yaml:"rpc_port" json:"rpc_port"`
+	// Name is the unique node name within the cluster.
+	Name string `yaml:"name" json:"name"`
+	// ProxyHost is the public hostname/IP used in subscription links and metric labels.
+	ProxyHost string `yaml:"proxy_host" json:"proxy_host"`
+}
+
+// EndNodeConfig holds End Node specific configuration.
+type EndNodeConfig struct {
+	NodeConfig `yaml:",inline"`
+	// Cluster holds cluster membership settings.
+	Cluster ClusterConfig `yaml:"cluster" json:"cluster"`
+	// OnlyGateway enables gateway-only mode: the node forwards traffic but does not
+	// expose proxy services itself.
+	OnlyGateway bool `yaml:"only_gateway" json:"only_gateway"`
+	// EnablePingCheck enables periodic latency probing to peer nodes.
+	EnablePingCheck bool `yaml:"enable_ping_check" json:"enable_ping_check"`
+	// HttpPort is the HTTP management interface port.
+	HttpPort int `yaml:"http_port" json:"http_port"`
+	// HttpListen overrides the listen address for the HTTP server only.
+	// When empty, falls back to the shared Listen address.
+	// Use "127.0.0.1" to restrict HTTP to localhost while gRPC listens on 0.0.0.0.
+	HttpListen string `yaml:"http_listen" json:"http_listen"`
+	// HttpToken is the HTTP management interface authentication token.
+	HttpToken string `yaml:"http_token" json:"http_token"`
+	// EnablePrometheus enables the Prometheus metrics endpoint.
+	EnablePrometheus bool `yaml:"enable_prometheus" json:"enable_prometheus"`
+}
+
+// CenterNodeConfig holds Center Node specific configuration.
+type CenterNodeConfig struct {
+	NodeConfig `yaml:",inline"`
+}
+
+// AppConfig is the top-level configuration for the v2raymg proxy refactor stack.
+// It is loaded from a YAML or JSON file and used to initialize all subsystems.
+type AppConfig struct {
+	// NodeType is the node role: "center" or "end". Default: "end".
+	NodeType     string                         `yaml:"node_type"    json:"node_type"`
+	Log          LogConfig                      `yaml:"log"          json:"log"`
+	Store        StoreConfig                    `yaml:"store"        json:"store"`
+	Forward      forward.PortAllocatorConfig    `yaml:"forward"      json:"forward"`
+	CertMgmt     certmgmtservice.Config         `yaml:"cert_mgmt"    json:"cert_mgmt"`
+	Containers   container.ContainerMgrConfig   `yaml:"containers"   json:"containers"`
+	Subscription SubscriptionConfig             `yaml:"subscription" json:"subscription"`
+	EndNode      EndNodeConfig                  `yaml:"end_node"     json:"end_node"`
+	CenterNode   CenterNodeConfig               `yaml:"center_node"  json:"center_node"`
+}

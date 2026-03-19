@@ -57,6 +57,12 @@ var (
 		Default:     false,
 	}
 
+	containerSuggest = prompt.Suggest{
+		Text:        "container",
+		Description: "container type, xray( default) or snell",
+		Default:     "xray",
+	}
+
 	portSuggest = prompt.Suggest{
 		Text:        "port",
 		Description: "inbound port, if port == 0, will generate a random port in 10000-50000",
@@ -106,7 +112,7 @@ var (
 
 	ttlSuggest = prompt.Suggest{
 		Text:        "ttl",
-		Description: "use to clac user expire time, uesr expire time = ttl + current time",
+		Description: "use to clac user expire time, user expire time = ttl + current time",
 		Default:     int(0),
 	}
 
@@ -121,6 +127,37 @@ var (
 		Description: "dst inbound tag",
 		Default:     "",
 	}
+
+	dstProtocolSuggest = prompt.Suggest{
+		Text:        "dst_protocol",
+		Description: "dst protocol: vless, vmess, trojan",
+		Default:     "",
+	}
+
+	boundRawStringSuggest = prompt.Suggest{
+		Text:        "bound_raw_string",
+		Description: "base64-encoded inbound config json",
+		Default:     "",
+	}
+
+	patternSuggest = prompt.Suggest{
+		Text:        "pattern",
+		Description: "query pattern for stat, empty means all",
+		Default:     "",
+	}
+
+	resetSuggest = prompt.Suggest{
+		Text:        "reset",
+		Description: "reset stat after query",
+		Default:     false,
+	}
+
+	versionTagSuggest = prompt.Suggest{
+		Text:        "version_tag",
+		Description: "proxy version tag, default latest",
+		Default:     "latest",
+	}
+
 )
 
 type SetSuggestOption func(*prompt.Suggest)
@@ -163,9 +200,8 @@ func GetSuggest(h *prompt.HandlerInfo, input string) ([]prompt.Suggest, error) {
 
 	isInputLast := len(input) == 0 || input[len(input)-1] != ' '
 	if len(input) == 0 || !isInputLast {
-		inputs = append(inputs, "") // 添加空字符串表示当前在等待输入一个新的参数, inputs的最后一个一定是当前在输入的值
+		inputs = append(inputs, "")
 	}
-	// input custom param, not need suggest
 	notInputHandler := len(inputs) > 1
 	isInputParamValue := notInputHandler &&
 		(prompt.IsBoolSuggest(h.Suggests, inputs[len(inputs)-1], h.SuggestPrefix) ||
@@ -178,7 +214,6 @@ func GetSuggest(h *prompt.HandlerInfo, input string) ([]prompt.Suggest, error) {
 		if isInputUserName(inputs[len(inputs)-2], h.SuggestPrefix, inputs[0]) {
 			return getUserSuggest(getTargetParam(input), inputs[len(inputs)-1])
 		}
-
 	}
 
 	return []prompt.Suggest{}, nil
@@ -199,7 +234,6 @@ func isInputUserName(lastFlag, suggestPrefix, handlerName string) bool {
 // return target name
 func getTargetParam(input string) string {
 	splitedInput := strings.Split(input, " ")
-	// filter extra spaces
 	inputs := []string{}
 	for _, s := range splitedInput {
 		if len(s) > 0 {
@@ -226,7 +260,6 @@ func getUserSuggest(node, currentInput string) ([]prompt.Suggest, error) {
 		for _, userList := range localUserList {
 			for _, u := range userList {
 				userMap[u.GetName()] = true
-
 			}
 		}
 		for u := range userMap {
