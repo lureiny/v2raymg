@@ -536,6 +536,13 @@ func (e *Executor) RemoveInboundConfig(tag string) error {
 	// This ensures synchronous completion before returning
 	_ = xrayIn.ReleaseAllUserPorts()
 
+	// Phase 2.5: Remove from xray runtime via gRPC (idempotent)
+	api := NewXrayAPI(e.grpcAPIAddress)
+	if err := api.RemoveInbound(tag); err != nil {
+		log.Warn("[RemoveInboundConfig] failed to remove inbound via gRPC, continuing with local cleanup", "tag", tag, "err", err)
+		// Continue anyway - local cleanup is still important
+	}
+
 	// Phase 3: Second lock - verify and delete
 	e.inboundsMu.Lock()
 	defer e.inboundsMu.Unlock()
