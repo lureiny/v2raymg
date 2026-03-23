@@ -429,6 +429,7 @@ func (m *DefaultForwardManager) GetAllTrafficRecords(reset bool) []ForwardTraffi
 			Username:           mr.rule.Username,
 			ContainerType:      mr.rule.ContainerType,
 			InboundTag:         mr.rule.InboundTag,
+			Protocol:           mr.rule.Protocol,
 			ListenPort:         mr.rule.ListenPort,
 			TargetAddr:         mr.rule.TargetAddr,
 			UplinkBytes:        upload,

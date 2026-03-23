@@ -14,7 +14,9 @@ import (
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/common/net"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/common/protocol"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/common/serial"
+	httpcfg "github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/proxy/http"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/proxy/shadowsocks_2022"
+	sockscfg "github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/proxy/socks"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/proxy/trojan"
 	vlessaccount "github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/proxy/vless"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/proxy/vless/inbound"
@@ -302,9 +304,11 @@ func buildProxySettingsProto(typeName, protocol string, settings map[string]inte
 		return buildTrojanInboundConfig(settings)
 	case "shadowsocks":
 		return buildShadowsocksInboundConfig(settings)
+	case "socks":
+		return buildSocksInboundConfig(settings)
+	case "http":
+		return buildHTTPInboundConfig(settings)
 	default:
-		// Fallback: try to build as generic JSON config
-		// This shouldn't happen for known protocols
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}
 }
@@ -980,6 +984,70 @@ func buildSniffingConfigProto(sniffing map[string]interface{}) (*serial.TypedMes
 	return NewTypedMessage("xray.app.proxyman.SniffingConfig", config)
 }
 
+// buildSocksInboundConfig builds SOCKS5 inbound protobuf config.
+// Supported settings fields: auth (none/password), accounts ([]{ user, pass }), udp, userLevel
+func buildSocksInboundConfig(settings map[string]interface{}) (*serial.TypedMessage, error) {
+	config := &sockscfg.ServerConfig{}
+
+	if auth, ok := settings["auth"].(string); ok && auth == "password" {
+		config.AuthType = sockscfg.AuthType_PASSWORD
+	} else {
+		config.AuthType = sockscfg.AuthType_NO_AUTH
+	}
+
+	if accounts, ok := settings["accounts"].([]interface{}); ok {
+		config.Accounts = make(map[string]string)
+		for _, a := range accounts {
+			if m, ok := a.(map[string]interface{}); ok {
+				user, _ := m["user"].(string)
+				pass, _ := m["pass"].(string)
+				if user != "" {
+					config.Accounts[user] = pass
+				}
+			}
+		}
+	}
+
+	if udp, ok := settings["udp"].(bool); ok {
+		config.UdpEnabled = udp
+	}
+
+	if level, ok := settings["userLevel"].(float64); ok {
+		config.UserLevel = uint32(level)
+	}
+
+	return NewTypedMessage("xray.proxy.socks.ServerConfig", config)
+}
+
+// buildHTTPInboundConfig builds HTTP inbound protobuf config.
+// Supported settings fields: accounts ([]{ user, pass }), allowTransparent, userLevel
+func buildHTTPInboundConfig(settings map[string]interface{}) (*serial.TypedMessage, error) {
+	config := &httpcfg.ServerConfig{}
+
+	if accounts, ok := settings["accounts"].([]interface{}); ok {
+		config.Accounts = make(map[string]string)
+		for _, a := range accounts {
+			if m, ok := a.(map[string]interface{}); ok {
+				user, _ := m["user"].(string)
+				pass, _ := m["pass"].(string)
+				if user != "" {
+					config.Accounts[user] = pass
+				}
+			}
+		}
+	}
+
+	if allow, ok := settings["allowTransparent"].(bool); ok {
+		config.AllowTransparent = allow
+	}
+
+	if level, ok := settings["userLevel"].(float64); ok {
+		config.UserLevel = uint32(level)
+	}
+
+	return NewTypedMessage("xray.proxy.http.ServerConfig", config)
+}
+
 func getProtocolSettingsType(protocol string) string {
 	switch protocol {
 	case "vmess":
@@ -987,13 +1055,13 @@ func getProtocolSettingsType(protocol string) string {
 	case "vless":
 		return "xray.proxy.vless.inbound.Config"
 	case "trojan":
-		return "xray.proxy.trojan.inbound.Config"
+		return "xray.proxy.trojan.ServerConfig"
 	case "shadowsocks":
-		return "xray.proxy.shadowsocks.inbound.Config"
+		return "xray.proxy.shadowsocks_2022.ServerConfig"
 	case "socks":
-		return "xray.proxy.socks.inbound.Config"
+		return "xray.proxy.socks.ServerConfig"
 	case "http":
-		return "xray.proxy.http.inbound.Config"
+		return "xray.proxy.http.ServerConfig"
 	default:
 		return "xray.proxy.vmess.inbound.Config"
 	}

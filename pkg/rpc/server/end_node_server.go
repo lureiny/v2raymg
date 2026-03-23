@@ -80,11 +80,12 @@ var methodRspMap = map[string]interface{}{
 	"GetBandWidthStats":    &proto.GetBandwidthStatsRsp{},
 	"HeartBeat":            &proto.HeartBeatRsp{},
 	"RegisterNode":         &proto.RegisterNodeRsp{},
-	"AddInbound":           &proto.InboundOpRsp{},
-	"DeleteInbound":        &proto.InboundOpRsp{},
-	"GetInbound":           &proto.GetInboundRsp{},
-	"GetTag":               &proto.GetTagRsp{},
-	"UpdateProxy":          &proto.UpdateProxyRsp{},
+	"AddInbound":              &proto.InboundOpRsp{},
+	"DeleteInbound":           &proto.InboundOpRsp{},
+	"GetInbound":              &proto.GetInboundRsp{},
+	"ListInbound":             &proto.ListInboundRsp{},
+	"DeleteInboundByName":     &proto.InboundOpRsp{},
+	"UpdateProxy":             &proto.UpdateProxyRsp{},
 	"FastAddInbound":       &proto.FastAddInboundReq{},
 	"SetGatewayModel":      &proto.SetGatewayModelRsp{},
 	"ObtainNewCert":        &proto.ObtainNewCertRsp{},
@@ -182,7 +183,7 @@ func (s *EndNodeServer) filter() {
 	timeTicker := time.NewTicker(clearInvalidNodeInterval)
 	for {
 		<-timeTicker.C
-		log.Info("filter invalid node and expire user")
+		log.Debug("filter invalid nodes")
 		s.clusterState.Filter(func(n *cluster.Node) bool {
 			return n.IsValid() || n.IsLocal()
 		})

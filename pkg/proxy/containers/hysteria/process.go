@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/tools/process"
 	"gopkg.in/yaml.v3"
 )
@@ -81,6 +82,8 @@ func (hc *HysteriaContainer) startProcess() error {
 	runner, err := process.NewRunner(process.RunnerConfig{
 		BinaryPath: hc.cfg.BinaryPath,
 		Args:       []string{"server", "--config", hc.cfg.ConfigFilePath},
+		Stdout:     log.NewPrefixWriter(os.Stdout, string(contracts.ContainerHysteria)),
+		Stderr:     log.NewPrefixWriter(os.Stderr, string(contracts.ContainerHysteria)),
 	})
 	if err != nil {
 		return fmt.Errorf("hysteria: create runner: %w", err)

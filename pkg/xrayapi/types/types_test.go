@@ -936,6 +936,311 @@ func TestBuildStreamConfigProto_XTLS(t *testing.T) {
 	}
 }
 
+// ─── Tests for newly added socks/http builders and shadowsocks type name fix ───
+
+// TestGetProtocolSettingsType verifies type names are consistent with actual builders.
+func TestGetProtocolSettingsType(t *testing.T) {
+	cases := []struct {
+		protocol string
+		want     string
+	}{
+		{"vmess", "xray.proxy.vmess.inbound.Config"},
+		{"vless", "xray.proxy.vless.inbound.Config"},
+		{"trojan", "xray.proxy.trojan.ServerConfig"},
+		{"shadowsocks", "xray.proxy.shadowsocks_2022.ServerConfig"},
+		{"socks", "xray.proxy.socks.ServerConfig"},
+		{"http", "xray.proxy.http.ServerConfig"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.protocol, func(t *testing.T) {
+			got := getProtocolSettingsType(tc.protocol)
+			if got != tc.want {
+				t.Errorf("getProtocolSettingsType(%q) = %q, want %q", tc.protocol, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuildProxySettingsProto_Socks verifies SOCKS5 inbound config builder.
+func TestBuildProxySettingsProto_Socks(t *testing.T) {
+	t.Run("no_auth", func(t *testing.T) {
+		settings := map[string]interface{}{
+			"auth": "noauth",
+			"udp":  true,
+		}
+		tm, err := buildSocksInboundConfig(settings)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if tm.Type != "xray.proxy.socks.ServerConfig" {
+			t.Errorf("type = %q, want %q", tm.Type, "xray.proxy.socks.ServerConfig")
+		}
+		if len(tm.Value) == 0 {
+			t.Error("Value should not be empty")
+		}
+	})
+
+	t.Run("password_auth_with_accounts", func(t *testing.T) {
+		settings := map[string]interface{}{
+			"auth": "password",
+			"accounts": []interface{}{
+				map[string]interface{}{"user": "alice", "pass": "s3cr3t"},
+				map[string]interface{}{"user": "bob", "pass": "p@ss"},
+			},
+			"udp":       false,
+			"userLevel": float64(1),
+		}
+		tm, err := buildSocksInboundConfig(settings)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if tm.Type != "xray.proxy.socks.ServerConfig" {
+			t.Errorf("type = %q, want %q", tm.Type, "xray.proxy.socks.ServerConfig")
+		}
+		// Bytes should contain account usernames
+		valStr := string(tm.Value)
+		if !findSubstring(valStr, "alice") {
+			t.Error("Value should contain account username 'alice'")
+		}
+		if !findSubstring(valStr, "bob") {
+			t.Error("Value should contain account username 'bob'")
+		}
+	})
+
+	t.Run("empty_settings", func(t *testing.T) {
+		tm, err := buildSocksInboundConfig(map[string]interface{}{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if tm.Type != "xray.proxy.socks.ServerConfig" {
+			t.Errorf("type = %q, want %q", tm.Type, "xray.proxy.socks.ServerConfig")
+		}
+	})
+}
+
+// TestBuildProxySettingsProto_HTTP verifies HTTP inbound config builder.
+func TestBuildProxySettingsProto_HTTP(t *testing.T) {
+	t.Run("with_accounts", func(t *testing.T) {
+		settings := map[string]interface{}{
+			"accounts": []interface{}{
+				map[string]interface{}{"user": "admin", "pass": "admin123"},
+			},
+			"allowTransparent": true,
+			"userLevel":        float64(0),
+		}
+		tm, err := buildHTTPInboundConfig(settings)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if tm.Type != "xray.proxy.http.ServerConfig" {
+			t.Errorf("type = %q, want %q", tm.Type, "xray.proxy.http.ServerConfig")
+		}
+		valStr := string(tm.Value)
+		if !findSubstring(valStr, "admin") {
+			t.Error("Value should contain account username 'admin'")
+		}
+	})
+
+	t.Run("empty_settings", func(t *testing.T) {
+		tm, err := buildHTTPInboundConfig(map[string]interface{}{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if tm.Type != "xray.proxy.http.ServerConfig" {
+			t.Errorf("type = %q, want %q", tm.Type, "xray.proxy.http.ServerConfig")
+		}
+	})
+}
+
+// TestParseInboundConfig_Socks verifies full ParseInboundConfig path for SOCKS5.
+func TestParseInboundConfig_Socks(t *testing.T) {
+	jsonData := []byte(`{
+		"tag": "socks-in",
+		"protocol": "socks",
+		"port": 1080,
+		"listen": "0.0.0.0",
+		"settings": {
+			"auth": "password",
+			"accounts": [
+				{"user": "u1", "pass": "p1"}
+			],
+			"udp": true
+		}
+	}`)
+
+	cfg, err := ParseInboundConfig(jsonData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Tag != "socks-in" {
+		t.Errorf("tag = %q, want %q", cfg.Tag, "socks-in")
+	}
+	if cfg.ProxySettings == nil {
+		t.Fatal("ProxySettings should not be nil")
+	}
+	if cfg.ProxySettings.Type != "xray.proxy.socks.ServerConfig" {
+		t.Errorf("ProxySettings.Type = %q, want %q", cfg.ProxySettings.Type, "xray.proxy.socks.ServerConfig")
+	}
+}
+
+// TestParseInboundConfig_HTTP verifies full ParseInboundConfig path for HTTP.
+func TestParseInboundConfig_HTTP(t *testing.T) {
+	jsonData := []byte(`{
+		"tag": "http-in",
+		"protocol": "http",
+		"port": 8080,
+		"listen": "127.0.0.1",
+		"settings": {
+			"accounts": [
+				{"user": "proxy", "pass": "proxypass"}
+			],
+			"allowTransparent": false
+		}
+	}`)
+
+	cfg, err := ParseInboundConfig(jsonData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Tag != "http-in" {
+		t.Errorf("tag = %q, want %q", cfg.Tag, "http-in")
+	}
+	if cfg.ProxySettings == nil {
+		t.Fatal("ProxySettings should not be nil")
+	}
+	if cfg.ProxySettings.Type != "xray.proxy.http.ServerConfig" {
+		t.Errorf("ProxySettings.Type = %q, want %q", cfg.ProxySettings.Type, "xray.proxy.http.ServerConfig")
+	}
+}
+
+// TestParseInboundConfig_Shadowsocks verifies shadowsocks 2022 type name is correct.
+func TestParseInboundConfig_Shadowsocks2022(t *testing.T) {
+	jsonData := []byte(`{
+		"tag": "ss-in",
+		"protocol": "shadowsocks",
+		"port": 8388,
+		"listen": "0.0.0.0",
+		"settings": {
+			"method": "2022-blake3-aes-256-gcm",
+			"password": "dGVzdHBhc3N3b3JkMTIzNDU2Nzg5MDEyMzQ1Njc4OTA="
+		}
+	}`)
+
+	cfg, err := ParseInboundConfig(jsonData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ProxySettings == nil {
+		t.Fatal("ProxySettings should not be nil")
+	}
+	// Critical: must be shadowsocks_2022, NOT the old shadowsocks type
+	if cfg.ProxySettings.Type != "xray.proxy.shadowsocks_2022.ServerConfig" {
+		t.Errorf("ProxySettings.Type = %q, want %q",
+			cfg.ProxySettings.Type, "xray.proxy.shadowsocks_2022.ServerConfig")
+	}
+}
+
+// TestParseInboundConfig_UnsupportedProtocol verifies unknown protocols return error.
+func TestParseInboundConfig_UnsupportedProtocol(t *testing.T) {
+	jsonData := []byte(`{
+		"tag": "unknown-in",
+		"protocol": "wireguard",
+		"port": 51820,
+		"settings": {}
+	}`)
+
+	_, err := ParseInboundConfig(jsonData)
+	if err == nil {
+		t.Fatal("expected error for unsupported protocol, got nil")
+	}
+}
+
+// TestBuildProxySettingsProto_DispatchAllProtocols verifies all supported protocols
+// route to the correct builder without error (smoke test).
+func TestBuildProxySettingsProto_DispatchAllProtocols(t *testing.T) {
+	cases := []struct {
+		protocol string
+		settings map[string]interface{}
+		wantType string
+	}{
+		{
+			protocol: "vmess",
+			settings: map[string]interface{}{
+				"clients": []interface{}{
+					map[string]interface{}{"id": "a348c600-1234-5678-9abc-def012345678"},
+				},
+			},
+			wantType: "xray.proxy.vmess.inbound.Config",
+		},
+		{
+			protocol: "vless",
+			settings: map[string]interface{}{
+				"clients": []interface{}{
+					map[string]interface{}{"id": "a348c600-1234-5678-9abc-def012345678"},
+				},
+				"decryption": "none",
+			},
+			wantType: "xray.proxy.vless.inbound.Config",
+		},
+		{
+			protocol: "trojan",
+			settings: map[string]interface{}{
+				"clients": []interface{}{
+					map[string]interface{}{"password": "trojanpass"},
+				},
+			},
+			wantType: "xray.proxy.trojan.ServerConfig",
+		},
+		{
+			protocol: "shadowsocks",
+			settings: map[string]interface{}{
+				"method":   "2022-blake3-aes-256-gcm",
+				"password": "dGVzdA==",
+			},
+			wantType: "xray.proxy.shadowsocks_2022.ServerConfig",
+		},
+		{
+			protocol: "socks",
+			settings: map[string]interface{}{
+				"auth": "password",
+				"accounts": []interface{}{
+					map[string]interface{}{"user": "u", "pass": "p"},
+				},
+			},
+			wantType: "xray.proxy.socks.ServerConfig",
+		},
+		{
+			protocol: "http",
+			settings: map[string]interface{}{
+				"accounts": []interface{}{
+					map[string]interface{}{"user": "admin", "pass": "pass"},
+				},
+			},
+			wantType: "xray.proxy.http.ServerConfig",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.protocol, func(t *testing.T) {
+			typeName := getProtocolSettingsType(tc.protocol)
+			tm, err := buildProxySettingsProto(typeName, tc.protocol, tc.settings)
+			if err != nil {
+				t.Fatalf("buildProxySettingsProto(%q) error: %v", tc.protocol, err)
+			}
+			if tm == nil {
+				t.Fatalf("buildProxySettingsProto(%q) returned nil", tc.protocol)
+			}
+			if tm.Type != tc.wantType {
+				t.Errorf("TypedMessage.Type = %q, want %q", tm.Type, tc.wantType)
+			}
+			// Note: socks/http with all-default fields may produce empty protobuf bytes (valid)
+			// so we only check Value length when settings are non-trivial
+		})
+	}
+}
+
+// ─── existing tests below ────────────────────────────────────────────────────
+
 func TestParseInboundConfig_WithXTLS(t *testing.T) {
 	// Test parsing a full inbound config with XTLS security
 	jsonData := []byte(`{

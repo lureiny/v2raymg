@@ -141,8 +141,8 @@ func NewExecutor(cfg ExecutorConfig) (*Executor, error) {
 		BinaryPath: cfg.BinaryPath,
 		Args:       []string{"run"}, // xray specific: "run" command
 		ConfigFile: cfg.ConfigFilePath,
-		Stdout:     nil, // default os.Stdout
-		Stderr:     nil, // default os.Stderr
+		Stdout:     log.NewPrefixWriter(os.Stdout, string(cfg.ContainerType)),
+		Stderr:     log.NewPrefixWriter(os.Stderr, string(cfg.ContainerType)),
 	})
 	if err != nil {
 		return nil, err
@@ -396,6 +396,8 @@ func (e *Executor) generateDefaultConfig() error {
 		BinaryPath: e.config.BinaryPath,
 		Args:       []string{"run"},
 		ConfigFile: configPath,
+		Stdout:     log.NewPrefixWriter(os.Stdout, string(e.config.ContainerType)),
+		Stderr:     log.NewPrefixWriter(os.Stderr, string(e.config.ContainerType)),
 	})
 
 	return nil
@@ -1228,6 +1230,7 @@ func (in *XrayInbound) AddUser(email string, user *contracts.User) (uint32, erro
 		TargetPort:    in.port,
 		ContainerType: contracts.ContainerXray,
 		InboundTag:    in.tag,
+		Protocol:      in.protocol,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("failed to get bind port: %w", err)
@@ -1480,6 +1483,8 @@ func (e *Executor) Init(config any) error {
 		BinaryPath: e.config.BinaryPath,
 		Args:       []string{"run"},
 		ConfigFile: e.config.ConfigFilePath,
+		Stdout:     log.NewPrefixWriter(os.Stdout, string(cfg.ContainerType)),
+		Stderr:     log.NewPrefixWriter(os.Stderr, string(cfg.ContainerType)),
 	})
 
 	// Reinitialize updater if:

@@ -75,7 +75,7 @@ func NewUserManager(fm forward.ForwardManager) *UserManager {
 		users:          make(map[string]*contracts.User),
 		forwardMgr:     fm,
 		eventCh:        make(chan UserEvent, 100), // Buffered channel
-		statsCollector: newStatsCollector(fm, time.Minute),
+		statsCollector: newStatsCollector(fm, time.Second),
 	}
 }
 
@@ -87,7 +87,7 @@ func NewUserManagerWithStore(fm forward.ForwardManager, storeMgr *store.StoreMan
 		forwardMgr:     fm,
 		store:          storeMgr.UserStore(),
 		eventCh:        make(chan UserEvent, 100),
-		statsCollector: newStatsCollector(fm, time.Minute),
+		statsCollector: newStatsCollector(fm, time.Second),
 	}
 
 	loaded, err := storeMgr.UserStore().Load()
@@ -489,6 +489,7 @@ type GetBindPortRequest struct {
 	TargetPort    uint32           // The target port to forward to
 	ContainerType contracts.ContainerType
 	InboundTag    string
+	Protocol      contracts.Protocol
 }
 
 // GetBindPort returns a bound port for the user.
@@ -558,6 +559,7 @@ func (m *UserManager) GetBindPort(req GetBindPortRequest) (uint32, error) {
 		Username:              req.Username,
 		ContainerType:         req.ContainerType,
 		InboundTag:            req.InboundTag,
+		Protocol:              req.Protocol,
 		ListenPort:            preferredPort, // 0 = auto allocate, >0 = specific port
 		TargetAddr:            fmt.Sprintf("127.0.0.1:%d", req.TargetPort),
 		MaxClients:            user.MaxClients,
@@ -1010,6 +1012,7 @@ type TrafficStats struct {
 type UserTrafficStats struct {
 	ContainerType contracts.ContainerType `json:"container_type"`
 	InboundTag    string                  `json:"inbound_tag"`
+	Protocol      contracts.Protocol      `json:"protocol"`
 	Username      string                   `json:"username"`
 	TrafficStats
 }
@@ -1177,6 +1180,7 @@ func (sc *statsCollector) collect() {
 		existing := sc.stats.ByUser[userKey]
 		existing.ContainerType = record.ContainerType
 		existing.InboundTag = record.InboundTag
+		existing.Protocol = record.Protocol
 		existing.Username = record.Username
 		existing.DeltaUplink += deltaUp
 		existing.DeltaDownlink += deltaDown

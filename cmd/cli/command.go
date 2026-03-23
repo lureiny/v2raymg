@@ -17,6 +17,7 @@ import (
 func InitPromptAndRegister() *prompt.Prompt {
 	updateLocalNodeList()
 	updateLocalUserList()
+	updateLocalInboundList()
 	m := prompt.NewPrompt(
 		prompt.WithPromptPrefixOption(">>> "),
 		prompt.WithSuggestNum(4),
@@ -90,9 +91,18 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
-	m.RegisterHandler(listTag, "ListTag",
+	m.RegisterHandler(listInbounds, "ListInbounds",
 		prompt.WithSuggests([]prompt.Suggest{
 			getSuggestWithTemplate(targetSuggest, WihtDefault("all")),
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	m.RegisterHandler(deleteInboundByName, "DeleteInboundByName",
+		prompt.WithSuggests([]prompt.Suggest{
+			targetSuggest,
+			containerSuggest,
+			tagSuggest,
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
@@ -329,8 +339,17 @@ func getInbound(target, srcTag string) error {
 	return nil
 }
 
-func listTag(target string) error {
-	result, err := client.ListTag(getHost(), getToken(), target)
+func listInbounds(target string) error {
+	result, err := client.ListInbounds(getHost(), getToken(), target)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+func deleteInboundByName(target, containerType, name string) error {
+	result, err := client.DeleteInboundByName(getHost(), getToken(), target, containerType, name)
 	if err != nil {
 		return err
 	}

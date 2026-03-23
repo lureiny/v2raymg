@@ -7,7 +7,7 @@ node_type: end
 log:
   level: info          # debug / info / warn / error
   format: text         # text / json
-  output: stderr       # stdout / stderr / file path
+  output: stdout       # stdout / stderr / file path
   add_source: true     # include caller file:line in log output
 
 store:
@@ -46,21 +46,61 @@ containers:
     - type: xray
       enabled: true
       config:
-        binary_path: /usr/local/bin/xray
-        config_file_path: /etc/v2raymg/xray.json
-        grpc_address: 127.0.0.1:62789
+        binary_path: /usr/local/bin/xray    # path to xray binary
+        config_file: /etc/v2raymg/xray.json # xray config file path (key: config_file)
+        grpc_port: 62789                    # xray gRPC API port (int, not address string)
+        auto_download: true                 # auto-download xray binary if not found
+        debug: false                        # enable gRPC debug logging
+
+    - type: hysteria
+      enabled: false
+      config:
+        binary_path: /usr/local/bin/hysteria
+        config_file_path: /etc/v2raymg/hysteria.yaml
+        listen: 0.0.0.0
+        port: 443
+        domain: example.com                 # domain for TLS cert lookup
+        cert_file: ""                       # explicit cert file (overrides domain lookup)
+        key_file: ""                        # explicit key file (overrides domain lookup)
+        traffic_stats_port: 9999
+        traffic_stats_secret: ""            # auto-generated if empty
+        version: app/v2.7.1                 # hysteria version to auto-download
+
+    - type: snell
+      enabled: false
+      config:
+        binary_path: /usr/local/bin/snell-server
+        config_file_path: /etc/v2raymg/snell.conf
+        listen: 127.0.0.1
+        port: 16160
+        psk: ""                             # auto-generated if empty or "auto"
+        version: v5.0.1                     # snell version to auto-download
 
 # End Node configuration (effective when node_type=end)
 end_node:
   name: node-1
   proxy_host: example.com
   listen: 0.0.0.0
+  http_listen: 0.0.0.0   # HTTP server listen address (defaults to listen if empty)
   rpc_port: 9090
   http_port: 8080
   http_token: your-secret-token
   enable_prometheus: false
   enable_ping_check: false
   only_gateway: false
+  ping:
+    enable_icmp_ping: true       # requires root/cap_net_raw
+    icmp_ping_interval: 5        # seconds
+    icmp_ping_timeout: 1         # seconds
+    enable_tcp_ping: true
+    tcp_ping_interval: 5         # seconds
+    tcp_ping_timeout: 1          # seconds
+    node_sources:
+      - type: file               # "file" or "remote"
+        source: ./config/ping_nodes.yaml
+      # - type: remote
+      #   source: https://example.com/ping_nodes.yaml
+      #   update_interval: 300   # seconds; only effective for "remote" type
   cluster:
     name: my-cluster
     token: cluster-secret

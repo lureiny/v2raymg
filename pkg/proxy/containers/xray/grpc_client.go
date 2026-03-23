@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/app/proxyman"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/app/proxyman/command"
@@ -167,14 +168,18 @@ func (api *XrayAPI) AddInbound(nativeInboundJSON []byte) error {
 	// Initial delay to allow xray gRPC service to stabilize
 	time.Sleep(500 * time.Millisecond)
 
-	fmt.Printf("[DEBUG] AddInbound: attempting to add inbound to %s\n", api.address)
+	if api.debug {
+		fmt.Printf("[DEBUG] AddInbound: attempting to add inbound to %s\n", api.address)
+	}
 
 	// Retry logic for gRPC connection - reduced for faster failure
 	maxRetries := 3
 	baseDelay := 200 * time.Millisecond
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		fmt.Printf("[DEBUG] AddInbound: attempt %d/%d\n", attempt+1, maxRetries)
+		if api.debug {
+			fmt.Printf("[DEBUG] AddInbound: attempt %d/%d\n", attempt+1, maxRetries)
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		conn, err := grpc.DialContext(ctx, api.address,
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -202,11 +207,15 @@ func (api *XrayAPI) AddInbound(nativeInboundJSON []byte) error {
 		cancel()
 
 		if err == nil {
-			fmt.Printf("[DEBUG] AddInbound: SUCCESS on attempt %d\n", attempt+1)
+			if api.debug {
+				fmt.Printf("[DEBUG] AddInbound: SUCCESS on attempt %d\n", attempt+1)
+			}
 			return nil
 		}
 
-		fmt.Printf("[DEBUG] AddInbound: attempt %d failed after timeout: %v\n", attempt+1, err)
+		if api.debug {
+			fmt.Printf("[DEBUG] AddInbound: attempt %d failed after timeout: %v\n", attempt+1, err)
+		}
 
 		// Check if error is retryable
 		errMsg := err.Error()
@@ -523,10 +532,12 @@ func (api *XrayAPI) checkTLSEffectiveness(inbound *proxyman.InboundHandlerConfig
 
 	// Print assertion result
 	if expectsTLS && (!hasTLSSecurity || !hasCertificates) {
-		fmt.Printf("[ERROR] TLS Effectiveness Assertion FAILED for tag=%s:\n", tag)
-		fmt.Printf("  - Expected: TLS enabled (tag contains '-tls')\n")
-		fmt.Printf("  - Actual: security=%v, certificates_count=%v\n", hasTLSSecurity, hasCertificates)
-		fmt.Printf("  - Hint: Check if cert_file/key_file are properly passed and parsed\n")
+		log.Error("TLS effectiveness assertion failed",
+			"tag", tag,
+			"has_tls_security", hasTLSSecurity,
+			"has_certificates", hasCertificates,
+			"hint", "check cert_file/key_file are properly passed and parsed",
+		)
 	} else if api.debug && expectsTLS && hasTLSSecurity && hasCertificates {
 		fmt.Printf("[DEBUG] TLS Effectiveness Assertion PASSED for tag=%s\n", tag)
 	}
@@ -681,13 +692,15 @@ func (api *XrayAPI) checkTLSEffectivenessV2(inbound *proxyman.InboundHandlerConf
 	// Deserialize ReceiverSettings
 	receiverConfig := &proxyman.ReceiverConfig{}
 	if err := proto.Unmarshal(inbound.ReceiverSettings.Value, receiverConfig); err != nil {
-		fmt.Printf("[DEBUG] checkTLSEffectivenessV2: failed to unmarshal ReceiverConfig for %s: %v\n", tag, err)
+		if api.debug {
+			fmt.Printf("[DEBUG] checkTLSEffectivenessV2: failed to unmarshal ReceiverConfig for %s: %v\n", tag, err)
+		}
 		return
 	}
 
 	// Check StreamConfig for TLS
 	if receiverConfig.StreamSettings == nil {
-		fmt.Printf("[ERROR] TLS Effectiveness Assertion FAILED for tag=%s: StreamSettings is nil\n", tag)
+		log.Error("TLS effectiveness assertion failed: StreamSettings is nil", "tag", tag)
 		return
 	}
 
@@ -706,7 +719,9 @@ func (api *XrayAPI) checkTLSEffectivenessV2(inbound *proxyman.InboundHandlerConf
 			if err := proto.Unmarshal(ss.Value, tlsConfig); err == nil {
 				if len(tlsConfig.Certificate) > 0 {
 					hasCertificates = true
-					fmt.Printf("[DEBUG] TLS certificates found for %s: %d certificate(s)\n", tag, len(tlsConfig.Certificate))
+					if api.debug {
+						fmt.Printf("[DEBUG] TLS certificates found for %s: %d certificate(s)\n", tag, len(tlsConfig.Certificate))
+					}
 				}
 			}
 		}
@@ -714,11 +729,13 @@ func (api *XrayAPI) checkTLSEffectivenessV2(inbound *proxyman.InboundHandlerConf
 
 	// Print assertion result
 	if !hasTLSSecurity || !hasCertificates {
-		fmt.Printf("[ERROR] TLS Effectiveness Assertion FAILED for tag=%s:\n", tag)
-		fmt.Printf("  - Expected: TLS enabled (tag contains '-tls')\n")
-		fmt.Printf("  - Actual: security_type=%v, certificates_count=%v\n", hasTLSSecurity, hasCertificates)
-		fmt.Printf("  - Hint: Check if cert_file/key_file are properly passed and parsed\n")
-	} else {
+		log.Error("TLS effectiveness assertion failed",
+			"tag", tag,
+			"has_tls_security", hasTLSSecurity,
+			"has_certificates", hasCertificates,
+			"hint", "check cert_file/key_file are properly passed and parsed",
+		)
+	} else if api.debug {
 		fmt.Printf("[DEBUG] TLS Effectiveness Assertion PASSED for tag=%s\n", tag)
 	}
 }

@@ -6,13 +6,16 @@ import (
 	"sync"
 )
 
-// PingNodeInfo ...
+// PingNodeInfo represents a ping target node.
 type PingNodeInfo struct {
 	Host string
 	Port int32
 
-	ISP string
-	Geo string
+	ISP  string
+	Geo  string
+	// Usage indicates which ping checkers can use this node.
+	// Values: "icmp", "tcp", "pingpe". Default: all.
+	Usage []string `yaml:"usage" json:"usage"`
 }
 
 // PingNodeManager ...

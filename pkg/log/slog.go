@@ -28,6 +28,7 @@ func buildSlogLogger(o Options) *slog.Logger {
 
 	switch o.Format {
 	case FormatJSON:
+		prefix := o.Prefix
 		handlerOpts := &slog.HandlerOptions{
 			Level:     slogLevel,
 			AddSource: o.AddSource,
@@ -38,9 +39,14 @@ func buildSlogLogger(o Options) *slog.Logger {
 				return a
 			},
 		}
-		return slog.New(slog.NewJSONHandler(o.Output, handlerOpts))
+		l := slog.New(slog.NewJSONHandler(o.Output, handlerOpts))
+		if prefix != "" {
+			// Attach prefix as a fixed field in JSON output.
+			l = l.With(slog.String("prefix", prefix))
+		}
+		return l
 	default:
-		return slog.New(newV2rayTextHandler(o.Output, slogLevel, o.AddSource))
+		return slog.New(newV2rayTextHandler(o.Output, slogLevel, o.AddSource, o.Prefix))
 	}
 }
 
@@ -63,20 +69,22 @@ func shortSource(a slog.Attr) string {
 
 // v2rayTextHandler is a minimal custom text handler that outputs:
 //
-//	2006/01/02 15:04:05 level=INFO source=pkg/foo/bar.go:42 msg="..." key=val
+//	[prefix] 2006/01/02 15:04:05 level=INFO source=pkg/foo/bar.go:42 msg="..." key=val
 //
 // No "time=" prefix — time value is printed directly.
+// If prefix is empty, the "[prefix] " part is omitted.
 type v2rayTextHandler struct {
 	mu        sync.Mutex
 	w         io.Writer
 	level     slog.Level
 	addSource bool
+	prefix    string     // optional log prefix, e.g. "v2raymg"
 	preAttrs  []slog.Attr // from WithAttrs
 	groups    []string    // from WithGroup
 }
 
-func newV2rayTextHandler(w io.Writer, level slog.Level, addSource bool) *v2rayTextHandler {
-	return &v2rayTextHandler{w: w, level: level, addSource: addSource}
+func newV2rayTextHandler(w io.Writer, level slog.Level, addSource bool, prefix string) *v2rayTextHandler {
+	return &v2rayTextHandler{w: w, level: level, addSource: addSource, prefix: prefix}
 }
 
 func (h *v2rayTextHandler) Enabled(_ context.Context, level slog.Level) bool {
@@ -97,6 +105,11 @@ func (h *v2rayTextHandler) WithGroup(name string) slog.Handler {
 
 func (h *v2rayTextHandler) Handle(_ context.Context, r slog.Record) error {
 	var buf bytes.Buffer
+
+	// Optional prefix — e.g. "[v2raymg] "
+	if h.prefix != "" {
+		fmt.Fprintf(&buf, "[%s] ", h.prefix)
+	}
 
 	// Time — no key prefix
 	buf.WriteString(r.Time.Format("2006/01/02 15:04:05"))
@@ -175,4 +188,72 @@ func sourceFromPC(pc uintptr) slog.Source {
 		File:     f.File,
 		Line:     f.Line,
 	}
+}
+
+// PrefixWriter wraps an io.Writer and prepends "[name] " to each line of output.
+// It is intended for capturing subprocess stdout/stderr so their output is clearly
+// distinguished from main-process logs in a shared terminal or log file.
+//
+// Usage:
+//
+//	runner.Stdout = log.NewPrefixWriter(os.Stdout, "xray")
+//	runner.Stderr = log.NewPrefixWriter(os.Stderr, "xray")
+type PrefixWriter struct {
+	w      io.Writer
+	prefix []byte // pre-formatted "[name] " bytes
+	mu     sync.Mutex
+	buf    []byte // incomplete line buffer
+}
+
+// NewPrefixWriter creates a PrefixWriter that prepends "[name] " to every line.
+func NewPrefixWriter(w io.Writer, name string) *PrefixWriter {
+	return &PrefixWriter{
+		w:      w,
+		prefix: []byte("[" + name + "] "),
+	}
+}
+
+// Write implements io.Writer. It buffers input until newlines, then emits each
+// complete line with the prefix prepended. Any incomplete trailing data is held
+// until the next Write (or until the process closes the pipe).
+func (pw *PrefixWriter) Write(p []byte) (int, error) {
+	pw.mu.Lock()
+	defer pw.mu.Unlock()
+
+	pw.buf = append(pw.buf, p...)
+	for {
+		idx := bytes.IndexByte(pw.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		line := pw.buf[:idx+1] // includes the '\n'
+		if _, err := pw.w.Write(pw.prefix); err != nil {
+			return 0, err
+		}
+		if _, err := pw.w.Write(line); err != nil {
+			return 0, err
+		}
+		pw.buf = pw.buf[idx+1:]
+	}
+	return len(p), nil
+}
+
+// Flush writes any buffered incomplete line (without a trailing newline).
+// Call this when the subprocess has exited to avoid losing the last log line.
+func (pw *PrefixWriter) Flush() error {
+	pw.mu.Lock()
+	defer pw.mu.Unlock()
+
+	if len(pw.buf) == 0 {
+		return nil
+	}
+	if _, err := pw.w.Write(pw.prefix); err != nil {
+		return err
+	}
+	if _, err := pw.w.Write(pw.buf); err != nil {
+		return err
+	}
+	_, err := pw.w.Write([]byte("\n"))
+	pw.buf = pw.buf[:0]
+	return err
 }

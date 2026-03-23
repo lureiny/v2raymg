@@ -318,6 +318,7 @@ func (sc *SnellContainer) handleUserEvent(event usermanager.UserEvent) {
 			ContainerType: contracts.ContainerSnell,
 			InboundTag:    defaultInboundTag,
 			TargetPort:    uint32(sc.cfg.Port),
+			Protocol:      contracts.ProtocolSnell,
 		})
 		if err != nil {
 			slog.Error("snell: allocate port failed", "user", event.Username, "err", err)
@@ -467,6 +468,7 @@ func (sc *SnellContainer) reconcileUsers() {
 			ContainerType: contracts.ContainerSnell,
 			InboundTag:    defaultInboundTag,
 			TargetPort:    uint32(sc.cfg.Port),
+			Protocol:      contracts.ProtocolSnell,
 		}); err != nil {
 			slog.Warn("snell: reconcile forward rule failed", "user", user.Username, "err", err)
 			continue

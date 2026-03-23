@@ -15,7 +15,6 @@ func NewHttpServer() *HttpServer {
 	s.RegisterHandler(&SubHandler{}, "GET")
 	s.RegisterHandler(&HelpHandler{}, "GET")
 	s.RegisterHandler(&NodeHandler{}, "GET")
-	s.RegisterHandler(&TagHandler{}, "GET")
 	s.RegisterHandler(&GetCertsHandler{}, "GET")
 
 	// User handlers (split by method)
@@ -29,6 +28,10 @@ func NewHttpServer() *HttpServer {
 	s.RegisterHandler(&InboundGetHandler{}, "GET")
 	s.RegisterHandler(&InboundAddHandler{}, "POST")
 	s.RegisterHandler(&InboundDeleteHandler{}, "DELETE")
+
+	// Inbound list/delete-by-name handlers (new /inbounds endpoint)
+	s.RegisterHandler(&InboundListHandler{}, "GET")
+	s.RegisterHandler(&InboundDeleteByNameHandler{}, "DELETE")
 
 	// POST handlers
 	s.RegisterHandler(&FastAddInboundHandler{}, "POST")

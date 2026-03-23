@@ -13,7 +13,7 @@ const (
 	DeleteInboundReqType
 	GetUsersReqType
 	GetInboundReqType
-	GetTagReqType
+	_ // was GetTagReqType (removed)
 	UpdateProxyReqType
 	_ // was AddAdaptiveConfigReqType
 	_ // was DeleteAdaptiveConfigReqType
@@ -29,4 +29,6 @@ const (
 	HeartBeatType
 	SetPingCheckType
 	GetNodeMetricType
+	ListInboundReqType
+	DeleteInboundByNameReqType
 )

@@ -29,10 +29,13 @@ type Options struct {
 	Level Level
 	// Format 输出格式：text（人类可读）或 json（结构化）。默认 text。
 	Format Format
-	// Output 输出目标，默认 os.Stderr。
+	// Output 输出目标，默认 os.Stdout。
 	Output io.Writer
-	// AddSource 是否在日志中包含 caller 文件名和行号，默认 false。
+	// AddSource 是否在日志中包含 caller 文件名和行号，默认 true。
 	AddSource bool
+	// Prefix 日志行首前缀，格式为 "[prefix] "。空字符串表示不加前缀。
+	// 默认 "v2raymg"。子进程输出通过 NewPrefixWriter 加各自前缀，不走此字段。
+	Prefix string
 }
 
 // defaultOptions 返回默认配置。
@@ -40,8 +43,9 @@ func defaultOptions() Options {
 	return Options{
 		Level:     LevelInfo,
 		Format:    FormatText,
-		Output:    os.Stderr,
+		Output:    os.Stdout,
 		AddSource: true,
+		Prefix:    "v2raymg",
 	}
 }
 
@@ -66,4 +70,9 @@ func WithOutput(w io.Writer) Option {
 // WithAddSource 设置是否输出 caller 信息。
 func WithAddSource(v bool) Option {
 	return func(o *Options) { o.AddSource = v }
+}
+
+// WithPrefix 设置日志行首前缀。
+func WithPrefix(p string) Option {
+	return func(o *Options) { o.Prefix = p }
 }

@@ -135,20 +135,6 @@ func (s *EndNodeServer) GetInbound(ctx context.Context, getInboundReq *proto.Get
 	return getInboundRsp, nil
 }
 
-func (s *EndNodeServer) GetTag(ctx context.Context, getTagReq *proto.GetTagReq) (*proto.GetTagRsp, error) {
-	getTagRsp := &proto.GetTagRsp{Code: 0}
-	c, err := s.getXrayContainer()
-	if err != nil {
-		log.Error("get tag failed", "err", err.Error())
-		return getTagRsp, nil
-	}
-	inbounds := c.ListInboundConfigs()
-	for _, inb := range inbounds {
-		getTagRsp.Tags = append(getTagRsp.Tags, inb.Tag())
-	}
-	return getTagRsp, nil
-}
-
 func (s *EndNodeServer) UpdateProxy(ctx context.Context, updateProxyReq *proto.UpdateProxyReq) (*proto.UpdateProxyRsp, error) {
 	updateProxyRsp := &proto.UpdateProxyRsp{Code: 0}
 	tag := updateProxyReq.GetTag()
@@ -266,4 +252,64 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		fastAddInboundRsp.Msg = err.Error()
 	}
 	return fastAddInboundRsp, nil
+}
+
+// ListInbound returns all inbounds across all registered containers.
+// Each InboundInfo contains the container type and the inbound's unique name (tag).
+func (s *EndNodeServer) ListInbound(ctx context.Context, req *proto.ListInboundReq) (*proto.ListInboundRsp, error) {
+	rsp := &proto.ListInboundRsp{Code: 0}
+
+	containerTypes := []contracts.ContainerType{
+		contracts.ContainerXray,
+		contracts.ContainerSnell,
+		contracts.ContainerHysteria,
+	}
+
+	for _, ct := range containerTypes {
+		c, ok := s.containerMgr.Get(ct)
+		if !ok {
+			continue
+		}
+		for _, inb := range c.ListInboundConfigs() {
+			rsp.Inbounds = append(rsp.Inbounds, &proto.InboundInfo{
+				Container: string(ct),
+				Name:      inb.Tag(),
+			})
+		}
+	}
+
+	return rsp, nil
+}
+
+// DeleteInboundByName deletes an inbound identified by container type and name (tag).
+// Supports xray, snell, and hysteria containers.
+func (s *EndNodeServer) DeleteInboundByName(ctx context.Context, req *proto.DeleteInboundByNameReq) (*proto.InboundOpRsp, error) {
+	rsp := &proto.InboundOpRsp{Code: 0}
+
+	ct := contracts.ContainerType(req.GetContainer())
+	name := req.GetName()
+
+	if name == "" {
+		rsp.Code = 601
+		rsp.Msg = "name is required"
+		return rsp, nil
+	}
+
+	c, ok := s.containerMgr.Get(ct)
+	if !ok {
+		rsp.Code = 601
+		rsp.Msg = fmt.Sprintf("container %q not found", req.GetContainer())
+		return rsp, nil
+	}
+
+	if err := c.RemoveInboundConfig(name); err != nil {
+		errMsg := fmt.Sprintf("delete inbound failed: %v", err)
+		log.Error("DeleteInboundByName failed", "container", req.GetContainer(), "name", name, "err", err)
+		rsp.Code = 601
+		rsp.Msg = errMsg
+		return rsp, nil
+	}
+
+	log.Info("DeleteInboundByName success", "container", req.GetContainer(), "name", name)
+	return rsp, nil
 }

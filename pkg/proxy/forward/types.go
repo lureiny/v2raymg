@@ -31,6 +31,9 @@ type ForwardRule struct {
 	// InboundTag is the inbound tag this rule forwards to.
 	InboundTag string `json:"inbound_tag"`
 
+	// Protocol is the proxy protocol (e.g., "vless", "vmess", "trojan").
+	Protocol contracts.Protocol `json:"protocol"`
+
 	// ListenAddr is the address the relay listens on (default "0.0.0.0").
 	ListenAddr string `json:"listen_addr"`
 
@@ -123,6 +126,9 @@ type ForwardTrafficRecord struct {
 
 	// InboundTag is the inbound tag.
 	InboundTag string `json:"inbound_tag"`
+
+	// Protocol is the proxy protocol (e.g., "vless", "vmess", "trojan").
+	Protocol contracts.Protocol `json:"protocol"`
 
 	// ListenPort is the forward listen port.
 	ListenPort uint32 `json:"listen_port"`

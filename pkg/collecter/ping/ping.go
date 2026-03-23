@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	maxDelayNum  = 100
-	invalidDelay = -1
-
-	invalidResult = -1
+	maxDelayNum        = 100
+	invalidDelay       = -1
+	invalidResult      = -1
+	pingResultChanSize = 1000
 )
 
 type PingResult struct {

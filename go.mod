@@ -10,7 +10,6 @@ require (
 	github.com/go-acme/lego/v4 v4.9.0
 	github.com/google/uuid v1.6.0
 	github.com/lureiny/go-prompt v0.0.12
-	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/prometheus-community/pro-bing v0.6.1
 	github.com/prometheus/client_golang v1.20.5
 	github.com/prometheus/client_model v0.6.1
@@ -124,6 +123,7 @@ require (
 	github.com/liquidweb/liquidweb-go v1.6.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/lufia/iostat v1.2.1 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.15 // indirect
@@ -221,5 +221,4 @@ require (
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	rsc.io/qr v0.2.0 // indirect
 )

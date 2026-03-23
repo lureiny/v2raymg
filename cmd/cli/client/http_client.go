@@ -338,24 +338,6 @@ func GetInBound(host, token, target, srcTag string) (string, error) {
 	return result, err
 }
 
-func ListTag(host, token, target string) (string, error) {
-	result := ""
-	cb := func(resp *http.Response) error {
-		d, err := readBody(resp)
-		if err != nil {
-			return err
-		}
-		result = string(d)
-		return nil
-	}
-
-	reqUrl := fmt.Sprintf("%s/%s", host, common.ListTag)
-	err := DoGetRequest(reqUrl, token, map[string]interface{}{
-		"target": target,
-	}, getCallBackFunc(cb))
-	return result, err
-}
-
 func GetStat(host, token, target, pattern string, reset bool) (string, error) {
 	result := ""
 	resetVal := "0"
@@ -417,5 +399,63 @@ func SetPingCheck(host, token, target string, enablePingCheck bool) (string, err
 		"enable_ping_check": enablePingCheck,
 	}
 	err := DoPutRequest(reqUrl, token, body, getCallBackFunc(cb))
+	return result, err
+}
+
+func ListInbounds(host, token, target string) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	reqUrl := fmt.Sprintf("%s/%s", host, common.Inbounds)
+	err := DoGetRequest(reqUrl, token, map[string]interface{}{
+		"target": target,
+	}, getCallBackFunc(cb))
+	return result, err
+}
+
+// ListInboundsStructured returns inbounds grouped by node name.
+// The server returns map[nodeName][]InboundInfo (same shape as ListUser).
+func ListInboundsStructured(host, token, target string) (map[string][]*proto.InboundInfo, error) {
+	result := map[string][]*proto.InboundInfo{}
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(d, &result)
+	}
+	reqUrl := fmt.Sprintf("%s/%s", host, common.Inbounds)
+	err := DoGetRequest(reqUrl, token, map[string]interface{}{
+		"target": target,
+	}, getCallBackFunc(cb))
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func DeleteInboundByName(host, token, target, container, name string) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	reqUrl := fmt.Sprintf("%s/%s", host, common.Inbounds)
+	body := map[string]interface{}{
+		"target":    target,
+		"container": container,
+		"name":      name,
+	}
+	err := DoDeleteRequest(reqUrl, token, body, getCallBackFunc(cb))
 	return result, err
 }

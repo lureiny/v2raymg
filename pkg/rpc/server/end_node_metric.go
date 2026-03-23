@@ -13,7 +13,7 @@ func (s *EndNodeServer) SetPingCheck(ctx context.Context, setPingCheckReq *proto
 	if !setPingCheckReq.GetEnablePingCheck() && s.pingCollector != nil {
 		s.pingCollector.StopPing()
 	}
-	s.cfg.EnablePingCheck = setPingCheckReq.GetEnablePingCheck()
+	s.cfg.Ping.EnableICMPPing = setPingCheckReq.GetEnablePingCheck()
 	return setPingCheckRsp, nil
 }
 

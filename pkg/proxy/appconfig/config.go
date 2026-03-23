@@ -15,14 +15,14 @@ type LogConfig struct {
 	Level string `yaml:"level" json:"level"`
 	// Format is the output format: text or json. Default: text.
 	Format string `yaml:"format" json:"format"`
-	// Output is the output target: stdout, stderr, or a file path. Default: stderr.
+	// Output is the output target: stdout, stderr, or a file path. Default: stdout.
 	Output string `yaml:"output" json:"output"`
 	// AddSource includes caller file and line number in log output. Default: false.
 	AddSource bool `yaml:"add_source" json:"add_source"`
 }
 
 // ApplyToLogger builds a log.Logger from LogConfig.
-// Zero values fall back to defaults (info level, text format, stderr).
+// Zero values fall back to defaults (info level, text format, stdout).
 func (c LogConfig) ApplyToLogger() log.Logger {
 	var opts []log.Option
 
@@ -45,9 +45,9 @@ func (c LogConfig) ApplyToLogger() log.Logger {
 	}
 
 	switch c.Output {
-	case "stdout":
+	case "", "stdout":
 		opts = append(opts, log.WithOutput(os.Stdout))
-	case "", "stderr":
+	case "stderr":
 		opts = append(opts, log.WithOutput(os.Stderr))
 	default:
 		// treat as file path
@@ -111,6 +111,37 @@ type NodeConfig struct {
 	ProxyHost string `yaml:"proxy_host" json:"proxy_host"`
 }
 
+// PingNodeSource defines a source for loading ping nodes.
+type PingNodeSource struct {
+	// Type is the source type: "file" or "remote".
+	Type string `yaml:"type" json:"type"`
+	// Source is the file path (for "file") or URL (for "remote").
+	Source string `yaml:"source" json:"source"`
+	// UpdateInterval is the reload interval in seconds for "remote" sources.
+	// Default: 300 (5 minutes). Ignored for "file" type.
+	UpdateInterval int `yaml:"update_interval" json:"update_interval"`
+}
+
+// PingConfig holds ping checker configuration.
+type PingConfig struct {
+	// EnableICMPPing enables local ICMP ping probing (requires root/privileges).
+	EnableICMPPing bool `yaml:"enable_icmp_ping" json:"enable_icmp_ping"`
+	// ICMPPingInterval is the interval between ICMP pings in seconds. Default: 5.
+	ICMPPingInterval int `yaml:"icmp_ping_interval" json:"icmp_ping_interval"`
+	// ICMPPingTimeout is the ICMP ping timeout in seconds. Default: 1.
+	ICMPPingTimeout int `yaml:"icmp_ping_timeout" json:"icmp_ping_timeout"`
+	// EnableTCPPing enables TCP-based latency probing.
+	EnableTCPPing bool `yaml:"enable_tcp_ping" json:"enable_tcp_ping"`
+	// TCPPingInterval is the interval between TCP pings in seconds. Default: 5.
+	TCPPingInterval int `yaml:"tcp_ping_interval" json:"tcp_ping_interval"`
+	// TCPPingTimeout is the TCP ping timeout in seconds. Default: 1.
+	TCPPingTimeout int `yaml:"tcp_ping_timeout" json:"tcp_ping_timeout"`
+	// NodeSources defines where to load ping nodes from.
+	// Multiple sources are supported; later sources override earlier ones by host.
+	// Default: [{type: "file", source: "./config/ping_nodes.yaml"}].
+	NodeSources []PingNodeSource `yaml:"node_sources" json:"node_sources"`
+}
+
 // EndNodeConfig holds End Node specific configuration.
 type EndNodeConfig struct {
 	NodeConfig `yaml:",inline"`
@@ -119,8 +150,8 @@ type EndNodeConfig struct {
 	// OnlyGateway enables gateway-only mode: the node forwards traffic but does not
 	// expose proxy services itself.
 	OnlyGateway bool `yaml:"only_gateway" json:"only_gateway"`
-	// EnablePingCheck enables periodic latency probing to peer nodes.
-	EnablePingCheck bool `yaml:"enable_ping_check" json:"enable_ping_check"`
+	// Ping holds ping checker configuration.
+	Ping PingConfig `yaml:"ping" json:"ping"`
 	// HttpPort is the HTTP management interface port.
 	HttpPort int `yaml:"http_port" json:"http_port"`
 	// HttpListen overrides the listen address for the HTTP server only.

@@ -40,8 +40,6 @@ func init() {
 	registerReqToEndNodeFunc(GetUsersReqType, ReqGetUsers)
 	// get inbound
 	registerReqToEndNodeFunc(GetInboundReqType, ReqGetInbound)
-	// get tag
-	registerReqToEndNodeFunc(GetTagReqType, ReqGetTag)
 	// update proxy
 	registerReqToEndNodeFunc(UpdateProxyReqType, ReqUpdateProxy)
 	// obtain new cert
@@ -64,6 +62,10 @@ func init() {
 	registerReqToEndNodeFunc(SetPingCheckType, ReqSetPingCheck)
 	// register get node metric
 	registerReqToEndNodeFunc(GetNodeMetricType, ReqGetNodeMetric)
+	// list inbound
+	registerReqToEndNodeFunc(ListInboundReqType, ReqListInbound)
+	// delete inbound by name
+	registerReqToEndNodeFunc(DeleteInboundByNameReqType, ReqDeleteInboundByName)
 }
 
 func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
@@ -257,23 +259,6 @@ func ReqGetInbound(ctx context.Context, reqData []byte, endNodeAccessClient prot
 		return "", err
 	}
 	return rsp.GetData(), nil
-}
-
-func ReqGetTag(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
-	getTagReq := &proto.GetTagReq{}
-	if err := pb.Unmarshal(reqData, getTagReq); err != nil {
-		return nil, fmt.Errorf("can't unmarshal req[%v] to GetTagReq > %v", reqData, err)
-	}
-
-	getTagReq.NodeAuthInfo = nodeAuthInfo
-	rsp, err := endNodeAccessClient.GetTag(ctx, getTagReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return "", fmt.Errorf(rsp.GetMsg())
-	}
-	if err != nil {
-		return "", err
-	}
-	return rsp.GetTags(), nil
 }
 
 func ReqUpdateProxy(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
@@ -512,4 +497,36 @@ func (c *EndNodeClient) ReqToMultiEndNodeServer(ctx context.Context, reqType Req
 	}
 	wg.Wait()
 	return
+}
+
+func ReqListInbound(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.ListInboundReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req to ListInboundReq > %v", err)
+	}
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.ListInbound(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	return rsp.GetInbounds(), nil
+}
+
+func ReqDeleteInboundByName(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.DeleteInboundByNameReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req to DeleteInboundByNameReq > %v", err)
+	}
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.DeleteInboundByName(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf(rsp.GetMsg())
+	}
+	return "Succ", nil
 }

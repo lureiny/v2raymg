@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/lureiny/go-prompt"
+	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
 // suggest
@@ -158,6 +159,11 @@ var (
 		Default:     "latest",
 	}
 
+	inboundNameSuggest = prompt.Suggest{
+		Text:        "name",
+		Description: "inbound name (tag within the container)",
+		Default:     "",
+	}
 )
 
 type SetSuggestOption func(*prompt.Suggest)
@@ -207,12 +213,23 @@ func GetSuggest(h *prompt.HandlerInfo, input string) ([]prompt.Suggest, error) {
 		(prompt.IsBoolSuggest(h.Suggests, inputs[len(inputs)-1], h.SuggestPrefix) ||
 			prompt.IsInputNotBoolValue(inputs, h.SuggestPrefix, h.Suggests))
 	if isInputParamValue {
-		if isInputNodeName(inputs[len(inputs)-2], h.SuggestPrefix) {
-			return getNodeSuggest(inputs[len(inputs)-1])
+		lastFlag := inputs[len(inputs)-2]
+		currentInput := inputs[len(inputs)-1]
+
+		if isInputNodeName(lastFlag, h.SuggestPrefix) {
+			return getNodeSuggest(currentInput)
 		}
 
-		if isInputUserName(inputs[len(inputs)-2], h.SuggestPrefix, inputs[0]) {
-			return getUserSuggest(getTargetParam(input), inputs[len(inputs)-1])
+		if isInputUserName(lastFlag, h.SuggestPrefix, inputs[0]) {
+			return getUserSuggest(getTargetParam(input), currentInput)
+		}
+
+		if isInputContainerName(lastFlag, h.SuggestPrefix) {
+			return getContainerSuggest(currentInput)
+		}
+
+		if isInputInboundName(lastFlag, h.SuggestPrefix) {
+			return getInboundNameSuggest(getTargetParam(input), getContainerParam(input), currentInput)
 		}
 	}
 
@@ -231,8 +248,29 @@ func isInputUserName(lastFlag, suggestPrefix, handlerName string) bool {
 		handlerName != "AddUser"
 }
 
-// return target name
+func isInputContainerName(lastFlag, suggestPrefix string) bool {
+	return lastFlag == suggestPrefix+containerSuggest.Text
+}
+
+func isInputInboundName(lastFlag, suggestPrefix string) bool {
+	return lastFlag == suggestPrefix+tagSuggest.Text ||
+		lastFlag == suggestPrefix+srcTagSuggest.Text ||
+		lastFlag == suggestPrefix+dstTagSuggest.Text ||
+		lastFlag == suggestPrefix+inboundNameSuggest.Text
+}
+
+// getTargetParam extracts the value of -target from the current input line.
 func getTargetParam(input string) string {
+	return getParamValue(input, targetSuggest.Text)
+}
+
+// getContainerParam extracts the value of -container from the current input line.
+func getContainerParam(input string) string {
+	return getParamValue(input, containerSuggest.Text)
+}
+
+// getParamValue extracts the value of a named flag (e.g. "-target") from the input line.
+func getParamValue(input, paramName string) string {
 	splitedInput := strings.Split(input, " ")
 	inputs := []string{}
 	for _, s := range splitedInput {
@@ -240,13 +278,12 @@ func getTargetParam(input string) string {
 			inputs = append(inputs, s)
 		}
 	}
-
+	flag := "-" + paramName
 	for index, i := range inputs {
-		if i == "-target" && index != len(inputs)-1 {
+		if i == flag && index != len(inputs)-1 {
 			return inputs[index+1]
 		}
 	}
-
 	return ""
 }
 
@@ -300,5 +337,68 @@ func getNodeSuggest(input string) ([]prompt.Suggest, error) {
 			})
 		}
 	}
+	return results, nil
+}
+
+// knownContainers lists all supported container types for inbound autocomplete.
+var knownContainers = []string{"xray", "snell", "hysteria"}
+
+// getContainerSuggest returns fixed container type suggestions.
+func getContainerSuggest(currentInput string) ([]prompt.Suggest, error) {
+	results := []prompt.Suggest{}
+	for _, ct := range knownContainers {
+		if prompt.IsMatch(currentInput, ct) {
+			results = append(results, prompt.Suggest{
+				Text:        ct,
+				SuggestType: prompt.SuggestOfHandler,
+			})
+		}
+	}
+	return results, nil
+}
+
+// getInboundNameSuggest returns inbound name suggestions.
+// If target is set, only inbounds from that node are considered.
+// If container is set, only inbounds of that container type are considered.
+// Results are deduplicated by name.
+func getInboundNameSuggest(target, container, currentInput string) ([]prompt.Suggest, error) {
+	inboundMutex.Lock()
+	defer inboundMutex.Unlock()
+
+	seen := map[string]bool{}
+	results := []prompt.Suggest{}
+
+	addInbound := func(inb *proto.InboundInfo) {
+		if container != "" && inb.GetContainer() != container {
+			return
+		}
+		name := inb.GetName()
+		if seen[name] {
+			return
+		}
+		if prompt.IsMatch(currentInput, name) {
+			seen[name] = true
+			results = append(results, prompt.Suggest{
+				Text:        name,
+				Description: inb.GetContainer(),
+				SuggestType: prompt.SuggestOfHandler,
+			})
+		}
+	}
+
+	if target != "" {
+		// specific node
+		for _, inb := range localInboundList[target] {
+			addInbound(inb)
+		}
+	} else {
+		// all nodes
+		for _, inbounds := range localInboundList {
+			for _, inb := range inbounds {
+				addInbound(inb)
+			}
+		}
+	}
+
 	return results, nil
 }

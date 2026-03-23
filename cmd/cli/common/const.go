@@ -3,7 +3,6 @@ package common
 const (
 	ListNodeURI = "node"
 	ListCert    = "getCerts"
-	ListTag     = "tag"
 
 	Gateway   = "gateway"
 	PingCheck = "pingCheck"
@@ -11,6 +10,7 @@ const (
 
 	FastAddInbound = "inbound/fast"
 	Inbound        = "inbound"
+	Inbounds       = "inbounds"
 
 	CopyUserBetweenNodes = "copyUserBetweenNodes"
 	User                 = "user"

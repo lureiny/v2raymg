@@ -21,8 +21,8 @@ func NewV2raymgTrafficDesc() *v2raymgTrafficDesc {
 	return &v2raymgTrafficDesc{
 		traffic: prometheus.NewDesc(
 			"v2raymg_traffic",
-			"v2ray/xray traffic",
-			[]string{"node", "name", "type", "direction", "proxy"},
+			"v2raymg traffic per user per inbound",
+			[]string{"node", "name", "type", "direction", "protocol", "container"},
 			nil,
 		),
 	}
@@ -37,8 +37,14 @@ func (d *v2raymgTrafficDesc) Collect(ch chan<- prometheus.Metric) {
 	defer d.mutex.RUnlock()
 	currentTime := time.Now()
 	for _, stat := range d.stats {
-		labels := []string{stat.GetSource(),
-			stat.GetName(), stat.GetType(), "downlink", stat.GetProxy()}
+		labels := []string{
+			stat.GetSource(),       // node = node name from RPC response key
+			stat.GetName(),         // name
+			stat.GetType(),         // type
+			"downlink",             // direction
+			stat.GetProtocol(),     // protocol
+			stat.GetContainer(),    // container
+		}
 		ch <- prometheus.NewMetricWithTimestamp(
 			currentTime.UTC(),
 			prometheus.MustNewConstMetric(
@@ -58,18 +64,26 @@ func (d *v2raymgTrafficDesc) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
-// Update ...
+// Update fetches stats from all nodes via RPC.
+// The node name is taken directly from the RPC response key (node name).
 func (d *v2raymgTrafficDesc) Update(ctx context.Context, rpcClient *client.EndNodeClient, token string) error {
 	succList, _, _ := rpcClient.ReqToMultiEndNodeServer(ctx,
 		client.GetBandWidthStatsReqType,
 		&proto.GetBandwidthStatsReq{},
 		token,
 	)
+
 	stats := []*proto.Stats{}
-	for _, v := range succList {
-		s, _ := v.([]*proto.Stats)
-		stats = append(stats, s...)
+
+	for nodeName, v := range succList {
+		nodeStats, _ := v.([]*proto.Stats)
+		for _, stat := range nodeStats {
+			// Set Source to node name for Prometheus node label
+			stat.Source = nodeName
+		}
+		stats = append(stats, nodeStats...)
 	}
+
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 	d.stats = stats

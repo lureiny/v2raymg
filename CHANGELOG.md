@@ -1,0 +1,113 @@
+# CHANGELOG.md
+
+## 2026-02-22 — T-032 目录重组与引用迁移（container 体系）
+- 目录重组：
+  - `core/container`：抽象接口与基础类型
+  - `containers/xray`：xray 具体实现
+  - `tools`：通用下载/校验/替换工具
+- 引用迁移：xray 侧改为本地 native 类型，移除 provider 路径依赖
+- 回归：`go test ./pkg/proxyrefactor/... -count=1` 通过
+- QA 结论：PASS_WITH_RISK（Update 失败路径完整性需后续继续强化）
+
+## 2026-02-22 — T-031 Domain 解耦第一阶段
+- 新增 domain 禁止项清单与自动 gate
+- 新增 InboundSpecV2（Mode/Entry/TargetRef/PolicyRef/Meta）
+- 新增 TargetRef 解析契约与错误判定
+- mapper 契约补齐 To/From 方向与 warnings 语义
+- QA 结论：PASS_WITH_RISK（逆向语义完善留待后续阶段）
+
+## 2026-02-21 — T-030 注释增强与并发回归闭环
+- 补充/完善注释（不改变业务意图）：
+  - `container/interface.go`：`Update(...)` 对外契约与参数语义
+  - `container/updater.go`：更新主流程、异常分支、回滚意图
+  - `container/exec_runner.go`：`Start/Stop` 生命周期与并发约束
+  - `forward/forward_manager.go`：锁模型、规则生命周期、失败回滚语义
+  - `forward/relay.go`：转发数据路径、优雅关闭语义
+- 回归中发现 `ExecRunner.Stop` 与后台 `Wait` 协同存在阻塞风险，修复为：
+  - 引入 `done` 信号通道，避免并发重复 `Wait` 导致卡住
+  - `Stop` 先取消上下文，再等待进程退出；超时后兜底 `Kill`
+- 验证：`go test ./pkg/proxyrefactor/... -count=1` 全量通过
+
+## 2026-02-21 — T-028 Start 自动拉取 xray 二进制
+- `ExecRunnerConfig` 增加：
+  - `AutoUpdateOnStart`（xray 默认 true，可关闭）
+  - `AutoUpdateTag`（默认 latest）
+- `Start()` 流程增强：
+  - 检测 binary 存在且可执行
+  - xray 且缺失时自动触发 `Update(latest, RestartNever)`
+  - update 成功后继续 start
+  - update 失败返回明确阶段错误（`binary auto-update failed: ...`）
+- 仅 xray 生效；v2ray/hysteria 保持原行为
+- `runUpdate(...)` 支持“首次安装”路径（binary 不存在时直接 install，不走 swap）
+- 新增测试 `exec_runner_autoupdate_test.go` 覆盖：
+  - binary 存在不触发 update
+  - binary 缺失触发 update 并启动成功
+  - update 失败 -> start 失败
+  - auto-update disabled -> 缺失直接失败
+  - 非 xray 不触发 auto-update
+
+## 2026-02-21 — Phase S 简单系统测试（T-027）
+- 新增 `pkg/proxyrefactor/systemtest/xray_socks5_system_test.go`（integration）
+  - 流程：启动 xray container -> socks5 inbound -> `http://example.com` 访问验证
+  - 运行条件：`XRAY_BIN` 可用 + `-tags=integration`
+- 新增 `pkg/proxyrefactor/systemtest/degraded_socks5_chain_test.go`
+  - 本地最小 SOCKS5 server + 本地 origin 服务
+  - 在受限环境可执行，验证 proxy chain 基础链路
+- 新增 `pkg/proxyrefactor/systemtest/README.md`
+  - 给出真实/降级两套执行命令
+  - 明确成功/失败判据
+
+## 2026-02-21 — Phase U QA 残留风险修复（T-026）
+- `updater.go` 可测试性改造：
+  - 接口化依赖：ReleaseClient / AssetDownloader / BinarySwapper / ProcessController
+  - 抽离 `runUpdate(...)` 纯编排函数，ExecRunner.Update 仅注入默认依赖
+- `github_release_client.go` 新增 `BaseURL`，支持 `httptest.Server`
+- `updater_test.go` 重构为表驱动 mock 测试，覆盖 FAIL 场景：
+  - 下载失败
+  - checksum fail
+  - swap fail
+  - restart fail -> rollback
+  - rollback fail
+  - restart policy 分支（never / if_was_running / always）
+  - FromVersion/ToVersion 断言
+  - running/non-running 调用序列断言（Stop 是否触发）
+- `github_release_client_test.go` 增加 BaseURL 路径断言
+
+## 2026-02-20 — Phase U Container Update 接口
+- container/interface.go: Container 新增 Update(ctx, req)
+- update_types.go: UpdateRequest/UpdateResult/RestartPolicy/Updater
+- github_release_client.go: tag 标准化 + GitHub Release 拉取 + asset 选择
+- downloader.go: 下载到本地文件
+- checksum.go: sha256 计算/解析/校验
+- swapper.go: 原子替换 + 回滚
+- updater.go: ExecRunner.Update 主流程（拉取→下载→校验→替换→回滚→重启策略）
+- 新增测试: update_types_test / github_release_client_test / checksum_test / swapper_test / updater_test
+
+## 2026-02-20 — D-008 Container option 注入 ForwardManager
+- 新增 global.go: GlobalForwardManager 进程级单例 + SetGlobalConfig + ResetGlobalForwardManager
+- 重写 integration.go: NewContainer(id, ...ContainerOption) 取代旧 NewForwardAwareContainer
+  - WithForwardManager(fm) option 显式注入
+  - 缺省回退到全局单例
+  - InboundForwarder 自动继承 container 的 FM，不再需要单独注入
+- 新增 global_test.go: 3 用例（单例/重置/功能性）
+- 重写 integration_test.go: 11 用例，新增覆盖：
+  - 显式注入 option / 默认全局单例 / 双 container 共享全局 / inbound 继承 container 实例
+
+## 2026-02-20 — Phase 6 端口转发层
+- T-014: ForwardRule 模型 + ForwardManager 接口
+- T-015: PortAllocator（范围端口池 + 分配/回收/冲突检测 + 并发安全）
+- T-016: TCP Relay（双向转发 + 优雅关闭 + 连接数限制 + 流量计数钩子）
+- T-017: TrafficCounter + TrafficRegistry（atomic 计数 + 按 rule 聚合 + snapshot/reset）
+- T-018: TokenBucketLimiter（令牌桶 + LimitedReader/LimitedWriter + 突发支持）
+- T-019: DefaultForwardManager（全局组装 + CRUD + 生命周期管理）
+- T-020: InboundForwarder + ForwardAwareContainer（集成接口 + 端到端测试）
+
+## 2026-02-20 — 项目收尾（Phase 1-3 xray）
+- Ryan 决定取消 Phase 3(v2ray) / Phase 4 / Phase 5
+- 已完成交付：Phase 1 + Phase 2 + Phase 3(xray)
+
+## 2026-02-20 — 项目启动
+- 创建项目文件 (PROJECT.md, DECISIONS.md, STATUS.md, TASKS.md)
+- Phase 1: domain 领域模型 + 统一错误码 + 核心接口
+- Phase 2: ExecRunner + ConfigWriter
+- Phase 3(xray): InboundAdapter + ConfigRenderer

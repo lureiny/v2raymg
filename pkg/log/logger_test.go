@@ -109,3 +109,62 @@ func TestGlobal_With(t *testing.T) {
 		t.Fatal("With() returned nil")
 	}
 }
+
+func TestDefaultPrefix(t *testing.T) {
+	var buf bytes.Buffer
+	l := pkglog.New(pkglog.WithOutput(&buf))
+	l.Info("hello")
+	out := buf.String()
+	if !strings.HasPrefix(out, "[v2raymg] ") {
+		t.Errorf("expected output to start with [v2raymg], got: %s", out)
+	}
+}
+
+func TestWithPrefix_Custom(t *testing.T) {
+	var buf bytes.Buffer
+	l := pkglog.New(pkglog.WithOutput(&buf), pkglog.WithPrefix("myapp"))
+	l.Info("hello")
+	out := buf.String()
+	if !strings.HasPrefix(out, "[myapp] ") {
+		t.Errorf("expected output to start with [myapp], got: %s", out)
+	}
+}
+
+func TestWithPrefix_Empty(t *testing.T) {
+	var buf bytes.Buffer
+	l := pkglog.New(pkglog.WithOutput(&buf), pkglog.WithPrefix(""))
+	l.Info("hello")
+	out := buf.String()
+	if strings.HasPrefix(out, "[") {
+		t.Errorf("expected no prefix, got: %s", out)
+	}
+}
+
+func TestPrefixWriter_Lines(t *testing.T) {
+	var buf bytes.Buffer
+	pw := pkglog.NewPrefixWriter(&buf, "xray")
+	_, _ = pw.Write([]byte("line one\nline two\n"))
+	out := buf.String()
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %q", len(lines), out)
+	}
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "[xray] ") {
+			t.Errorf("expected line to start with [xray], got: %q", line)
+		}
+	}
+}
+
+func TestPrefixWriter_Flush(t *testing.T) {
+	var buf bytes.Buffer
+	pw := pkglog.NewPrefixWriter(&buf, "snell")
+	_, _ = pw.Write([]byte("incomplete line"))
+	if buf.Len() != 0 {
+		t.Error("expected no output before Flush")
+	}
+	_ = pw.Flush()
+	if !strings.Contains(buf.String(), "[snell] incomplete line") {
+		t.Errorf("expected flushed output with prefix, got: %q", buf.String())
+	}
+}

@@ -109,7 +109,7 @@ func migrateLegacyConfig(old *legacyConfig) *AppConfig {
 	cfg.EndNode.RpcPort = old.Server.Rpc.Port
 	cfg.EndNode.HttpPort = old.Server.Http.Port
 	cfg.EndNode.HttpToken = old.Server.Http.Token
-	cfg.EndNode.EnablePingCheck = old.Server.PingCheck
+	cfg.EndNode.Ping.EnableICMPPing = old.Server.IcmpPingCheck
 	cfg.EndNode.EnablePrometheus = old.Server.Http.SupportPrometheus
 	cfg.EndNode.OnlyGateway = old.Server.Rpc.OnlyGateway
 
@@ -129,6 +129,12 @@ func defaultAppConfig() *AppConfig {
 	cfg.Store.DSN = "./v2raymg.db"
 	cfg.Forward.MinPort = 10000
 	cfg.Forward.MaxPort = 60000
+	cfg.EndNode.Ping.EnableICMPPing = true
+	cfg.EndNode.Ping.ICMPPingInterval = 5
+	cfg.EndNode.Ping.ICMPPingTimeout = 1
+	cfg.EndNode.Ping.EnableTCPPing = true
+	cfg.EndNode.Ping.TCPPingInterval = 5
+	cfg.EndNode.Ping.TCPPingTimeout = 1
 	return cfg
 }
 
@@ -174,6 +180,13 @@ func LoadFromFile(path string) (*AppConfig, error) {
 		return nil, fmt.Errorf("appconfig: unsupported file extension %q (want .yaml, .yml, or .json)", ext)
 	}
 
+	// Set default NodeSources if not configured
+	if len(cfg.EndNode.Ping.NodeSources) == 0 {
+		cfg.EndNode.Ping.NodeSources = []PingNodeSource{
+			{Type: "file", Source: "./config/ping_nodes.yaml"},
+		}
+	}
+
 	return cfg, nil
 }
 
@@ -216,6 +229,16 @@ func Validate(cfg *AppConfig) error {
 
 	if cfg.CertMgmt.Email != "" && !strings.Contains(cfg.CertMgmt.Email, "@") {
 		return fmt.Errorf("appconfig: cert_mgmt.email %q is not a valid email address", cfg.CertMgmt.Email)
+	}
+
+	validSourceTypes := map[string]bool{"file": true, "remote": true}
+	for i, ns := range cfg.EndNode.Ping.NodeSources {
+		if !validSourceTypes[ns.Type] {
+			return fmt.Errorf(
+				"appconfig: ping.node_sources[%d].type %q is invalid; valid values are: \"file\", \"remote\"",
+				i, ns.Type,
+			)
+		}
 	}
 
 	enabledCount := 0

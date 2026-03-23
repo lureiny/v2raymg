@@ -14,9 +14,15 @@ func (handler *InboundAddHandler) handlerFunc(c *gin.Context) {
 	var req struct {
 		Target         string `json:"target"`
 		BoundRawString string `json:"bound_raw_string"`
+		Container      string `json:"container"` // "xray"(default); other containers not yet supported
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.String(400, "invalid request body: %v", err)
+		return
+	}
+	// Only xray is supported via this raw-JSON path; other containers must use POST /inbound/fast
+	if req.Container != "" && req.Container != "xray" {
+		c.String(400, "container %q not supported via POST /inbound; use POST /inbound/fast instead", req.Container)
 		return
 	}
 	if req.Target == "" {
@@ -46,9 +52,10 @@ func (handler *InboundAddHandler) getRelativePath() string { return "/inbound" }
 
 func (handler *InboundAddHandler) help() string {
 	return `POST /inbound
-	添加inbound
-	body: {"target": "", "bound_raw_string": ""}
-	bound_raw_string: json中inbound配置base64编码后的字符串`
+	添加inbound（仅支持 xray container）
+	body: {"target": "", "bound_raw_string": "", "container": "xray"}
+	bound_raw_string: json中inbound配置base64编码后的字符串
+	container: 可选，目前仅支持 "xray"（默认）；其他container请使用 POST /inbound/fast`
 }
 
 // InboundDeleteHandler DELETE /inbound — 删除inbound
@@ -56,11 +63,16 @@ type InboundDeleteHandler struct{ HttpHandlerImp }
 
 func (handler *InboundDeleteHandler) handlerFunc(c *gin.Context) {
 	var req struct {
-		Target string `json:"target"`
-		SrcTag string `json:"src_tag"`
+		Target    string `json:"target"`
+		SrcTag    string `json:"src_tag"`
+		Container string `json:"container"` // "xray"(default); other containers not yet supported
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.String(400, "invalid request body: %v", err)
+		return
+	}
+	if req.Container != "" && req.Container != "xray" {
+		c.String(400, "container %q not supported via DELETE /inbound; use POST /inbound/fast instead", req.Container)
 		return
 	}
 	if req.Target == "" {
@@ -90,9 +102,10 @@ func (handler *InboundDeleteHandler) getRelativePath() string { return "/inbound
 
 func (handler *InboundDeleteHandler) help() string {
 	return `DELETE /inbound
-	删除inbound
-	body: {"target": "", "src_tag": ""}
-	src_tag: 要删除inbound的tag`
+	删除inbound（仅支持 xray container）
+	body: {"target": "", "src_tag": "", "container": "xray"}
+	src_tag: 要删除inbound的tag
+	container: 可选，目前仅支持 "xray"（默认）`
 }
 
 // InboundGetHandler GET /inbound — 获取inbound
@@ -101,6 +114,12 @@ type InboundGetHandler struct{ HttpHandlerImp }
 func (handler *InboundGetHandler) handlerFunc(c *gin.Context) {
 	target := c.DefaultQuery("target", handler.getHttpServer().Name)
 	srcTag := c.DefaultQuery("src_tag", "")
+	containerType := c.DefaultQuery("container", "xray")
+	// Only xray is supported; other containers not yet implemented
+	if containerType != "xray" {
+		c.String(400, "container %q not supported via GET /inbound", containerType)
+		return
+	}
 	nodes := handler.getHttpServer().GetTargetNodes(target)
 	if len(nodes) == 0 {
 		c.String(200, "no avaliable node")
@@ -129,6 +148,6 @@ func (handler *InboundGetHandler) getRelativePath() string { return "/inbound" }
 
 func (handler *InboundGetHandler) help() string {
 	return `GET /inbound
-	获取inbound详细配置
-	query: target, src_tag`
+	获取inbound详细配置（仅支持 xray container）
+	query: target, src_tag, container(默认xray)`
 }

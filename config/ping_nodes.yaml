@@ -1,0 +1,241 @@
+# Ping nodes for v2raymg
+# Generated at 2026-03-20T19:29:05+08:00
+# 来源: https://ip.cn/dns.html
+
+nodes:
+  - host: "202.99.192.66"
+    geo: "China, 山西"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "202.102.128.68"
+    geo: "China, 山东"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "219.147.198.230"
+    geo: "China, 黑龙江"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "123.123.123.123"
+    geo: "China, 北京"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "218.104.111.122"
+    geo: "China, 湖北"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "219.151.48.1"
+    geo: "China, 西藏"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "221.7.128.68"
+    geo: "China, 广西"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "218.201.96.130"
+    geo: "China, 山东"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.138.151.161"
+    geo: "China, 福建"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "221.207.55.1"
+    geo: "China, 青海"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.139.5.29"
+    geo: "China, 贵州"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.136.20.203"
+    geo: "China, 广东"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "119.6.6.6"
+    geo: "China, 四川"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.141.16.99"
+    geo: "China, 吉林"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.138.106.2"
+    geo: "China, 山西"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "202.99.160.68"
+    geo: "China, 河北"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "218.203.160.194"
+    geo: "China, 甘肃"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "220.248.192.12"
+    geo: "China, 江西"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "210.21.196.6"
+    geo: "China, 广东"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.137.32.178"
+    geo: "China, 辽宁"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "222.172.200.68"
+    geo: "China, 云南"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.138.24.66"
+    geo: "China, 河南"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "218.85.152.99"
+    geo: "China, 福建"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.141.90.68"
+    geo: "China, 江西"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.138.91.1"
+    geo: "China, 内蒙古"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "202.99.224.68"
+    geo: "China, 内蒙古"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.137.58.20"
+    geo: "China, 湖北"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "221.13.65.34"
+    geo: "China, 西藏"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "61.128.192.68"
+    geo: "China, 重庆"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "221.176.88.95"
+    geo: "China, 海南"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "221.11.132.2"
+    geo: "China, 海南"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "218.201.4.3"
+    geo: "China, 重庆"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.138.30.66"
+    geo: "China, 北京"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "221.199.12.157"
+    geo: "China, 宁夏"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.137.130.3"
+    geo: "China, 陕西"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "202.96.209.133"
+    geo: "China, 上海"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "202.98.0.68"
+    geo: "China, 吉林"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.138.245.180"
+    geo: "China, 广西"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "218.2.2.2"
+    geo: "China, 江苏"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "202.100.96.68"
+    geo: "China, 宁夏"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "202.103.24.68"
+    geo: "China, 湖北"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "218.104.78.2"
+    geo: "China, 安徽"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.138.180.2"
+    geo: "China, 安徽"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "219.148.204.66"
+    geo: "China, 辽宁"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.138.75.123"
+    geo: "China, 青海"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "222.88.88.88"
+    geo: "China, 河南"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.140.13.188"
+    geo: "China, 浙江"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "218.203.123.116"
+    geo: "China, 宁夏"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "58.20.127.238"
+    geo: "China, 湖南"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "221.5.203.98"
+    geo: "China, 重庆"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "202.96.128.86"
+    geo: "China, 广东"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "61.128.114.167"
+    geo: "China, 新疆"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "221.131.143.69"
+    geo: "China, 江苏"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "218.202.152.130"
+    geo: "China, 新疆"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "202.97.224.69"
+    geo: "China, 黑龙江"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "202.98.192.67"
+    geo: "China, 贵州"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "211.136.112.50"
+    geo: "China, 上海"
+    isp: "MOBILE"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "221.12.1.227"
+    geo: "China, 浙江"
+    isp: "UNICOM"
+    usage: ["icmp", "tcp", "pingpe"]
+  - host: "61.132.163.68"
+    geo: "China, 安徽"
+    isp: "TELECOM"
+    usage: ["icmp", "tcp", "pingpe"]

@@ -37,7 +37,8 @@ const (
 	EndNodeAccess_CopyInbound_FullMethodName          = "/proto.EndNodeAccess/CopyInbound"
 	EndNodeAccess_CopyUser_FullMethodName             = "/proto.EndNodeAccess/CopyUser"
 	EndNodeAccess_GetInbound_FullMethodName           = "/proto.EndNodeAccess/GetInbound"
-	EndNodeAccess_GetTag_FullMethodName               = "/proto.EndNodeAccess/GetTag"
+	EndNodeAccess_ListInbound_FullMethodName          = "/proto.EndNodeAccess/ListInbound"
+	EndNodeAccess_DeleteInboundByName_FullMethodName  = "/proto.EndNodeAccess/DeleteInboundByName"
 	EndNodeAccess_UpdateProxy_FullMethodName          = "/proto.EndNodeAccess/UpdateProxy"
 	EndNodeAccess_AddAdaptiveConfig_FullMethodName    = "/proto.EndNodeAccess/AddAdaptiveConfig"
 	EndNodeAccess_DeleteAdaptiveConfig_FullMethodName = "/proto.EndNodeAccess/DeleteAdaptiveConfig"
@@ -75,7 +76,8 @@ type EndNodeAccessClient interface {
 	CopyInbound(ctx context.Context, in *CopyInboundReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
 	CopyUser(ctx context.Context, in *CopyUserReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
 	GetInbound(ctx context.Context, in *GetInboundReq, opts ...grpc.CallOption) (*GetInboundRsp, error)
-	GetTag(ctx context.Context, in *GetTagReq, opts ...grpc.CallOption) (*GetTagRsp, error)
+	ListInbound(ctx context.Context, in *ListInboundReq, opts ...grpc.CallOption) (*ListInboundRsp, error)
+	DeleteInboundByName(ctx context.Context, in *DeleteInboundByNameReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
 	// proxy
 	UpdateProxy(ctx context.Context, in *UpdateProxyReq, opts ...grpc.CallOption) (*UpdateProxyRsp, error)
 	AddAdaptiveConfig(ctx context.Context, in *AdaptiveOpReq, opts ...grpc.CallOption) (*AdaptiveRsp, error)
@@ -279,10 +281,20 @@ func (c *endNodeAccessClient) GetInbound(ctx context.Context, in *GetInboundReq,
 	return out, nil
 }
 
-func (c *endNodeAccessClient) GetTag(ctx context.Context, in *GetTagReq, opts ...grpc.CallOption) (*GetTagRsp, error) {
+func (c *endNodeAccessClient) ListInbound(ctx context.Context, in *ListInboundReq, opts ...grpc.CallOption) (*ListInboundRsp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetTagRsp)
-	err := c.cc.Invoke(ctx, EndNodeAccess_GetTag_FullMethodName, in, out, cOpts...)
+	out := new(ListInboundRsp)
+	err := c.cc.Invoke(ctx, EndNodeAccess_ListInbound_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *endNodeAccessClient) DeleteInboundByName(ctx context.Context, in *DeleteInboundByNameReq, opts ...grpc.CallOption) (*InboundOpRsp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InboundOpRsp)
+	err := c.cc.Invoke(ctx, EndNodeAccess_DeleteInboundByName_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +426,8 @@ type EndNodeAccessServer interface {
 	CopyInbound(context.Context, *CopyInboundReq) (*InboundOpRsp, error)
 	CopyUser(context.Context, *CopyUserReq) (*InboundOpRsp, error)
 	GetInbound(context.Context, *GetInboundReq) (*GetInboundRsp, error)
-	GetTag(context.Context, *GetTagReq) (*GetTagRsp, error)
+	ListInbound(context.Context, *ListInboundReq) (*ListInboundRsp, error)
+	DeleteInboundByName(context.Context, *DeleteInboundByNameReq) (*InboundOpRsp, error)
 	// proxy
 	UpdateProxy(context.Context, *UpdateProxyReq) (*UpdateProxyRsp, error)
 	AddAdaptiveConfig(context.Context, *AdaptiveOpReq) (*AdaptiveRsp, error)
@@ -492,8 +505,11 @@ func (UnimplementedEndNodeAccessServer) CopyUser(context.Context, *CopyUserReq) 
 func (UnimplementedEndNodeAccessServer) GetInbound(context.Context, *GetInboundReq) (*GetInboundRsp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetInbound not implemented")
 }
-func (UnimplementedEndNodeAccessServer) GetTag(context.Context, *GetTagReq) (*GetTagRsp, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetTag not implemented")
+func (UnimplementedEndNodeAccessServer) ListInbound(context.Context, *ListInboundReq) (*ListInboundRsp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListInbound not implemented")
+}
+func (UnimplementedEndNodeAccessServer) DeleteInboundByName(context.Context, *DeleteInboundByNameReq) (*InboundOpRsp, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteInboundByName not implemented")
 }
 func (UnimplementedEndNodeAccessServer) UpdateProxy(context.Context, *UpdateProxyReq) (*UpdateProxyRsp, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateProxy not implemented")
@@ -870,20 +886,38 @@ func _EndNodeAccess_GetInbound_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EndNodeAccess_GetTag_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetTagReq)
+func _EndNodeAccess_ListInbound_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListInboundReq)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(EndNodeAccessServer).GetTag(ctx, in)
+		return srv.(EndNodeAccessServer).ListInbound(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: EndNodeAccess_GetTag_FullMethodName,
+		FullMethod: EndNodeAccess_ListInbound_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndNodeAccessServer).GetTag(ctx, req.(*GetTagReq))
+		return srv.(EndNodeAccessServer).ListInbound(ctx, req.(*ListInboundReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EndNodeAccess_DeleteInboundByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteInboundByNameReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).DeleteInboundByName(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EndNodeAccess_DeleteInboundByName_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).DeleteInboundByName(ctx, req.(*DeleteInboundByNameReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1148,8 +1182,12 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _EndNodeAccess_GetInbound_Handler,
 		},
 		{
-			MethodName: "GetTag",
-			Handler:    _EndNodeAccess_GetTag_Handler,
+			MethodName: "ListInbound",
+			Handler:    _EndNodeAccess_ListInbound_Handler,
+		},
+		{
+			MethodName: "DeleteInboundByName",
+			Handler:    _EndNodeAccess_DeleteInboundByName_Handler,
 		},
 		{
 			MethodName: "UpdateProxy",

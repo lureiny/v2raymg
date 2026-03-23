@@ -42,7 +42,24 @@ func init() {
 	serverCmd.Flags().BoolVar(&serverMigrate, "migrate", false, "migrate legacy config to new format and overwrite the config file, then exit")
 }
 
+// printBanner prints the ASCII logo and build info to stdout.
+func printBanner() {
+	fmt.Print(`
+ ██╗   ██╗██████╗ ██████╗  █████╗ ██╗   ██╗███╗   ███╗ ██████╗
+ ██║   ██║╚════██╗██╔══██╗██╔══██╗╚██╗ ██╔╝████╗ ████║██╔════╝
+ ██║   ██║ █████╔╝██████╔╝███████║ ╚████╔╝ ██╔████╔██║██║  ███╗
+ ╚██╗ ██╔╝██╔═══╝ ██╔══██╗██╔══██║  ╚██╔╝  ██║╚██╔╝██║██║   ██║
+  ╚████╔╝ ███████╗██║  ██║██║  ██║   ██║   ██║ ╚═╝ ██║╚██████╔╝
+   ╚═══╝  ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚═╝ ╚═════╝
+`)
+	fmt.Printf("  Version   : %s\n", Version)
+	fmt.Printf("  Commit    : %s\n", Commit)
+	fmt.Printf("  Built at  : %s\n", BuildTime)
+	fmt.Println()
+}
+
 func startServer(cmd *cobra.Command, args []string) {
+	printBanner()
 	cfg, err := appconfig.LoadFromFile(serverConfig)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
@@ -139,9 +156,14 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	// 8. Collectors
 	statsCol := usermanager.NewBandwidthStatsCollector(userMgr)
 	pingCol := collecter.NewPingCollector(collecter.PingCollectorConfig{
-		Host:           cfg.EndNode.ProxyHost,
-		EnablePingPe:   cfg.EndNode.EnablePingCheck,
-		EnableICMPPing: false,
+		Host:             cfg.EndNode.ProxyHost,
+		EnableICMPPing:   cfg.EndNode.Ping.EnableICMPPing,
+		EnableTCPPing:    cfg.EndNode.Ping.EnableTCPPing,
+		ICMPPingInterval: cfg.EndNode.Ping.ICMPPingInterval,
+		ICMPPingTimeout:  cfg.EndNode.Ping.ICMPPingTimeout,
+		TCPPingInterval:  cfg.EndNode.Ping.TCPPingInterval,
+		TCPPingTimeout:   cfg.EndNode.Ping.TCPPingTimeout,
+		NodeSources:      cfg.EndNode.Ping.NodeSources,
 	})
 	nodeMetricCol := collecter.DefaultNodeCollector()
 

@@ -3,10 +3,12 @@ package collecter
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/collecter/ping"
+	"github.com/lureiny/v2raymg/pkg/proxy/appconfig"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
@@ -15,64 +17,95 @@ type pingResults map[string]*ping.PingResult // key: node name
 // PingCollector manages PingCheckers and aggregates their results.
 // It implements the PingCollector interface expected by pkg/rpc/server.
 type PingCollector struct {
-	host            string
-	pingCheckers    map[string]ping.PingChecker
-	pingResultMap   map[string]pingResults
-	mu              sync.RWMutex
-	enablePingPe    bool
-	enableICMPPing  bool
+	host              string
+	pingCheckers      map[string]ping.PingChecker
+	pingResultMap     map[string]pingResults
+	mu                sync.RWMutex
+	enableICMPPing    bool
+	enableTCPPing     bool
+	icmpPingInterval  int
+	icmpPingTimeout   int
+	tcpPingInterval   int
+	tcpPingTimeout    int
+	nodeManager       ping.NodeManager
 }
 
 // PingCollectorConfig configures which checkers to enable and the local host.
 type PingCollectorConfig struct {
-	Host           string
-	EnablePingPe   bool
-	EnableICMPPing bool
+	Host             string
+	EnableICMPPing   bool
+	EnableTCPPing    bool
+	ICMPPingInterval int // seconds, default 5
+	ICMPPingTimeout  int // seconds, default 1
+	TCPPingInterval  int // seconds, default 5
+	TCPPingTimeout   int // seconds, default 1
+	NodeSources      []appconfig.PingNodeSource
 }
 
 // NewPingCollector creates and starts a PingCollector.
 func NewPingCollector(cfg PingCollectorConfig) *PingCollector {
 	pc := &PingCollector{
-		host:           cfg.Host,
-		pingCheckers:   make(map[string]ping.PingChecker),
-		pingResultMap:  make(map[string]pingResults),
-		enablePingPe:   cfg.EnablePingPe,
-		enableICMPPing: cfg.EnableICMPPing,
+		host:             cfg.Host,
+		pingCheckers:     make(map[string]ping.PingChecker),
+		pingResultMap:    make(map[string]pingResults),
+		enableICMPPing:   cfg.EnableICMPPing,
+		enableTCPPing:    cfg.EnableTCPPing,
+		icmpPingInterval: cfg.ICMPPingInterval,
+		icmpPingTimeout:  cfg.ICMPPingTimeout,
+		tcpPingInterval:  cfg.TCPPingInterval,
+		tcpPingTimeout:   cfg.TCPPingTimeout,
 	}
+
+	// Initialize NodeManager
+	nm := ping.NewNodeManager()
+	if err := nm.LoadFromSources(cfg.NodeSources); err != nil {
+		log.Error("load ping nodes failed", "err", err)
+	}
+
+	// Register callback for node changes (cleanup stale results)
+	nm.OnChange(func() {
+		pc.cleanupStaleResults(nm.ListAll())
+	})
+
+	pc.nodeManager = nm
 	pc.init()
 	return pc
 }
 
 func (pc *PingCollector) init() {
-	// Add default ping nodes
-	nodeManager := ping.NewPingNodeManager()
-	allNodes := append(append([]*ping.PingNodeInfo{}, telecomPingNodes...), mobilePingNodes...)
-	allNodes = append(allNodes, unicomPingNodes...)
-	for _, node := range allNodes {
-		if err := nodeManager.AddNode(node); err != nil {
-			log.Error("add ping node failed", "node", node, "err", err)
-		}
-	}
-
-	if pc.enablePingPe {
-		checker := ping.NewPingPeChekcer()
-		pc.pingCheckers[checker.Name()] = checker
-		pc.startChecker(checker, nodeManager)
-	}
 	if pc.enableICMPPing {
 		checker := ping.NewIcmpPingChecker()
 		pc.pingCheckers[checker.Name()] = checker
-		pc.startChecker(checker, nodeManager)
+		opts := []ping.OptionFunc{
+			ping.WithNodeManager(pc.nodeManager),
+		}
+		if pc.icmpPingInterval > 0 {
+			opts = append(opts, ping.WithICMPPingInterval(pc.icmpPingInterval))
+		}
+		if pc.icmpPingTimeout > 0 {
+			opts = append(opts, ping.WithICMPPingTimeout(pc.icmpPingTimeout))
+		}
+		checker.Init(opts...)
+		pc.startChecker(checker)
+	}
+	if pc.enableTCPPing {
+		checker := ping.NewTcpPingChecker()
+		pc.pingCheckers[checker.Name()] = checker
+		opts := []ping.OptionFunc{
+			ping.WithNodeManager(pc.nodeManager),
+		}
+		if pc.tcpPingInterval > 0 {
+			opts = append(opts, ping.WithTCPPingInterval(pc.tcpPingInterval))
+		}
+		if pc.tcpPingTimeout > 0 {
+			opts = append(opts, ping.WithTCPPingTimeout(pc.tcpPingTimeout))
+		}
+		checker.Init(opts...)
+		pc.startChecker(checker)
 	}
 }
 
-func (pc *PingCollector) startChecker(checker ping.PingChecker, nodeManager *ping.PingNodeManager) {
-	checker.Init(
-		ping.WithHost(pc.host),
-		ping.WithGetNodeFunc(func() []*ping.PingNodeInfo {
-			return nodeManager.ListNode()
-		}),
-	)
+func (pc *PingCollector) startChecker(checker ping.PingChecker) {
 	ctx, _ := context.WithCancel(checker.GetContext())
 	go func(ctx context.Context, ch <-chan *ping.PingResult, name string) {
 		for {
@@ -98,6 +131,51 @@ func (pc *PingCollector) startChecker(checker ping.PingChecker, nodeManager *pin
 	checker.Start()
 }
 
+// cleanupStaleResults removes results for nodes that no longer exist.
+func (pc *PingCollector) cleanupStaleResults(currentNodes []*ping.PingNodeInfo) {
+	// Build host set for current nodes
+	hostSet := make(map[string]struct{})
+	for _, n := range currentNodes {
+		hostSet[n.Host] = struct{}{}
+	}
+
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+
+	for checkerName, results := range pc.pingResultMap {
+		for nodeName := range results {
+			host := extractHostFromNodeName(nodeName, checkerName)
+			if host != "" {
+				if _, exists := hostSet[host]; !exists {
+					delete(results, nodeName)
+					log.Info("removed stale ping result", "checker", checkerName, "node", nodeName)
+				}
+			}
+		}
+	}
+}
+
+// extractHostFromNodeName extracts the host from a node name.
+// For ICMP: nodeName format is "{geo}_{isp}_{ip}"
+// For TCP:  nodeName format is "{geo}_{isp}_{host:port}"
+func extractHostFromNodeName(nodeName, checkerName string) string {
+	parts := strings.Split(nodeName, "_")
+	if len(parts) < 3 {
+		return ""
+	}
+
+	lastPart := parts[len(parts)-1]
+
+	// For TCP checker, the last part is "host:port", extract host
+	if checkerName == "tcp_ping" {
+		if idx := strings.LastIndex(lastPart, ":"); idx > 0 {
+			return lastPart[:idx]
+		}
+	}
+
+	return lastPart
+}
+
 // GetPingResults returns all current ping results as proto.PingResult slice.
 // Implements pkg/rpc/server.PingCollector interface.
 func (pc *PingCollector) GetPingResults() []*proto.PingResult {
@@ -119,5 +197,8 @@ func (pc *PingCollector) StopPing() {
 	defer pc.mu.RUnlock()
 	for _, checker := range pc.pingCheckers {
 		checker.Stop()
+	}
+	if pc.nodeManager != nil {
+		pc.nodeManager.Stop()
 	}
 }

@@ -107,9 +107,10 @@ message Stats {
     string type = 2;
     int64 downlink = 3;
     int64 uplink = 4;
-    string proxy = 5; // proxy name
+    string proxy = 5; // proxy name (DEPRECATED: use protocol + container instead)
     string source = 6;
-    // int64 timestamp = 7; // 记录统计的时间
+    string protocol = 7; // protocol: vmess, vless, trojan, shadowsocks, snell, hysteria2, etc.
+    string container = 8; // container type: xray, snell, hysteria
 }
 
 message GetBandwidthStatsRsp {
@@ -160,14 +161,26 @@ message GetInboundRsp {
     string data = 3;
 }
 
-message GetTagReq {
+// InboundInfo represents a single inbound entry across all containers.
+message InboundInfo {
+    string container = 1; // container type: "xray" / "snell" / "hysteria"
+    string name = 2;      // inbound unique identifier within the container (tag)
+}
+
+message ListInboundReq {
     NodeAuthInfo node_auth_info = 1;
 }
 
-message GetTagRsp {
+message ListInboundRsp {
     int32 code = 1;
     string msg = 2;
-    repeated string tags = 3;
+    repeated InboundInfo inbounds = 3;
+}
+
+message DeleteInboundByNameReq {
+    NodeAuthInfo node_auth_info = 1;
+    string container = 2; // "xray" / "snell" / "hysteria"
+    string name = 3;      // inbound tag
 }
 
 message UpdateProxyReq {
@@ -350,7 +363,8 @@ service EndNodeAccess {
     rpc CopyInbound(CopyInboundReq) returns (InboundOpRsp) {}
     rpc CopyUser(CopyUserReq) returns (InboundOpRsp) {}
     rpc GetInbound(GetInboundReq) returns (GetInboundRsp) {}
-    rpc GetTag(GetTagReq) returns (GetTagRsp) {}
+    rpc ListInbound(ListInboundReq) returns (ListInboundRsp) {}
+    rpc DeleteInboundByName(DeleteInboundByNameReq) returns (InboundOpRsp) {}
 
     // proxy
     rpc UpdateProxy(UpdateProxyReq) returns (UpdateProxyRsp) {}

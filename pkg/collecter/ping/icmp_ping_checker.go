@@ -32,14 +32,18 @@ type pingerInfo struct {
 	pinger      *ping.Pinger
 	nodeInfo    *PingNodeInfo
 	pingChecker string
+	interval    time.Duration
+	timeout     time.Duration
 	ctx         context.Context
 	cancel      context.CancelFunc
 }
 
-func newPingerInfo(nodeInfo *PingNodeInfo, pingChecker string) *pingerInfo {
+func newPingerInfo(nodeInfo *PingNodeInfo, pingChecker string, interval, timeout time.Duration) *pingerInfo {
 	return &pingerInfo{
 		nodeInfo:    nodeInfo,
 		pingChecker: pingChecker,
+		interval:    interval,
+		timeout:     timeout,
 	}
 }
 
@@ -122,14 +126,18 @@ type IcmpPingChecker struct {
 	*basePingChecker
 	pingerMap   map[string]*pingerInfo // ip -> pinger info
 	getNodeFunc getNodeFunc
+	nodeManager NodeManager // alternative to getNodeFunc
+	interval    int // seconds, default 5
+	timeout     int // seconds, default 1
 }
 
 // NewIcmpPingChecker ...
 func NewIcmpPingChecker() *IcmpPingChecker {
-	ipc := &IcmpPingChecker{
+	return &IcmpPingChecker{
 		basePingChecker: newBasePingChecker(),
+		interval:        pingInterval,
+		timeout:         int(pingTimeout.Seconds()),
 	}
-	return ipc
 }
 
 func (ipc *IcmpPingChecker) Name() string {
@@ -158,7 +166,21 @@ func (ipc *IcmpPingChecker) Start() {
 				oldPingerMap := ipc.pingerMap
 				ipc.pingerMap = make(map[string]*pingerInfo)
 				// update pinger info
-				nodes := ipc.getNodeFunc()
+				var nodes []*PingNodeInfo
+				if ipc.nodeManager != nil {
+					nodes = ipc.nodeManager.ListByUsage("icmp")
+				} else if ipc.getNodeFunc != nil {
+					nodes = ipc.getNodeFunc()
+				}
+				// calculate interval and timeout
+				interval := time.Second * time.Duration(ipc.interval)
+				if interval <= 0 {
+					interval = time.Second * time.Duration(pingInterval)
+				}
+				timeout := time.Second * time.Duration(ipc.timeout)
+				if timeout <= 0 {
+					timeout = pingTimeout
+				}
 				// add new node
 				for _, node := range nodes {
 					if pinger, ok := oldPingerMap[node.Host]; ok {
@@ -167,7 +189,7 @@ func (ipc *IcmpPingChecker) Start() {
 						delete(oldPingerMap, node.Host)
 					} else {
 						// create new pinger info
-						pi := newPingerInfo(node, ipc.Name())
+						pi := newPingerInfo(node, ipc.Name(), interval, timeout)
 						if err := pi.start(ipc); err != nil {
 							log.Error("start ping failed", "geo", node.Geo, "isp", node.ISP, "host", node.Host)
 							continue

@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/tools/process"
 )
 
@@ -29,6 +30,8 @@ func (sc *SnellContainer) startProcess() error {
 		BinaryPath: sc.cfg.BinaryPath,
 		Args:       nil,
 		ConfigFile: sc.cfg.ConfigFilePath,
+		Stdout:     log.NewPrefixWriter(os.Stdout, string(contracts.ContainerSnell)),
+		Stderr:     log.NewPrefixWriter(os.Stderr, string(contracts.ContainerSnell)),
 	})
 	if err != nil {
 		return fmt.Errorf("snell: create runner: %w", err)
