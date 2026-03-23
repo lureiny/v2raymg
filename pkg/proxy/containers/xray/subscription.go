@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 
@@ -342,8 +343,11 @@ func generateVMessURI(spec contracts.SubscriptionSpec) (string, error) {
 		cfg["aid"] = aid
 	}
 
-	// Issue #91: SNI for TLS
-	if sni := extString(spec.Extensions, "server_name"); sni != "" {
+	// SNI logic: only output SNI when necessary (same as buildShareLinkParams)
+	certSource := extString(spec.Extensions, "cert_source")
+	sni := extString(spec.Extensions, "server_name")
+	hostIsIP := net.ParseIP(spec.Host) != nil
+	if sni != "" && (certSource == "self_signed" || hostIsIP) {
 		cfg["sni"] = sni
 	}
 
@@ -528,8 +532,19 @@ func buildShareLinkParams(spec contracts.SubscriptionSpec) []string {
 
 	// TLS/XTLS/Reality params
 	if security == "tls" || security == "xtls" || security == "reality" {
-		// Issue #91: SNI parameter
-		if sni := extString(spec.Extensions, "server_name"); sni != "" {
+		// SNI logic: only output SNI when necessary
+		// - self_signed cert: always need SNI
+		// - host is IP: need SNI (IP cannot be used as SNI by client)
+		// - formal cert + domain host: NO SNI (client uses host automatically)
+		certSource := extString(spec.Extensions, "cert_source")
+		sni := extString(spec.Extensions, "server_name")
+		hostIsIP := net.ParseIP(spec.Host) != nil
+
+		// Only add SNI if:
+		// 1. cert_source is "self_signed", OR
+		// 2. host is an IP address
+		// Otherwise, let client use host as SNI naturally
+		if sni != "" && (certSource == "self_signed" || hostIsIP) {
 			params = append(params, "sni="+sni)
 		}
 		// Issue #91: ALPN comma-separated list

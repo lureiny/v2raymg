@@ -1430,6 +1430,8 @@ func (in *XrayInbound) buildSubscriptionExtensions(user contracts.UserSpec) map[
 			"flow",
 			// Reality-specific fields for subscription URI
 			"reality_public_key", "reality_short_ids", "reality_server_names",
+			// Cert source for SNI logic
+			"cert_source",
 		}
 		for _, key := range copyKeys {
 			if v, ok := in.extra[key]; ok {
@@ -1580,6 +1582,12 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 	}
 	if port < 100 || port > 65535 {
 		return errs.Newf(errs.ErrFastAddInboundFailed, "port must be between 100 and 65535, got %d", port)
+	}
+
+	// Normalize: domain implies server_name for TLS SNI
+	// If domain is set, server_name must match for certificate validation
+	if domain, ok := params["domain"].(string); ok && domain != "" {
+		params["server_name"] = domain
 	}
 
 	// Determine security
@@ -1789,6 +1797,14 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 				}
 			}
 		}
+	}
+
+	// Store cert_source in extensions for subscription SNI logic
+	if certSource != "none" {
+		if spec.Extensions == nil {
+			spec.Extensions = make(map[string]any)
+		}
+		spec.Extensions["cert_source"] = certSource
 	}
 
 	xrayInbound := &XrayInbound{
