@@ -15,15 +15,21 @@ var dnsGlobalMu sync.Mutex
 // environment variables, calls fn, and then restores the original values.
 // All DNS provider construction and certificate operations that depend on the
 // env-var credentials must be performed inside fn.
+//
+// This function also sets LEGO_DISABLE_CNAME_SUPPORT=true to prevent lego from
+// following CNAME records during DNS-01 challenge, which can cause unintended
+// deletion of non-TXT records (see https://github.com/go-acme/lego/issues/XXXX).
 func WithDNSCredentials(creds map[string]string, fn func() error) error {
 	dnsGlobalMu.Lock()
 	defer dnsGlobalMu.Unlock()
 
 	// Save original values so we can restore them.
-	originals := make(map[string]string, len(creds))
+	// +1 for LEGO_DISABLE_CNAME_SUPPORT
+	originals := make(map[string]string, len(creds)+1)
 	for k := range creds {
 		originals[k] = os.Getenv(k)
 	}
+	originals["LEGO_DISABLE_CNAME_SUPPORT"] = os.Getenv("LEGO_DISABLE_CNAME_SUPPORT")
 
 	// Set credentials.
 	for k, v := range creds {
@@ -35,6 +41,9 @@ func WithDNSCredentials(creds map[string]string, fn func() error) error {
 			return fmt.Errorf("setenv %q: %w", k, err)
 		}
 	}
+
+	// Disable CNAME following to prevent DNS record deletion bugs.
+	_ = os.Setenv("LEGO_DISABLE_CNAME_SUPPORT", "true")
 
 	// Execute the caller's function.
 	fnErr := fn()
