@@ -102,3 +102,29 @@ func (m *Manager) GetSubscriptionForClient(req contracts.SubscriptionRequest, fo
 
 	return c.Convert(specs)
 }
+
+// GetSubscriptionForClientWithOptions validates the user, aggregates subscription specs,
+// and converts them with custom options. Only Clash format supports custom options.
+func (m *Manager) GetSubscriptionForClientWithOptions(req contracts.SubscriptionRequest, format ClientFormat, opts *ConvertOptions) (string, error) {
+	specs, err := m.GetSubscription(req)
+	if err != nil {
+		return "", err
+	}
+
+	if format == "" {
+		format = FormatCommon
+	}
+
+	c := GetConverterOrDefault(format)
+	if c == nil {
+		return "", fmt.Errorf("no converter registered for format: %s", format)
+	}
+
+	// 检查 converter 是否支持 ConvertWithOptions
+	if cc, ok := c.(interface{ ConvertWithOptions([]contracts.SubscriptionSpec, *ConvertOptions) (string, error) }); ok && opts != nil {
+		return cc.ConvertWithOptions(specs, opts)
+	}
+
+	// fallback 到普通 Convert
+	return c.Convert(specs)
+}

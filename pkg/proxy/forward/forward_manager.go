@@ -285,7 +285,7 @@ func (m *DefaultForwardManager) RemoveRule(ruleKey string) error {
 		return fmt.Errorf("forward_manager: rule %q not found", ruleKey)
 	}
 
-	log.Debug("[ForwardManager] removing rule", "key", ruleKey, "port", mr.rule.ListenPort, "user", mr.rule.Username)
+	log.Info("[ForwardManager] rule removed", "key", ruleKey, "port", mr.rule.ListenPort, "user", mr.rule.Username)
 	mr.relay.Stop()
 	m.allocator.Release(mr.rule.ListenPort)
 	m.traffic.Remove(ruleKey)

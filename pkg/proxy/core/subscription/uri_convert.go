@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 )
 
@@ -25,6 +26,92 @@ func ConvertURIs(userAgent string, uris []string) (string, error) {
 		return "", nil
 	}
 	return c.Convert(specs)
+}
+
+// ConvertURIsWithOptions converts URIs with custom options (proxy-groups, rules, etc).
+// Only Clash format supports custom options; other formats ignore opts.
+func ConvertURIsWithOptions(userAgent string, uris []string, opts *ConvertOptions) (string, error) {
+	format := detectFormat(userAgent)
+	specs := urisToSpecs(uris)
+	c := GetConverterOrDefault(format)
+	if c == nil {
+		return "", nil
+	}
+
+	// 检查是否支持 ConvertWithOptions
+	if cc, ok := c.(interface{ ConvertWithOptions([]contracts.SubscriptionSpec, *ConvertOptions) (string, error) }); ok && opts != nil {
+		return cc.ConvertWithOptions(specs, opts)
+	}
+
+	return c.Convert(specs)
+}
+
+// BuildConvertOptions 从 HTTP 参数构建 ConvertOptions。
+// 参数解析失败时记录日志但不中断流程。
+func BuildConvertOptions(proxyGroups, ruleProviders, rules []string, pgURL, rpURL, rURL string) *ConvertOptions {
+	opts := &ConvertOptions{}
+
+	// 解析 proxy_group 参数
+	for _, pg := range proxyGroups {
+		config, err := ParseProxyGroupParam(pg)
+		if err != nil {
+			log.Warn("parse proxy_group param failed", "param", pg, "err", err)
+			continue
+		}
+		opts.ProxyGroups = append(opts.ProxyGroups, *config)
+	}
+
+	// 从 URL 获取 proxy-groups
+	if pgURL != "" {
+		configs, err := FetchProxyGroupsFromURL(pgURL)
+		if err != nil {
+			log.Warn("fetch proxy_groups_url failed", "url", pgURL, "err", err)
+		} else {
+			opts.ProxyGroups = append(opts.ProxyGroups, configs...)
+		}
+	}
+
+	// 解析 rule_provider 参数
+	for _, rp := range ruleProviders {
+		config, err := ParseRuleProviderParam(rp)
+		if err != nil {
+			log.Warn("parse rule_provider param failed", "param", rp, "err", err)
+			continue
+		}
+		opts.RuleProviders = append(opts.RuleProviders, *config)
+	}
+
+	// 从 URL 获取 rule-providers
+	if rpURL != "" {
+		configs, err := FetchRuleProvidersFromURL(rpURL)
+		if err != nil {
+			log.Warn("fetch rule_providers_url failed", "url", rpURL, "err", err)
+		} else {
+			opts.RuleProviders = append(opts.RuleProviders, configs...)
+		}
+	}
+
+	// 解析 rule 参数
+	for _, r := range rules {
+		config, err := ParseRuleParam(r)
+		if err != nil {
+			log.Warn("parse rule param failed", "param", r, "err", err)
+			continue
+		}
+		opts.Rules = append(opts.Rules, *config)
+	}
+
+	// 从 URL 获取 rules
+	if rURL != "" {
+		configs, err := FetchRulesFromURL(rURL)
+		if err != nil {
+			log.Warn("fetch rules_url failed", "url", rURL, "err", err)
+		} else {
+			opts.Rules = append(opts.Rules, configs...)
+		}
+	}
+
+	return opts
 }
 
 // DetectFormat selects a ClientFormat based on User-Agent string.

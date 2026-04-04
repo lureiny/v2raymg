@@ -1,6 +1,8 @@
 package subscription
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
@@ -162,5 +164,79 @@ func TestParseStandardURI_SnellNoFragment(t *testing.T) {
 	}
 	if spec.Host != "host" {
 		t.Errorf("Host: got %q, want %q", spec.Host, "host")
+	}
+}
+
+func TestBuildConvertOptions_MergesInlineAndRemoteSources(t *testing.T) {
+	pgServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Auto:url-test:all\n"))
+	}))
+	defer pgServer.Close()
+
+	rpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("remote-rules:http:domain:https://example.com/remote.yaml\n"))
+	}))
+	defer rpServer.Close()
+
+	ruleServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("RULE-SET,remote-rules,REJECT\n"))
+	}))
+	defer ruleServer.Close()
+
+	opts := BuildConvertOptions(
+		[]string{"Proxy:select:all"},
+		[]string{"inline-rules:http:domain:https://example.com/inline.yaml"},
+		[]string{"MATCH,,Proxy"},
+		pgServer.URL,
+		rpServer.URL,
+		ruleServer.URL,
+	)
+
+	if opts == nil {
+		t.Fatal("BuildConvertOptions returned nil")
+	}
+	if len(opts.ProxyGroups) != 2 {
+		t.Fatalf("expected 2 proxy groups, got %d", len(opts.ProxyGroups))
+	}
+	if len(opts.RuleProviders) != 2 {
+		t.Fatalf("expected 2 rule providers, got %d", len(opts.RuleProviders))
+	}
+	if len(opts.Rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(opts.Rules))
+	}
+	if opts.RuleProviders[0].URL != "https://example.com/inline.yaml" {
+		t.Fatalf("inline rule provider URL not preserved: %q", opts.RuleProviders[0].URL)
+	}
+	if opts.RuleProviders[1].URL != "https://example.com/remote.yaml" {
+		t.Fatalf("remote rule provider URL not preserved: %q", opts.RuleProviders[1].URL)
+	}
+}
+
+func TestBuildConvertOptions_SkipsInvalidInlineRuleProviderButKeepsValidRemote(t *testing.T) {
+	rpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("remote-rules:http:domain:https://example.com/remote.yaml\n"))
+	}))
+	defer rpServer.Close()
+
+	opts := BuildConvertOptions(
+		nil,
+		[]string{"broken-rule-provider"},
+		nil,
+		"",
+		rpServer.URL,
+		"",
+	)
+
+	if opts == nil {
+		t.Fatal("BuildConvertOptions returned nil")
+	}
+	if len(opts.RuleProviders) != 1 {
+		t.Fatalf("expected 1 valid remote rule provider, got %d", len(opts.RuleProviders))
+	}
+	if opts.RuleProviders[0].Name != "remote-rules" {
+		t.Fatalf("unexpected remote rule provider name: %q", opts.RuleProviders[0].Name)
+	}
+	if opts.RuleProviders[0].URL != "https://example.com/remote.yaml" {
+		t.Fatalf("unexpected remote rule provider URL: %q", opts.RuleProviders[0].URL)
 	}
 }
