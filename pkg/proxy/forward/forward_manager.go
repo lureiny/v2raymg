@@ -160,25 +160,31 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 	// Create traffic counter
 	counter := m.traffic.GetOrCreate(key)
 
-	// Build limiters: user-level bandwidth limit takes precedence over rule-level limit
+	// Build limiters: always ensure a userBandwidthLimiter exists for stable references.
+	// This guarantees that SetUserBandwidthLimit called after AddRule can update rates
+	// in-place, and existing relays will see the change immediately.
 	var limiterUp, limiterDown Limiter
 	var userBandwidthLim *userBandwidthLimiter
 
-	// Check if user has bandwidth limit set
-	if userLimiter, ok := m.userBandwidth[rule.Username]; ok && userLimiter != nil {
-		userBandwidthLim = userLimiter
-		// User-level limit applies to all rules for this user
-		limiterUp = userLimiter.UploadLimiter()
-		limiterDown = userLimiter.DownloadLimiter()
-	} else {
-		// Fall back to rule-level limit
+	if _, ok := m.userBandwidth[rule.Username]; !ok {
+		// Create placeholder limiter (rate=0 = passthrough/unlimited).
+		// Seed from rule-level limits if present.
+		upRate, downRate := int64(0), int64(0)
+		upSet, downSet := false, false
 		if rule.UploadBytesPerSec > 0 {
-			limiterUp = NewTokenBucketLimiter(rule.UploadBytesPerSec, rule.UploadBytesPerSec)
+			upRate = rule.UploadBytesPerSec
+			upSet = true
 		}
 		if rule.DownloadBytesPerSec > 0 {
-			limiterDown = NewTokenBucketLimiter(rule.DownloadBytesPerSec, rule.DownloadBytesPerSec)
+			downRate = rule.DownloadBytesPerSec
+			downSet = true
 		}
+		m.userBandwidth[rule.Username] = newUserBandwidthLimiter(upRate, downRate, upSet, downSet)
 	}
+	userLimiter := m.userBandwidth[rule.Username]
+	userBandwidthLim = userLimiter
+	limiterUp = userLimiter.UploadLimiter()
+	limiterDown = userLimiter.DownloadLimiter()
 
 	// Determine listen address
 	listenAddr := rule.ListenAddr

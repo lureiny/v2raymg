@@ -14,6 +14,8 @@ import (
 // with a maximum burst capacity of `burst` bytes.
 // A zero or negative rate means unlimited (passthrough).
 type TokenBucketLimiter struct {
+	unlimited atomic.Bool // fast lock-free check for passthrough
+
 	rate     float64 // tokens (bytes) per second
 	burst    float64 // max bucket size
 	maxChunk float64 // max bytes per single waitForTokens call (for smoothing)
@@ -42,18 +44,21 @@ func NewTokenBucketLimiter(bytesPerSec int64, burst int64) *TokenBucketLimiter {
 		mc = 16 * 1024
 	}
 
-	return &TokenBucketLimiter{
+	l := &TokenBucketLimiter{
 		rate:     r,
 		burst:    b,
 		maxChunk: mc,
 		tokens:   b, // start full but limited burst
 		last:     time.Now(),
 	}
+	l.unlimited.Store(bytesPerSec <= 0)
+	return l
 }
 
 // IsUnlimited returns true if the limiter is a passthrough.
+// Uses atomic load for lock-free concurrent access.
 func (l *TokenBucketLimiter) IsUnlimited() bool {
-	return l.rate <= 0
+	return l.unlimited.Load()
 }
 
 // SetRate atomically updates the rate (bytes/sec) of this limiter.
@@ -63,6 +68,7 @@ func (l *TokenBucketLimiter) IsUnlimited() bool {
 // When switching from unlimited to limited, tokens are limited to avoid burst rush.
 func (l *TokenBucketLimiter) SetRate(rate int64) {
 	if rate <= 0 {
+		l.unlimited.Store(true) // set unlimited BEFORE zeroing rate to avoid divide-by-zero window
 		l.mu.Lock()
 		l.rate = 0
 		l.burst = 0
@@ -97,6 +103,7 @@ func (l *TokenBucketLimiter) SetRate(rate int64) {
 		}
 	}
 	l.mu.Unlock()
+	l.unlimited.Store(false) // set limited AFTER rate is ready to avoid stale-false with rate=0
 }
 
 // GetRate returns the current rate setting (bytes/sec).
@@ -136,6 +143,12 @@ func (l *TokenBucketLimiter) waitForTokens(n int) int {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	// Re-check under lock: rate may have been set to 0 between the atomic
+	// check above and acquiring the mutex (stale-false window).
+	if l.rate <= 0 {
+		return n
+	}
 
 	// Refill tokens based on elapsed time
 	now := time.Now()
