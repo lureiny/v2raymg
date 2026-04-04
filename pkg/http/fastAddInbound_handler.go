@@ -106,7 +106,7 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *FastAddInboundHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{getAuthHandlerFunc(handler.httpServer), handler.handlerFunc}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *FastAddInboundHandler) getRelativePath() string { return "/inbound/fast" }

@@ -42,7 +42,7 @@ func (handler *GatewayHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *GatewayHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{getAuthHandlerFunc(handler.httpServer), handler.handlerFunc}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *GatewayHandler) getRelativePath() string { return "/gateway" }

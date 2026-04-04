@@ -77,7 +77,7 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *CopyUserBetweenNodesHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{getAuthHandlerFunc(handler.httpServer), handler.handlerFunc}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *CopyUserBetweenNodesHandler) getRelativePath() string {

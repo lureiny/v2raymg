@@ -47,7 +47,7 @@ func (handler *UpdateHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *UpdateHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{getAuthHandlerFunc(handler.httpServer), handler.handlerFunc}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *UpdateHandler) getRelativePath() string { return "/update" }

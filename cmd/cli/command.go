@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -225,6 +227,44 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
+	// --- Port rotation (JWT auth via AuthMiddleware) ---
+	m.RegisterHandler(rotatePort, "RotatePort",
+		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(userNameSuggest, WihtDefault("")),
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	m.RegisterHandler(rotateInboundPort, "RotateInboundPort",
+		prompt.WithSuggests([]prompt.Suggest{
+			containerSuggest,
+			{Text: "inbound", Description: "inbound tag", Default: ""},
+			{Text: "port", Description: "new listen port (0 = auto)", Default: int(0)},
+			getSuggestWithTemplate(userNameSuggest, WihtDefault("")),
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	m.RegisterHandler(rotateAllPorts, "RotateAllPorts",
+		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(userNameSuggest, WihtDefault("")),
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	// --- User role management (admin only) ---
+	m.RegisterHandler(setUserRole, "SetUserRole",
+		prompt.WithSuggests([]prompt.Suggest{
+			userNameSuggest,
+			{Text: "role", Description: "role: admin or normal", Default: "normal"},
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	// --- Session lifecycle (JWT only) ---
+	m.RegisterHandler(logout, "Logout")
+	m.RegisterHandler(profile, "Profile")
+
 	return m
 }
 
@@ -246,7 +286,7 @@ func listNode() error {
 	var err error = nil
 	nodeMutex.Lock()
 	defer nodeMutex.Unlock()
-	localNodeList, err = client.ListNode(getHost(), getToken())
+	localNodeList, err = client.ListNode(getHost(), getAuthToken())
 	if err != nil {
 		return err
 	}
@@ -259,7 +299,7 @@ func listNode() error {
 // ---- Cert ----
 
 func listCert(target string) error {
-	certList, err := client.ListCert(getHost(), getToken(), target)
+	certList, err := client.ListCert(getHost(), getAuthToken(), target)
 	if err != nil {
 		return err
 	}
@@ -273,7 +313,7 @@ func listCert(target string) error {
 }
 
 func setGatewayModel(target string, enableGatewayModel bool) error {
-	result, err := client.SetGatewayModel(getHost(), getToken(), target, enableGatewayModel)
+	result, err := client.SetGatewayModel(getHost(), getAuthToken(), target, enableGatewayModel)
 	if err != nil {
 		return err
 	}
@@ -282,7 +322,7 @@ func setGatewayModel(target string, enableGatewayModel bool) error {
 }
 
 func applyCert(target, domain string) error {
-	result, err := client.ApplyCert(getHost(), getToken(), target, domain)
+	result, err := client.ApplyCert(getHost(), getAuthToken(), target, domain)
 	if err != nil {
 		return err
 	}
@@ -298,13 +338,14 @@ func fastAddInbound(target, tag, protocol, stream, domain, container string, isX
 		domain = node.GetHost()
 	}
 	if tag == "" {
-		tag = protocol
+		h := sha256.Sum256([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
+		tag = fmt.Sprintf("%s-%s", protocol, hex.EncodeToString(h[:])[:8])
 	}
 	if port == 0 {
 		rand.Seed(time.Now().UnixNano())
 		port = 10000 + rand.Intn(40000)
 	}
-	result, err := client.FastAddInbound(getHost(), getToken(), target, tag, protocol, stream, domain, container, isXtls, port)
+	result, err := client.FastAddInbound(getHost(), getAuthToken(), target, tag, protocol, stream, domain, container, isXtls, port)
 	if err != nil {
 		return err
 	}
@@ -313,7 +354,7 @@ func fastAddInbound(target, tag, protocol, stream, domain, container string, isX
 }
 
 func addInbound(target, boundRawString string) error {
-	result, err := client.AddInBound(getHost(), getToken(), target, boundRawString)
+	result, err := client.AddInBound(getHost(), getAuthToken(), target, boundRawString)
 	if err != nil {
 		return err
 	}
@@ -322,7 +363,7 @@ func addInbound(target, boundRawString string) error {
 }
 
 func deleteInbound(target, srcTag string) error {
-	result, err := client.DeleteInBound(getHost(), getToken(), target, srcTag)
+	result, err := client.DeleteInBound(getHost(), getAuthToken(), target, srcTag)
 	if err != nil {
 		return err
 	}
@@ -331,7 +372,7 @@ func deleteInbound(target, srcTag string) error {
 }
 
 func getInbound(target, srcTag string) error {
-	result, err := client.GetInBound(getHost(), getToken(), target, srcTag)
+	result, err := client.GetInBound(getHost(), getAuthToken(), target, srcTag)
 	if err != nil {
 		return err
 	}
@@ -340,16 +381,21 @@ func getInbound(target, srcTag string) error {
 }
 
 func listInbounds(target string) error {
-	result, err := client.ListInbounds(getHost(), getToken(), target)
+	result, err := client.ListInboundsStructured(getHost(), getAuthToken(), target)
 	if err != nil {
 		return err
 	}
-	fmt.Println(result)
+	for node, inbounds := range result {
+		fmt.Printf("%s :\n", node)
+		for _, inb := range inbounds {
+			fmt.Printf("  [%s] %s\n", inb.GetContainer(), inb.GetName())
+		}
+	}
 	return nil
 }
 
 func deleteInboundByName(target, containerType, name string) error {
-	result, err := client.DeleteInboundByName(getHost(), getToken(), target, containerType, name)
+	result, err := client.DeleteInboundByName(getHost(), getAuthToken(), target, containerType, name)
 	if err != nil {
 		return err
 	}
@@ -360,7 +406,7 @@ func deleteInboundByName(target, containerType, name string) error {
 // ---- User ----
 
 func copyUserBetweenNodes(srcNode, dstNode string) error {
-	result, err := client.CopyUserBetweenNodes(getHost(), getToken(), srcNode, dstNode)
+	result, err := client.CopyUserBetweenNodes(getHost(), getAuthToken(), srcNode, dstNode)
 	if err != nil {
 		return err
 	}
@@ -369,7 +415,7 @@ func copyUserBetweenNodes(srcNode, dstNode string) error {
 }
 
 func addUser(target, userName, password, tags string, expire, ttl int) error {
-	result, err := client.AddUser(getHost(), getToken(), target, userName, password, tags, expire, ttl)
+	result, err := client.AddUser(getHost(), getAuthToken(), target, userName, password, tags, expire, ttl)
 	if err != nil {
 		return err
 	}
@@ -378,7 +424,7 @@ func addUser(target, userName, password, tags string, expire, ttl int) error {
 }
 
 func updateUser(target, userName, password string, expire, ttl int) error {
-	result, err := client.UpdateUser(getHost(), getToken(), target, userName, password, expire, ttl)
+	result, err := client.UpdateUser(getHost(), getAuthToken(), target, userName, password, expire, ttl)
 	if err != nil {
 		return err
 	}
@@ -389,7 +435,7 @@ func updateUser(target, userName, password string, expire, ttl int) error {
 func deleteUser(target, userNames, tags string) error {
 	users := strings.Split(userNames, ",")
 	for _, user := range users {
-		result, err := client.DeleteUser(getHost(), getToken(), target, user, tags)
+		result, err := client.DeleteUser(getHost(), getAuthToken(), target, user, tags)
 		if err != nil {
 			fmt.Printf("delete user[%s] fail > %v\n", user, err)
 		} else {
@@ -400,7 +446,7 @@ func deleteUser(target, userNames, tags string) error {
 }
 
 func resetUser(target, userName string) error {
-	result, err := client.ResetUser(getHost(), getToken(), target, userName)
+	result, err := client.ResetUser(getHost(), getAuthToken(), target, userName)
 	if err != nil {
 		return err
 	}
@@ -409,7 +455,7 @@ func resetUser(target, userName string) error {
 }
 
 func listUser(target string) error {
-	result, err := client.ListUser(getHost(), getToken(), target)
+	result, err := client.ListUser(getHost(), getAuthToken(), target)
 	if err != nil {
 		return err
 	}
@@ -426,7 +472,7 @@ func listUser(target string) error {
 }
 
 func clearUsers(target, users string) error {
-	result, err := client.ClearUser(getHost(), getToken(), target, users)
+	result, err := client.ClearUser(getHost(), getAuthToken(), target, users)
 	if err != nil {
 		return err
 	}
@@ -435,7 +481,7 @@ func clearUsers(target, users string) error {
 }
 
 func addAllUserToInbound(target, inboundTag string) error {
-	result, err := client.ListUser(getHost(), getToken(), target)
+	result, err := client.ListUser(getHost(), getAuthToken(), target)
 	if err != nil {
 		return err
 	}
@@ -457,7 +503,7 @@ func getUserSubUrl(target, userName string) error {
 		}
 	}
 	uri.Path = "sub"
-	if len(localNodeList) == 0 {
+	if len(localUserList) == 0 {
 		listUser(target)
 	}
 	var targetUser *proto.User = nil
@@ -484,7 +530,7 @@ func getUserSubUrl(target, userName string) error {
 // ---- Stats & Misc ----
 
 func getStat(target, pattern string, reset bool) error {
-	result, err := client.GetStat(getHost(), getToken(), target, pattern, reset)
+	result, err := client.GetStat(getHost(), getAuthToken(), target, pattern, reset)
 	if err != nil {
 		return err
 	}
@@ -500,7 +546,7 @@ func getStat(target, pattern string, reset bool) error {
 }
 
 func updateProxy(target, versionTag string) error {
-	result, err := client.UpdateProxy(getHost(), getToken(), target, versionTag)
+	result, err := client.UpdateProxy(getHost(), getAuthToken(), target, versionTag)
 	if err != nil {
 		return err
 	}
@@ -513,7 +559,75 @@ func pingTarget(target string, times int) error {
 }
 
 func setPingCheck(target string, enable bool) error {
-	result, err := client.SetPingCheck(getHost(), getToken(), target, enable)
+	result, err := client.SetPingCheck(getHost(), getAuthToken(), target, enable)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+// ---- Port rotation (JWT auth via AuthMiddleware) ----
+// username is optional: empty = operate on own account (normal JWT); non-empty = admin targeting another user.
+
+func rotatePort(username string) error {
+	result, err := client.RotatePort(getHost(), getAuthToken(), username)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+func rotateInboundPort(container, inbound string, port int, username string) error {
+	result, err := client.RotateInboundPort(getHost(), getAuthToken(), username, container, inbound, port)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+func rotateAllPorts(username string) error {
+	result, err := client.RotateAllPorts(getHost(), getAuthToken(), username)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+// ---- User role management (admin only) ----
+
+func setUserRole(username, role string) error {
+	result, err := client.SetUserRole(getHost(), getAuthToken(), username, role)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+// ---- Session lifecycle (JWT only) ----
+
+// logout revokes the current JWT token and clears the local JWT cache.
+// Requires JWT auth; X-Token is not accepted by the server.
+func logout() error {
+	token := getAuthToken()
+	result, err := client.Logout(getHost(), token)
+	if err != nil {
+		return err
+	}
+	// Invalidate the cached JWT so subsequent commands trigger a fresh login.
+	ClearJWTCache()
+	fmt.Println(result)
+	return nil
+}
+
+// profile prints the current user's profile information.
+// Requires JWT auth; X-Token is not accepted by the server.
+func profile() error {
+	result, err := client.Profile(getHost(), getAuthToken())
 	if err != nil {
 		return err
 	}

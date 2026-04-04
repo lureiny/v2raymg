@@ -10,10 +10,12 @@ import (
 
 // HttpServerConfig holds HTTP server configuration.
 type HttpServerConfig struct {
-	Listen string
-	Port   int
-	Token  string
-	Name   string
+	Listen         string
+	Port           int
+	Token          string
+	Name           string
+	JWTSecret      string
+	JWTExpireHours int
 }
 
 // ClusterNodes provides node lookup for routing HTTP requests to cluster members.
@@ -33,16 +35,18 @@ type CertReader interface {
 var GlobalHttpServer = &HttpServer{}
 
 type HttpServer struct {
-	RestfulServer *gin.Engine
-	Host          string
-	Port          int
-	Name          string
-	token         string
-	handlersMap   map[string]HttpHandlerInterface
-	certReader    CertReader
-	clusterNodes  ClusterNodes
-	localNode     *cluster.LocalNode
-	userLister    UserLister
+	RestfulServer  *gin.Engine
+	Host           string
+	Port           int
+	Name           string
+	token          string
+	jwtSecret      string
+	jwtExpireHours int
+	handlersMap    map[string]HttpHandlerInterface
+	certReader     CertReader
+	clusterNodes   ClusterNodes
+	localNode      *cluster.LocalNode
+	userLister     UserLister
 }
 
 // Init initializes the HttpServer with config and dependencies.
@@ -51,10 +55,13 @@ func (s *HttpServer) Init(cfg HttpServerConfig, localNode *cluster.LocalNode, cl
 	s.Port = cfg.Port
 	s.token = cfg.Token
 	s.Name = cfg.Name
+	s.jwtSecret = cfg.JWTSecret
+	s.jwtExpireHours = cfg.JWTExpireHours
 	s.localNode = localNode
 	s.clusterNodes = clusterNodes
 	s.certReader = certReader
 	s.userLister = userLister
+	s.registerRoutes()
 }
 
 // GetLocalNode returns the local cluster node identity.

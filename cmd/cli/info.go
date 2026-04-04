@@ -28,7 +28,7 @@ var updateCycle = 5 * time.Second
 func updateLocalNodeList() {
 	nodeMutex.Lock()
 	defer nodeMutex.Unlock()
-	localNodeList, _ = client.ListNode(getHost(), getToken())
+	localNodeList, _ = client.ListNode(getHost(), getAuthToken())
 }
 
 func getNode(nodeName string) *cluster.Node {
@@ -38,13 +38,13 @@ func getNode(nodeName string) *cluster.Node {
 func updateLocalUserList() {
 	userMutex.Lock()
 	defer userMutex.Unlock()
-	localUserList, _ = client.ListUser(getHost(), getToken(), "all")
+	localUserList, _ = client.ListUser(getHost(), getAuthToken(), "all")
 }
 
 func updateLocalInboundList() {
 	inboundMutex.Lock()
 	defer inboundMutex.Unlock()
-	result, err := client.ListInboundsStructured(getHost(), getToken(), "all")
+	result, err := client.ListInboundsStructured(getHost(), getAuthToken(), "all")
 	if err != nil || result == nil {
 		return
 	}

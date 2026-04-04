@@ -6,13 +6,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 )
 
-// UserLister provides a user list for Hysteria2 authentication.
-// Callers inject an implementation (e.g. wrapping global/user or the new usermanager).
+// UserLister provides user lookup for HTTP handlers.
 type UserLister interface {
 	// ListUsersWithPasswd returns a map of username -> password for all active users.
+	// Used by Hysteria2 authentication and port rotation.
 	ListUsersWithPasswd() map[string]string
+	// GetUser returns the full UserSpec for the given username.
+	// Used by login and profile handlers.
+	GetUser(username string) (*contracts.User, error)
 }
 
 type AuthHysteria2Data struct {
@@ -60,8 +64,8 @@ func (handler *AuthHysteria2) getHandlers() []gin.HandlerFunc {
 	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
-func (handler *AuthHysteria2) getRelativePath() string { return "/authHysteria2" }
+func (handler *AuthHysteria2) getRelativePath() string { return "/api/authHysteria2" }
 
 func (handler *AuthHysteria2) help() string {
-	return `/authHysteria2 auth hysteria2服务`
+	return `/api/authHysteria2 auth hysteria2服务`
 }

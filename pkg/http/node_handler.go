@@ -15,10 +15,7 @@ func (handler *NodeHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *NodeHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{
-		getAuthHandlerFunc(handler.httpServer),
-		handler.handlerFunc,
-	}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *NodeHandler) getRelativePath() string { return "/node" }

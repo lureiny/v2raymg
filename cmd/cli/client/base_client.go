@@ -7,10 +7,22 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 type HttpCallback func(*http.Response, error) error
+
+// setAuthHeader sets the appropriate auth header.
+// If token starts with "Bearer " it is used as-is via Authorization header;
+// otherwise it is treated as a static X-Token.
+func setAuthHeader(req *http.Request, token string) {
+	if strings.HasPrefix(token, "Bearer ") {
+		req.Header.Set("Authorization", token)
+	} else if token != "" {
+		req.Header.Set("X-Token", token)
+	}
+}
 
 func DoGetRequest(reqUrl string, token string, params map[string]interface{}, cb HttpCallback) error {
 	client := http.Client{
@@ -30,7 +42,7 @@ func DoGetRequest(reqUrl string, token string, params map[string]interface{}, cb
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-Token", token)
+	setAuthHeader(req, token)
 	return cb(client.Do(req))
 }
 
@@ -64,6 +76,6 @@ func doJSONRequest(method, reqUrl string, token string, body interface{}, cb Htt
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Token", token)
+	setAuthHeader(req, token)
 	return cb(client.Do(req))
 }

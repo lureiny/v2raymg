@@ -1,53 +1,80 @@
 package http
 
-import "github.com/gin-gonic/gin"
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/lureiny/v2raymg/pkg/http/auth"
+)
 
-// NewHttpServer creates and returns a new HttpServer with all handlers registered.
-// Call Init() on the returned server before Start().
+// NewHttpServer creates and returns a new HttpServer without routes registered.
+// Call Init() to configure dependencies and register all routes, then Start().
 func NewHttpServer() *HttpServer {
 	gin.SetMode(gin.ReleaseMode)
-	s := &HttpServer{
+	return &HttpServer{
 		RestfulServer: gin.Default(),
 		handlersMap:   make(map[string]HttpHandlerInterface),
 	}
+}
 
-	// Handlers that stay GET (not in migration scope)
-	s.RegisterHandler(&SubHandler{}, "GET")
-	s.RegisterHandler(&HelpHandler{}, "GET")
-	s.RegisterHandler(&NodeHandler{}, "GET")
-	s.RegisterHandler(&GetCertsHandler{}, "GET")
+// registerRoutes sets up all HTTP routes grouped by auth requirements.
+// Called automatically by Init() after all config fields are set.
+func (s *HttpServer) registerRoutes() {
+	r := s.RestfulServer
 
-	// User handlers (split by method)
-	s.RegisterHandler(&UserListHandler{}, "GET")
-	s.RegisterHandler(&UserAddHandler{}, "POST")
-	s.RegisterHandler(&UserUpdateHandler{}, "PUT")
-	s.RegisterHandler(&UserDeleteHandler{}, "DELETE")
-	s.RegisterHandler(&UserResetHandler{}, "POST")
+	// Public routes — no authentication required
+	s.registerOn(r, &LoginHandler{}, "POST")
+	s.registerOn(r, &SubHandler{}, "GET")
+	s.registerOn(r, &HelpHandler{}, "GET")
+	s.registerOn(r, &AuthHysteria2{}, "POST")
 
-	// Inbound handlers (split by method)
-	s.RegisterHandler(&InboundGetHandler{}, "GET")
-	s.RegisterHandler(&InboundAddHandler{}, "POST")
-	s.RegisterHandler(&InboundDeleteHandler{}, "DELETE")
+	// User routes — any authenticated user (normal or admin)
+	userGroup := r.Group("/api", auth.AuthMiddleware(s.token, s.jwtSecret))
+	s.registerOn(userGroup, &LogoutHandler{}, "POST")
+	s.registerOn(userGroup, &ProfileHandler{}, "GET")
+	s.registerOn(userGroup, &RotatePortHandler{}, "POST")
+	s.registerOn(userGroup, &RotateInboundPortHandler{}, "POST")
+	s.registerOn(userGroup, &RotateAllPortsHandler{}, "POST")
+	s.registerOn(userGroup, &ChangePasswordHandler{}, "PUT")
 
-	// Inbound list/delete-by-name handlers (new /inbounds endpoint)
-	s.RegisterHandler(&InboundListHandler{}, "GET")
-	s.RegisterHandler(&InboundDeleteByNameHandler{}, "DELETE")
+	// Admin routes — authenticated + admin role required
+	// X-Token holders are automatically treated as admin by AuthMiddleware.
+	adminGroup := r.Group("/api", auth.AuthMiddleware(s.token, s.jwtSecret), auth.AdminOnly())
+	s.registerOn(adminGroup, &NodeHandler{}, "GET")
+	s.registerOn(adminGroup, &GetCertsHandler{}, "GET")
+	s.registerOn(adminGroup, &UserListHandler{}, "GET")
+	s.registerOn(adminGroup, &UserAddHandler{}, "POST")
+	s.registerOn(adminGroup, &UserUpdateHandler{}, "PUT")
+	s.registerOn(adminGroup, &UserDeleteHandler{}, "DELETE")
+	s.registerOn(adminGroup, &UserResetHandler{}, "POST")
+	s.registerOn(adminGroup, &InboundGetHandler{}, "GET")
+	s.registerOn(adminGroup, &InboundAddHandler{}, "POST")
+	s.registerOn(adminGroup, &InboundDeleteHandler{}, "DELETE")
+	s.registerOn(adminGroup, &InboundListHandler{}, "GET")
+	s.registerOn(adminGroup, &InboundDeleteByNameHandler{}, "DELETE")
+	s.registerOn(adminGroup, &FastAddInboundHandler{}, "POST")
+	s.registerOn(adminGroup, &CertHandler{}, "POST")
+	s.registerOn(adminGroup, &TransferCertHandler{}, "POST")
+	s.registerOn(adminGroup, &UpdateHandler{}, "POST")
+	s.registerOn(adminGroup, &CopyUserBetweenNodesHandler{}, "POST")
+	s.registerOn(adminGroup, &GatewayHandler{}, "PUT")
+	s.registerOn(adminGroup, &PingCheckHandler{}, "PUT")
+	s.registerOn(adminGroup, &ClearUserHandler{}, "DELETE")
+	s.registerOn(adminGroup, &SetUserRoleHandler{}, "PUT")
+}
 
-	// POST handlers
-	s.RegisterHandler(&FastAddInboundHandler{}, "POST")
-	s.RegisterHandler(&CertHandler{}, "POST")
-	s.RegisterHandler(&TransferCertHandler{}, "POST")
-	s.RegisterHandler(&UpdateHandler{}, "POST")
-	s.RegisterHandler(&CopyUserBetweenNodesHandler{}, "POST")
-	s.RegisterHandler(&AuthHysteria2{}, "POST")
-	s.RegisterHandler(&RotatePortHandler{}, "POST")
-
-	// PUT handlers
-	s.RegisterHandler(&GatewayHandler{}, "PUT")
-	s.RegisterHandler(&PingCheckHandler{}, "PUT")
-
-	// DELETE handlers
-	s.RegisterHandler(&ClearUserHandler{}, "DELETE")
-
-	return s
+// registerOn registers a handler on the given router (engine or group).
+func (s *HttpServer) registerOn(router gin.IRouter, handler HttpHandlerInterface, method string) {
+	relativePath := handler.getRelativePath()
+	handler.setHttpServer(s)
+	s.handlersMap[relativePath] = handler
+	handlers := handler.getHandlers()
+	switch method {
+	case "GET":
+		router.GET(relativePath, handlers...)
+	case "POST":
+		router.POST(relativePath, handlers...)
+	case "PUT":
+		router.PUT(relativePath, handlers...)
+	case "DELETE":
+		router.DELETE(relativePath, handlers...)
+	}
 }

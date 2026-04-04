@@ -67,6 +67,11 @@ type UserManager struct {
 
 	// statsCollector handles periodic traffic stats collection
 	statsCollector *statsCollector
+
+	// loginPasswordHasher, if set, is called to produce a login_password hash from
+	// a plaintext proxy password whenever a user is created or has their password changed.
+	// It is a function field to avoid a circular import on pkg/http/auth.
+	loginPasswordHasher func(string) (string, error)
 }
 
 // NewUserManager creates a new user manager (pure in-memory mode, no persistence).
@@ -98,6 +103,12 @@ func NewUserManagerWithStore(fm forward.ForwardManager, storeMgr *store.StoreMan
 		m.users[u.Username] = u
 	}
 	return m, nil
+}
+
+// SetLoginPasswordHasher injects the function used to hash login passwords.
+// Call this once after construction (e.g., in cmd/server.go) before serving requests.
+func (m *UserManager) SetLoginPasswordHasher(fn func(string) (string, error)) {
+	m.loginPasswordHasher = fn
 }
 
 // GetForwardManager returns the ForwardManager for port mapping operations.
@@ -222,6 +233,17 @@ func (m *UserManager) AddUser(req AddUserRequest) error {
 
 	if req.TTL > 0 {
 		user.ExpiryTime = time.Now().Add(req.TTL)
+	}
+
+	// Generate login_password so the user can log in immediately via /login.
+	// A hasher failure is fatal: returning without a login_password would leave the
+	// user unable to authenticate via the frontend.
+	if m.loginPasswordHasher != nil {
+		lp, err := m.loginPasswordHasher(req.Password)
+		if err != nil {
+			return fmt.Errorf("AddUser: hash login_password: %w", err)
+		}
+		user.LoginPassword = lp
 	}
 
 	if m.store != nil {
@@ -405,6 +427,24 @@ func (m *UserManager) ListUsersWithPasswd() map[string]string {
 	return result
 }
 
+// SetUserRole updates the role of an existing user and persists the change.
+func (m *UserManager) SetUserRole(username, role string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	user, exists := m.users[username]
+	if !exists {
+		return errors.New(errors.ErrUserNotFound, fmt.Sprintf("user %s not found", username))
+	}
+	user.Role = role
+	if m.store != nil {
+		if err := m.store.Save(user); err != nil {
+			return fmt.Errorf("SetUserRole: persist: %w", err)
+		}
+	}
+	return nil
+}
+
 // UpdateUser updates a user's password and/or expiry time.
 // expireTime is a Unix timestamp; 0 means no change to expiry.
 // If password is non-empty, it is updated. If expireTime > 0, ExpiryTime is set.
@@ -421,8 +461,22 @@ func (m *UserManager) UpdateUser(username, password string, expireTime int64) er
 		return errors.New(errors.ErrUserNotFound, fmt.Sprintf("user %s not found", username))
 	}
 
+	// Compute new login_password BEFORE mutating the user struct so that a
+	// hasher failure leaves the user in a consistent state.
+	var newLoginPassword string
+	if password != "" && m.loginPasswordHasher != nil {
+		lp, err := m.loginPasswordHasher(password)
+		if err != nil {
+			return fmt.Errorf("UpdateUser: hash login_password: %w", err)
+		}
+		newLoginPassword = lp
+	}
+
 	if password != "" {
 		user.Password = password
+		if newLoginPassword != "" {
+			user.LoginPassword = newLoginPassword
+		}
 	}
 	if expireTime > 0 {
 		user.ExpiryTime = time.Unix(expireTime, 0)
@@ -463,15 +517,33 @@ func (m *UserManager) UpdateUserPassword(req UpdateUserPasswordRequest) error {
 		return errors.New(errors.ErrUserNotFound, fmt.Sprintf("user %s not found", req.Username))
 	}
 
+	// Compute new login_password before persisting.
+	// A hasher failure is fatal: the proxy password would change but the frontend
+	// login password would remain the old one, causing an inconsistent state.
+	newLoginPassword := ""
+	if m.loginPasswordHasher != nil {
+		lp, err := m.loginPasswordHasher(req.NewPassword)
+		if err != nil {
+			return fmt.Errorf("UpdateUserPassword: hash login_password: %w", err)
+		}
+		newLoginPassword = lp
+	}
+
 	if m.store != nil {
 		updated := *user
 		updated.Password = req.NewPassword
+		if newLoginPassword != "" {
+			updated.LoginPassword = newLoginPassword
+		}
 		if err := m.store.Save(&updated); err != nil {
 			return fmt.Errorf("UpdateUserPassword: persist: %w", err)
 		}
 	}
 
 	user.Password = req.NewPassword
+	if newLoginPassword != "" {
+		user.LoginPassword = newLoginPassword
+	}
 
 	// Emit update event
 	m.emitEvent(UserEvent{
@@ -684,6 +756,175 @@ func (m *UserManager) RotateUserPort(username string) error {
 
 	log.Info("[RotateUserPort] port rotation complete", "user", username, "rules", len(oldRules))
 	return nil
+}
+
+// RotateUserPortForInbound allocates a new forward port for a specific container+inbound
+// of a user, then releases the old port. If preferredPort > 0, tries that port first.
+// Returns the newly allocated listen port.
+//
+// Flow: make (new relay) → break (old relay) → update state.
+// The old port remains active until the new one is confirmed listening.
+func (m *UserManager) RotateUserPortForInbound(username string, containerType contracts.ContainerType, inboundTag string, preferredPort uint32) (uint32, error) {
+	if username == "" {
+		return 0, errors.New(errors.ErrInvalidUserSpec, "username is required")
+	}
+	if containerType == "" {
+		return 0, errors.New(errors.ErrInvalidUserSpec, "container type is required")
+	}
+	if inboundTag == "" {
+		return 0, errors.New(errors.ErrInvalidUserSpec, "inbound tag is required")
+	}
+	if m.forwardMgr == nil {
+		return 0, errors.New(errors.ErrInternal, "forward manager not available")
+	}
+
+	// Step 1: snapshot existing rule fields needed to rebuild the relay
+	ruleKey := string(containerType) + ":" + inboundTag + ":" + username
+	existingRule := m.forwardMgr.GetRule(ruleKey)
+	if existingRule == nil {
+		return 0, errors.New(errors.ErrInvalidUserSpec, fmt.Sprintf("no forward rule found for user %s, container %s, inbound %s", username, containerType, inboundTag))
+	}
+	var targetPort uint32
+	if _, err := fmt.Sscanf(existingRule.TargetAddr, "127.0.0.1:%d", &targetPort); err != nil || targetPort == 0 {
+		return 0, errors.New(errors.ErrInternal, fmt.Sprintf("could not parse target port from rule TargetAddr=%s", existingRule.TargetAddr))
+	}
+	oldListenPort := existingRule.ListenPort
+
+	// Step 2: MAKE — start new relay under a temporary inbound tag to avoid key conflict.
+	// Using a temp tag gives a different RuleKey while pointing to the same TargetAddr.
+	// The new port is confirmed bindable before we touch the old relay.
+	tmpTag := inboundTag + ":_r"
+	tmpRuleKey := string(containerType) + ":" + tmpTag + ":" + username
+	tmpRule := forward.ForwardRule{
+		Username:              username,
+		ContainerType:         containerType,
+		InboundTag:            tmpTag,
+		Protocol:              existingRule.Protocol,
+		ListenAddr:            existingRule.ListenAddr,
+		ListenPort:            preferredPort, // 0 = auto-allocate
+		TargetAddr:            existingRule.TargetAddr,
+		UploadBytesPerSec:     existingRule.UploadBytesPerSec,
+		DownloadBytesPerSec:   existingRule.DownloadBytesPerSec,
+		MaxConnections:        existingRule.MaxConnections,
+		MaxClients:            existingRule.MaxClients,
+		ClientRecycleDelaySec: existingRule.ClientRecycleDelaySec,
+		ClientDrainSec:        existingRule.ClientDrainSec,
+	}
+	createdTmpRule, err := m.forwardMgr.AddRule(tmpRule)
+	if err != nil {
+		return 0, errors.Wrap(errors.ErrInternal, "failed to allocate new forward port", err)
+	}
+	newPort := createdTmpRule.ListenPort
+
+	// Step 3: BREAK — remove old relay only after new one is confirmed up
+	if removeErr := m.forwardMgr.RemoveRule(ruleKey); removeErr != nil {
+		// Old rule removal failed — clean up temp relay and bail; old port stays intact
+		_ = m.forwardMgr.RemoveRule(tmpRuleKey)
+		return 0, errors.Wrap(errors.ErrInternal, "failed to remove old forward rule", removeErr)
+	}
+
+	// Step 4: replace temp relay with the canonical one under the proper rule key.
+	// Remove temp first, then re-add with the real inbound tag and the exact new port.
+	_ = m.forwardMgr.RemoveRule(tmpRuleKey)
+	finalRule := forward.ForwardRule{
+		Username:              username,
+		ContainerType:         containerType,
+		InboundTag:            inboundTag,
+		Protocol:              existingRule.Protocol,
+		ListenAddr:            existingRule.ListenAddr,
+		ListenPort:            newPort, // reclaim the same port (just freed above)
+		TargetAddr:            existingRule.TargetAddr,
+		UploadBytesPerSec:     existingRule.UploadBytesPerSec,
+		DownloadBytesPerSec:   existingRule.DownloadBytesPerSec,
+		MaxConnections:        existingRule.MaxConnections,
+		MaxClients:            existingRule.MaxClients,
+		ClientRecycleDelaySec: existingRule.ClientRecycleDelaySec,
+		ClientDrainSec:        existingRule.ClientDrainSec,
+	}
+	createdFinalRule, err := m.forwardMgr.AddRule(finalRule)
+	if err != nil {
+		// Port grabbed in the tiny window — fall back to auto-allocate
+		log.Warn("[RotateUserPortForInbound] port reclaim failed, auto-allocating", "user", username, "port", newPort, "err", err)
+		finalRule.ListenPort = 0
+		createdFinalRule, err = m.forwardMgr.AddRule(finalRule)
+		if err != nil {
+			return 0, errors.Wrap(errors.ErrInternal, "failed to finalize forward rule", err)
+		}
+		newPort = createdFinalRule.ListenPort
+	}
+
+	// Step 5: update user state now that the new relay is confirmed
+	m.mu.Lock()
+	user, exists := m.users[username]
+	if !exists {
+		m.mu.Unlock()
+		_ = m.forwardMgr.RemoveRule(createdFinalRule.RuleKey())
+		return 0, errors.New(errors.ErrUserNotFound, fmt.Sprintf("user %s not found", username))
+	}
+	newBindPorts := make([]uint32, 0, len(user.BindPorts))
+	for _, p := range user.BindPorts {
+		if p != oldListenPort {
+			newBindPorts = append(newBindPorts, p)
+		}
+	}
+	user.BindPorts = append(newBindPorts, newPort)
+	if user.PortMappings == nil {
+		user.PortMappings = make(map[uint32]uint32)
+	}
+	user.PortMappings[targetPort] = newPort
+	if m.store != nil {
+		if err := m.store.Save(user); err != nil {
+			log.Warn("[RotateUserPortForInbound] failed to persist port_mappings", "err", err)
+		}
+	}
+	m.mu.Unlock()
+
+	m.emitEvent(UserEvent{
+		Type:     UserEventPortBind,
+		Username: username,
+		User:     user,
+		Ports:    []uint32{newPort},
+	})
+
+	log.Info("[RotateUserPortForInbound] port rotated", "user", username, "container", containerType, "inbound", inboundTag, "oldPort", oldListenPort, "newPort", newPort)
+	return newPort, nil
+}
+
+// RotateAllUserPorts rotates the forward port for every inbound of a user using
+// make-before-break semantics (same as RotateUserPortForInbound).
+// Returns a map of inbound tag → new listen port for all successfully rotated rules.
+// If any single inbound fails, the error is collected and rotation continues for the rest.
+// Returns a combined error if any rotation failed.
+func (m *UserManager) RotateAllUserPorts(username string) (map[string]uint32, error) {
+	if username == "" {
+		return nil, errors.New(errors.ErrInvalidUserSpec, "username is required")
+	}
+	if m.forwardMgr == nil {
+		return nil, errors.New(errors.ErrInternal, "forward manager not available")
+	}
+
+	// Snapshot all current rules for this user
+	rules := m.forwardMgr.GetRulesByUser(username)
+	if len(rules) == 0 {
+		return nil, errors.New(errors.ErrInvalidUserSpec, fmt.Sprintf("no forward rules found for user %s", username))
+	}
+
+	result := make(map[string]uint32, len(rules))
+	var firstErr error
+	for _, rule := range rules {
+		newPort, err := m.RotateUserPortForInbound(username, rule.ContainerType, rule.InboundTag, 0)
+		if err != nil {
+			log.Error("[RotateAllUserPorts] failed to rotate inbound", "user", username, "inbound", rule.InboundTag, "err", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		result[rule.InboundTag] = newPort
+	}
+
+	log.Info("[RotateAllUserPorts] rotation complete", "user", username, "total", len(rules), "success", len(result))
+	return result, firstErr
 }
 
 // SetUserBandwidthLimit sets the bandwidth limit for a user.

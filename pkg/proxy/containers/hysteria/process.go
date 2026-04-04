@@ -124,7 +124,7 @@ func (hc *HysteriaContainer) generateConfigFile(certFile, keyFile string) error 
 		Auth: hysteriaAuth{
 			Type: "http",
 			HTTP: hysteriaAuthHTTP{
-				URL: fmt.Sprintf("http://127.0.0.1:%d/authHysteria2", hc.httpPort),
+				URL: fmt.Sprintf("http://127.0.0.1:%d/api/authHysteria2", hc.httpPort),
 			},
 		},
 		TrafficStats: hysteriaTrafficStats{

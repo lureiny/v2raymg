@@ -38,7 +38,7 @@ func (handler *InboundListHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *InboundListHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{getAuthHandlerFunc(handler.httpServer), handler.handlerFunc}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *InboundListHandler) getRelativePath() string { return "/inbounds" }
@@ -96,7 +96,7 @@ func (handler *InboundDeleteByNameHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *InboundDeleteByNameHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{getAuthHandlerFunc(handler.httpServer), handler.handlerFunc}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *InboundDeleteByNameHandler) getRelativePath() string { return "/inbounds" }

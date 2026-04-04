@@ -46,7 +46,7 @@ func (handler *ClearUserHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *ClearUserHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{getAuthHandlerFunc(handler.httpServer), handler.handlerFunc}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *ClearUserHandler) getRelativePath() string { return "/users" }

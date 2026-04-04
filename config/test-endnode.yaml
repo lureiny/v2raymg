@@ -42,6 +42,8 @@ end_node:
   rpc_port: 19090
   http_port: 18080
   http_token: testtoken123
+  jwt_secret: test-jwt-secret-key-for-testing-only
+  jwt_expire_hours: 24
   enable_prometheus: false
   enable_ping_check: false
   only_gateway: false

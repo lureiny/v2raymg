@@ -1,6 +1,8 @@
 package appconfig
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -135,6 +137,7 @@ func defaultAppConfig() *AppConfig {
 	cfg.EndNode.Ping.EnableTCPPing = true
 	cfg.EndNode.Ping.TCPPingInterval = 5
 	cfg.EndNode.Ping.TCPPingTimeout = 1
+	cfg.EndNode.JWTExpireHours = 24
 	return cfg
 }
 
@@ -187,7 +190,29 @@ func LoadFromFile(path string) (*AppConfig, error) {
 		}
 	}
 
+	// Auto-generate jwt_secret when not configured.
+	// The secret is only used to sign in-memory session tokens; each restart
+	// with a new secret simply invalidates existing sessions (users re-login).
+	// This allows old configs to upgrade without modification.
+	if !strings.EqualFold(cfg.NodeType, "center") && cfg.EndNode.JWTSecret == "" {
+		secret, err := generateRandomSecret(32)
+		if err != nil {
+			return nil, fmt.Errorf("appconfig: generate jwt_secret: %w", err)
+		}
+		cfg.EndNode.JWTSecret = secret
+		fmt.Fprintf(os.Stderr, "[appconfig] end_node.jwt_secret not set — using a random secret (sessions will be invalidated on restart)\n")
+	}
+
 	return cfg, nil
+}
+
+// generateRandomSecret returns a URL-safe base64-encoded random string of n bytes.
+func generateRandomSecret(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
 }
 
 // SaveToFile writes an AppConfig to a YAML file, overwriting any existing content.

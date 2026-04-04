@@ -41,7 +41,8 @@ func (s *SQLiteUserStore) Load() ([]*contracts.User, error) {
 		       bandwidth_upload_bps, bandwidth_download_bps,
 		       max_clients, client_recycle_delay_sec, client_drain_sec,
 		       port_mappings,
-		       traffic_total_uplink, traffic_total_downlink
+		       traffic_total_uplink, traffic_total_downlink,
+		       role, login_password
 		FROM users`)
 	if err != nil {
 		return nil, fmt.Errorf("SQLiteUserStore.Load: %w", err)
@@ -61,6 +62,7 @@ func (s *SQLiteUserStore) Load() ([]*contracts.User, error) {
 			&u.MaxClients, &u.ClientRecycleDelaySec, &u.ClientDrainSec,
 			&portMappingsStr,
 			&u.TrafficTotalUplink, &u.TrafficTotalDownlink,
+			&u.Role, &u.LoginPassword,
 		); err != nil {
 			return nil, fmt.Errorf("SQLiteUserStore.Load scan: %w", err)
 		}
@@ -96,10 +98,17 @@ func (s *SQLiteUserStore) Load() ([]*contracts.User, error) {
 
 // Save upserts a user record. updated_at is set to the current time.
 // ExpiryTime zero value is stored as NULL.
+// An empty Role is normalised to "normal" before persisting.
 func (s *SQLiteUserStore) Save(user *contracts.User) error {
 	var expiryArg interface{}
 	if !user.ExpiryTime.IsZero() {
 		expiryArg = user.ExpiryTime.UTC().Format(time.RFC3339)
+	}
+
+	// Normalize role: empty string → "normal" (the documented default).
+	role := user.Role
+	if role == "" {
+		role = "normal"
 	}
 
 	// Serialize port_mappings to JSON
@@ -118,14 +127,16 @@ func (s *SQLiteUserStore) Save(user *contracts.User) error {
 			max_clients, client_recycle_delay_sec, client_drain_sec,
 			port_mappings,
 			traffic_total_uplink, traffic_total_downlink,
+			role, login_password,
 			updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
 		user.Username, user.Password, user.Level, expiryArg,
 		user.TrafficLimit, user.UploadLimit, user.DownloadLimit,
 		user.BandwidthUploadBps, user.BandwidthDownloadBps,
 		user.MaxClients, user.ClientRecycleDelaySec, user.ClientDrainSec,
 		portMappingsJSON,
 		user.TrafficTotalUplink, user.TrafficTotalDownlink,
+		role, user.LoginPassword,
 	)
 	if err != nil {
 		return fmt.Errorf("SQLiteUserStore.Save: %w", err)

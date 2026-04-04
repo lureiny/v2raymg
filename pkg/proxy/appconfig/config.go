@@ -160,6 +160,11 @@ type EndNodeConfig struct {
 	HttpListen string `yaml:"http_listen" json:"http_listen"`
 	// HttpToken is the HTTP management interface authentication token.
 	HttpToken string `yaml:"http_token" json:"http_token"`
+	// JWTSecret is the signing key for JWT tokens issued by POST /login.
+	// Should be a random string of at least 32 bytes. Do not commit to version control.
+	JWTSecret string `yaml:"jwt_secret" json:"jwt_secret"`
+	// JWTExpireHours is the JWT token expiry in hours. Default: 24.
+	JWTExpireHours int `yaml:"jwt_expire_hours" json:"jwt_expire_hours"`
 	// EnablePrometheus enables the Prometheus metrics endpoint.
 	EnablePrometheus bool `yaml:"enable_prometheus" json:"enable_prometheus"`
 }

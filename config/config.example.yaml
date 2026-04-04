@@ -85,6 +85,11 @@ end_node:
   rpc_port: 9090
   http_port: 8080
   http_token: your-secret-token
+  # jwt_secret: signing key for frontend JWT tokens (POST /login).
+  # Required (end node). Minimum 16 characters. Service will refuse to start if missing or too short.
+  jwt_secret: change-this-to-a-random-secret-at-least-16-chars
+  # jwt_expire_hours: JWT token validity in hours. Default: 24.
+  jwt_expire_hours: 24
   enable_prometheus: false
   enable_ping_check: false
   only_gateway: false

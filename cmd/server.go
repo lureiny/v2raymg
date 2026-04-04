@@ -12,6 +12,7 @@ import (
 	"github.com/lureiny/v2raymg/pkg/cluster"
 	"github.com/lureiny/v2raymg/pkg/collecter"
 	"github.com/lureiny/v2raymg/pkg/http"
+	"github.com/lureiny/v2raymg/pkg/http/auth"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/appconfig"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
@@ -66,7 +67,8 @@ func startServer(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// --migrate: save converted config back to file and exit
+	// --migrate: save converted config back to file and exit (skip validation,
+	// old configs may not have jwt_secret yet).
 	if serverMigrate {
 		if err := appconfig.SaveToFile(cfg, serverConfig); err != nil {
 			fmt.Fprintf(os.Stderr, "migrate: write config: %v\n", err)
@@ -74,6 +76,12 @@ func startServer(cmd *cobra.Command, args []string) {
 		}
 		fmt.Fprintf(os.Stdout, "config migrated and saved to %s\n", serverConfig)
 		return
+	}
+
+	// Validate configuration before starting any subsystems (fail-fast).
+	if err := appconfig.Validate(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "config validation: %v\n", err)
+		os.Exit(1)
 	}
 
 	logger := cfg.Log.ApplyToLogger()
@@ -110,11 +118,20 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	defer forwardMgr.Close()
 
 	// 3. User Manager
+	// 3a. Init login_password for existing users that don't have one yet (blocking).
+	//     Must run BEFORE NewUserManagerWithStore so that users are loaded with
+	//     login_password already populated — no restart required.
+	if err := storeMgr.InitLoginPasswords(auth.HashLoginPassword); err != nil {
+		log.Error("init login passwords failed", "err", err)
+		os.Exit(1)
+	}
 	userMgr, err := usermanager.NewUserManagerWithStore(forwardMgr, storeMgr)
 	if err != nil {
 		log.Error("init user manager failed", "err", err)
 		os.Exit(1)
 	}
+	// 3b. Inject the login password hasher so AddUser/UpdateUser keep login_password in sync.
+	userMgr.SetLoginPasswordHasher(auth.HashLoginPassword)
 
 	// 4. Container Manager (deferred to after certMgr init — see step 7)
 
@@ -190,15 +207,17 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	httpServer := http.NewHttpServer()
 	httpServer.Init(
 		http.HttpServerConfig{
-			Listen: httpListen,
-			Port:   cfg.EndNode.HttpPort,
-			Token:  cfg.EndNode.HttpToken,
-			Name:   cfg.EndNode.Name,
+			Listen:         httpListen,
+			Port:           cfg.EndNode.HttpPort,
+			Token:          cfg.EndNode.HttpToken,
+			Name:           cfg.EndNode.Name,
+			JWTSecret:      cfg.EndNode.JWTSecret,
+			JWTExpireHours: cfg.EndNode.JWTExpireHours,
 		},
 		localNode,
 		clusterMgr,
 		certMgr,
-		userMgr, // UserLister for Hysteria2 /authHysteria2 handler
+		userMgr,
 	)
 	if cfg.EndNode.EnablePrometheus {
 		http.RegisterPrometheus(httpServer)

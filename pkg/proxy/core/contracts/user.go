@@ -77,6 +77,14 @@ type UserSpec struct {
 	// This ensures port mappings persist even when inbound tags change.
 	PortMappings map[uint32]uint32 `json:"port_mappings,omitempty"`
 
+	// Role is the user's role for frontend access control: "admin" or "normal".
+	// Default: "normal". Not related to proxy protocol.
+	Role string `json:"role,omitempty"`
+
+	// LoginPassword is the bcrypt hash of the frontend login password (SHA256+bcrypt).
+	// Not used by any proxy protocol. Empty means not yet initialized (pending migration).
+	LoginPassword string `json:"-"` // never serialize to avoid leaking
+
 	// DeletionState indicates the deletion state of the user.
 	// Empty means active, "deleting" means marked for deletion.
 	// When in "deleting" state, user is hidden from normal queries but

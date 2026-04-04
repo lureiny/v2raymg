@@ -82,7 +82,7 @@ func (handler *UserAddHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *UserAddHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{getAuthHandlerFunc(handler.httpServer), handler.handlerFunc}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *UserAddHandler) getRelativePath() string { return "/user" }
@@ -131,7 +131,7 @@ func (handler *UserUpdateHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *UserUpdateHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{getAuthHandlerFunc(handler.httpServer), handler.handlerFunc}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *UserUpdateHandler) getRelativePath() string { return "/user" }
@@ -177,7 +177,7 @@ func (handler *UserDeleteHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *UserDeleteHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{getAuthHandlerFunc(handler.httpServer), handler.handlerFunc}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *UserDeleteHandler) getRelativePath() string { return "/user" }
@@ -221,7 +221,7 @@ func (handler *UserResetHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *UserResetHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{getAuthHandlerFunc(handler.httpServer), handler.handlerFunc}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *UserResetHandler) getRelativePath() string { return "/user/reset" }
@@ -248,7 +248,7 @@ func (handler *UserListHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *UserListHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{getAuthHandlerFunc(handler.httpServer), handler.handlerFunc}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *UserListHandler) getRelativePath() string { return "/user" }

@@ -77,7 +77,7 @@ func (handler *TransferCertHandler) handlerFunc(c *gin.Context) {
 }
 
 func (handler *TransferCertHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{getAuthHandlerFunc(handler.httpServer), handler.handlerFunc}
+	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
 func (handler *TransferCertHandler) getRelativePath() string { return "/cert/transfer" }

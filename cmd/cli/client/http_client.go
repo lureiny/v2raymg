@@ -5,11 +5,37 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/lureiny/v2raymg/cmd/cli/common"
 	"github.com/lureiny/v2raymg/pkg/cluster"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
+
+// Login calls POST /login and returns the JWT token string and its Unix expiry timestamp.
+func Login(host, username, password string) (token string, expire int64, err error) {
+	var loginResp struct {
+		Token  string `json:"token"`
+		Expire int64  `json:"expire"`
+	}
+	cb := func(resp *http.Response) error {
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("login failed: HTTP %d", resp.StatusCode)
+		}
+		d, e := readBody(resp)
+		if e != nil {
+			return e
+		}
+		return json.Unmarshal(d, &loginResp)
+	}
+	reqUrl := fmt.Sprintf("%s/%s", host, common.Login)
+	body := map[string]interface{}{
+		"username": username,
+		"password": password,
+	}
+	err = DoPostRequest(reqUrl, "", body, getCallBackFunc(cb))
+	return loginResp.Token, loginResp.Expire, err
+}
 
 func getCallBackFunc(fn func(resp *http.Response) error) HttpCallback {
 	return func(r *http.Response, err error) error {
@@ -25,6 +51,14 @@ func readBody(resp *http.Response) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+func unexpectedHTTPStatus(resp *http.Response, body []byte) error {
+	msg := strings.TrimSpace(string(body))
+	if msg == "" {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
+}
+
 // ListNode returns nodes keyed by name. Server returns a slice, so we convert.
 func ListNode(host, token string) (map[string]*cluster.Node, error) {
 	nodeList := []*cluster.Node{}
@@ -32,6 +66,9 @@ func ListNode(host, token string) (map[string]*cluster.Node, error) {
 		d, err := readBody(resp)
 		if err != nil {
 			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return unexpectedHTTPStatus(resp, d)
 		}
 		return json.Unmarshal(d, &nodeList)
 	}
@@ -54,6 +91,9 @@ func ListCert(host, token, target string) (map[string][]*proto.Cert, error) {
 		d, err := readBody(resp)
 		if err != nil {
 			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return unexpectedHTTPStatus(resp, d)
 		}
 		return json.Unmarshal(d, &certList)
 	}
@@ -457,5 +497,127 @@ func DeleteInboundByName(host, token, target, container, name string) (string, e
 		"name":      name,
 	}
 	err := DoDeleteRequest(reqUrl, token, body, getCallBackFunc(cb))
+	return result, err
+}
+
+// RotatePort resets all forward ports for the authenticated user (JWT auth via AuthMiddleware).
+// username is optional: empty = operate on the token's own user; non-empty = target user (admin only).
+func RotatePort(host, token, username string) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	reqUrl := fmt.Sprintf("%s/%s", host, common.RotatePort)
+	body := map[string]interface{}{}
+	if username != "" {
+		body["username"] = username
+	}
+	err := DoPostRequest(reqUrl, token, body, getCallBackFunc(cb))
+	return result, err
+}
+
+// RotateInboundPort resets the forward port for a specific container+inbound (JWT auth via AuthMiddleware).
+// username is optional: empty = token's own user; non-empty = target user (admin only).
+// port=0 means auto-allocate; port>0 requests a specific port.
+func RotateInboundPort(host, token, username, container, inbound string, port int) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	reqUrl := fmt.Sprintf("%s/%s", host, common.RotateInboundPort)
+	body := map[string]interface{}{
+		"container": container,
+		"inbound":   inbound,
+		"port":      port,
+	}
+	if username != "" {
+		body["username"] = username
+	}
+	err := DoPostRequest(reqUrl, token, body, getCallBackFunc(cb))
+	return result, err
+}
+
+// RotateAllPorts resets all forward ports for the authenticated user using make-before-break (JWT auth).
+// username is optional: empty = token's own user; non-empty = target user (admin only).
+func RotateAllPorts(host, token, username string) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	reqUrl := fmt.Sprintf("%s/%s", host, common.RotateAllPorts)
+	body := map[string]interface{}{}
+	if username != "" {
+		body["username"] = username
+	}
+	err := DoPostRequest(reqUrl, token, body, getCallBackFunc(cb))
+	return result, err
+}
+
+// SetUserRole sets the frontend login role ("admin" or "normal") for the given user.
+// Requires admin auth (X-Token or admin JWT).
+func SetUserRole(host, token, username, role string) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	reqUrl := fmt.Sprintf("%s/%s/%s/role", host, common.UserRole, username)
+	body := map[string]interface{}{
+		"role": role,
+	}
+	err := DoPutRequest(reqUrl, token, body, getCallBackFunc(cb))
+	return result, err
+}
+
+// Logout revokes the current JWT by calling POST /logout.
+// The token must be a Bearer JWT ("Bearer <jwt>"); X-Token is rejected by the server.
+func Logout(host, token string) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	reqUrl := fmt.Sprintf("%s/%s", host, common.Logout)
+	err := DoPostRequest(reqUrl, token, map[string]interface{}{}, getCallBackFunc(cb))
+	return result, err
+}
+
+// Profile returns the current user's profile from GET /profile.
+// The token must be a Bearer JWT; X-Token is rejected by the server.
+func Profile(host, token string) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	reqUrl := fmt.Sprintf("%s/%s", host, common.Profile)
+	err := DoGetRequest(reqUrl, token, map[string]interface{}{}, getCallBackFunc(cb))
 	return result, err
 }

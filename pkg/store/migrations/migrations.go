@@ -78,4 +78,9 @@ var All = []store.Migration{
 		SQL: `ALTER TABLE users ADD COLUMN traffic_total_uplink INTEGER NOT NULL DEFAULT 0;
         ALTER TABLE users ADD COLUMN traffic_total_downlink INTEGER NOT NULL DEFAULT 0;`,
 	},
+	{
+		Version: 6,
+		SQL: `ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'normal';
+ALTER TABLE users ADD COLUMN login_password TEXT NOT NULL DEFAULT '';`,
+	},
 }

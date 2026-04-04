@@ -77,7 +77,7 @@ func (handler *MetricHandler) getHandlers() []gin.HandlerFunc {
 }
 
 func (handler *MetricHandler) getRelativePath() string {
-	return "/metrics"
+	return "/api/metrics"
 }
 
 func RegisterPrometheus(s *HttpServer) {

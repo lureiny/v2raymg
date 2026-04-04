@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -62,4 +63,42 @@ func (m *StoreManager) DB() *DB {
 // Close closes the database connection.
 func (m *StoreManager) Close() error {
 	return m.db.Close()
+}
+
+// InitLoginPasswords initializes login_password for users whose login_password is empty.
+// hashFn is called with the user's plaintext password and must return a bcrypt hash.
+// This is blocking and must be called before starting the HTTP server to ensure
+// existing users can log in with their current proxy password.
+func (m *StoreManager) InitLoginPasswords(hashFn func(string) (string, error)) error {
+	sqlDB := m.db.DB()
+
+	rows, err := sqlDB.Query(`SELECT username, password FROM users WHERE login_password = ''`)
+	if err != nil {
+		return fmt.Errorf("InitLoginPasswords: query: %w", err)
+	}
+	defer rows.Close()
+
+	type row struct{ username, password string }
+	var pending []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.username, &r.password); err != nil {
+			return fmt.Errorf("InitLoginPasswords: scan: %w", err)
+		}
+		pending = append(pending, r)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("InitLoginPasswords: rows: %w", err)
+	}
+
+	for _, r := range pending {
+		hash, err := hashFn(r.password)
+		if err != nil {
+			return fmt.Errorf("InitLoginPasswords: hash user %q: %w", r.username, err)
+		}
+		if _, err := sqlDB.Exec(`UPDATE users SET login_password = ? WHERE username = ?`, hash, r.username); err != nil {
+			return fmt.Errorf("InitLoginPasswords: update user %q: %w", r.username, err)
+		}
+	}
+	return nil
 }
