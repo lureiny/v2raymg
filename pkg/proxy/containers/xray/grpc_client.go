@@ -296,7 +296,7 @@ func (api *XrayAPI) AddUser(tag string, user contracts.UserSpec) error {
 	var accountType string
 	var accountProto proto.Message
 
-	// Use AuthToken as the credential; default to VMess with a placeholder UUID.
+	// Use AuthToken as the credential via Trojan account type.
 	// This method is currently unused in the production path (users are managed via forward ports).
 	accountType = "xray.proxy.trojan.Account"
 	password := user.AuthToken

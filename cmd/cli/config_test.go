@@ -27,7 +27,7 @@ func resetState(host, username, password, staticToken string) {
 func newLoginServer(t *testing.T, returnToken string, expireOffset int64, loginCalls *atomic.Int32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/login" {
+		if r.URL.Path != "/api/login" {
 			http.NotFound(w, r)
 			return
 		}

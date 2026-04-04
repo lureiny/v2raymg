@@ -2,6 +2,7 @@
 package xray
 
 import (
+	"strings"
 	"sync"
 	"testing"
 
@@ -30,8 +31,9 @@ func TestNewExecutor_Defaults(t *testing.T) {
 		t.Errorf("ContainerType = %v, want %v", exec.config.ContainerType, contracts.ContainerXray)
 	}
 
-	if exec.config.GRPCAPIAddress != "127.0.0.1:62789" {
-		t.Errorf("GRPCAPIAddress = %v, want %v", exec.config.GRPCAPIAddress, "127.0.0.1:62789")
+	// NewExecutor picks a free port dynamically; verify format only
+	if !strings.HasPrefix(exec.config.GRPCAPIAddress, "127.0.0.1:") {
+		t.Errorf("GRPCAPIAddress = %v, want 127.0.0.1:<port>", exec.config.GRPCAPIAddress)
 	}
 }
 
@@ -129,8 +131,9 @@ func TestExecutor_DefaultGRPCAddress(t *testing.T) {
 
 	exec, _ := NewExecutor(cfg)
 
-	if exec.config.GRPCAPIAddress != "127.0.0.1:62789" {
-		t.Errorf("GRPCAPIAddress = %v, want %v", exec.config.GRPCAPIAddress, "127.0.0.1:62789")
+	// NewExecutor picks a free port dynamically; verify format only
+	if !strings.HasPrefix(exec.config.GRPCAPIAddress, "127.0.0.1:") {
+		t.Errorf("GRPCAPIAddress = %v, want 127.0.0.1:<port>", exec.config.GRPCAPIAddress)
 	}
 }
 

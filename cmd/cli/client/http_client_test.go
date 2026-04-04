@@ -69,8 +69,8 @@ func TestRotatePort_SendsTokenAndEmptyBody(t *testing.T) {
 	if captured.method != "POST" {
 		t.Fatalf("expected POST, got %s", captured.method)
 	}
-	if captured.path != "/rotatePort" {
-		t.Fatalf("expected /rotatePort, got %s", captured.path)
+	if captured.path != "/api/rotatePort" {
+		t.Fatalf("expected /api/rotatePort, got %s", captured.path)
 	}
 	if captured.token != "Bearer testjwt" {
 		t.Fatalf("expected Authorization header, got %q", captured.token)
@@ -164,8 +164,8 @@ func TestLogout_SendsBearerTokenAndPOST(t *testing.T) {
 	if captured.method != "POST" {
 		t.Fatalf("expected POST, got %s", captured.method)
 	}
-	if captured.path != "/logout" {
-		t.Fatalf("expected /logout, got %s", captured.path)
+	if captured.path != "/api/logout" {
+		t.Fatalf("expected /api/logout, got %s", captured.path)
 	}
 	if captured.auth != "Bearer testjwt" {
 		t.Fatalf("expected Authorization header, got %q", captured.auth)
@@ -198,8 +198,8 @@ func TestProfile_SendsGETWithBearerToken(t *testing.T) {
 	if captured.method != "GET" {
 		t.Fatalf("expected GET, got %s", captured.method)
 	}
-	if captured.path != "/profile" {
-		t.Fatalf("expected /profile, got %s", captured.path)
+	if captured.path != "/api/user" {
+		t.Fatalf("expected /api/user, got %s", captured.path)
 	}
 	if captured.auth != "Bearer testjwt" {
 		t.Fatalf("expected Authorization header, got %q", captured.auth)
@@ -234,8 +234,8 @@ func TestSetUserRole_SendsCorrectRequest(t *testing.T) {
 	if captured.method != "PUT" {
 		t.Fatalf("expected PUT, got %s", captured.method)
 	}
-	if captured.path != "/user/bob/role" {
-		t.Fatalf("expected /user/bob/role, got %s", captured.path)
+	if captured.path != "/api/user/bob/role" {
+		t.Fatalf("expected /api/user/bob/role, got %s", captured.path)
 	}
 	if captured.token != "admin-token" {
 		t.Fatalf("expected X-Token=admin-token, got %q", captured.token)

@@ -149,11 +149,12 @@ func NewExecutor(cfg ExecutorConfig) (*Executor, error) {
 	}
 
 	e := &Executor{
-		Runner:     runner,
-		config:     cfg,
-		inbounds:   make(map[string]*XrayInbound),
-		renderer:   NewRenderer(),
-		storeMgr:   cfg.StoreMgr,
+		Runner:          runner,
+		config:          cfg,
+		grpcAPIAddress:  cfg.GRPCAPIAddress,
+		inbounds:        make(map[string]*XrayInbound),
+		renderer:        NewRenderer(),
+		storeMgr:        cfg.StoreMgr,
 	}
 
 	// Wire dependencies from config
@@ -1850,6 +1851,10 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 			for _, f := range xrayInbound.tempCertFiles {
 				os.Remove(f)
 			}
+		}
+		// Map xray's "existing tag" gRPC error to ErrInboundAlreadyExists
+		if strings.Contains(err.Error(), "existing tag found") {
+			return errs.Newf(errs.ErrInboundAlreadyExists, "inbound %s already exists in xray", tag)
 		}
 		return errs.Wrap(errs.ErrFastAddInboundFailed, "failed to add inbound to xray process", err)
 	}

@@ -16,8 +16,10 @@ import (
 // TestExecutor_EnsureBinary_NotFound tests that EnsureBinary returns error
 // when binary doesn't exist and AutoDownload is disabled.
 func TestExecutor_EnsureBinary_NotFound(t *testing.T) {
+	// Use a path inside t.TempDir() so we're guaranteed it doesn't exist.
+	binaryPath := filepath.Join(t.TempDir(), "subdir", "xray-nonexistent")
 	cfg := ExecutorConfig{
-		BinaryPath:   "/nonexistent/xray",
+		BinaryPath:   binaryPath,
 		AutoDownload: false,
 	}
 
@@ -134,8 +136,10 @@ func TestExecutor_EnsureConfig_InvalidPath(t *testing.T) {
 // binary check fails.
 func TestExecutor_Start_BinaryCheckFailure(t *testing.T) {
 	um := usermanager.NewUserManager(nil, "test-node")
+	// Use a path inside t.TempDir() so we're guaranteed it doesn't exist.
+	binaryPath := filepath.Join(t.TempDir(), "subdir", "xray-nonexistent")
 	cfg := ExecutorConfig{
-		BinaryPath:   "/nonexistent/xray",
+		BinaryPath:   binaryPath,
 		AutoDownload: false,
 		UserManager:  um,
 	}
@@ -148,6 +152,7 @@ func TestExecutor_Start_BinaryCheckFailure(t *testing.T) {
 	err = exec.Start()
 	if err == nil {
 		t.Error("expected error when binary check fails")
+		return // prevent nil dereference below
 	}
 	if !strings.Contains(err.Error(), "binary") {
 		t.Errorf("expected binary-related error, got: %v", err)
@@ -344,7 +349,7 @@ func TestExecutor_GetDefaultContainerType(t *testing.T) {
 func TestExecutor_GetDefaultGRPCAddress(t *testing.T) {
 	cfg := ExecutorConfig{
 		BinaryPath: "/usr/bin/xray",
-		// GRPCAPIAddress not set
+		// GRPCAPIAddress not set — NewExecutor picks a free port dynamically
 	}
 
 	exec, err := NewExecutor(cfg)
@@ -352,8 +357,9 @@ func TestExecutor_GetDefaultGRPCAddress(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if exec.config.GRPCAPIAddress != "127.0.0.1:62789" {
-		t.Errorf("GRPCAPIAddress = %v, want %v", exec.config.GRPCAPIAddress, "127.0.0.1:62789")
+	addr := exec.config.GRPCAPIAddress
+	if !strings.HasPrefix(addr, "127.0.0.1:") {
+		t.Errorf("GRPCAPIAddress = %v, want 127.0.0.1:<port>", addr)
 	}
 }
 
