@@ -85,7 +85,7 @@ func (handler *ProfileHandler) serveRemote(c *gin.Context, username, target stri
 			"traffic_limit":         rsp.GetTrafficLimit(),
 			"traffic_used_uplink":   rsp.GetUplink(),
 			"traffic_used_downlink": rsp.GetDownlink(),
-			"proxy_password":        rsp.GetProxyPassword(),
+			"auth_token":            rsp.GetProxyPassword(),
 			"inbounds":              inbounds,
 		})
 		return

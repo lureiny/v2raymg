@@ -58,7 +58,6 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 
 	users := succList[req.SrcNode]
 	for _, u := range users.([]*proto.User) {
-		u.Tags = []string{}
 		u.Downlink = 0
 		u.Uplink = 0
 	}

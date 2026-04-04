@@ -918,7 +918,7 @@ func TestGetUserSubscriptions(t *testing.T) {
 	}
 
 	// Set up mock UserManager with forward ports
-	um := usermanager.NewUserManager(nil)
+	um := usermanager.NewUserManager(nil, "test-node")
 	um.AddUserForTest("alice@example.com", []uint32{30001})
 	um.AddUserForTest("bob@example.com", []uint32{30001})
 	um.AddUserForTest("charlie@example.com", []uint32{30001})
@@ -1248,7 +1248,7 @@ func TestSubscriptionFlow_AddUserThenGetSubs(t *testing.T) {
 	}
 
 	// Set up mock UserManager with forward port for test user
-	um := usermanager.NewUserManager(nil)
+	um := usermanager.NewUserManager(nil, "test-node")
 	um.AddUserForTest("fulluser@example.com", []uint32{30001})
 	executor.userMgr = um
 
@@ -1499,7 +1499,7 @@ func TestGenerateURI_Dispatch(t *testing.T) {
 
 // newMockUserManagerForSubscription creates a UserManager for subscription tests.
 func newMockUserManagerForSubscription() *usermanager.UserManager {
-	um := usermanager.NewUserManager(nil)
+	um := usermanager.NewUserManager(nil, "test-node")
 	// Pre-add users with bound ports using test helper
 	um.AddUserForTest("alice@example.com", []uint32{30001})
 	um.AddUserForTest("bob@example.com", []uint32{})
@@ -1607,7 +1607,7 @@ func TestGetUserSubscriptions_WithoutForwardPort(t *testing.T) {
 // TestGetUserSubscriptions_NoUserManager tests that subscription works without usermanager
 // when using inbound internal mapping (new approach).
 func TestGetUserSubscriptions_NoUserManager(t *testing.T) {
-	um := usermanager.NewUserManager(nil)
+	um := usermanager.NewUserManager(nil, "test-node")
 	executor := &Executor{
 		inbounds: make(map[string]*XrayInbound),
 		userMgr:  nil, // no UserManager - but we have internal mapping
@@ -1654,7 +1654,7 @@ func TestGetUserSubscriptions_NoUserManager(t *testing.T) {
 // TestGetUserSubscriptions_PortOverride tests that explicit port override
 // takes precedence over forward port.
 func TestGetUserSubscriptions_PortOverride(t *testing.T) {
-	um := usermanager.NewUserManager(nil)
+	um := usermanager.NewUserManager(nil, "test-node")
 	executor := &Executor{
 		inbounds: make(map[string]*XrayInbound),
 	}
@@ -1710,7 +1710,7 @@ func TestGetUserSubscriptions_UserNotFound_SkipsWithoutError(t *testing.T) {
 	}
 
 	// Set up mock UserManager with forward ports
-	um := usermanager.NewUserManager(nil)
+	um := usermanager.NewUserManager(nil, "test-node")
 	um.AddUserForTest("alice@example.com", []uint32{30001})
 	executor.userMgr = um
 
@@ -1770,7 +1770,7 @@ func TestGetUserSubscriptions_NonUserNotFoundError_FailFast(t *testing.T) {
 	}
 
 	// Set up mock UserManager with forward ports
-	um := usermanager.NewUserManager(nil)
+	um := usermanager.NewUserManager(nil, "test-node")
 	um.AddUserForTest("alice@example.com", []uint32{30001})
 	executor.userMgr = um
 
@@ -1830,7 +1830,7 @@ func TestGetUserSubscriptions_MixedScenario_FailFastOnRealError(t *testing.T) {
 	}
 
 	// Set up mock UserManager with forward ports
-	um := usermanager.NewUserManager(nil)
+	um := usermanager.NewUserManager(nil, "test-node")
 	um.AddUserForTest("alice@example.com", []uint32{30001})
 	um.AddUserForTest("bob@example.com", []uint32{30001})
 	executor.userMgr = um

@@ -291,6 +291,18 @@ func TestValidate_CenterNode_NoJWTSecretRequired(t *testing.T) {
 	require.NoError(t, Validate(cfg))
 }
 
+func TestValidate_CenterNode_NoContainerRequired(t *testing.T) {
+	// center nodes do not need any enabled container.
+	cfg := &AppConfig{}
+	cfg.NodeType = "center"
+	cfg.Store.DSN = "/tmp/test.db"
+	cfg.Forward.MinPort = 10000
+	cfg.Forward.MaxPort = 60000
+	// Containers intentionally empty
+
+	require.NoError(t, Validate(cfg))
+}
+
 func TestLoadFromFile_DefaultsApplied(t *testing.T) {
 	// Minimal YAML — omit store, forward, and demo to verify defaults kick in.
 	content := `

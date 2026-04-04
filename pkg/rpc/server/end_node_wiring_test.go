@@ -4,37 +4,28 @@ import (
 	"context"
 	"testing"
 
+	"github.com/lureiny/v2raymg/pkg/proxy/usermanager"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
 // ---------------------------------------------------------------------------
-// Startup wiring: clusterUserEnabled flag propagation
+// Startup wiring: cluster sync enabled/disabled propagation via UserManager
 // ---------------------------------------------------------------------------
 
-// TestEndNodeServer_ClusterUserDisabledByDefault:
-// A freshly created EndNodeServer (no InitClusterUser call) has cluster_user disabled.
-// All cluster-user gRPC handlers should return code=400 immediately.
-func TestEndNodeServer_ClusterUserDisabledByDefault(t *testing.T) {
+// TestEndNodeServer_ClusterDisabledByDefault:
+// A freshly created EndNodeServer with a default UserManager has cluster sync disabled.
+// Cluster gRPC handlers should return code=400 immediately.
+func TestEndNodeServer_ClusterDisabledByDefault(t *testing.T) {
 	s := &EndNodeServer{}
-	// No InitClusterUser() call — simulates cfg.ClusterUser.Enabled=false wiring path.
+	s.userMgr = usermanager.NewUserManager(nil, "node-test")
 
-	if s.clusterUserEnabled {
-		t.Fatal("clusterUserEnabled should be false by default")
-	}
-
-	rspList, err := s.ListClusterUsers(context.Background(), &proto.ListClusterUsersReq{})
-	if err != nil || rspList.Code != 400 {
-		t.Errorf("ListClusterUsers: expected code=400 when disabled, got code=%d err=%v", rspList.Code, err)
+	if s.userMgr.IsClusterEnabled() {
+		t.Fatal("cluster should be disabled by default")
 	}
 
 	rspUpsert, err := s.UpsertClusterUsers(context.Background(), &proto.UpsertClusterUsersReq{})
 	if err != nil || rspUpsert.Code != 400 {
 		t.Errorf("UpsertClusterUsers: expected code=400 when disabled, got code=%d err=%v", rspUpsert.Code, err)
-	}
-
-	rspDel, err := s.DeleteClusterUsers(context.Background(), &proto.DeleteClusterUsersReq{})
-	if err != nil || rspDel.Code != 400 {
-		t.Errorf("DeleteClusterUsers: expected code=400 when disabled, got code=%d err=%v", rspDel.Code, err)
 	}
 
 	rspNG, err := s.GetNodeGroups(context.Background(), &proto.GetNodeGroupsReq{})
@@ -43,45 +34,27 @@ func TestEndNodeServer_ClusterUserDisabledByDefault(t *testing.T) {
 	}
 }
 
-// TestEndNodeServer_InitClusterUser_EnablesFeature:
-// After InitClusterUser(true, ...) the flag is set and handlers work.
-func TestEndNodeServer_InitClusterUser_EnablesFeature(t *testing.T) {
-	cuStore := newTestCUStore()
+// TestEndNodeServer_ClusterEnabled:
+// After enabling cluster sync via UserManager, handlers should work.
+func TestEndNodeServer_ClusterEnabled(t *testing.T) {
 	ngStore := newTestNGStore("default")
+	mgr := usermanager.NewUserManager(nil, "node-test")
+	mgr.EnableClusterSync("default", ngStore)
+
 	s := &EndNodeServer{}
-	s.Name = "node-wiring-test"
+	s.Name = "node-test"
+	s.userMgr = mgr
 
-	// Simulate cfg.ClusterUser.Enabled=true wiring: call InitClusterUser
-	s.InitClusterUser(true, cuStore, ngStore, nil)
-
-	if !s.clusterUserEnabled {
-		t.Fatal("clusterUserEnabled should be true after InitClusterUser(true, ...)")
+	if !s.userMgr.IsClusterEnabled() {
+		t.Fatal("cluster should be enabled after EnableClusterSync")
 	}
 
-	// ListClusterUsers should work (no 400)
-	rsp, err := s.ListClusterUsers(context.Background(), &proto.ListClusterUsersReq{})
+	// UpsertClusterUsers should not return 400 when enabled.
+	rsp, err := s.UpsertClusterUsers(context.Background(), &proto.UpsertClusterUsersReq{})
 	if err != nil {
-		t.Fatalf("ListClusterUsers error: %v", err)
+		t.Fatalf("UpsertClusterUsers error: %v", err)
 	}
 	if rsp.Code == 400 {
-		t.Errorf("ListClusterUsers: got code=400 after feature was enabled")
-	}
-}
-
-// TestEndNodeServer_InitClusterUser_FlagFalse_DisablesFeature:
-// InitClusterUser(false, ...) keeps feature disabled even with stores injected.
-func TestEndNodeServer_InitClusterUser_FlagFalse_DisablesFeature(t *testing.T) {
-	cuStore := newTestCUStore()
-	ngStore := newTestNGStore("default")
-	s := &EndNodeServer{}
-	s.InitClusterUser(false, cuStore, ngStore, nil)
-
-	if s.clusterUserEnabled {
-		t.Fatal("clusterUserEnabled should remain false when InitClusterUser(false,...)")
-	}
-
-	rsp, err := s.ListClusterUsers(context.Background(), &proto.ListClusterUsersReq{})
-	if err != nil || rsp.Code != 400 {
-		t.Errorf("expected code=400 for disabled feature, got code=%d err=%v", rsp.Code, err)
+		t.Errorf("UpsertClusterUsers: got code=400 after feature was enabled")
 	}
 }

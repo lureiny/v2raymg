@@ -3,18 +3,18 @@ package server
 import (
 	context "context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/lureiny/v2raymg/pkg/http/auth"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+	"github.com/lureiny/v2raymg/pkg/proxy/forward"
 	"github.com/lureiny/v2raymg/pkg/proxy/usermanager"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
 func (s *EndNodeServer) GetProfile(ctx context.Context, req *proto.GetProfileReq) (*proto.GetProfileRsp, error) {
-	if s.clusterUserEnabled {
-		return &proto.GetProfileRsp{Code: 400, Msg: "local user API disabled: cluster_user is enabled"}, nil
-	}
 	user, err := s.userMgr.GetUser(req.GetUsername())
 	if err != nil {
 		return &proto.GetProfileRsp{Code: 404, Msg: "user not found"}, nil
@@ -35,7 +35,7 @@ func (s *EndNodeServer) GetProfile(ctx context.Context, req *proto.GetProfileReq
 		TrafficLimit:  user.TrafficLimit,
 		Uplink:        user.TrafficTotalUplink,
 		Downlink:      user.TrafficTotalDownlink,
-		ProxyPassword: user.Password,
+		ProxyPassword: user.AuthToken,
 	}
 	if fm := s.userMgr.GetForwardManager(); fm != nil {
 		rules := fm.GetRulesByUser(user.Username)
@@ -51,30 +51,20 @@ func (s *EndNodeServer) GetProfile(ctx context.Context, req *proto.GetProfileReq
 }
 
 func (s *EndNodeServer) GetUsers(ctx context.Context, getUsersReq *proto.GetUsersReq) (*proto.GetUsersRsp, error) {
-	if s.clusterUserEnabled {
-		return &proto.GetUsersRsp{Code: 400, Msg: "local user API disabled: cluster_user is enabled, use cluster user API instead"}, nil
-	}
 	getUsersRsp := &proto.GetUsersRsp{Code: 0}
 	users := s.userMgr.ListUsers()
 	for _, u := range users {
-		protoUser := &proto.User{
-			Name:   u.Username,
-			Passwd: u.Password,
-		}
-		protoUser.Uplink = u.TrafficTotalUplink
-		protoUser.Downlink = u.TrafficTotalDownlink
-		getUsersRsp.Users = append(getUsersRsp.Users, protoUser)
+		pu := userToProtoUser(u)
+		pu.Passwd = "" // list 接口不返回 auth_token
+		getUsersRsp.Users = append(getUsersRsp.Users, pu)
 	}
 	return getUsersRsp, nil
 }
 
 func (s *EndNodeServer) AddUsers(ctx context.Context, addUsersReq *proto.UserOpReq) (*proto.UserOpRsp, error) {
-	if s.clusterUserEnabled {
-		return &proto.UserOpRsp{Code: 400, Msg: "local user API disabled: cluster_user is enabled, use cluster user API instead"}, nil
-	}
 	addUsersRsp := &proto.UserOpRsp{Code: 0}
 	for _, user := range addUsersReq.GetUsers() {
-		log.Infof("AddUsers: name=%s passwd=%q expire_time=%d tags=%v", user.Name, user.Passwd, user.ExpireTime, user.Tags)
+		log.Infof("AddUsers: name=%s passwd=%q expire_time=%d", user.Name, user.Passwd, user.ExpireTime)
 
 		var ttl time.Duration
 		if user.ExpireTime > 0 {
@@ -88,6 +78,45 @@ func (s *EndNodeServer) AddUsers(ctx context.Context, addUsersReq *proto.UserOpR
 		if err != nil {
 			log.Error("add user failed", "err", err.Error(), "user", user.Name)
 			addUsersRsp.Msg += fmt.Sprintf("user: %s add failed: %s|", user.Name, err.Error())
+			continue
+		}
+		// Apply optional fields after user creation.
+		if user.Role != "" {
+			if err := s.userMgr.SetUserRole(user.Name, user.Role); err != nil {
+				addUsersRsp.Msg += fmt.Sprintf("user: %s set role failed: %s|", user.Name, err.Error())
+			}
+		}
+		if user.Group != "" {
+			if err := s.userMgr.SetUserGroup(user.Name, user.Group); err != nil {
+				addUsersRsp.Msg += fmt.Sprintf("user: %s set group failed: %s|", user.Name, err.Error())
+			}
+		}
+		if user.UploadBps != 0 {
+			bps := user.UploadBps
+			if bps < 0 {
+				bps = 0
+			}
+			if err := s.userMgr.SetUserBandwidthLimit(user.Name, forward.BandwidthUpload, bps); err != nil {
+				addUsersRsp.Msg += fmt.Sprintf("user: %s set upload bw failed: %s|", user.Name, err.Error())
+			}
+		}
+		if user.DownloadBps != 0 {
+			bps := user.DownloadBps
+			if bps < 0 {
+				bps = 0
+			}
+			if err := s.userMgr.SetUserBandwidthLimit(user.Name, forward.BandwidthDownload, bps); err != nil {
+				addUsersRsp.Msg += fmt.Sprintf("user: %s set download bw failed: %s|", user.Name, err.Error())
+			}
+		}
+		if user.MaxClients != 0 {
+			mc := int(user.MaxClients)
+			if mc < 0 {
+				mc = 0
+			}
+			if err := s.userMgr.SetUserClientLimit(user.Name, mc, int(user.ClientRecycleDelaySec), int(user.ClientDrainSec)); err != nil {
+				addUsersRsp.Msg += fmt.Sprintf("user: %s set client limit failed: %s|", user.Name, err.Error())
+			}
 		}
 	}
 	if len(addUsersRsp.Msg) > 0 {
@@ -97,9 +126,6 @@ func (s *EndNodeServer) AddUsers(ctx context.Context, addUsersReq *proto.UserOpR
 }
 
 func (s *EndNodeServer) DeleteUsers(ctx context.Context, deleteUsersReq *proto.UserOpReq) (*proto.UserOpRsp, error) {
-	if s.clusterUserEnabled {
-		return &proto.UserOpRsp{Code: 400, Msg: "local user API disabled: cluster_user is enabled, use cluster user API instead"}, nil
-	}
 	deleteUsersRsp := &proto.UserOpRsp{Code: 0}
 	for _, user := range deleteUsersReq.GetUsers() {
 		err := s.userMgr.RemoveUser(usermanager.RemoveUserRequest{Username: user.Name})
@@ -115,27 +141,78 @@ func (s *EndNodeServer) DeleteUsers(ctx context.Context, deleteUsersReq *proto.U
 }
 
 func (s *EndNodeServer) UpdateUsers(ctx context.Context, updateUsersReq *proto.UserOpReq) (*proto.UserOpRsp, error) {
-	if s.clusterUserEnabled {
-		return &proto.UserOpRsp{Code: 400, Msg: "local user API disabled: cluster_user is enabled, use cluster user API instead"}, nil
-	}
 	updateUsersRsp := &proto.UserOpRsp{Code: 0}
-	var err error
+	var errMsgs []string
 	for _, user := range updateUsersReq.GetUsers() {
-		err = s.userMgr.UpdateUser(user.Name, user.Passwd, user.ExpireTime)
+		// Handle role update if specified.
+		if user.Role != "" {
+			if err := s.userMgr.SetUserRole(user.Name, user.Role); err != nil {
+				errMsgs = append(errMsgs, fmt.Sprintf("set role for %s: %s", user.Name, err.Error()))
+			}
+		}
+		// Handle password and/or expiry update if specified.
+		if user.Passwd != "" || user.ExpireTime > 0 {
+			if err := s.userMgr.UpdateUser(user.Name, user.Passwd, user.ExpireTime); err != nil {
+				errMsgs = append(errMsgs, fmt.Sprintf("update %s: %s", user.Name, err.Error()))
+			}
+		}
+		// Handle bandwidth limit updates. Sentinel: 0=no change, -1=remove, >0=set.
+		if user.UploadBps != 0 {
+			bps := user.UploadBps
+			if bps < 0 {
+				bps = 0
+			}
+			if err := s.userMgr.SetUserBandwidthLimit(user.Name, forward.BandwidthUpload, bps); err != nil {
+				errMsgs = append(errMsgs, fmt.Sprintf("set upload bw for %s: %s", user.Name, err.Error()))
+			}
+		}
+		if user.DownloadBps != 0 {
+			bps := user.DownloadBps
+			if bps < 0 {
+				bps = 0
+			}
+			if err := s.userMgr.SetUserBandwidthLimit(user.Name, forward.BandwidthDownload, bps); err != nil {
+				errMsgs = append(errMsgs, fmt.Sprintf("set download bw for %s: %s", user.Name, err.Error()))
+			}
+		}
+		// Handle group update if specified.
+		if user.Group != "" {
+			if err := s.userMgr.SetUserGroup(user.Name, user.Group); err != nil {
+				errMsgs = append(errMsgs, fmt.Sprintf("set group for %s: %s", user.Name, err.Error()))
+			}
+		}
+		// Handle client limit update. Sentinel: 0=no change, -1=remove, >0=set.
+		// When removing the limit (mc→0), recycle/drain are also zeroed — this is
+		// intentional because those fields are meaningless without a client cap.
+		if user.MaxClients != 0 {
+			mc := int(user.MaxClients)
+			if mc < 0 {
+				mc = 0
+			}
+			if err := s.userMgr.SetUserClientLimit(user.Name, mc, int(user.ClientRecycleDelaySec), int(user.ClientDrainSec)); err != nil {
+				errMsgs = append(errMsgs, fmt.Sprintf("set client limit for %s: %s", user.Name, err.Error()))
+			}
+		}
 	}
-	if err != nil {
-		updateUsersRsp.Msg = err.Error()
+	if len(errMsgs) > 0 {
+		updateUsersRsp.Msg = strings.Join(errMsgs, "|")
 	}
 	return updateUsersRsp, nil
 }
 
 func (s *EndNodeServer) ResetUser(ctx context.Context, resetUserReq *proto.UserOpReq) (*proto.UserOpRsp, error) {
-	if s.clusterUserEnabled {
-		return &proto.UserOpRsp{Code: 400, Msg: "local user API disabled: cluster_user is enabled, use cluster user API instead"}, nil
-	}
 	rsp := &proto.UserOpRsp{Code: 0}
 	for _, u := range resetUserReq.GetUsers() {
 		username := u.GetName()
+		// Reset auth token.
+		if _, err := s.userMgr.ResetAuthToken(username); err != nil {
+			errMsg := fmt.Sprintf("reset auth token for user %s: %v", username, err)
+			log.Error("ResetUser failed", "user", username, "err", errMsg)
+			rsp.Code = 300
+			rsp.Msg = errMsg
+			return rsp, nil
+		}
+		// Rotate ports.
 		if err := s.userMgr.RotateUserPort(username); err != nil {
 			errMsg := fmt.Sprintf("rotate port for user %s: %v", username, err)
 			log.Error("ResetUser failed", "user", username, "err", errMsg)
@@ -143,33 +220,56 @@ func (s *EndNodeServer) ResetUser(ctx context.Context, resetUserReq *proto.UserO
 			rsp.Msg = errMsg
 			return rsp, nil
 		}
-		log.Info("ResetUser: port rotated", "user", username)
+		log.Info("ResetUser: token and port rotated", "user", username)
 	}
 	return rsp, nil
 }
 
 func (s *EndNodeServer) GetSub(ctx context.Context, getSubReq *proto.GetSubReq) (*proto.GetSubRsp, error) {
 	getSubRsp := &proto.GetSubRsp{Code: 0}
-	user := getSubReq.GetUser()
 	excludeProtocols := getSubReq.GetExcludeProtocols()
 
-	localUser, err := s.userMgr.GetUser(user.Name)
-	if err != nil {
-		errMsg := fmt.Sprintf("get sub err > %v", err)
-		log.Error("get sub failed", "err", errMsg, "user", user.Name)
-		getSubRsp.Msg = errMsg
-		getSubRsp.Code = 300
-		return getSubRsp, nil
-	}
-	if localUser.Password != user.Passwd {
-		log.Error("get sub failed", "err", "invalid password", "user", user.Name)
-		getSubRsp.Msg = "invalid password"
-		getSubRsp.Code = 300
-		return getSubRsp, nil
+	// Dual authentication: token-first, then user+pwd fallback.
+	var localUser *contracts.User
+
+	if token := getSubReq.GetToken(); token != "" {
+		// Method A: token-only auth — token uniquely identifies the user.
+		localUser = s.userMgr.FindUserByToken(token)
+		if localUser == nil {
+			log.Error("get sub failed", "err", "invalid token")
+			getSubRsp.Msg = "invalid token"
+			getSubRsp.Code = 300
+			return getSubRsp, nil
+		}
+	} else {
+		// Method B: user + password auth (backward compatible with old subscription links).
+		// Password is verified via SHA256+bcrypt against LoginPassword.
+		user := getSubReq.GetUser()
+		if user == nil || user.Name == "" || user.Passwd == "" {
+			log.Error("get sub failed", "err", "missing user credentials")
+			getSubRsp.Msg = "missing user credentials"
+			getSubRsp.Code = 300
+			return getSubRsp, nil
+		}
+		var err error
+		localUser, err = s.userMgr.GetUser(user.Name)
+		if err != nil {
+			errMsg := fmt.Sprintf("get sub err > %v", err)
+			log.Error("get sub failed", "err", errMsg, "user", user.Name)
+			getSubRsp.Msg = errMsg
+			getSubRsp.Code = 300
+			return getSubRsp, nil
+		}
+		if !auth.VerifyLoginPassword(localUser.LoginPassword, user.Passwd) {
+			log.Error("get sub failed", "err", "invalid password", "user", user.Name)
+			getSubRsp.Msg = "invalid password"
+			getSubRsp.Code = 300
+			return getSubRsp, nil
+		}
 	}
 
 	req := contracts.SubscriptionRequest{
-		User:             contracts.UserSpec{Username: user.Name, Password: localUser.Password},
+		User:             contracts.UserSpec{Username: localUser.Username, AuthToken: localUser.AuthToken},
 		Host:             s.cfg.ProxyHost,
 		NodeName:         s.cfg.Name,
 		ExcludeProtocols: excludeProtocols,
@@ -178,7 +278,7 @@ func (s *EndNodeServer) GetSub(ctx context.Context, getSubReq *proto.GetSubReq) 
 	specs, err := s.subMgr.GetSubscription(req)
 	if err != nil {
 		errMsg := fmt.Sprintf("get sub err > %v", err)
-		log.Error("get sub failed", "err", errMsg, "user", user.Name)
+		log.Error("get sub failed", "err", errMsg, "user", localUser.Username)
 		getSubRsp.Msg = errMsg
 		getSubRsp.Code = 300
 		return getSubRsp, nil
@@ -191,7 +291,7 @@ func (s *EndNodeServer) GetSub(ctx context.Context, getSubReq *proto.GetSubReq) 
 		}
 	}
 	if len(uris) == 0 {
-		log.Error("get sub failed", "err", "no subscription found", "user", user.Name)
+		log.Error("get sub failed", "err", "no subscription found", "user", localUser.Username)
 		getSubRsp.Msg = "no subscription found"
 		getSubRsp.Code = 300
 		return getSubRsp, nil

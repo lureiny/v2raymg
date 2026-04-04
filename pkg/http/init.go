@@ -41,15 +41,12 @@ func (s *HttpServer) registerRoutes() {
 	adminGroup := r.Group("/api", auth.AuthMiddleware(s.token, s.jwtSecret), auth.AdminOnly())
 	s.registerOn(adminGroup, &NodeHandler{}, "GET")
 	s.registerOn(adminGroup, &GetCertsHandler{}, "GET")
-	// User CRUD routes — disabled when clusterUser is enabled to prevent
-	// two user management systems from running simultaneously.
-	if !s.clusterUserEnabled {
-		s.registerOn(adminGroup, &UserListHandler{}, "GET")
-		s.registerOn(adminGroup, &UserAddHandler{}, "POST")
-		s.registerOn(adminGroup, &UserUpdateHandler{}, "PUT")
-		s.registerOn(adminGroup, &UserDeleteHandler{}, "DELETE")
-		s.registerOn(adminGroup, &UserResetHandler{}, "POST")
-	}
+	// User CRUD routes — always registered; UserManager is now the single user store.
+	s.registerOn(adminGroup, &UserListHandler{}, "GET")
+	s.registerOn(adminGroup, &UserAddHandler{}, "POST")
+	s.registerOn(adminGroup, &UserUpdateHandler{}, "PUT")
+	s.registerOn(adminGroup, &UserDeleteHandler{}, "DELETE")
+	s.registerOn(adminGroup, &UserResetHandler{}, "POST")
 	s.registerOn(adminGroup, &InboundGetHandler{}, "GET")
 	s.registerOn(adminGroup, &InboundAddHandler{}, "POST")
 	s.registerOn(adminGroup, &InboundDeleteHandler{}, "DELETE")
@@ -63,16 +60,12 @@ func (s *HttpServer) registerRoutes() {
 	s.registerOn(adminGroup, &GatewayHandler{}, "PUT")
 	s.registerOn(adminGroup, &PingCheckHandler{}, "PUT")
 	s.registerOn(adminGroup, &SetUserRoleHandler{}, "PUT")
-	// Node Groups and ClusterUser routes — only registered when feature is enabled.
-	// When disabled, accessing these paths returns 404 to preserve the "default-off
-	// is invisible" contract.
-	if s.clusterUserEnabled {
+	s.registerOn(adminGroup, &SetUserBandwidthHandler{}, "PUT")
+	s.registerOn(adminGroup, &SetUserClientLimitHandler{}, "PUT")
+	// Node Groups routes — only registered when cluster sync is enabled.
+	if s.clusterEnabled {
 		s.registerOn(adminGroup, &NodeGroupsGetHandler{}, "GET")
 		s.registerOn(adminGroup, &NodeGroupsSetHandler{}, "PUT")
-		s.registerOn(adminGroup, &ClusterUserListHandler{}, "GET")
-		s.registerOn(adminGroup, &ClusterUserAddHandler{}, "POST")
-		s.registerOn(adminGroup, &ClusterUserUpdateHandler{}, "PUT")
-		s.registerOn(adminGroup, &ClusterUserDeleteHandler{}, "DELETE")
 	}
 }
 

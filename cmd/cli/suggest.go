@@ -99,9 +99,15 @@ var (
 		Default:     "",
 	}
 
-	tagsSuggest = prompt.Suggest{
-		Text:        "tags",
-		Description: "xray/v2ray inbound tags, eg: tag1,tag2",
+	oldPasswordSuggest = prompt.Suggest{
+		Text:        "old_password",
+		Description: "current password",
+		Default:     "",
+	}
+
+	newPasswordSuggest = prompt.Suggest{
+		Text:        "new_password",
+		Description: "new password",
 		Default:     "",
 	}
 
@@ -129,28 +135,10 @@ var (
 		Default:     "",
 	}
 
-	dstProtocolSuggest = prompt.Suggest{
-		Text:        "dst_protocol",
-		Description: "dst protocol: vless, vmess, trojan",
-		Default:     "",
-	}
-
 	boundRawStringSuggest = prompt.Suggest{
 		Text:        "bound_raw_string",
 		Description: "base64-encoded inbound config json",
 		Default:     "",
-	}
-
-	patternSuggest = prompt.Suggest{
-		Text:        "pattern",
-		Description: "query pattern for stat, empty means all",
-		Default:     "",
-	}
-
-	resetSuggest = prompt.Suggest{
-		Text:        "reset",
-		Description: "reset stat after query",
-		Default:     false,
 	}
 
 	versionTagSuggest = prompt.Suggest{

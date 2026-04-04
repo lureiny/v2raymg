@@ -328,7 +328,7 @@ func (sc *SnellContainer) handleUserEvent(event usermanager.UserEvent) {
 
 	case usermanager.UserEventRemove:
 		delete(sc.addedUsers, event.Username)
-		port, ok := sc.userMgr.GetUserPortByDst(event.Username, uint32(sc.cfg.Port))
+		port, ok := sc.userMgr.GetUserPortByDstForCleanup(event.Username, uint32(sc.cfg.Port))
 		if !ok {
 			return
 		}
@@ -337,6 +337,38 @@ func (sc *SnellContainer) handleUserEvent(event usermanager.UserEvent) {
 			BindPort: port,
 		}); err != nil {
 			slog.Error("snell: release port failed", "user", event.Username, "err", err)
+		}
+
+	case usermanager.UserEventUpdate:
+		// Re-evaluate visibility after group or other changes.
+		if event.User != nil && !sc.userMgr.IsUserVisible(event.User) {
+			// User no longer belongs to this node — tear down forwarding rule.
+			delete(sc.addedUsers, event.Username)
+			port, ok := sc.userMgr.GetUserPortByDstForCleanup(event.Username, uint32(sc.cfg.Port))
+			if ok {
+				if err := sc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
+					Username: event.Username,
+					BindPort: port,
+				}); err != nil {
+					slog.Error("snell: release port on group change failed", "user", event.Username, "err", err)
+				}
+			}
+		} else if event.User != nil {
+			// User became visible (e.g. group changed back) — ensure forwarding rule exists.
+			if _, exists := sc.addedUsers[event.Username]; !exists {
+				_, err := sc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
+					Username:      event.Username,
+					ContainerType: contracts.ContainerSnell,
+					InboundTag:    defaultInboundTag,
+					TargetPort:    uint32(sc.cfg.Port),
+					Protocol:      contracts.ProtocolSnell,
+				})
+				if err != nil {
+					slog.Error("snell: allocate port on group change failed", "user", event.Username, "err", err)
+					return
+				}
+				sc.addedUsers[event.Username] = struct{}{}
+			}
 		}
 	}
 }
@@ -459,6 +491,30 @@ func (sc *SnellContainer) reconcileUsers() {
 	}
 
 	users := sc.userMgr.ListUsers()
+
+	// Build a set of visible usernames for fast lookup.
+	visibleSet := make(map[string]struct{}, len(users))
+	for _, u := range users {
+		visibleSet[u.Username] = struct{}{}
+	}
+
+	// Remove users that are tracked but no longer visible (e.g. group changed).
+	for username := range sc.addedUsers {
+		if _, visible := visibleSet[username]; !visible {
+			delete(sc.addedUsers, username)
+			port, ok := sc.userMgr.GetUserPortByDstForCleanup(username, uint32(sc.cfg.Port))
+			if ok {
+				if err := sc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
+					Username: username,
+					BindPort: port,
+				}); err != nil {
+					slog.Warn("snell: reconcile release port failed", "user", username, "err", err)
+				}
+			}
+		}
+	}
+
+	// Add users that are visible but not yet tracked.
 	for _, user := range users {
 		if _, exists := sc.addedUsers[user.Username]; exists {
 			continue

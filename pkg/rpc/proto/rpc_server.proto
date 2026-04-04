@@ -6,11 +6,20 @@ package proto;
 
 message User {
     string name = 1;
-    string passwd = 2;
+    string passwd = 2; // semantics: auth_token (for GetUsers/GetProfile) or login password input (for AddUsers/UpdateUsers)
     int64 expire_time = 3;
-    repeated string tags = 4;
+    reserved 4;
     int64 downlink = 5;
     int64 uplink = 6;
+    string role = 7;
+    // Bandwidth limits (bytes/sec). Sentinel: 0=no change, -1=remove limit, >0=set.
+    int64 upload_bps = 8;
+    int64 download_bps = 9;
+    // Client limits. Sentinel: 0=no change, -1=remove limit, >0=set.
+    int32 max_clients = 10;
+    int32 client_recycle_delay_sec = 11;
+    int32 client_drain_sec = 12;
+    string group = 13;
 }
 
 enum BuilderType {
@@ -82,6 +91,7 @@ message GetSubReq {
     repeated string exclude_protocols = 3;
     bool use_sni = 4;
     string user_agent = 5; // client User-Agent, used to select subscription format on node side
+    string token = 6;      // auth token for token-only authentication (no username needed)
 }
 
 message GetSubRsp {
@@ -99,16 +109,12 @@ message UserDigest {
     string hash = 5;
 }
 
-message ClusterUserInfo {
-    string username = 1;
-    string password = 2;
-    int64 expire = 3;
-    string role = 4;
-    string target_group = 5;
-    bool deleted = 6;
-    int64 updated_at_us = 7;
-    string origin_node = 8;
-    string hash = 9;
+message ClusterUserSync {
+    User user = 1;
+    bool deleted = 2;
+    int64 updated_at_us = 3;
+    string origin_node = 4;
+    string hash = 5;
 }
 
 message HeartBeatReq {
@@ -447,10 +453,7 @@ service EndNodeAccess {
     // cluster user
     rpc GetNodeGroups(GetNodeGroupsReq) returns (GetNodeGroupsRsp) {}
     rpc SetNodeGroups(SetNodeGroupsReq) returns (SetNodeGroupsRsp) {}
-    rpc ListClusterUsers(ListClusterUsersReq) returns (ListClusterUsersRsp) {}
-    rpc GetClusterUsersByName(GetClusterUsersByNameReq) returns (GetClusterUsersByNameRsp) {}
     rpc UpsertClusterUsers(UpsertClusterUsersReq) returns (UpsertClusterUsersRsp) {}
-    rpc DeleteClusterUsers(DeleteClusterUsersReq) returns (DeleteClusterUsersRsp) {}
 
     // status
     rpc GetStatus(GetStatusReq) returns (GetStatusRsp) {}
@@ -473,38 +476,12 @@ message SetNodeGroupsRsp {
     string msg = 2;
 }
 
-message ListClusterUsersReq {
-    NodeAuthInfo node_auth_info = 1;
-    string group = 2;
-}
-message ListClusterUsersRsp {
-    int32 code = 1;
-    string msg = 2;
-    repeated ClusterUserInfo users = 3;
-}
-message GetClusterUsersByNameReq {
-    NodeAuthInfo node_auth_info = 1;
-    repeated string usernames = 2;
-}
-message GetClusterUsersByNameRsp {
-    int32 code = 1;
-    string msg = 2;
-    repeated ClusterUserInfo users = 3;
-}
 message UpsertClusterUsersReq {
     NodeAuthInfo node_auth_info = 1;
-    repeated ClusterUserInfo users = 2;
+    repeated ClusterUserSync users = 2;
     bool from_admin = 3;  // true = Admin HTTP 写入（自动填充 version），false = Peer sync 写入（需版本仲裁）
 }
 message UpsertClusterUsersRsp {
-    int32 code = 1;
-    string msg = 2;
-}
-message DeleteClusterUsersReq {
-    NodeAuthInfo node_auth_info = 1;
-    repeated string usernames = 2;
-}
-message DeleteClusterUsersRsp {
     int32 code = 1;
     string msg = 2;
 }

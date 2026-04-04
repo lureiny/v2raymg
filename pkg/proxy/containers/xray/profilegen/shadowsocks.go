@@ -250,7 +250,7 @@ func GenerateShadowsocksInboundSpec(p GenerateShadowsocksParams) (contracts.Inbo
 		Username: fmt.Sprintf("auto@ss.local"),
 		Level:    0,
 		Protocol: contracts.ProtocolShadowsocks,
-		Password: password,
+		AuthToken: password,
 		Extensions: map[string]any{
 			"method": p.Method,
 		},

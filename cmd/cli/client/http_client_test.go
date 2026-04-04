@@ -245,6 +245,105 @@ func TestSetUserRole_SendsCorrectRequest(t *testing.T) {
 	}
 }
 
+// --- SetUserBandwidth request tests ---
+
+func TestSetUserBandwidth_SendsCorrectRequest(t *testing.T) {
+	var captured struct {
+		method string
+		path   string
+		body   map[string]interface{}
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured.method = r.Method
+		captured.path = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&captured.body)
+		w.WriteHeader(200)
+		w.Write([]byte(`{"code":0,"msg":"ok"}`))
+	}))
+	defer srv.Close()
+
+	up := int64(1000000)
+	down := int64(500000)
+	SetUserBandwidth(srv.URL, "my-token", "node1", "alice", &up, &down)
+
+	if captured.method != "PUT" {
+		t.Fatalf("expected PUT, got %s", captured.method)
+	}
+	if captured.path != "/api/user/alice/bandwidth" {
+		t.Fatalf("expected /api/user/alice/bandwidth, got %s", captured.path)
+	}
+	if captured.body["upload_bps"] != float64(1000000) {
+		t.Fatalf("expected upload_bps=1000000, got %v", captured.body["upload_bps"])
+	}
+	if captured.body["download_bps"] != float64(500000) {
+		t.Fatalf("expected download_bps=500000, got %v", captured.body["download_bps"])
+	}
+	if captured.body["target"] != "node1" {
+		t.Fatalf("expected target=node1, got %v", captured.body["target"])
+	}
+}
+
+func TestSetUserBandwidth_OmitsNilFields(t *testing.T) {
+	var captured struct {
+		body map[string]interface{}
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&captured.body)
+		w.WriteHeader(200)
+		w.Write([]byte(`{"code":0,"msg":"ok"}`))
+	}))
+	defer srv.Close()
+
+	up := int64(1000000)
+	SetUserBandwidth(srv.URL, "my-token", "", "alice", &up, nil)
+
+	if _, ok := captured.body["download_bps"]; ok {
+		t.Fatalf("expected download_bps to be absent, got %v", captured.body["download_bps"])
+	}
+	if captured.body["upload_bps"] != float64(1000000) {
+		t.Fatalf("expected upload_bps=1000000, got %v", captured.body["upload_bps"])
+	}
+}
+
+// --- SetUserClientLimit request tests ---
+
+func TestSetUserClientLimit_SendsCorrectRequest(t *testing.T) {
+	var captured struct {
+		method string
+		path   string
+		body   map[string]interface{}
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured.method = r.Method
+		captured.path = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&captured.body)
+		w.WriteHeader(200)
+		w.Write([]byte(`{"code":0,"msg":"ok"}`))
+	}))
+	defer srv.Close()
+
+	SetUserClientLimit(srv.URL, "my-token", "", "bob", 3, 60, 2)
+
+	if captured.method != "PUT" {
+		t.Fatalf("expected PUT, got %s", captured.method)
+	}
+	if captured.path != "/api/user/bob/client-limit" {
+		t.Fatalf("expected /api/user/bob/client-limit, got %s", captured.path)
+	}
+	if captured.body["max_clients"] != float64(3) {
+		t.Fatalf("expected max_clients=3, got %v", captured.body["max_clients"])
+	}
+	if captured.body["recycle_delay_sec"] != float64(60) {
+		t.Fatalf("expected recycle_delay_sec=60, got %v", captured.body["recycle_delay_sec"])
+	}
+	if captured.body["drain_sec"] != float64(2) {
+		t.Fatalf("expected drain_sec=2, got %v", captured.body["drain_sec"])
+	}
+}
+
 func TestListNode_Unauthorized_ReturnsHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

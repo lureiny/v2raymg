@@ -6,14 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"net/url"
 	"reflect"
 	"strings"
 	"time"
 
 	"github.com/lureiny/go-prompt"
 	"github.com/lureiny/v2raymg/cmd/cli/client"
-	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
 func InitPromptAndRegister() *prompt.Prompt {
@@ -130,9 +128,15 @@ func InitPromptAndRegister() *prompt.Prompt {
 			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
 			userNameSuggest,
 			passwordSuggest,
-			tagsSuggest,
 			expireSuggest,
 			ttlSuggest,
+			{Text: "role", Description: "role: admin or normal", Default: ""},
+			{Text: "group", Description: "cluster group", Default: ""},
+			{Text: "upload_bps", Description: "upload limit bytes/sec (0=unlimited)", Default: int64(0)},
+			{Text: "download_bps", Description: "download limit bytes/sec (0=unlimited)", Default: int64(0)},
+			{Text: "max_clients", Description: "max client IPs (0=unlimited)", Default: int(0)},
+			{Text: "recycle_delay_sec", Description: "client recycle delay sec", Default: int(0)},
+			{Text: "drain_sec", Description: "client drain sec", Default: int(0)},
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
@@ -144,6 +148,13 @@ func InitPromptAndRegister() *prompt.Prompt {
 			passwordSuggest,
 			expireSuggest,
 			ttlSuggest,
+			{Text: "role", Description: "role: admin or normal (empty=no change)", Default: ""},
+			{Text: "upload_bps", Description: "upload limit bytes/sec (0=no change)", Default: int64(0)},
+			{Text: "download_bps", Description: "download limit bytes/sec (0=no change)", Default: int64(0)},
+			{Text: "max_clients", Description: "max client IPs (0=no change)", Default: int(0)},
+			{Text: "recycle_delay_sec", Description: "client recycle delay sec (0=no change)", Default: int(0)},
+			{Text: "drain_sec", Description: "client drain sec (0=no change)", Default: int(0)},
+			{Text: "group", Description: "cluster group (empty=no change)", Default: ""},
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
@@ -152,7 +163,6 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithSuggests([]prompt.Suggest{
 			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
 			userNamesSuggest,
-			tagsSuggest,
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
@@ -165,48 +175,11 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
-	m.RegisterHandler(addAllUserToInbound, "AddAllUserToInbound",
-		prompt.WithSuggests([]prompt.Suggest{
-			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
-			dstTagSuggest,
-		}),
-		prompt.WithGetSuggestMethod(GetSuggest),
-	)
-
-	m.RegisterHandler(getUserSubUrl, "GetUserSubUrl",
-		prompt.WithSuggests([]prompt.Suggest{
-			getSuggestWithTemplate(targetSuggest, WihtDefault("all")),
-			userNameSuggest,
-		}),
-		prompt.WithGetSuggestMethod(GetSuggest),
-	)
-
 	// --- Stats & Misc ---
-	m.RegisterHandler(getStat, "GetStat",
-		prompt.WithSuggests([]prompt.Suggest{
-			getSuggestWithTemplate(targetSuggest, WihtDefault("all")),
-			patternSuggest,
-			resetSuggest,
-		}),
-		prompt.WithGetSuggestMethod(GetSuggest),
-	)
-
 	m.RegisterHandler(updateProxy, "UpdateProxy",
 		prompt.WithSuggests([]prompt.Suggest{
 			targetSuggest,
 			versionTagSuggest,
-		}),
-		prompt.WithGetSuggestMethod(GetSuggest),
-	)
-
-	m.RegisterHandler(pingTarget, "PingTarget",
-		prompt.WithSuggests([]prompt.Suggest{
-			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
-			{
-				Text:        "times",
-				Description: "ping times",
-				Default:     int(10),
-			},
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
@@ -253,6 +226,28 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
+	// --- Bandwidth / client limit management (admin only) ---
+	m.RegisterHandler(setUserBandwidth, "SetUserBandwidth",
+		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
+			userNameSuggest,
+			{Text: "upload_bps", Description: "upload limit bytes/sec (0=unlimited, -1=skip)", Default: int64(-1)},
+			{Text: "download_bps", Description: "download limit bytes/sec (0=unlimited, -1=skip)", Default: int64(-1)},
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	m.RegisterHandler(setUserClientLimit, "SetUserClientLimit",
+		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
+			userNameSuggest,
+			{Text: "max_clients", Description: "max unique client IPs (0=unlimited)", Default: int(0)},
+			{Text: "recycle_delay_sec", Description: "idle slot recycle delay", Default: int(60)},
+			{Text: "drain_sec", Description: "drain timeout after EOF", Default: int(2)},
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
 	// --- Status ---
 	m.RegisterHandler(getStatus, "GetStatus",
 		prompt.WithSuggests([]prompt.Suggest{
@@ -261,7 +256,22 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
+	// --- Cert transfer ---
+	m.RegisterHandler(transferCert, "TransferCert",
+		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
+			domainSuggest,
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
 	// --- Session lifecycle (JWT only) ---
+	m.RegisterHandler(changePassword, "ChangePassword",
+		prompt.WithSuggests([]prompt.Suggest{
+			oldPasswordSuggest,
+			newPasswordSuggest,
+		}),
+	)
 	m.RegisterHandler(logout, "Logout")
 	m.RegisterHandler(profile, "Profile")
 
@@ -414,8 +424,10 @@ func copyUserBetweenNodes(srcNode, dstNode string) error {
 	return nil
 }
 
-func addUser(target, userName, password, tags string, expire, ttl int) error {
-	result, err := client.AddUser(getHost(), getAuthToken(), target, userName, password, tags, expire, ttl)
+func addUser(target, userName, password string, expire, ttl int,
+	role, group string, uploadBps, downloadBps int64, maxClients, recycleDelaySec, drainSec int) error {
+	result, err := client.AddUser(getHost(), getAuthToken(), target, userName, password, expire, ttl,
+		role, group, uploadBps, downloadBps, maxClients, recycleDelaySec, drainSec)
 	if err != nil {
 		return err
 	}
@@ -423,8 +435,10 @@ func addUser(target, userName, password, tags string, expire, ttl int) error {
 	return nil
 }
 
-func updateUser(target, userName, password string, expire, ttl int) error {
-	result, err := client.UpdateUser(getHost(), getAuthToken(), target, userName, password, expire, ttl)
+func updateUser(target, userName, password string, expire, ttl int,
+	role string, uploadBps, downloadBps int64, maxClients, recycleDelaySec, drainSec int, group string) error {
+	result, err := client.UpdateUser(getHost(), getAuthToken(), target, userName, password, expire, ttl,
+		role, uploadBps, downloadBps, maxClients, recycleDelaySec, drainSec, group)
 	if err != nil {
 		return err
 	}
@@ -432,10 +446,10 @@ func updateUser(target, userName, password string, expire, ttl int) error {
 	return nil
 }
 
-func deleteUser(target, userNames, tags string) error {
+func deleteUser(target, userNames string) error {
 	users := strings.Split(userNames, ",")
 	for _, user := range users {
-		result, err := client.DeleteUser(getHost(), getAuthToken(), target, user, tags)
+		result, err := client.DeleteUser(getHost(), getAuthToken(), target, user)
 		if err != nil {
 			fmt.Printf("delete user[%s] fail > %v\n", user, err)
 		} else {
@@ -463,78 +477,23 @@ func listUser(target string) error {
 	defer userMutex.Unlock()
 	for node, users := range result {
 		localUserList[node] = users
-		fmt.Println(node, ":")
-		for _, user := range users {
-			fmt.Println(user)
-		}
-	}
-	return nil
-}
-
-func addAllUserToInbound(target, inboundTag string) error {
-	result, err := client.ListUser(getHost(), getAuthToken(), target)
-	if err != nil {
-		return err
-	}
-	users := result[target]
-	for _, user := range users {
-		if err := addUser(target, user.GetName(), user.GetPasswd(), inboundTag, int(user.GetExpireTime()), 0); err != nil {
-			fmt.Printf("add user[%s] to inbound[%s] fail, err: %v\n", user.GetName(), inboundTag, err)
-		}
-	}
-	return nil
-}
-
-func getUserSubUrl(target, userName string) error {
-	uri, err := url.Parse(getHost())
-	if err != nil {
-		uri = &url.URL{
-			Host:   getHost(),
-			Scheme: "http",
-		}
-	}
-	uri.Path = "sub"
-	if len(localUserList) == 0 {
-		listUser(target)
-	}
-	var targetUser *proto.User = nil
-	for _, users := range localUserList {
-		for _, user := range users {
-			if user.GetName() == userName {
-				targetUser = user
+		fmt.Printf("=== %s ===\n", node)
+		for _, u := range users {
+			expireStr := "never"
+			if u.GetExpireTime() > 0 {
+				expireStr = time.Unix(u.GetExpireTime(), 0).Format("2006-01-02 15:04:05")
 			}
+			fmt.Printf("  %-16s role=%-8s group=%-10s expire=%s\n", u.GetName(), u.GetRole(), u.GetGroup(), expireStr)
+			fmt.Printf("    traffic   up=%-12d down=%-12d\n", u.GetUplink(), u.GetDownlink())
+			fmt.Printf("    bandwidth upload_bps=%-10d download_bps=%-10d\n", u.GetUploadBps(), u.GetDownloadBps())
+			fmt.Printf("    clients   max=%-4d recycle_delay=%ds drain=%ds\n",
+				u.GetMaxClients(), u.GetClientRecycleDelaySec(), u.GetClientDrainSec())
 		}
 	}
-	if targetUser == nil {
-		fmt.Printf("user[%s] not exist", userName)
-		return nil
-	}
-	query := uri.Query()
-	query.Add("target", target)
-	query.Add("user", targetUser.GetName())
-	query.Add("pwd", targetUser.GetPasswd())
-	uri.RawQuery = query.Encode()
-	fmt.Println(uri.String())
 	return nil
 }
 
 // ---- Stats & Misc ----
-
-func getStat(target, pattern string, reset bool) error {
-	result, err := client.GetStat(getHost(), getAuthToken(), target, pattern, reset)
-	if err != nil {
-		return err
-	}
-	// try pretty print JSON
-	var pretty interface{}
-	if jsonErr := json.Unmarshal([]byte(result), &pretty); jsonErr == nil {
-		b, _ := json.MarshalIndent(pretty, "", "  ")
-		fmt.Println(string(b))
-	} else {
-		fmt.Println(result)
-	}
-	return nil
-}
 
 func updateProxy(target, versionTag string) error {
 	result, err := client.UpdateProxy(getHost(), getAuthToken(), target, versionTag)
@@ -542,10 +501,6 @@ func updateProxy(target, versionTag string) error {
 		return err
 	}
 	fmt.Println(result)
-	return nil
-}
-
-func pingTarget(target string, times int) error {
 	return nil
 }
 
@@ -599,7 +554,61 @@ func setUserRole(username, role string) error {
 	return nil
 }
 
+// ---- Bandwidth / client limit management (admin only) ----
+
+func setUserBandwidth(target, username string, uploadBps, downloadBps int64) error {
+	if uploadBps < -1 || downloadBps < -1 {
+		return fmt.Errorf("bandwidth values must be >= 0 (set limit) or -1 (skip)")
+	}
+	var up, down *int64
+	if uploadBps >= 0 {
+		up = &uploadBps
+	}
+	if downloadBps >= 0 {
+		down = &downloadBps
+	}
+	result, err := client.SetUserBandwidth(getHost(), getAuthToken(), target, username, up, down)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+func setUserClientLimit(target, username string, maxClients, recycleDelaySec, drainSec int) error {
+	if maxClients < 0 || recycleDelaySec < 0 || drainSec < 0 {
+		return fmt.Errorf("client limit values must be >= 0")
+	}
+	result, err := client.SetUserClientLimit(getHost(), getAuthToken(), target, username, maxClients, recycleDelaySec, drainSec)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+// ---- Cert transfer ----
+
+func transferCert(target, domain string) error {
+	result, err := client.TransferCert(getHost(), getAuthToken(), target, domain)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
 // ---- Session lifecycle (JWT only) ----
+
+// changePassword changes the authenticated user's own password.
+func changePassword(oldPassword, newPassword string) error {
+	result, err := client.ChangePassword(getHost(), getAuthToken(), oldPassword, newPassword)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
 
 // logout revokes the current JWT token and clears the local JWT cache.
 // Requires JWT auth; X-Token is not accepted by the server.

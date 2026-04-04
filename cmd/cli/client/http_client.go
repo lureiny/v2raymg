@@ -191,7 +191,8 @@ func CopyUserBetweenNodes(host, token, srcNode, dstNode string) (string, error) 
 	return result, err
 }
 
-func AddUser(host, token, target, userName, password, tags string, expire, ttl int) (string, error) {
+func AddUser(host, token, target, userName, password string, expire, ttl int,
+	role, group string, uploadBps, downloadBps int64, maxClients, recycleDelaySec, drainSec int) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {
 		d, err := readBody(resp)
@@ -204,18 +205,25 @@ func AddUser(host, token, target, userName, password, tags string, expire, ttl i
 
 	reqUrl := fmt.Sprintf("%s/%s", host, common.User)
 	body := map[string]interface{}{
-		"target": target,
-		"user":   userName,
-		"pwd":    password,
-		"expire": expire,
-		"ttl":    ttl,
-		"tags":   tags,
+		"target":                   target,
+		"user":                     userName,
+		"pwd":                      password,
+		"expire":                   expire,
+		"ttl":                      ttl,
+		"role":                     role,
+		"group":                    group,
+		"upload_bps":               uploadBps,
+		"download_bps":             downloadBps,
+		"max_clients":              maxClients,
+		"client_recycle_delay_sec": recycleDelaySec,
+		"client_drain_sec":         drainSec,
 	}
 	err := DoPostRequest(reqUrl, token, body, getCallBackFunc(cb))
 	return result, err
 }
 
-func UpdateUser(host, token, target, userName, password string, expire, ttl int) (string, error) {
+func UpdateUser(host, token, target, userName, password string, expire, ttl int,
+	role string, uploadBps, downloadBps int64, maxClients, recycleDelaySec, drainSec int, group string) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {
 		d, err := readBody(resp)
@@ -228,17 +236,24 @@ func UpdateUser(host, token, target, userName, password string, expire, ttl int)
 
 	reqUrl := fmt.Sprintf("%s/%s", host, common.User)
 	body := map[string]interface{}{
-		"target": target,
-		"user":   userName,
-		"pwd":    password,
-		"expire": expire,
-		"ttl":    ttl,
+		"target":                  target,
+		"user":                    userName,
+		"pwd":                     password,
+		"expire":                  expire,
+		"ttl":                     ttl,
+		"role":                    role,
+		"upload_bps":              uploadBps,
+		"download_bps":            downloadBps,
+		"max_clients":             maxClients,
+		"client_recycle_delay_sec": recycleDelaySec,
+		"client_drain_sec":        drainSec,
+		"group":                   group,
 	}
 	err := DoPutRequest(reqUrl, token, body, getCallBackFunc(cb))
 	return result, err
 }
 
-func DeleteUser(host, token, target, userName, tags string) (string, error) {
+func DeleteUser(host, token, target, userName string) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {
 		d, err := readBody(resp)
@@ -253,7 +268,6 @@ func DeleteUser(host, token, target, userName, tags string) (string, error) {
 	body := map[string]interface{}{
 		"target": target,
 		"user":   userName,
-		"tags":   tags,
 	}
 	err := DoDeleteRequest(reqUrl, token, body, getCallBackFunc(cb))
 	return result, err
@@ -354,30 +368,6 @@ func GetInBound(host, token, target, srcTag string) (string, error) {
 	err := DoGetRequest(reqUrl, token, map[string]interface{}{
 		"target":  target,
 		"src_tag": srcTag,
-	}, getCallBackFunc(cb))
-	return result, err
-}
-
-func GetStat(host, token, target, pattern string, reset bool) (string, error) {
-	result := ""
-	resetVal := "0"
-	if reset {
-		resetVal = "1"
-	}
-	cb := func(resp *http.Response) error {
-		d, err := readBody(resp)
-		if err != nil {
-			return err
-		}
-		result = string(d)
-		return nil
-	}
-
-	reqUrl := fmt.Sprintf("%s/%s", host, common.Stat)
-	err := DoGetRequest(reqUrl, token, map[string]interface{}{
-		"target":  target,
-		"pattern": pattern,
-		"reset":   resetVal,
 	}, getCallBackFunc(cb))
 	return result, err
 }
@@ -568,6 +558,58 @@ func SetUserRole(host, token, username, role string) (string, error) {
 	return result, err
 }
 
+// SetUserBandwidth sets bandwidth limits for a user.
+// uploadBps/downloadBps: nil = no change, non-nil = set value (0 = unlimited).
+func SetUserBandwidth(host, token, target, username string, uploadBps, downloadBps *int64) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	reqUrl := fmt.Sprintf("%s/%s/%s/bandwidth", host, common.UserBandwidth, username)
+	body := map[string]interface{}{}
+	if target != "" {
+		body["target"] = target
+	}
+	if uploadBps != nil {
+		body["upload_bps"] = *uploadBps
+	}
+	if downloadBps != nil {
+		body["download_bps"] = *downloadBps
+	}
+	err := DoPutRequest(reqUrl, token, body, getCallBackFunc(cb))
+	return result, err
+}
+
+// SetUserClientLimit sets client connection limits for a user.
+// maxClients=0 means remove the limit (unlimited).
+func SetUserClientLimit(host, token, target, username string, maxClients, recycleDelaySec, drainSec int) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	reqUrl := fmt.Sprintf("%s/%s/%s/client-limit", host, common.UserClientLimit, username)
+	body := map[string]interface{}{
+		"max_clients":       maxClients,
+		"recycle_delay_sec": recycleDelaySec,
+		"drain_sec":         drainSec,
+	}
+	if target != "" {
+		body["target"] = target
+	}
+	err := DoPutRequest(reqUrl, token, body, getCallBackFunc(cb))
+	return result, err
+}
+
 // Logout revokes the current JWT by calling POST /logout.
 // The token must be a Bearer JWT ("Bearer <jwt>"); X-Token is rejected by the server.
 func Logout(host, token string) (string, error) {
@@ -599,6 +641,47 @@ func Profile(host, token string) (string, error) {
 	}
 	reqUrl := fmt.Sprintf("%s/%s", host, common.Profile)
 	err := DoGetRequest(reqUrl, token, map[string]interface{}{}, getCallBackFunc(cb))
+	return result, err
+}
+
+// ChangePassword changes the authenticated user's own password via PUT /api/profile/password.
+// Requires JWT auth.
+func ChangePassword(host, token, oldPassword, newPassword string) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	reqUrl := fmt.Sprintf("%s/%s", host, common.ChangePassword)
+	body := map[string]interface{}{
+		"old_password": oldPassword,
+		"new_password": newPassword,
+	}
+	err := DoPutRequest(reqUrl, token, body, getCallBackFunc(cb))
+	return result, err
+}
+
+// TransferCert transfers a certificate to target nodes via POST /api/cert/transfer.
+func TransferCert(host, token, target, domain string) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	reqUrl := fmt.Sprintf("%s/%s", host, common.TransferCert)
+	body := map[string]interface{}{
+		"target": target,
+		"domain": domain,
+	}
+	err := DoPostRequest(reqUrl, token, body, getCallBackFunc(cb))
 	return result, err
 }
 

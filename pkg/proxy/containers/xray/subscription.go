@@ -175,9 +175,9 @@ func extractCredential(in *XrayInbound, user contracts.UserSpec) (string, error)
 		}
 		return password, nil
 	case contracts.ProtocolSOCKS5:
-		// SOCKS5 supports per-user auth; password is stored in the first-class field.
-		if user.Password != "" {
-			return user.Password, nil
+		// SOCKS5 supports per-user auth; auth token is used as the SOCKS5 password.
+		if user.AuthToken != "" {
+			return user.AuthToken, nil
 		}
 		return "", fmt.Errorf("password not found for user %s", user.Username)
 	default:

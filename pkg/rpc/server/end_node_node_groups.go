@@ -11,13 +11,13 @@ import (
 func (s *EndNodeServer) GetNodeGroups(ctx context.Context, req *proto.GetNodeGroupsReq) (*proto.GetNodeGroupsRsp, error) {
 	rsp := &proto.GetNodeGroupsRsp{}
 
-	if !s.clusterUserEnabled {
+	if !s.userMgr.IsClusterEnabled() {
 		rsp.Code = 400
 		rsp.Msg = "cluster_user disabled"
 		return rsp, nil
 	}
 
-	groups, err := s.nodeGroupsStore.List()
+	groups, err := s.userMgr.NodeGroupsStore().List()
 	if err != nil {
 		rsp.Code = 500
 		rsp.Msg = err.Error()
@@ -37,7 +37,7 @@ func (s *EndNodeServer) GetNodeGroups(ctx context.Context, req *proto.GetNodeGro
 func (s *EndNodeServer) SetNodeGroups(ctx context.Context, req *proto.SetNodeGroupsReq) (*proto.SetNodeGroupsRsp, error) {
 	rsp := &proto.SetNodeGroupsRsp{}
 
-	if !s.clusterUserEnabled {
+	if !s.userMgr.IsClusterEnabled() {
 		rsp.Code = 400
 		rsp.Msg = "cluster_user disabled"
 		return rsp, nil
@@ -48,7 +48,7 @@ func (s *EndNodeServer) SetNodeGroups(ctx context.Context, req *proto.SetNodeGro
 		groups = []string{"default"}
 	}
 
-	if err := s.nodeGroupsStore.Set(groups); err != nil {
+	if err := s.userMgr.SetNodeGroups(groups); err != nil {
 		rsp.Code = 500
 		rsp.Msg = err.Error()
 		return rsp, nil

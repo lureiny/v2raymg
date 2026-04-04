@@ -66,23 +66,23 @@ func (m *StoreManager) Close() error {
 }
 
 // InitLoginPasswords initializes login_password for users whose login_password is empty.
-// hashFn is called with the user's plaintext password and must return a bcrypt hash.
+// hashFn is called with the user's auth_token and must return a bcrypt hash.
 // This is blocking and must be called before starting the HTTP server to ensure
-// existing users can log in with their current proxy password.
+// existing users can log in with their current auth token.
 func (m *StoreManager) InitLoginPasswords(hashFn func(string) (string, error)) error {
 	sqlDB := m.db.DB()
 
-	rows, err := sqlDB.Query(`SELECT username, password FROM users WHERE login_password = ''`)
+	rows, err := sqlDB.Query(`SELECT username, auth_token FROM users WHERE login_password = ''`)
 	if err != nil {
 		return fmt.Errorf("InitLoginPasswords: query: %w", err)
 	}
 	defer rows.Close()
 
-	type row struct{ username, password string }
+	type row struct{ username, authToken string }
 	var pending []row
 	for rows.Next() {
 		var r row
-		if err := rows.Scan(&r.username, &r.password); err != nil {
+		if err := rows.Scan(&r.username, &r.authToken); err != nil {
 			return fmt.Errorf("InitLoginPasswords: scan: %w", err)
 		}
 		pending = append(pending, r)
@@ -92,7 +92,7 @@ func (m *StoreManager) InitLoginPasswords(hashFn func(string) (string, error)) e
 	}
 
 	for _, r := range pending {
-		hash, err := hashFn(r.password)
+		hash, err := hashFn(r.authToken)
 		if err != nil {
 			return fmt.Errorf("InitLoginPasswords: hash user %q: %w", r.username, err)
 		}

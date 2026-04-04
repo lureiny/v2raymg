@@ -132,7 +132,7 @@ func GenerateTrojanTLSInboundSpec(p GenerateTrojanTLSParams) (contracts.InboundS
 		Username: fmt.Sprintf("auto@trojan.local"),
 		Level:    0,
 		Protocol: contracts.ProtocolTrojan,
-		Password: password,
+		AuthToken: password,
 	}
 
 	// Build extensions for xray adapter

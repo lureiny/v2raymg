@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
-
-	pkgstore "github.com/lureiny/v2raymg/pkg/store"
 )
 
 // NodeGroupsStore is the persistence interface for the local node group assignments.
@@ -22,12 +20,12 @@ type NodeGroupsStore interface {
 
 // SQLiteNodeGroupsStore implements NodeGroupsStore using the shared SQLite DB.
 type SQLiteNodeGroupsStore struct {
-	db *pkgstore.DB
+	db *DB
 }
 
 // NewSQLiteNodeGroupsStore creates a new SQLiteNodeGroupsStore backed by db.
 // The local_node_groups table must already exist (run Migrate with migrations.All).
-func NewSQLiteNodeGroupsStore(db *pkgstore.DB) *SQLiteNodeGroupsStore {
+func NewSQLiteNodeGroupsStore(db *DB) *SQLiteNodeGroupsStore {
 	return &SQLiteNodeGroupsStore{db: db}
 }
 
@@ -69,7 +67,7 @@ func (s *SQLiteNodeGroupsStore) Set(groups []string) error {
 		}
 	}
 
-	err := pkgstore.WithTx(context.Background(), s.db.DB(), func(tx *sql.Tx) error {
+	err := WithTx(context.Background(), s.db.DB(), func(tx *sql.Tx) error {
 		if _, err := tx.Exec(`DELETE FROM local_node_groups`); err != nil {
 			return fmt.Errorf("delete local_node_groups: %w", err)
 		}

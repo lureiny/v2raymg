@@ -95,15 +95,23 @@ func (BuilderType) EnumDescriptor() ([]byte, []int) {
 }
 
 type User struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Passwd        string                 `protobuf:"bytes,2,opt,name=passwd,proto3" json:"passwd,omitempty"`
-	ExpireTime    int64                  `protobuf:"varint,3,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
-	Tags          []string               `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty"`
-	Downlink      int64                  `protobuf:"varint,5,opt,name=downlink,proto3" json:"downlink,omitempty"`
-	Uplink        int64                  `protobuf:"varint,6,opt,name=uplink,proto3" json:"uplink,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Name       string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Passwd     string                 `protobuf:"bytes,2,opt,name=passwd,proto3" json:"passwd,omitempty"` // semantics: auth_token (for GetUsers/GetProfile) or login password input (for AddUsers/UpdateUsers)
+	ExpireTime int64                  `protobuf:"varint,3,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
+	Downlink   int64                  `protobuf:"varint,5,opt,name=downlink,proto3" json:"downlink,omitempty"`
+	Uplink     int64                  `protobuf:"varint,6,opt,name=uplink,proto3" json:"uplink,omitempty"`
+	Role       string                 `protobuf:"bytes,7,opt,name=role,proto3" json:"role,omitempty"`
+	// Bandwidth limits (bytes/sec). Sentinel: 0=no change, -1=remove limit, >0=set.
+	UploadBps   int64 `protobuf:"varint,8,opt,name=upload_bps,json=uploadBps,proto3" json:"upload_bps,omitempty"`
+	DownloadBps int64 `protobuf:"varint,9,opt,name=download_bps,json=downloadBps,proto3" json:"download_bps,omitempty"`
+	// Client limits. Sentinel: 0=no change, -1=remove limit, >0=set.
+	MaxClients            int32  `protobuf:"varint,10,opt,name=max_clients,json=maxClients,proto3" json:"max_clients,omitempty"`
+	ClientRecycleDelaySec int32  `protobuf:"varint,11,opt,name=client_recycle_delay_sec,json=clientRecycleDelaySec,proto3" json:"client_recycle_delay_sec,omitempty"`
+	ClientDrainSec        int32  `protobuf:"varint,12,opt,name=client_drain_sec,json=clientDrainSec,proto3" json:"client_drain_sec,omitempty"`
+	Group                 string `protobuf:"bytes,13,opt,name=group,proto3" json:"group,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *User) Reset() {
@@ -157,13 +165,6 @@ func (x *User) GetExpireTime() int64 {
 	return 0
 }
 
-func (x *User) GetTags() []string {
-	if x != nil {
-		return x.Tags
-	}
-	return nil
-}
-
 func (x *User) GetDownlink() int64 {
 	if x != nil {
 		return x.Downlink
@@ -176,6 +177,55 @@ func (x *User) GetUplink() int64 {
 		return x.Uplink
 	}
 	return 0
+}
+
+func (x *User) GetRole() string {
+	if x != nil {
+		return x.Role
+	}
+	return ""
+}
+
+func (x *User) GetUploadBps() int64 {
+	if x != nil {
+		return x.UploadBps
+	}
+	return 0
+}
+
+func (x *User) GetDownloadBps() int64 {
+	if x != nil {
+		return x.DownloadBps
+	}
+	return 0
+}
+
+func (x *User) GetMaxClients() int32 {
+	if x != nil {
+		return x.MaxClients
+	}
+	return 0
+}
+
+func (x *User) GetClientRecycleDelaySec() int32 {
+	if x != nil {
+		return x.ClientRecycleDelaySec
+	}
+	return 0
+}
+
+func (x *User) GetClientDrainSec() int32 {
+	if x != nil {
+		return x.ClientDrainSec
+	}
+	return 0
+}
+
+func (x *User) GetGroup() string {
+	if x != nil {
+		return x.Group
+	}
+	return ""
 }
 
 type NodeAuthInfo struct {
@@ -673,6 +723,7 @@ type GetSubReq struct {
 	ExcludeProtocols []string               `protobuf:"bytes,3,rep,name=exclude_protocols,json=excludeProtocols,proto3" json:"exclude_protocols,omitempty"`
 	UseSni           bool                   `protobuf:"varint,4,opt,name=use_sni,json=useSni,proto3" json:"use_sni,omitempty"`
 	UserAgent        string                 `protobuf:"bytes,5,opt,name=user_agent,json=userAgent,proto3" json:"user_agent,omitempty"` // client User-Agent, used to select subscription format on node side
+	Token            string                 `protobuf:"bytes,6,opt,name=token,proto3" json:"token,omitempty"`                          // auth token for token-only authentication (no username needed)
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -738,6 +789,13 @@ func (x *GetSubReq) GetUseSni() bool {
 func (x *GetSubReq) GetUserAgent() string {
 	if x != nil {
 		return x.UserAgent
+	}
+	return ""
+}
+
+func (x *GetSubReq) GetToken() string {
+	if x != nil {
+		return x.Token
 	}
 	return ""
 }
@@ -886,35 +944,31 @@ func (x *UserDigest) GetHash() string {
 	return ""
 }
 
-type ClusterUserInfo struct {
+type ClusterUserSync struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
-	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
-	Expire        int64                  `protobuf:"varint,3,opt,name=expire,proto3" json:"expire,omitempty"`
-	Role          string                 `protobuf:"bytes,4,opt,name=role,proto3" json:"role,omitempty"`
-	TargetGroup   string                 `protobuf:"bytes,5,opt,name=target_group,json=targetGroup,proto3" json:"target_group,omitempty"`
-	Deleted       bool                   `protobuf:"varint,6,opt,name=deleted,proto3" json:"deleted,omitempty"`
-	UpdatedAtUs   int64                  `protobuf:"varint,7,opt,name=updated_at_us,json=updatedAtUs,proto3" json:"updated_at_us,omitempty"`
-	OriginNode    string                 `protobuf:"bytes,8,opt,name=origin_node,json=originNode,proto3" json:"origin_node,omitempty"`
-	Hash          string                 `protobuf:"bytes,9,opt,name=hash,proto3" json:"hash,omitempty"`
+	User          *User                  `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
+	Deleted       bool                   `protobuf:"varint,2,opt,name=deleted,proto3" json:"deleted,omitempty"`
+	UpdatedAtUs   int64                  `protobuf:"varint,3,opt,name=updated_at_us,json=updatedAtUs,proto3" json:"updated_at_us,omitempty"`
+	OriginNode    string                 `protobuf:"bytes,4,opt,name=origin_node,json=originNode,proto3" json:"origin_node,omitempty"`
+	Hash          string                 `protobuf:"bytes,5,opt,name=hash,proto3" json:"hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ClusterUserInfo) Reset() {
-	*x = ClusterUserInfo{}
+func (x *ClusterUserSync) Reset() {
+	*x = ClusterUserSync{}
 	mi := &file_rpc_server_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ClusterUserInfo) String() string {
+func (x *ClusterUserSync) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ClusterUserInfo) ProtoMessage() {}
+func (*ClusterUserSync) ProtoMessage() {}
 
-func (x *ClusterUserInfo) ProtoReflect() protoreflect.Message {
+func (x *ClusterUserSync) ProtoReflect() protoreflect.Message {
 	mi := &file_rpc_server_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -926,68 +980,40 @@ func (x *ClusterUserInfo) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ClusterUserInfo.ProtoReflect.Descriptor instead.
-func (*ClusterUserInfo) Descriptor() ([]byte, []int) {
+// Deprecated: Use ClusterUserSync.ProtoReflect.Descriptor instead.
+func (*ClusterUserSync) Descriptor() ([]byte, []int) {
 	return file_rpc_server_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *ClusterUserInfo) GetUsername() string {
+func (x *ClusterUserSync) GetUser() *User {
 	if x != nil {
-		return x.Username
+		return x.User
 	}
-	return ""
+	return nil
 }
 
-func (x *ClusterUserInfo) GetPassword() string {
-	if x != nil {
-		return x.Password
-	}
-	return ""
-}
-
-func (x *ClusterUserInfo) GetExpire() int64 {
-	if x != nil {
-		return x.Expire
-	}
-	return 0
-}
-
-func (x *ClusterUserInfo) GetRole() string {
-	if x != nil {
-		return x.Role
-	}
-	return ""
-}
-
-func (x *ClusterUserInfo) GetTargetGroup() string {
-	if x != nil {
-		return x.TargetGroup
-	}
-	return ""
-}
-
-func (x *ClusterUserInfo) GetDeleted() bool {
+func (x *ClusterUserSync) GetDeleted() bool {
 	if x != nil {
 		return x.Deleted
 	}
 	return false
 }
 
-func (x *ClusterUserInfo) GetUpdatedAtUs() int64 {
+func (x *ClusterUserSync) GetUpdatedAtUs() int64 {
 	if x != nil {
 		return x.UpdatedAtUs
 	}
 	return 0
 }
 
-func (x *ClusterUserInfo) GetOriginNode() string {
+func (x *ClusterUserSync) GetOriginNode() string {
 	if x != nil {
 		return x.OriginNode
 	}
 	return ""
 }
 
-func (x *ClusterUserInfo) GetHash() string {
+func (x *ClusterUserSync) GetHash() string {
 	if x != nil {
 		return x.Hash
 	}
@@ -4083,234 +4109,10 @@ func (x *SetNodeGroupsRsp) GetMsg() string {
 	return ""
 }
 
-type ListClusterUsersReq struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeAuthInfo  *NodeAuthInfo          `protobuf:"bytes,1,opt,name=node_auth_info,json=nodeAuthInfo,proto3" json:"node_auth_info,omitempty"`
-	Group         string                 `protobuf:"bytes,2,opt,name=group,proto3" json:"group,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListClusterUsersReq) Reset() {
-	*x = ListClusterUsersReq{}
-	mi := &file_rpc_server_proto_msgTypes[65]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListClusterUsersReq) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListClusterUsersReq) ProtoMessage() {}
-
-func (x *ListClusterUsersReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[65]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListClusterUsersReq.ProtoReflect.Descriptor instead.
-func (*ListClusterUsersReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{65}
-}
-
-func (x *ListClusterUsersReq) GetNodeAuthInfo() *NodeAuthInfo {
-	if x != nil {
-		return x.NodeAuthInfo
-	}
-	return nil
-}
-
-func (x *ListClusterUsersReq) GetGroup() string {
-	if x != nil {
-		return x.Group
-	}
-	return ""
-}
-
-type ListClusterUsersRsp struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Code          int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
-	Msg           string                 `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
-	Users         []*ClusterUserInfo     `protobuf:"bytes,3,rep,name=users,proto3" json:"users,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListClusterUsersRsp) Reset() {
-	*x = ListClusterUsersRsp{}
-	mi := &file_rpc_server_proto_msgTypes[66]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListClusterUsersRsp) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListClusterUsersRsp) ProtoMessage() {}
-
-func (x *ListClusterUsersRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[66]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListClusterUsersRsp.ProtoReflect.Descriptor instead.
-func (*ListClusterUsersRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{66}
-}
-
-func (x *ListClusterUsersRsp) GetCode() int32 {
-	if x != nil {
-		return x.Code
-	}
-	return 0
-}
-
-func (x *ListClusterUsersRsp) GetMsg() string {
-	if x != nil {
-		return x.Msg
-	}
-	return ""
-}
-
-func (x *ListClusterUsersRsp) GetUsers() []*ClusterUserInfo {
-	if x != nil {
-		return x.Users
-	}
-	return nil
-}
-
-type GetClusterUsersByNameReq struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeAuthInfo  *NodeAuthInfo          `protobuf:"bytes,1,opt,name=node_auth_info,json=nodeAuthInfo,proto3" json:"node_auth_info,omitempty"`
-	Usernames     []string               `protobuf:"bytes,2,rep,name=usernames,proto3" json:"usernames,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetClusterUsersByNameReq) Reset() {
-	*x = GetClusterUsersByNameReq{}
-	mi := &file_rpc_server_proto_msgTypes[67]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetClusterUsersByNameReq) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetClusterUsersByNameReq) ProtoMessage() {}
-
-func (x *GetClusterUsersByNameReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[67]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetClusterUsersByNameReq.ProtoReflect.Descriptor instead.
-func (*GetClusterUsersByNameReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{67}
-}
-
-func (x *GetClusterUsersByNameReq) GetNodeAuthInfo() *NodeAuthInfo {
-	if x != nil {
-		return x.NodeAuthInfo
-	}
-	return nil
-}
-
-func (x *GetClusterUsersByNameReq) GetUsernames() []string {
-	if x != nil {
-		return x.Usernames
-	}
-	return nil
-}
-
-type GetClusterUsersByNameRsp struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Code          int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
-	Msg           string                 `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
-	Users         []*ClusterUserInfo     `protobuf:"bytes,3,rep,name=users,proto3" json:"users,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetClusterUsersByNameRsp) Reset() {
-	*x = GetClusterUsersByNameRsp{}
-	mi := &file_rpc_server_proto_msgTypes[68]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetClusterUsersByNameRsp) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetClusterUsersByNameRsp) ProtoMessage() {}
-
-func (x *GetClusterUsersByNameRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[68]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetClusterUsersByNameRsp.ProtoReflect.Descriptor instead.
-func (*GetClusterUsersByNameRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{68}
-}
-
-func (x *GetClusterUsersByNameRsp) GetCode() int32 {
-	if x != nil {
-		return x.Code
-	}
-	return 0
-}
-
-func (x *GetClusterUsersByNameRsp) GetMsg() string {
-	if x != nil {
-		return x.Msg
-	}
-	return ""
-}
-
-func (x *GetClusterUsersByNameRsp) GetUsers() []*ClusterUserInfo {
-	if x != nil {
-		return x.Users
-	}
-	return nil
-}
-
 type UpsertClusterUsersReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeAuthInfo  *NodeAuthInfo          `protobuf:"bytes,1,opt,name=node_auth_info,json=nodeAuthInfo,proto3" json:"node_auth_info,omitempty"`
-	Users         []*ClusterUserInfo     `protobuf:"bytes,2,rep,name=users,proto3" json:"users,omitempty"`
+	Users         []*ClusterUserSync     `protobuf:"bytes,2,rep,name=users,proto3" json:"users,omitempty"`
 	FromAdmin     bool                   `protobuf:"varint,3,opt,name=from_admin,json=fromAdmin,proto3" json:"from_admin,omitempty"` // true = Admin HTTP 写入（自动填充 version），false = Peer sync 写入（需版本仲裁）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4318,7 +4120,7 @@ type UpsertClusterUsersReq struct {
 
 func (x *UpsertClusterUsersReq) Reset() {
 	*x = UpsertClusterUsersReq{}
-	mi := &file_rpc_server_proto_msgTypes[69]
+	mi := &file_rpc_server_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4330,7 +4132,7 @@ func (x *UpsertClusterUsersReq) String() string {
 func (*UpsertClusterUsersReq) ProtoMessage() {}
 
 func (x *UpsertClusterUsersReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[69]
+	mi := &file_rpc_server_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4343,7 +4145,7 @@ func (x *UpsertClusterUsersReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpsertClusterUsersReq.ProtoReflect.Descriptor instead.
 func (*UpsertClusterUsersReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{69}
+	return file_rpc_server_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *UpsertClusterUsersReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -4353,7 +4155,7 @@ func (x *UpsertClusterUsersReq) GetNodeAuthInfo() *NodeAuthInfo {
 	return nil
 }
 
-func (x *UpsertClusterUsersReq) GetUsers() []*ClusterUserInfo {
+func (x *UpsertClusterUsersReq) GetUsers() []*ClusterUserSync {
 	if x != nil {
 		return x.Users
 	}
@@ -4377,7 +4179,7 @@ type UpsertClusterUsersRsp struct {
 
 func (x *UpsertClusterUsersRsp) Reset() {
 	*x = UpsertClusterUsersRsp{}
-	mi := &file_rpc_server_proto_msgTypes[70]
+	mi := &file_rpc_server_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4389,7 +4191,7 @@ func (x *UpsertClusterUsersRsp) String() string {
 func (*UpsertClusterUsersRsp) ProtoMessage() {}
 
 func (x *UpsertClusterUsersRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[70]
+	mi := &file_rpc_server_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4402,7 +4204,7 @@ func (x *UpsertClusterUsersRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpsertClusterUsersRsp.ProtoReflect.Descriptor instead.
 func (*UpsertClusterUsersRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{70}
+	return file_rpc_server_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *UpsertClusterUsersRsp) GetCode() int32 {
@@ -4419,110 +4221,6 @@ func (x *UpsertClusterUsersRsp) GetMsg() string {
 	return ""
 }
 
-type DeleteClusterUsersReq struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeAuthInfo  *NodeAuthInfo          `protobuf:"bytes,1,opt,name=node_auth_info,json=nodeAuthInfo,proto3" json:"node_auth_info,omitempty"`
-	Usernames     []string               `protobuf:"bytes,2,rep,name=usernames,proto3" json:"usernames,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteClusterUsersReq) Reset() {
-	*x = DeleteClusterUsersReq{}
-	mi := &file_rpc_server_proto_msgTypes[71]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteClusterUsersReq) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteClusterUsersReq) ProtoMessage() {}
-
-func (x *DeleteClusterUsersReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[71]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteClusterUsersReq.ProtoReflect.Descriptor instead.
-func (*DeleteClusterUsersReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{71}
-}
-
-func (x *DeleteClusterUsersReq) GetNodeAuthInfo() *NodeAuthInfo {
-	if x != nil {
-		return x.NodeAuthInfo
-	}
-	return nil
-}
-
-func (x *DeleteClusterUsersReq) GetUsernames() []string {
-	if x != nil {
-		return x.Usernames
-	}
-	return nil
-}
-
-type DeleteClusterUsersRsp struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Code          int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
-	Msg           string                 `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteClusterUsersRsp) Reset() {
-	*x = DeleteClusterUsersRsp{}
-	mi := &file_rpc_server_proto_msgTypes[72]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteClusterUsersRsp) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteClusterUsersRsp) ProtoMessage() {}
-
-func (x *DeleteClusterUsersRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[72]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteClusterUsersRsp.ProtoReflect.Descriptor instead.
-func (*DeleteClusterUsersRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{72}
-}
-
-func (x *DeleteClusterUsersRsp) GetCode() int32 {
-	if x != nil {
-		return x.Code
-	}
-	return 0
-}
-
-func (x *DeleteClusterUsersRsp) GetMsg() string {
-	if x != nil {
-		return x.Msg
-	}
-	return ""
-}
-
 type GetClutersReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ClusterName   string                 `protobuf:"bytes,1,opt,name=cluster_name,json=clusterName,proto3" json:"cluster_name,omitempty"`
@@ -4532,7 +4230,7 @@ type GetClutersReq struct {
 
 func (x *GetClutersReq) Reset() {
 	*x = GetClutersReq{}
-	mi := &file_rpc_server_proto_msgTypes[73]
+	mi := &file_rpc_server_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4544,7 +4242,7 @@ func (x *GetClutersReq) String() string {
 func (*GetClutersReq) ProtoMessage() {}
 
 func (x *GetClutersReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[73]
+	mi := &file_rpc_server_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4557,7 +4255,7 @@ func (x *GetClutersReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClutersReq.ProtoReflect.Descriptor instead.
 func (*GetClutersReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{73}
+	return file_rpc_server_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *GetClutersReq) GetClusterName() string {
@@ -4576,7 +4274,7 @@ type GetClutersRsp struct {
 
 func (x *GetClutersRsp) Reset() {
 	*x = GetClutersRsp{}
-	mi := &file_rpc_server_proto_msgTypes[74]
+	mi := &file_rpc_server_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4588,7 +4286,7 @@ func (x *GetClutersRsp) String() string {
 func (*GetClutersRsp) ProtoMessage() {}
 
 func (x *GetClutersRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[74]
+	mi := &file_rpc_server_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4601,7 +4299,7 @@ func (x *GetClutersRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClutersRsp.ProtoReflect.Descriptor instead.
 func (*GetClutersRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{74}
+	return file_rpc_server_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *GetClutersRsp) GetClusterNames() []string {
@@ -4620,7 +4318,7 @@ type GetNodesReq struct {
 
 func (x *GetNodesReq) Reset() {
 	*x = GetNodesReq{}
-	mi := &file_rpc_server_proto_msgTypes[75]
+	mi := &file_rpc_server_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4632,7 +4330,7 @@ func (x *GetNodesReq) String() string {
 func (*GetNodesReq) ProtoMessage() {}
 
 func (x *GetNodesReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[75]
+	mi := &file_rpc_server_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4645,7 +4343,7 @@ func (x *GetNodesReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodesReq.ProtoReflect.Descriptor instead.
 func (*GetNodesReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{75}
+	return file_rpc_server_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *GetNodesReq) GetClusterName() string {
@@ -4665,7 +4363,7 @@ type GetNodesRsp struct {
 
 func (x *GetNodesRsp) Reset() {
 	*x = GetNodesRsp{}
-	mi := &file_rpc_server_proto_msgTypes[76]
+	mi := &file_rpc_server_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4677,7 +4375,7 @@ func (x *GetNodesRsp) String() string {
 func (*GetNodesRsp) ProtoMessage() {}
 
 func (x *GetNodesRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[76]
+	mi := &file_rpc_server_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4690,7 +4388,7 @@ func (x *GetNodesRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodesRsp.ProtoReflect.Descriptor instead.
 func (*GetNodesRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{76}
+	return file_rpc_server_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *GetNodesRsp) GetClusterName() string {
@@ -4711,15 +4409,24 @@ var File_rpc_server_proto protoreflect.FileDescriptor
 
 const file_rpc_server_proto_rawDesc = "" +
 	"\n" +
-	"\x10rpc_server.proto\x12\x05proto\"\x9b\x01\n" +
+	"\x10rpc_server.proto\x12\x05proto\"\xfd\x02\n" +
 	"\x04User\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06passwd\x18\x02 \x01(\tR\x06passwd\x12\x1f\n" +
 	"\vexpire_time\x18\x03 \x01(\x03R\n" +
-	"expireTime\x12\x12\n" +
-	"\x04tags\x18\x04 \x03(\tR\x04tags\x12\x1a\n" +
+	"expireTime\x12\x1a\n" +
 	"\bdownlink\x18\x05 \x01(\x03R\bdownlink\x12\x16\n" +
-	"\x06uplink\x18\x06 \x01(\x03R\x06uplink\"E\n" +
+	"\x06uplink\x18\x06 \x01(\x03R\x06uplink\x12\x12\n" +
+	"\x04role\x18\a \x01(\tR\x04role\x12\x1d\n" +
+	"\n" +
+	"upload_bps\x18\b \x01(\x03R\tuploadBps\x12!\n" +
+	"\fdownload_bps\x18\t \x01(\x03R\vdownloadBps\x12\x1f\n" +
+	"\vmax_clients\x18\n" +
+	" \x01(\x05R\n" +
+	"maxClients\x127\n" +
+	"\x18client_recycle_delay_sec\x18\v \x01(\x05R\x15clientRecycleDelaySec\x12(\n" +
+	"\x10client_drain_sec\x18\f \x01(\x05R\x0eclientDrainSec\x12\x14\n" +
+	"\x05group\x18\r \x01(\tR\x05groupJ\x04\b\x04\x10\x05\"E\n" +
 	"\fNodeAuthInfo\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1f\n" +
 	"\x04node\x18\x02 \x01(\v2\v.proto.NodeR\x04node\"H\n" +
@@ -4754,14 +4461,15 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\x05users\x18\x02 \x03(\v2\v.proto.UserR\x05users\"1\n" +
 	"\tUserOpRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
-	"\x03msg\x18\x02 \x01(\tR\x03msg\"\xcc\x01\n" +
+	"\x03msg\x18\x02 \x01(\tR\x03msg\"\xe2\x01\n" +
 	"\tGetSubReq\x129\n" +
 	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x12\x1f\n" +
 	"\x04user\x18\x02 \x01(\v2\v.proto.UserR\x04user\x12+\n" +
 	"\x11exclude_protocols\x18\x03 \x03(\tR\x10excludeProtocols\x12\x17\n" +
 	"\ause_sni\x18\x04 \x01(\bR\x06useSni\x12\x1d\n" +
 	"\n" +
-	"user_agent\x18\x05 \x01(\tR\tuserAgent\"j\n" +
+	"user_agent\x18\x05 \x01(\tR\tuserAgent\x12\x14\n" +
+	"\x05token\x18\x06 \x01(\tR\x05token\"j\n" +
 	"\tGetSubRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
 	"\x03msg\x18\x02 \x01(\tR\x03msg\x12\x12\n" +
@@ -4774,18 +4482,14 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\vorigin_node\x18\x03 \x01(\tR\n" +
 	"originNode\x12\x18\n" +
 	"\adeleted\x18\x04 \x01(\bR\adeleted\x12\x12\n" +
-	"\x04hash\x18\x05 \x01(\tR\x04hash\"\x8b\x02\n" +
-	"\x0fClusterUserInfo\x12\x1a\n" +
-	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x02 \x01(\tR\bpassword\x12\x16\n" +
-	"\x06expire\x18\x03 \x01(\x03R\x06expire\x12\x12\n" +
-	"\x04role\x18\x04 \x01(\tR\x04role\x12!\n" +
-	"\ftarget_group\x18\x05 \x01(\tR\vtargetGroup\x12\x18\n" +
-	"\adeleted\x18\x06 \x01(\bR\adeleted\x12\"\n" +
-	"\rupdated_at_us\x18\a \x01(\x03R\vupdatedAtUs\x12\x1f\n" +
-	"\vorigin_node\x18\b \x01(\tR\n" +
+	"\x04hash\x18\x05 \x01(\tR\x04hash\"\xa5\x01\n" +
+	"\x0fClusterUserSync\x12\x1f\n" +
+	"\x04user\x18\x01 \x01(\v2\v.proto.UserR\x04user\x12\x18\n" +
+	"\adeleted\x18\x02 \x01(\bR\adeleted\x12\"\n" +
+	"\rupdated_at_us\x18\x03 \x01(\x03R\vupdatedAtUs\x12\x1f\n" +
+	"\vorigin_node\x18\x04 \x01(\tR\n" +
 	"originNode\x12\x12\n" +
-	"\x04hash\x18\t \x01(\tR\x04hash\"\x7f\n" +
+	"\x04hash\x18\x05 \x01(\tR\x04hash\"\x7f\n" +
 	"\fHeartBeatReq\x129\n" +
 	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x124\n" +
 	"\fuser_digests\x18\x02 \x03(\v2\x11.proto.UserDigestR\vuserDigests\"e\n" +
@@ -5011,33 +4715,13 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\x06groups\x18\x02 \x03(\tR\x06groups\"8\n" +
 	"\x10SetNodeGroupsRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
-	"\x03msg\x18\x02 \x01(\tR\x03msg\"f\n" +
-	"\x13ListClusterUsersReq\x129\n" +
-	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x12\x14\n" +
-	"\x05group\x18\x02 \x01(\tR\x05group\"i\n" +
-	"\x13ListClusterUsersRsp\x12\x12\n" +
-	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
-	"\x03msg\x18\x02 \x01(\tR\x03msg\x12,\n" +
-	"\x05users\x18\x03 \x03(\v2\x16.proto.ClusterUserInfoR\x05users\"s\n" +
-	"\x18GetClusterUsersByNameReq\x129\n" +
-	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x12\x1c\n" +
-	"\tusernames\x18\x02 \x03(\tR\tusernames\"n\n" +
-	"\x18GetClusterUsersByNameRsp\x12\x12\n" +
-	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
-	"\x03msg\x18\x02 \x01(\tR\x03msg\x12,\n" +
-	"\x05users\x18\x03 \x03(\v2\x16.proto.ClusterUserInfoR\x05users\"\x9f\x01\n" +
+	"\x03msg\x18\x02 \x01(\tR\x03msg\"\x9f\x01\n" +
 	"\x15UpsertClusterUsersReq\x129\n" +
 	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x12,\n" +
-	"\x05users\x18\x02 \x03(\v2\x16.proto.ClusterUserInfoR\x05users\x12\x1d\n" +
+	"\x05users\x18\x02 \x03(\v2\x16.proto.ClusterUserSyncR\x05users\x12\x1d\n" +
 	"\n" +
 	"from_admin\x18\x03 \x01(\bR\tfromAdmin\"=\n" +
 	"\x15UpsertClusterUsersRsp\x12\x12\n" +
-	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
-	"\x03msg\x18\x02 \x01(\tR\x03msg\"p\n" +
-	"\x15DeleteClusterUsersReq\x129\n" +
-	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x12\x1c\n" +
-	"\tusernames\x18\x02 \x03(\tR\tusernames\"=\n" +
-	"\x15DeleteClusterUsersRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
 	"\x03msg\x18\x02 \x01(\tR\x03msg\"2\n" +
 	"\rGetClutersReq\x12!\n" +
@@ -5064,7 +4748,7 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\x0fQuicBuilderType\x10\x16\x12\x13\n" +
 	"\x0fMkcpBuilderType\x10\x17\x12\x13\n" +
 	"\x0fGrpcBuilderType\x10\x18\x12\x13\n" +
-	"\x0fHttpBuilderType\x10\x192\xf0\x12\n" +
+	"\x0fHttpBuilderType\x10\x192\xf1\x10\n" +
 	"\rEndNodeAccess\x124\n" +
 	"\bGetUsers\x12\x12.proto.GetUsersReq\x1a\x12.proto.GetUsersRsp\"\x00\x12:\n" +
 	"\n" +
@@ -5100,11 +4784,8 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\rGetPingMetric\x12\x17.proto.GetPingMetricReq\x1a\x17.proto.GetPingMetricRsp\"\x00\x12C\n" +
 	"\rGetNodeMetric\x12\x17.proto.GetNodeMetricReq\x1a\x17.proto.GetNodeMetricRsp\"\x00\x12C\n" +
 	"\rGetNodeGroups\x12\x17.proto.GetNodeGroupsReq\x1a\x17.proto.GetNodeGroupsRsp\"\x00\x12C\n" +
-	"\rSetNodeGroups\x12\x17.proto.SetNodeGroupsReq\x1a\x17.proto.SetNodeGroupsRsp\"\x00\x12L\n" +
-	"\x10ListClusterUsers\x12\x1a.proto.ListClusterUsersReq\x1a\x1a.proto.ListClusterUsersRsp\"\x00\x12[\n" +
-	"\x15GetClusterUsersByName\x12\x1f.proto.GetClusterUsersByNameReq\x1a\x1f.proto.GetClusterUsersByNameRsp\"\x00\x12R\n" +
-	"\x12UpsertClusterUsers\x12\x1c.proto.UpsertClusterUsersReq\x1a\x1c.proto.UpsertClusterUsersRsp\"\x00\x12R\n" +
-	"\x12DeleteClusterUsers\x12\x1c.proto.DeleteClusterUsersReq\x1a\x1c.proto.DeleteClusterUsersRsp\"\x00\x127\n" +
+	"\rSetNodeGroups\x12\x17.proto.SetNodeGroupsReq\x1a\x17.proto.SetNodeGroupsRsp\"\x00\x12R\n" +
+	"\x12UpsertClusterUsers\x12\x1c.proto.UpsertClusterUsersReq\x1a\x1c.proto.UpsertClusterUsersRsp\"\x00\x127\n" +
 	"\tGetStatus\x12\x13.proto.GetStatusReq\x1a\x13.proto.GetStatusRsp\"\x002\x83\x01\n" +
 	"\x0fCenterNodeAdmin\x12:\n" +
 	"\n" +
@@ -5127,89 +4808,83 @@ func file_rpc_server_proto_rawDescGZIP() []byte {
 }
 
 var file_rpc_server_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_rpc_server_proto_msgTypes = make([]protoimpl.MessageInfo, 80)
+var file_rpc_server_proto_msgTypes = make([]protoimpl.MessageInfo, 74)
 var file_rpc_server_proto_goTypes = []any{
-	(BuilderType)(0),                 // 0: proto.BuilderType
-	(*User)(nil),                     // 1: proto.User
-	(*NodeAuthInfo)(nil),             // 2: proto.NodeAuthInfo
-	(*GetUsersReq)(nil),              // 3: proto.GetUsersReq
-	(*GetUsersRsp)(nil),              // 4: proto.GetUsersRsp
-	(*ProfileInbound)(nil),           // 5: proto.ProfileInbound
-	(*GetProfileReq)(nil),            // 6: proto.GetProfileReq
-	(*GetProfileRsp)(nil),            // 7: proto.GetProfileRsp
-	(*UserOpReq)(nil),                // 8: proto.UserOpReq
-	(*UserOpRsp)(nil),                // 9: proto.UserOpRsp
-	(*GetSubReq)(nil),                // 10: proto.GetSubReq
-	(*GetSubRsp)(nil),                // 11: proto.GetSubRsp
-	(*UserDigest)(nil),               // 12: proto.UserDigest
-	(*ClusterUserInfo)(nil),          // 13: proto.ClusterUserInfo
-	(*HeartBeatReq)(nil),             // 14: proto.HeartBeatReq
-	(*Node)(nil),                     // 15: proto.Node
-	(*HeartBeatRsp)(nil),             // 16: proto.HeartBeatRsp
-	(*Nodes)(nil),                    // 17: proto.Nodes
-	(*RegisterNodeReq)(nil),          // 18: proto.RegisterNodeReq
-	(*RegisterNodeRsp)(nil),          // 19: proto.RegisterNodeRsp
-	(*GetBandwidthStatsReq)(nil),     // 20: proto.GetBandwidthStatsReq
-	(*Stats)(nil),                    // 21: proto.Stats
-	(*GetBandwidthStatsRsp)(nil),     // 22: proto.GetBandwidthStatsRsp
-	(*InboundOpReq)(nil),             // 23: proto.InboundOpReq
-	(*InboundOpRsp)(nil),             // 24: proto.InboundOpRsp
-	(*TransferInboundReq)(nil),       // 25: proto.TransferInboundReq
-	(*CopyInboundReq)(nil),           // 26: proto.CopyInboundReq
-	(*CopyUserReq)(nil),              // 27: proto.CopyUserReq
-	(*GetInboundReq)(nil),            // 28: proto.GetInboundReq
-	(*GetInboundRsp)(nil),            // 29: proto.GetInboundRsp
-	(*InboundInfo)(nil),              // 30: proto.InboundInfo
-	(*ListInboundReq)(nil),           // 31: proto.ListInboundReq
-	(*ListInboundRsp)(nil),           // 32: proto.ListInboundRsp
-	(*DeleteInboundByNameReq)(nil),   // 33: proto.DeleteInboundByNameReq
-	(*UpdateProxyReq)(nil),           // 34: proto.UpdateProxyReq
-	(*UpdateProxyRsp)(nil),           // 35: proto.UpdateProxyRsp
-	(*AdaptiveOpReq)(nil),            // 36: proto.AdaptiveOpReq
-	(*AdaptiveReq)(nil),              // 37: proto.AdaptiveReq
-	(*AdaptiveRsp)(nil),              // 38: proto.AdaptiveRsp
-	(*SetGatewayModelReq)(nil),       // 39: proto.SetGatewayModelReq
-	(*SetGatewayModelRsp)(nil),       // 40: proto.SetGatewayModelRsp
-	(*ObtainNewCertReq)(nil),         // 41: proto.ObtainNewCertReq
-	(*ObtainNewCertRsp)(nil),         // 42: proto.ObtainNewCertRsp
-	(*FastAddInboundReq)(nil),        // 43: proto.FastAddInboundReq
-	(*FastAddInboundRsp)(nil),        // 44: proto.FastAddInboundRsp
-	(*TransferCertReq)(nil),          // 45: proto.TransferCertReq
-	(*TransferCertRsp)(nil),          // 46: proto.TransferCertRsp
-	(*Cert)(nil),                     // 47: proto.Cert
-	(*GetCertsReq)(nil),              // 48: proto.GetCertsReq
-	(*GetCertsRsp)(nil),              // 49: proto.GetCertsRsp
-	(*PingMetric)(nil),               // 50: proto.PingMetric
-	(*PingResult)(nil),               // 51: proto.PingResult
-	(*GetPingMetricReq)(nil),         // 52: proto.GetPingMetricReq
-	(*GetPingMetricRsp)(nil),         // 53: proto.GetPingMetricRsp
-	(*SetPingCheckReq)(nil),          // 54: proto.SetPingCheckReq
-	(*SetPingCheckRsp)(nil),          // 55: proto.SetPingCheckRsp
-	(*NodeMetrics)(nil),              // 56: proto.NodeMetrics
-	(*GetNodeMetricReq)(nil),         // 57: proto.GetNodeMetricReq
-	(*GetNodeMetricRsp)(nil),         // 58: proto.GetNodeMetricRsp
-	(*NodeStatus)(nil),               // 59: proto.NodeStatus
-	(*GetStatusReq)(nil),             // 60: proto.GetStatusReq
-	(*GetStatusRsp)(nil),             // 61: proto.GetStatusRsp
-	(*GetNodeGroupsReq)(nil),         // 62: proto.GetNodeGroupsReq
-	(*GetNodeGroupsRsp)(nil),         // 63: proto.GetNodeGroupsRsp
-	(*SetNodeGroupsReq)(nil),         // 64: proto.SetNodeGroupsReq
-	(*SetNodeGroupsRsp)(nil),         // 65: proto.SetNodeGroupsRsp
-	(*ListClusterUsersReq)(nil),      // 66: proto.ListClusterUsersReq
-	(*ListClusterUsersRsp)(nil),      // 67: proto.ListClusterUsersRsp
-	(*GetClusterUsersByNameReq)(nil), // 68: proto.GetClusterUsersByNameReq
-	(*GetClusterUsersByNameRsp)(nil), // 69: proto.GetClusterUsersByNameRsp
-	(*UpsertClusterUsersReq)(nil),    // 70: proto.UpsertClusterUsersReq
-	(*UpsertClusterUsersRsp)(nil),    // 71: proto.UpsertClusterUsersRsp
-	(*DeleteClusterUsersReq)(nil),    // 72: proto.DeleteClusterUsersReq
-	(*DeleteClusterUsersRsp)(nil),    // 73: proto.DeleteClusterUsersRsp
-	(*GetClutersReq)(nil),            // 74: proto.GetClutersReq
-	(*GetClutersRsp)(nil),            // 75: proto.GetClutersRsp
-	(*GetNodesReq)(nil),              // 76: proto.GetNodesReq
-	(*GetNodesRsp)(nil),              // 77: proto.GetNodesRsp
-	nil,                              // 78: proto.HeartBeatRsp.NodesMapEntry
-	nil,                              // 79: proto.Nodes.NodesEntry
-	nil,                              // 80: proto.GetNodesRsp.NodesMapEntry
+	(BuilderType)(0),               // 0: proto.BuilderType
+	(*User)(nil),                   // 1: proto.User
+	(*NodeAuthInfo)(nil),           // 2: proto.NodeAuthInfo
+	(*GetUsersReq)(nil),            // 3: proto.GetUsersReq
+	(*GetUsersRsp)(nil),            // 4: proto.GetUsersRsp
+	(*ProfileInbound)(nil),         // 5: proto.ProfileInbound
+	(*GetProfileReq)(nil),          // 6: proto.GetProfileReq
+	(*GetProfileRsp)(nil),          // 7: proto.GetProfileRsp
+	(*UserOpReq)(nil),              // 8: proto.UserOpReq
+	(*UserOpRsp)(nil),              // 9: proto.UserOpRsp
+	(*GetSubReq)(nil),              // 10: proto.GetSubReq
+	(*GetSubRsp)(nil),              // 11: proto.GetSubRsp
+	(*UserDigest)(nil),             // 12: proto.UserDigest
+	(*ClusterUserSync)(nil),        // 13: proto.ClusterUserSync
+	(*HeartBeatReq)(nil),           // 14: proto.HeartBeatReq
+	(*Node)(nil),                   // 15: proto.Node
+	(*HeartBeatRsp)(nil),           // 16: proto.HeartBeatRsp
+	(*Nodes)(nil),                  // 17: proto.Nodes
+	(*RegisterNodeReq)(nil),        // 18: proto.RegisterNodeReq
+	(*RegisterNodeRsp)(nil),        // 19: proto.RegisterNodeRsp
+	(*GetBandwidthStatsReq)(nil),   // 20: proto.GetBandwidthStatsReq
+	(*Stats)(nil),                  // 21: proto.Stats
+	(*GetBandwidthStatsRsp)(nil),   // 22: proto.GetBandwidthStatsRsp
+	(*InboundOpReq)(nil),           // 23: proto.InboundOpReq
+	(*InboundOpRsp)(nil),           // 24: proto.InboundOpRsp
+	(*TransferInboundReq)(nil),     // 25: proto.TransferInboundReq
+	(*CopyInboundReq)(nil),         // 26: proto.CopyInboundReq
+	(*CopyUserReq)(nil),            // 27: proto.CopyUserReq
+	(*GetInboundReq)(nil),          // 28: proto.GetInboundReq
+	(*GetInboundRsp)(nil),          // 29: proto.GetInboundRsp
+	(*InboundInfo)(nil),            // 30: proto.InboundInfo
+	(*ListInboundReq)(nil),         // 31: proto.ListInboundReq
+	(*ListInboundRsp)(nil),         // 32: proto.ListInboundRsp
+	(*DeleteInboundByNameReq)(nil), // 33: proto.DeleteInboundByNameReq
+	(*UpdateProxyReq)(nil),         // 34: proto.UpdateProxyReq
+	(*UpdateProxyRsp)(nil),         // 35: proto.UpdateProxyRsp
+	(*AdaptiveOpReq)(nil),          // 36: proto.AdaptiveOpReq
+	(*AdaptiveReq)(nil),            // 37: proto.AdaptiveReq
+	(*AdaptiveRsp)(nil),            // 38: proto.AdaptiveRsp
+	(*SetGatewayModelReq)(nil),     // 39: proto.SetGatewayModelReq
+	(*SetGatewayModelRsp)(nil),     // 40: proto.SetGatewayModelRsp
+	(*ObtainNewCertReq)(nil),       // 41: proto.ObtainNewCertReq
+	(*ObtainNewCertRsp)(nil),       // 42: proto.ObtainNewCertRsp
+	(*FastAddInboundReq)(nil),      // 43: proto.FastAddInboundReq
+	(*FastAddInboundRsp)(nil),      // 44: proto.FastAddInboundRsp
+	(*TransferCertReq)(nil),        // 45: proto.TransferCertReq
+	(*TransferCertRsp)(nil),        // 46: proto.TransferCertRsp
+	(*Cert)(nil),                   // 47: proto.Cert
+	(*GetCertsReq)(nil),            // 48: proto.GetCertsReq
+	(*GetCertsRsp)(nil),            // 49: proto.GetCertsRsp
+	(*PingMetric)(nil),             // 50: proto.PingMetric
+	(*PingResult)(nil),             // 51: proto.PingResult
+	(*GetPingMetricReq)(nil),       // 52: proto.GetPingMetricReq
+	(*GetPingMetricRsp)(nil),       // 53: proto.GetPingMetricRsp
+	(*SetPingCheckReq)(nil),        // 54: proto.SetPingCheckReq
+	(*SetPingCheckRsp)(nil),        // 55: proto.SetPingCheckRsp
+	(*NodeMetrics)(nil),            // 56: proto.NodeMetrics
+	(*GetNodeMetricReq)(nil),       // 57: proto.GetNodeMetricReq
+	(*GetNodeMetricRsp)(nil),       // 58: proto.GetNodeMetricRsp
+	(*NodeStatus)(nil),             // 59: proto.NodeStatus
+	(*GetStatusReq)(nil),           // 60: proto.GetStatusReq
+	(*GetStatusRsp)(nil),           // 61: proto.GetStatusRsp
+	(*GetNodeGroupsReq)(nil),       // 62: proto.GetNodeGroupsReq
+	(*GetNodeGroupsRsp)(nil),       // 63: proto.GetNodeGroupsRsp
+	(*SetNodeGroupsReq)(nil),       // 64: proto.SetNodeGroupsReq
+	(*SetNodeGroupsRsp)(nil),       // 65: proto.SetNodeGroupsRsp
+	(*UpsertClusterUsersReq)(nil),  // 66: proto.UpsertClusterUsersReq
+	(*UpsertClusterUsersRsp)(nil),  // 67: proto.UpsertClusterUsersRsp
+	(*GetClutersReq)(nil),          // 68: proto.GetClutersReq
+	(*GetClutersRsp)(nil),          // 69: proto.GetClutersRsp
+	(*GetNodesReq)(nil),            // 70: proto.GetNodesReq
+	(*GetNodesRsp)(nil),            // 71: proto.GetNodesRsp
+	nil,                            // 72: proto.HeartBeatRsp.NodesMapEntry
+	nil,                            // 73: proto.Nodes.NodesEntry
+	nil,                            // 74: proto.GetNodesRsp.NodesMapEntry
 }
 var file_rpc_server_proto_depIdxs = []int32{
 	15, // 0: proto.NodeAuthInfo.node:type_name -> proto.Node
@@ -5221,140 +4896,130 @@ var file_rpc_server_proto_depIdxs = []int32{
 	1,  // 6: proto.UserOpReq.users:type_name -> proto.User
 	2,  // 7: proto.GetSubReq.node_auth_info:type_name -> proto.NodeAuthInfo
 	1,  // 8: proto.GetSubReq.user:type_name -> proto.User
-	2,  // 9: proto.HeartBeatReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	12, // 10: proto.HeartBeatReq.user_digests:type_name -> proto.UserDigest
-	78, // 11: proto.HeartBeatRsp.nodesMap:type_name -> proto.HeartBeatRsp.NodesMapEntry
-	79, // 12: proto.Nodes.nodes:type_name -> proto.Nodes.NodesEntry
-	2,  // 13: proto.RegisterNodeReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 14: proto.GetBandwidthStatsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	21, // 15: proto.GetBandwidthStatsRsp.stats:type_name -> proto.Stats
-	2,  // 16: proto.InboundOpReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 17: proto.TransferInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 18: proto.CopyInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 19: proto.CopyUserReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 20: proto.GetInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 21: proto.ListInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	30, // 22: proto.ListInboundRsp.inbounds:type_name -> proto.InboundInfo
-	2,  // 23: proto.DeleteInboundByNameReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 24: proto.UpdateProxyReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 25: proto.AdaptiveOpReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 26: proto.AdaptiveReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 27: proto.SetGatewayModelReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 28: proto.ObtainNewCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 29: proto.FastAddInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	0,  // 30: proto.FastAddInboundReq.inboundBuilderType:type_name -> proto.BuilderType
-	0,  // 31: proto.FastAddInboundReq.streamBuilderType:type_name -> proto.BuilderType
-	2,  // 32: proto.TransferCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 33: proto.GetCertsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	47, // 34: proto.GetCertsRsp.certs:type_name -> proto.Cert
-	51, // 35: proto.PingMetric.results:type_name -> proto.PingResult
-	2,  // 36: proto.GetPingMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	50, // 37: proto.GetPingMetricRsp.metric:type_name -> proto.PingMetric
-	2,  // 38: proto.SetPingCheckReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 39: proto.GetNodeMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	56, // 40: proto.GetNodeMetricRsp.node_metrics:type_name -> proto.NodeMetrics
-	2,  // 41: proto.GetStatusReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	59, // 42: proto.GetStatusRsp.status:type_name -> proto.NodeStatus
-	2,  // 43: proto.GetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 44: proto.SetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 45: proto.ListClusterUsersReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	13, // 46: proto.ListClusterUsersRsp.users:type_name -> proto.ClusterUserInfo
-	2,  // 47: proto.GetClusterUsersByNameReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	13, // 48: proto.GetClusterUsersByNameRsp.users:type_name -> proto.ClusterUserInfo
-	2,  // 49: proto.UpsertClusterUsersReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	13, // 50: proto.UpsertClusterUsersReq.users:type_name -> proto.ClusterUserInfo
-	2,  // 51: proto.DeleteClusterUsersReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	80, // 52: proto.GetNodesRsp.nodesMap:type_name -> proto.GetNodesRsp.NodesMapEntry
-	15, // 53: proto.HeartBeatRsp.NodesMapEntry.value:type_name -> proto.Node
-	17, // 54: proto.Nodes.NodesEntry.value:type_name -> proto.Nodes
-	15, // 55: proto.GetNodesRsp.NodesMapEntry.value:type_name -> proto.Node
-	3,  // 56: proto.EndNodeAccess.GetUsers:input_type -> proto.GetUsersReq
-	6,  // 57: proto.EndNodeAccess.GetProfile:input_type -> proto.GetProfileReq
-	8,  // 58: proto.EndNodeAccess.AddUsers:input_type -> proto.UserOpReq
-	8,  // 59: proto.EndNodeAccess.DeleteUsers:input_type -> proto.UserOpReq
-	8,  // 60: proto.EndNodeAccess.UpdateUsers:input_type -> proto.UserOpReq
-	8,  // 61: proto.EndNodeAccess.ResetUser:input_type -> proto.UserOpReq
-	10, // 62: proto.EndNodeAccess.GetSub:input_type -> proto.GetSubReq
-	20, // 63: proto.EndNodeAccess.GetBandWidthStats:input_type -> proto.GetBandwidthStatsReq
-	14, // 64: proto.EndNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
-	18, // 65: proto.EndNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
-	39, // 66: proto.EndNodeAccess.SetGatewayModel:input_type -> proto.SetGatewayModelReq
-	54, // 67: proto.EndNodeAccess.SetPingCheck:input_type -> proto.SetPingCheckReq
-	23, // 68: proto.EndNodeAccess.AddInbound:input_type -> proto.InboundOpReq
-	23, // 69: proto.EndNodeAccess.DeleteInbound:input_type -> proto.InboundOpReq
-	25, // 70: proto.EndNodeAccess.TransferInbound:input_type -> proto.TransferInboundReq
-	26, // 71: proto.EndNodeAccess.CopyInbound:input_type -> proto.CopyInboundReq
-	27, // 72: proto.EndNodeAccess.CopyUser:input_type -> proto.CopyUserReq
-	28, // 73: proto.EndNodeAccess.GetInbound:input_type -> proto.GetInboundReq
-	31, // 74: proto.EndNodeAccess.ListInbound:input_type -> proto.ListInboundReq
-	33, // 75: proto.EndNodeAccess.DeleteInboundByName:input_type -> proto.DeleteInboundByNameReq
-	34, // 76: proto.EndNodeAccess.UpdateProxy:input_type -> proto.UpdateProxyReq
-	36, // 77: proto.EndNodeAccess.AddAdaptiveConfig:input_type -> proto.AdaptiveOpReq
-	36, // 78: proto.EndNodeAccess.DeleteAdaptiveConfig:input_type -> proto.AdaptiveOpReq
-	37, // 79: proto.EndNodeAccess.Adaptive:input_type -> proto.AdaptiveReq
-	43, // 80: proto.EndNodeAccess.FastAddInbound:input_type -> proto.FastAddInboundReq
-	41, // 81: proto.EndNodeAccess.ObtainNewCert:input_type -> proto.ObtainNewCertReq
-	45, // 82: proto.EndNodeAccess.TransferCert:input_type -> proto.TransferCertReq
-	48, // 83: proto.EndNodeAccess.GetCerts:input_type -> proto.GetCertsReq
-	52, // 84: proto.EndNodeAccess.GetPingMetric:input_type -> proto.GetPingMetricReq
-	57, // 85: proto.EndNodeAccess.GetNodeMetric:input_type -> proto.GetNodeMetricReq
-	62, // 86: proto.EndNodeAccess.GetNodeGroups:input_type -> proto.GetNodeGroupsReq
-	64, // 87: proto.EndNodeAccess.SetNodeGroups:input_type -> proto.SetNodeGroupsReq
-	66, // 88: proto.EndNodeAccess.ListClusterUsers:input_type -> proto.ListClusterUsersReq
-	68, // 89: proto.EndNodeAccess.GetClusterUsersByName:input_type -> proto.GetClusterUsersByNameReq
-	70, // 90: proto.EndNodeAccess.UpsertClusterUsers:input_type -> proto.UpsertClusterUsersReq
-	72, // 91: proto.EndNodeAccess.DeleteClusterUsers:input_type -> proto.DeleteClusterUsersReq
-	60, // 92: proto.EndNodeAccess.GetStatus:input_type -> proto.GetStatusReq
-	74, // 93: proto.CenterNodeAdmin.GetCluters:input_type -> proto.GetClutersReq
-	76, // 94: proto.CenterNodeAdmin.GetNodes:input_type -> proto.GetNodesReq
-	14, // 95: proto.CenterNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
-	18, // 96: proto.CenterNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
-	4,  // 97: proto.EndNodeAccess.GetUsers:output_type -> proto.GetUsersRsp
-	7,  // 98: proto.EndNodeAccess.GetProfile:output_type -> proto.GetProfileRsp
-	9,  // 99: proto.EndNodeAccess.AddUsers:output_type -> proto.UserOpRsp
-	9,  // 100: proto.EndNodeAccess.DeleteUsers:output_type -> proto.UserOpRsp
-	9,  // 101: proto.EndNodeAccess.UpdateUsers:output_type -> proto.UserOpRsp
-	9,  // 102: proto.EndNodeAccess.ResetUser:output_type -> proto.UserOpRsp
-	11, // 103: proto.EndNodeAccess.GetSub:output_type -> proto.GetSubRsp
-	22, // 104: proto.EndNodeAccess.GetBandWidthStats:output_type -> proto.GetBandwidthStatsRsp
-	16, // 105: proto.EndNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
-	19, // 106: proto.EndNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
-	40, // 107: proto.EndNodeAccess.SetGatewayModel:output_type -> proto.SetGatewayModelRsp
-	55, // 108: proto.EndNodeAccess.SetPingCheck:output_type -> proto.SetPingCheckRsp
-	24, // 109: proto.EndNodeAccess.AddInbound:output_type -> proto.InboundOpRsp
-	24, // 110: proto.EndNodeAccess.DeleteInbound:output_type -> proto.InboundOpRsp
-	24, // 111: proto.EndNodeAccess.TransferInbound:output_type -> proto.InboundOpRsp
-	24, // 112: proto.EndNodeAccess.CopyInbound:output_type -> proto.InboundOpRsp
-	24, // 113: proto.EndNodeAccess.CopyUser:output_type -> proto.InboundOpRsp
-	29, // 114: proto.EndNodeAccess.GetInbound:output_type -> proto.GetInboundRsp
-	32, // 115: proto.EndNodeAccess.ListInbound:output_type -> proto.ListInboundRsp
-	24, // 116: proto.EndNodeAccess.DeleteInboundByName:output_type -> proto.InboundOpRsp
-	35, // 117: proto.EndNodeAccess.UpdateProxy:output_type -> proto.UpdateProxyRsp
-	38, // 118: proto.EndNodeAccess.AddAdaptiveConfig:output_type -> proto.AdaptiveRsp
-	38, // 119: proto.EndNodeAccess.DeleteAdaptiveConfig:output_type -> proto.AdaptiveRsp
-	38, // 120: proto.EndNodeAccess.Adaptive:output_type -> proto.AdaptiveRsp
-	44, // 121: proto.EndNodeAccess.FastAddInbound:output_type -> proto.FastAddInboundRsp
-	42, // 122: proto.EndNodeAccess.ObtainNewCert:output_type -> proto.ObtainNewCertRsp
-	46, // 123: proto.EndNodeAccess.TransferCert:output_type -> proto.TransferCertRsp
-	49, // 124: proto.EndNodeAccess.GetCerts:output_type -> proto.GetCertsRsp
-	53, // 125: proto.EndNodeAccess.GetPingMetric:output_type -> proto.GetPingMetricRsp
-	58, // 126: proto.EndNodeAccess.GetNodeMetric:output_type -> proto.GetNodeMetricRsp
-	63, // 127: proto.EndNodeAccess.GetNodeGroups:output_type -> proto.GetNodeGroupsRsp
-	65, // 128: proto.EndNodeAccess.SetNodeGroups:output_type -> proto.SetNodeGroupsRsp
-	67, // 129: proto.EndNodeAccess.ListClusterUsers:output_type -> proto.ListClusterUsersRsp
-	69, // 130: proto.EndNodeAccess.GetClusterUsersByName:output_type -> proto.GetClusterUsersByNameRsp
-	71, // 131: proto.EndNodeAccess.UpsertClusterUsers:output_type -> proto.UpsertClusterUsersRsp
-	73, // 132: proto.EndNodeAccess.DeleteClusterUsers:output_type -> proto.DeleteClusterUsersRsp
-	61, // 133: proto.EndNodeAccess.GetStatus:output_type -> proto.GetStatusRsp
-	75, // 134: proto.CenterNodeAdmin.GetCluters:output_type -> proto.GetClutersRsp
-	77, // 135: proto.CenterNodeAdmin.GetNodes:output_type -> proto.GetNodesRsp
-	16, // 136: proto.CenterNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
-	19, // 137: proto.CenterNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
-	97, // [97:138] is the sub-list for method output_type
-	56, // [56:97] is the sub-list for method input_type
-	56, // [56:56] is the sub-list for extension type_name
-	56, // [56:56] is the sub-list for extension extendee
-	0,  // [0:56] is the sub-list for field type_name
+	1,  // 9: proto.ClusterUserSync.user:type_name -> proto.User
+	2,  // 10: proto.HeartBeatReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	12, // 11: proto.HeartBeatReq.user_digests:type_name -> proto.UserDigest
+	72, // 12: proto.HeartBeatRsp.nodesMap:type_name -> proto.HeartBeatRsp.NodesMapEntry
+	73, // 13: proto.Nodes.nodes:type_name -> proto.Nodes.NodesEntry
+	2,  // 14: proto.RegisterNodeReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 15: proto.GetBandwidthStatsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	21, // 16: proto.GetBandwidthStatsRsp.stats:type_name -> proto.Stats
+	2,  // 17: proto.InboundOpReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 18: proto.TransferInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 19: proto.CopyInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 20: proto.CopyUserReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 21: proto.GetInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 22: proto.ListInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	30, // 23: proto.ListInboundRsp.inbounds:type_name -> proto.InboundInfo
+	2,  // 24: proto.DeleteInboundByNameReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 25: proto.UpdateProxyReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 26: proto.AdaptiveOpReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 27: proto.AdaptiveReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 28: proto.SetGatewayModelReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 29: proto.ObtainNewCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 30: proto.FastAddInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	0,  // 31: proto.FastAddInboundReq.inboundBuilderType:type_name -> proto.BuilderType
+	0,  // 32: proto.FastAddInboundReq.streamBuilderType:type_name -> proto.BuilderType
+	2,  // 33: proto.TransferCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 34: proto.GetCertsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	47, // 35: proto.GetCertsRsp.certs:type_name -> proto.Cert
+	51, // 36: proto.PingMetric.results:type_name -> proto.PingResult
+	2,  // 37: proto.GetPingMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	50, // 38: proto.GetPingMetricRsp.metric:type_name -> proto.PingMetric
+	2,  // 39: proto.SetPingCheckReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 40: proto.GetNodeMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	56, // 41: proto.GetNodeMetricRsp.node_metrics:type_name -> proto.NodeMetrics
+	2,  // 42: proto.GetStatusReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	59, // 43: proto.GetStatusRsp.status:type_name -> proto.NodeStatus
+	2,  // 44: proto.GetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 45: proto.SetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 46: proto.UpsertClusterUsersReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	13, // 47: proto.UpsertClusterUsersReq.users:type_name -> proto.ClusterUserSync
+	74, // 48: proto.GetNodesRsp.nodesMap:type_name -> proto.GetNodesRsp.NodesMapEntry
+	15, // 49: proto.HeartBeatRsp.NodesMapEntry.value:type_name -> proto.Node
+	17, // 50: proto.Nodes.NodesEntry.value:type_name -> proto.Nodes
+	15, // 51: proto.GetNodesRsp.NodesMapEntry.value:type_name -> proto.Node
+	3,  // 52: proto.EndNodeAccess.GetUsers:input_type -> proto.GetUsersReq
+	6,  // 53: proto.EndNodeAccess.GetProfile:input_type -> proto.GetProfileReq
+	8,  // 54: proto.EndNodeAccess.AddUsers:input_type -> proto.UserOpReq
+	8,  // 55: proto.EndNodeAccess.DeleteUsers:input_type -> proto.UserOpReq
+	8,  // 56: proto.EndNodeAccess.UpdateUsers:input_type -> proto.UserOpReq
+	8,  // 57: proto.EndNodeAccess.ResetUser:input_type -> proto.UserOpReq
+	10, // 58: proto.EndNodeAccess.GetSub:input_type -> proto.GetSubReq
+	20, // 59: proto.EndNodeAccess.GetBandWidthStats:input_type -> proto.GetBandwidthStatsReq
+	14, // 60: proto.EndNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
+	18, // 61: proto.EndNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
+	39, // 62: proto.EndNodeAccess.SetGatewayModel:input_type -> proto.SetGatewayModelReq
+	54, // 63: proto.EndNodeAccess.SetPingCheck:input_type -> proto.SetPingCheckReq
+	23, // 64: proto.EndNodeAccess.AddInbound:input_type -> proto.InboundOpReq
+	23, // 65: proto.EndNodeAccess.DeleteInbound:input_type -> proto.InboundOpReq
+	25, // 66: proto.EndNodeAccess.TransferInbound:input_type -> proto.TransferInboundReq
+	26, // 67: proto.EndNodeAccess.CopyInbound:input_type -> proto.CopyInboundReq
+	27, // 68: proto.EndNodeAccess.CopyUser:input_type -> proto.CopyUserReq
+	28, // 69: proto.EndNodeAccess.GetInbound:input_type -> proto.GetInboundReq
+	31, // 70: proto.EndNodeAccess.ListInbound:input_type -> proto.ListInboundReq
+	33, // 71: proto.EndNodeAccess.DeleteInboundByName:input_type -> proto.DeleteInboundByNameReq
+	34, // 72: proto.EndNodeAccess.UpdateProxy:input_type -> proto.UpdateProxyReq
+	36, // 73: proto.EndNodeAccess.AddAdaptiveConfig:input_type -> proto.AdaptiveOpReq
+	36, // 74: proto.EndNodeAccess.DeleteAdaptiveConfig:input_type -> proto.AdaptiveOpReq
+	37, // 75: proto.EndNodeAccess.Adaptive:input_type -> proto.AdaptiveReq
+	43, // 76: proto.EndNodeAccess.FastAddInbound:input_type -> proto.FastAddInboundReq
+	41, // 77: proto.EndNodeAccess.ObtainNewCert:input_type -> proto.ObtainNewCertReq
+	45, // 78: proto.EndNodeAccess.TransferCert:input_type -> proto.TransferCertReq
+	48, // 79: proto.EndNodeAccess.GetCerts:input_type -> proto.GetCertsReq
+	52, // 80: proto.EndNodeAccess.GetPingMetric:input_type -> proto.GetPingMetricReq
+	57, // 81: proto.EndNodeAccess.GetNodeMetric:input_type -> proto.GetNodeMetricReq
+	62, // 82: proto.EndNodeAccess.GetNodeGroups:input_type -> proto.GetNodeGroupsReq
+	64, // 83: proto.EndNodeAccess.SetNodeGroups:input_type -> proto.SetNodeGroupsReq
+	66, // 84: proto.EndNodeAccess.UpsertClusterUsers:input_type -> proto.UpsertClusterUsersReq
+	60, // 85: proto.EndNodeAccess.GetStatus:input_type -> proto.GetStatusReq
+	68, // 86: proto.CenterNodeAdmin.GetCluters:input_type -> proto.GetClutersReq
+	70, // 87: proto.CenterNodeAdmin.GetNodes:input_type -> proto.GetNodesReq
+	14, // 88: proto.CenterNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
+	18, // 89: proto.CenterNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
+	4,  // 90: proto.EndNodeAccess.GetUsers:output_type -> proto.GetUsersRsp
+	7,  // 91: proto.EndNodeAccess.GetProfile:output_type -> proto.GetProfileRsp
+	9,  // 92: proto.EndNodeAccess.AddUsers:output_type -> proto.UserOpRsp
+	9,  // 93: proto.EndNodeAccess.DeleteUsers:output_type -> proto.UserOpRsp
+	9,  // 94: proto.EndNodeAccess.UpdateUsers:output_type -> proto.UserOpRsp
+	9,  // 95: proto.EndNodeAccess.ResetUser:output_type -> proto.UserOpRsp
+	11, // 96: proto.EndNodeAccess.GetSub:output_type -> proto.GetSubRsp
+	22, // 97: proto.EndNodeAccess.GetBandWidthStats:output_type -> proto.GetBandwidthStatsRsp
+	16, // 98: proto.EndNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
+	19, // 99: proto.EndNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
+	40, // 100: proto.EndNodeAccess.SetGatewayModel:output_type -> proto.SetGatewayModelRsp
+	55, // 101: proto.EndNodeAccess.SetPingCheck:output_type -> proto.SetPingCheckRsp
+	24, // 102: proto.EndNodeAccess.AddInbound:output_type -> proto.InboundOpRsp
+	24, // 103: proto.EndNodeAccess.DeleteInbound:output_type -> proto.InboundOpRsp
+	24, // 104: proto.EndNodeAccess.TransferInbound:output_type -> proto.InboundOpRsp
+	24, // 105: proto.EndNodeAccess.CopyInbound:output_type -> proto.InboundOpRsp
+	24, // 106: proto.EndNodeAccess.CopyUser:output_type -> proto.InboundOpRsp
+	29, // 107: proto.EndNodeAccess.GetInbound:output_type -> proto.GetInboundRsp
+	32, // 108: proto.EndNodeAccess.ListInbound:output_type -> proto.ListInboundRsp
+	24, // 109: proto.EndNodeAccess.DeleteInboundByName:output_type -> proto.InboundOpRsp
+	35, // 110: proto.EndNodeAccess.UpdateProxy:output_type -> proto.UpdateProxyRsp
+	38, // 111: proto.EndNodeAccess.AddAdaptiveConfig:output_type -> proto.AdaptiveRsp
+	38, // 112: proto.EndNodeAccess.DeleteAdaptiveConfig:output_type -> proto.AdaptiveRsp
+	38, // 113: proto.EndNodeAccess.Adaptive:output_type -> proto.AdaptiveRsp
+	44, // 114: proto.EndNodeAccess.FastAddInbound:output_type -> proto.FastAddInboundRsp
+	42, // 115: proto.EndNodeAccess.ObtainNewCert:output_type -> proto.ObtainNewCertRsp
+	46, // 116: proto.EndNodeAccess.TransferCert:output_type -> proto.TransferCertRsp
+	49, // 117: proto.EndNodeAccess.GetCerts:output_type -> proto.GetCertsRsp
+	53, // 118: proto.EndNodeAccess.GetPingMetric:output_type -> proto.GetPingMetricRsp
+	58, // 119: proto.EndNodeAccess.GetNodeMetric:output_type -> proto.GetNodeMetricRsp
+	63, // 120: proto.EndNodeAccess.GetNodeGroups:output_type -> proto.GetNodeGroupsRsp
+	65, // 121: proto.EndNodeAccess.SetNodeGroups:output_type -> proto.SetNodeGroupsRsp
+	67, // 122: proto.EndNodeAccess.UpsertClusterUsers:output_type -> proto.UpsertClusterUsersRsp
+	61, // 123: proto.EndNodeAccess.GetStatus:output_type -> proto.GetStatusRsp
+	69, // 124: proto.CenterNodeAdmin.GetCluters:output_type -> proto.GetClutersRsp
+	71, // 125: proto.CenterNodeAdmin.GetNodes:output_type -> proto.GetNodesRsp
+	16, // 126: proto.CenterNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
+	19, // 127: proto.CenterNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
+	90, // [90:128] is the sub-list for method output_type
+	52, // [52:90] is the sub-list for method input_type
+	52, // [52:52] is the sub-list for extension type_name
+	52, // [52:52] is the sub-list for extension extendee
+	0,  // [0:52] is the sub-list for field type_name
 }
 
 func init() { file_rpc_server_proto_init() }
@@ -5368,7 +5033,7 @@ func file_rpc_server_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_rpc_server_proto_rawDesc), len(file_rpc_server_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   80,
+			NumMessages:   74,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

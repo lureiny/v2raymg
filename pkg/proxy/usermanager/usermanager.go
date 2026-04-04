@@ -3,16 +3,28 @@
 package usermanager
 
 import (
+	crypto_rand "crypto/rand"
+	"encoding/hex"
 	"fmt"
-	"github.com/lureiny/v2raymg/pkg/log"
 	"sync"
 	"time"
 
+	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/errors"
 	"github.com/lureiny/v2raymg/pkg/proxy/forward"
+	usync "github.com/lureiny/v2raymg/pkg/proxy/usermanager/sync"
 	"github.com/lureiny/v2raymg/pkg/store"
 )
+
+// generateAuthToken creates a cryptographically random 32-character hex token.
+func generateAuthToken() string {
+	b := make([]byte, 16)
+	if _, err := crypto_rand.Read(b); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
 
 // UserEventType represents the type of user event.
 type UserEventType string
@@ -46,6 +58,12 @@ type UserLister interface {
 // Ensure UserManager implements UserLister
 var _ UserLister = (*UserManager)(nil)
 
+// NodeGroupsStore is the persistence interface for local node group assignments.
+type NodeGroupsStore interface {
+	List() ([]string, error)
+	Set(groups []string) error
+}
+
 // UserManager manages users and their port bindings.
 // It also provides an event channel for user state changes.
 type UserManager struct {
@@ -72,13 +90,27 @@ type UserManager struct {
 	// a plaintext proxy password whenever a user is created or has their password changed.
 	// It is a function field to avoid a circular import on pkg/http/auth.
 	loginPasswordHasher func(string) (string, error)
+
+	// Cluster sync fields — clusterEnabled controls heartbeat digest exchange only.
+	// Version stamping (stampVersion) is always active regardless of this flag.
+	clusterEnabled  bool
+	localNodeName   string
+	defaultGroup    string
+	nodeGroupsStore NodeGroupsStore
+
+	// cachedNodeGroups is the in-memory set of group names this node belongs to.
+	// nil or empty means "no filtering" (backward compat / fail-open).
+	// Protected by mu.
+	cachedNodeGroups map[string]struct{}
 }
 
 // NewUserManager creates a new user manager (pure in-memory mode, no persistence).
-func NewUserManager(fm forward.ForwardManager) *UserManager {
+// localNodeName identifies this node for version stamping; use the node's config name.
+func NewUserManager(fm forward.ForwardManager, localNodeName string) *UserManager {
 	return &UserManager{
 		users:          make(map[string]*contracts.User),
 		forwardMgr:     fm,
+		localNodeName:  localNodeName,
 		eventCh:        make(chan UserEvent, 100), // Buffered channel
 		statsCollector: newStatsCollector(fm, time.Second),
 	}
@@ -86,10 +118,12 @@ func NewUserManager(fm forward.ForwardManager) *UserManager {
 
 // NewUserManagerWithStore creates a new user manager backed by the given store manager.
 // All users are loaded from store on construction. Returns an error if load fails.
-func NewUserManagerWithStore(fm forward.ForwardManager, storeMgr *store.StoreManager) (*UserManager, error) {
+// localNodeName identifies this node for version stamping; use the node's config name.
+func NewUserManagerWithStore(fm forward.ForwardManager, storeMgr *store.StoreManager, localNodeName string) (*UserManager, error) {
 	m := &UserManager{
 		users:          make(map[string]*contracts.User),
 		forwardMgr:     fm,
+		localNodeName:  localNodeName,
 		store:          storeMgr.UserStore(),
 		eventCh:        make(chan UserEvent, 100),
 		statsCollector: newStatsCollector(fm, time.Second),
@@ -115,6 +149,154 @@ func (m *UserManager) SetLoginPasswordHasher(fn func(string) (string, error)) {
 // Returns nil if ForwardManager is not configured.
 func (m *UserManager) GetForwardManager() forward.ForwardManager {
 	return m.forwardMgr
+}
+
+// EnableClusterSync activates cluster synchronisation mode.
+// When enabled, heartbeat exchanges carry user digests so that stale data is
+// detected and pulled from peers. Version stamping itself is always active
+// (handled by stampVersion), independent of this flag.
+// Call once during server startup before serving requests.
+func (m *UserManager) EnableClusterSync(defaultGroup string, ngs NodeGroupsStore) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.clusterEnabled = true
+	m.defaultGroup = defaultGroup
+	m.nodeGroupsStore = ngs
+
+	if ngs != nil {
+		groups, err := ngs.List()
+		if err != nil {
+			log.Warn("EnableClusterSync: failed to load node groups, filtering disabled", "err", err)
+			return
+		}
+		m.cachedNodeGroups = makeGroupSet(groups)
+	}
+}
+
+// SetNodeGroups atomically replaces the node's group assignments and refreshes
+// the in-memory cache. Call this instead of nodeGroupsStore.Set() directly.
+func (m *UserManager) SetNodeGroups(groups []string) error {
+	m.mu.RLock()
+	ngs := m.nodeGroupsStore
+	m.mu.RUnlock()
+	if ngs == nil {
+		return fmt.Errorf("node groups store not configured")
+	}
+	if err := ngs.Set(groups); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.cachedNodeGroups = makeGroupSet(groups)
+	m.mu.Unlock()
+	return nil
+}
+
+// makeGroupSet converts a slice of group names to a set for O(1) lookups.
+func makeGroupSet(groups []string) map[string]struct{} {
+	s := make(map[string]struct{}, len(groups))
+	for _, g := range groups {
+		s[g] = struct{}{}
+	}
+	return s
+}
+
+// isUserVisibleLocked returns true if the user should be visible to local
+// containers/inbounds. Must be called with mu held (read or write).
+func (m *UserManager) isUserVisibleLocked(user *contracts.User) bool {
+	if !m.clusterEnabled || len(m.cachedNodeGroups) == 0 {
+		return true
+	}
+	if user.TargetGroup == "" {
+		return true
+	}
+	_, ok := m.cachedNodeGroups[user.TargetGroup]
+	return ok
+}
+
+// IsUserVisible reports whether the user should be visible on this node
+// based on group membership. Safe to call concurrently.
+func (m *UserManager) IsUserVisible(user *contracts.User) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.isUserVisibleLocked(user)
+}
+
+// NodeGroupsStore returns the node groups store (nil if cluster sync is disabled).
+func (m *UserManager) NodeGroupsStore() NodeGroupsStore {
+	return m.nodeGroupsStore
+}
+
+// IsClusterEnabled returns true if cluster sync mode is active.
+func (m *UserManager) IsClusterEnabled() bool {
+	return m.clusterEnabled
+}
+
+// LocalNodeName returns the local node name used for version stamping.
+func (m *UserManager) LocalNodeName() string {
+	return m.localNodeName
+}
+
+// stampVersion stamps version fields (UpdatedAtUs, OriginNode, Hash) on the user
+// after any local mutation. Called unconditionally regardless of cluster mode.
+// SyncUpsertUser does NOT call this — it adopts remote versions directly.
+func (m *UserManager) stampVersion(user *contracts.User) {
+	user.UpdatedAtUs = time.Now().UnixMicro()
+	user.OriginNode = m.localNodeName
+	user.Hash = usync.ComputeHash(user)
+}
+
+// errMutateSkip is a sentinel returned by a mutateUser closure to signal that
+// the mutation should be silently abandoned (no stamp, no persist, no event).
+// mutateUser returns nil to the caller when it sees this sentinel.
+var errMutateSkip = fmt.Errorf("mutate: skip")
+
+// mutateUser is the single mutation path for existing users. Every method that
+// modifies a user's synced fields MUST go through this function, which
+// guarantees the sequence: lock → lookup → mutate → stampVersion → persist →
+// emit event.
+//
+// The closure may return errMutateSkip to abort without error (useful for
+// idempotent operations like RemoveUser). Any other non-nil error is returned
+// as-is and no stamp/persist/emit happens.
+//
+// Pre-mutation work that might fail (e.g. loginPassword hashing) should be
+// done BEFORE calling mutateUser so that a failure never leaves the user in
+// an inconsistent state.
+//
+// SyncUpsertUser does NOT use this — it adopts remote versions directly.
+func (m *UserManager) mutateUser(username string, eventType UserEventType, mutate func(*contracts.User) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	user, exists := m.users[username]
+	if !exists {
+		return errors.New(errors.ErrUserNotFound, fmt.Sprintf("user %s not found", username))
+	}
+
+	if err := mutate(user); err != nil {
+		if err == errMutateSkip {
+			return nil
+		}
+		return err
+	}
+
+	m.stampVersion(user)
+
+	if m.store != nil {
+		if err := m.store.Save(user); err != nil {
+			return fmt.Errorf("mutateUser(%s): persist: %w", username, err)
+		}
+	}
+
+	evt := UserEvent{Type: eventType, Username: username}
+	if eventType == UserEventRemove {
+		evt.Ports = user.BindPorts
+	} else {
+		evt.User = user
+	}
+	m.emitEvent(evt)
+	return nil
 }
 
 // UserEventChannel returns a read-only channel for receiving user events.
@@ -212,28 +394,36 @@ func (m *UserManager) AddUser(req AddUserRequest) error {
 	// Check if user exists (including deleting state)
 	if existing, exists := m.users[req.Username]; exists {
 		if existing.IsDeleting() {
-			// User is in deletion state - get remaining forward rules info for error message
-			var ruleInfo string
-			if len(existing.BindPorts) > 0 && m.forwardMgr != nil {
-				rules := m.forwardMgr.GetRulesByUser(req.Username)
-				if len(rules) > 0 {
-					ruleInfo = fmt.Sprintf(" (remaining rules: %d, ports: %v)", len(rules), existing.BindPorts)
+			// User is tombstoned. Allow re-add only if all forward rules
+			// have been cleaned up — otherwise the old inbound state would
+			// conflict with the new user object.
+			if m.forwardMgr != nil {
+				if rules := m.forwardMgr.GetRulesByUser(req.Username); len(rules) > 0 {
+					return errors.New(errors.ErrUserDeletionInProgress,
+						fmt.Sprintf("user %s is being deleted, still has %d forward rules", req.Username, len(rules)))
 				}
 			}
-			return errors.New(errors.ErrUserDeletionInProgress,
-				fmt.Sprintf("user %s is being deleted, cannot add%s", req.Username, ruleInfo))
+			// No remaining rules — fall through to rebuild the user object
+			// below. The old entry in m.users will be overwritten.
+		} else {
+			return errors.New(errors.ErrUserAlreadyExists, fmt.Sprintf("user %s already exists", req.Username))
 		}
-		return errors.New(errors.ErrUserAlreadyExists, fmt.Sprintf("user %s already exists", req.Username))
 	}
 
 	user := &contracts.User{
-		Username: req.Username,
-		Password: req.Password,
+		Username:  req.Username,
+		AuthToken: generateAuthToken(),
 	}
 
 	if req.TTL > 0 {
 		user.ExpiryTime = time.Now().Add(req.TTL)
 	}
+
+	// Assign default group if configured (set via EnableClusterSync).
+	if user.TargetGroup == "" && m.defaultGroup != "" {
+		user.TargetGroup = m.defaultGroup
+	}
+	m.stampVersion(user)
 
 	// Generate login_password so the user can log in immediately via /login.
 	// A hasher failure is fatal: returning without a login_password would leave the
@@ -264,45 +454,26 @@ func (m *UserManager) AddUser(req AddUserRequest) error {
 	return nil
 }
 
-// RemoveUser marks a user for deletion (soft delete).
-// The user is marked as "deleting" and hidden from normal queries.
-// Actual cleanup (port release, forward rule deletion) should be done via separate finalize step.
-// This method is idempotent - calling multiple times will not cause errors.
+// RemoveUser marks a user for deletion (tombstone).
+// The user stays in memory and store — it is never physically deleted.
+// Containers react to the UserEventRemove to clean up inbound/forward rules.
+// A subsequent AddUser with the same username is allowed once all forward
+// rules have been cleaned up, at which point the tombstone is replaced by
+// a fresh user object.
+// This method is idempotent.
 func (m *UserManager) RemoveUser(req RemoveUserRequest) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	user, exists := m.users[req.Username]
-	if !exists {
-		// User not found - idempotent, return nil
-		return nil
-	}
-
-	// Already marked for deletion - idempotent
-	if user.IsDeleting() {
-		return nil
-	}
-
-	// Physically delete from store before marking in-memory
-	if m.store != nil {
-		if err := m.store.Delete(req.Username); err != nil {
-			return fmt.Errorf("RemoveUser: persist: %w", err)
+	err := m.mutateUser(req.Username, UserEventRemove, func(user *contracts.User) error {
+		if user.IsDeleting() {
+			return errMutateSkip // idempotent
 		}
-	}
-
-	// Mark user as deleting (soft delete)
-	// Do NOT delete the user record or clean up ports yet
-	// Cleanup will be done via a separate finalize step
-	user.MarkDeleting()
-
-	// Emit remove event (but keep the user record for cleanup)
-	m.emitEvent(UserEvent{
-		Type:     UserEventRemove,
-		Username: req.Username,
-		Ports:    user.BindPorts, // Keep the ports for reference
+		user.MarkDeleting()
+		return nil
 	})
-
-	return nil
+	// RemoveUser is idempotent: not-found is not an error.
+	if errors.HasCode(err, errors.ErrUserNotFound) {
+		return nil
+	}
+	return err
 }
 
 // cleanupUserPorts cleans up all ports bound to a user.
@@ -325,6 +496,9 @@ type RemoveUserRequest struct {
 
 // GetUser returns a user by username.
 // It filters out users that are marked for deletion.
+// Note: GetUser intentionally does NOT apply group filtering — it is used for
+// admin operations and RPC profile lookups where the caller already knows the
+// username. Group filtering only applies to enumeration methods (ListUsers, ListUsersWithPasswd).
 func (m *UserManager) GetUser(username string) (*contracts.User, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -345,6 +519,22 @@ func (m *UserManager) GetUser(username string) (*contracts.User, error) {
 	}
 
 	return user, nil
+}
+
+// FindUserByToken looks up an active user by their auth token.
+// Returns nil if no matching user is found.
+func (m *UserManager) FindUserByToken(token string) *contracts.User {
+	if token == "" {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, user := range m.users {
+		if user.AuthToken == token && !user.IsDeleting() && !user.IsExpired() {
+			return user
+		}
+	}
+	return nil
 }
 
 // GetUserPort returns the first bound port for the user.
@@ -380,6 +570,29 @@ func (m *UserManager) GetUserPortByDst(username string, dstPort uint32) (uint32,
 	return port, true
 }
 
+// GetUserPortByDstForCleanup returns the forward port for a user given a dstPort,
+// including users marked for deletion. This is used by inbound cleanup paths
+// (e.g. XrayInbound.RemoveUser, Snell UserEventRemove) that need to look up
+// port mappings for users in the "deleting" state so that ReleaseBindPort can
+// be called and the two-phase deletion can complete.
+func (m *UserManager) GetUserPortByDstForCleanup(username string, dstPort uint32) (uint32, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	user, exists := m.users[username]
+	if !exists {
+		return 0, false
+	}
+	if user.PortMappings == nil {
+		return 0, false
+	}
+	port, ok := user.PortMappings[dstPort]
+	if !ok {
+		return 0, false
+	}
+	return port, true
+}
+
 // GetUserIncludingDeleting returns a user by username, including users marked for deletion.
 // This is an internal method used for cleanup and error reporting.
 // Returns nil if user doesn't exist at all.
@@ -394,16 +607,18 @@ func (m *UserManager) GetUserIncludingDeleting(username string) *contracts.User 
 	return user
 }
 
-// ListUsers returns all users.
-// ListUsers returns all active (non-deleting) users.
+// ListUsers returns all active (non-deleting, non-expired) users visible on this node.
+// When cluster sync is enabled, only users whose TargetGroup matches the node's groups are returned.
 func (m *UserManager) ListUsers() []*contracts.User {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	users := make([]*contracts.User, 0, len(m.users))
 	for _, user := range m.users {
-		// Skip users marked for deletion
-		if user.IsDeleting() {
+		if user.IsDeleting() || user.IsExpired() {
+			continue
+		}
+		if !m.isUserVisibleLocked(user) {
 			continue
 		}
 		users = append(users, user)
@@ -422,27 +637,28 @@ func (m *UserManager) ListUsersWithPasswd() map[string]string {
 		if user.IsDeleting() || user.IsExpired() {
 			continue
 		}
-		result[user.Username] = user.Password
+		if !m.isUserVisibleLocked(user) {
+			continue
+		}
+		result[user.Username] = user.AuthToken
 	}
 	return result
 }
 
 // SetUserRole updates the role of an existing user and persists the change.
 func (m *UserManager) SetUserRole(username, role string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	return m.mutateUser(username, UserEventUpdate, func(user *contracts.User) error {
+		user.Role = role
+		return nil
+	})
+}
 
-	user, exists := m.users[username]
-	if !exists {
-		return errors.New(errors.ErrUserNotFound, fmt.Sprintf("user %s not found", username))
-	}
-	user.Role = role
-	if m.store != nil {
-		if err := m.store.Save(user); err != nil {
-			return fmt.Errorf("SetUserRole: persist: %w", err)
-		}
-	}
-	return nil
+// SetUserGroup updates the cluster group of an existing user and persists the change.
+func (m *UserManager) SetUserGroup(username, group string) error {
+	return m.mutateUser(username, UserEventUpdate, func(user *contracts.User) error {
+		user.TargetGroup = group
+		return nil
+	})
 }
 
 // UpdateUser updates a user's password and/or expiry time.
@@ -453,16 +669,8 @@ func (m *UserManager) UpdateUser(username, password string, expireTime int64) er
 		return errors.New(errors.ErrInvalidUserSpec, "username cannot be empty")
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	user, exists := m.users[username]
-	if !exists {
-		return errors.New(errors.ErrUserNotFound, fmt.Sprintf("user %s not found", username))
-	}
-
-	// Compute new login_password BEFORE mutating the user struct so that a
-	// hasher failure leaves the user in a consistent state.
+	// Pre-mutation: compute login_password hash before taking the lock so that
+	// a hasher failure never leaves the user in an inconsistent state.
 	var newLoginPassword string
 	if password != "" && m.loginPasswordHasher != nil {
 		lp, err := m.loginPasswordHasher(password)
@@ -472,29 +680,19 @@ func (m *UserManager) UpdateUser(username, password string, expireTime int64) er
 		newLoginPassword = lp
 	}
 
-	if password != "" {
-		user.Password = password
-		if newLoginPassword != "" {
-			user.LoginPassword = newLoginPassword
+	return m.mutateUser(username, UserEventUpdate, func(user *contracts.User) error {
+		if password != "" {
+			// Password update only changes LoginPassword (bcrypt hash).
+			// AuthToken is independent and unchanged.
+			if newLoginPassword != "" {
+				user.LoginPassword = newLoginPassword
+			}
 		}
-	}
-	if expireTime > 0 {
-		user.ExpiryTime = time.Unix(expireTime, 0)
-	}
-
-	if m.store != nil {
-		if err := m.store.Save(user); err != nil {
-			return fmt.Errorf("UpdateUser: persist: %w", err)
+		if expireTime > 0 {
+			user.ExpiryTime = time.Unix(expireTime, 0)
 		}
-	}
-
-	m.emitEvent(UserEvent{
-		Type:     UserEventUpdate,
-		Username: username,
-		User:     user,
+		return nil
 	})
-
-	return nil
 }
 
 // UpdateUserPassword updates a user's password.
@@ -509,18 +707,8 @@ func (m *UserManager) UpdateUserPassword(req UpdateUserPasswordRequest) error {
 		return errors.New(errors.ErrInvalidUserSpec, "password cannot be empty")
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	user, exists := m.users[req.Username]
-	if !exists {
-		return errors.New(errors.ErrUserNotFound, fmt.Sprintf("user %s not found", req.Username))
-	}
-
-	// Compute new login_password before persisting.
-	// A hasher failure is fatal: the proxy password would change but the frontend
-	// login password would remain the old one, causing an inconsistent state.
-	newLoginPassword := ""
+	// Pre-mutation: hash login_password before taking the lock.
+	var newLoginPassword string
 	if m.loginPasswordHasher != nil {
 		lp, err := m.loginPasswordHasher(req.NewPassword)
 		if err != nil {
@@ -529,30 +717,14 @@ func (m *UserManager) UpdateUserPassword(req UpdateUserPasswordRequest) error {
 		newLoginPassword = lp
 	}
 
-	if m.store != nil {
-		updated := *user
-		updated.Password = req.NewPassword
+	return m.mutateUser(req.Username, UserEventUpdate, func(user *contracts.User) error {
+		// Password update only changes LoginPassword (bcrypt hash).
+		// AuthToken is independent and unchanged.
 		if newLoginPassword != "" {
-			updated.LoginPassword = newLoginPassword
+			user.LoginPassword = newLoginPassword
 		}
-		if err := m.store.Save(&updated); err != nil {
-			return fmt.Errorf("UpdateUserPassword: persist: %w", err)
-		}
-	}
-
-	user.Password = req.NewPassword
-	if newLoginPassword != "" {
-		user.LoginPassword = newLoginPassword
-	}
-
-	// Emit update event
-	m.emitEvent(UserEvent{
-		Type:     UserEventUpdate,
-		Username: req.Username,
-		User:     user,
+		return nil
 	})
-
-	return nil
 }
 
 // GetBindPortRequest contains parameters for getting a bind port.
@@ -691,6 +863,17 @@ type ReleaseBindPortRequest struct {
 // This method is idempotent - calling multiple times will not cause errors.
 // After releasing the port, if the user is in "deleting" state and has no more
 // forward rules, it will physically delete the user (finalize).
+
+// ResetAuthToken regenerates the user's auth token with a new random value.
+func (m *UserManager) ResetAuthToken(username string) (string, error) {
+	var newToken string
+	err := m.mutateUser(username, UserEventUpdate, func(user *contracts.User) error {
+		newToken = generateAuthToken()
+		user.AuthToken = newToken
+		return nil
+	})
+	return newToken, err
+}
 
 // RotateUserPort releases all existing forward ports for a user and allocates
 // new ones. Used when the user's current port is blocked/unreachable.
@@ -940,34 +1123,19 @@ func (m *UserManager) SetUserBandwidthLimit(username string, kind forward.Bandwi
 		return errors.New(errors.ErrInvalidUserSpec, "bandwidth limit must not be negative")
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	user, exists := m.users[username]
-	if !exists {
-		return errors.New(errors.ErrUserNotFound, fmt.Sprintf("user %s not found", username))
-	}
-
-	if m.store != nil {
-		updated := *user
+	err := m.mutateUser(username, UserEventUpdate, func(user *contracts.User) error {
 		if kind == forward.BandwidthUpload {
-			updated.BandwidthUploadBps = bytesPerSec
+			user.BandwidthUploadBps = bytesPerSec
 		} else {
-			updated.BandwidthDownloadBps = bytesPerSec
+			user.BandwidthDownloadBps = bytesPerSec
 		}
-		if err := m.store.Save(&updated); err != nil {
-			return fmt.Errorf("SetUserBandwidthLimit: persist: %w", err)
-		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	// Update user's bandwidth configuration
-	if kind == forward.BandwidthUpload {
-		user.BandwidthUploadBps = bytesPerSec
-	} else {
-		user.BandwidthDownloadBps = bytesPerSec
-	}
-
-	// Sync to ForwardManager
+	// Sync to ForwardManager (outside mutateUser since it doesn't need stamp/persist)
 	if m.forwardMgr != nil {
 		_ = m.forwardMgr.SetUserBandwidthLimit(username, kind, bytesPerSec)
 	}
@@ -1004,29 +1172,17 @@ func (m *UserManager) GetUserBandwidthLimit(username string, kind forward.Bandwi
 
 // SetUserClientLimit sets the client limit configuration for a user.
 func (m *UserManager) SetUserClientLimit(username string, maxClients, recycleDelaySec, drainSec int) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	user, exists := m.users[username]
-	if !exists {
-		return errors.New(errors.ErrUserNotFound, "user not found")
+	err := m.mutateUser(username, UserEventUpdate, func(user *contracts.User) error {
+		user.MaxClients = maxClients
+		user.ClientRecycleDelaySec = recycleDelaySec
+		user.ClientDrainSec = drainSec
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	if m.store != nil {
-		updated := *user
-		updated.MaxClients = maxClients
-		updated.ClientRecycleDelaySec = recycleDelaySec
-		updated.ClientDrainSec = drainSec
-		if err := m.store.Save(&updated); err != nil {
-			return fmt.Errorf("SetUserClientLimit: persist: %w", err)
-		}
-	}
-
-	user.MaxClients = maxClients
-	user.ClientRecycleDelaySec = recycleDelaySec
-	user.ClientDrainSec = drainSec
-
-	// Sync to ForwardManager if available (including maxClients=0 to disable)
+	// Sync to ForwardManager (outside mutateUser since it doesn't need stamp/persist)
 	if m.forwardMgr != nil {
 		_ = m.forwardMgr.SetUserClientLimitConfig(username, forward.ClientLimitConfig{
 			MaxClients:              maxClients,
@@ -1086,6 +1242,15 @@ func (m *UserManager) ReleaseBindPort(req ReleaseBindPortRequest) error {
 		user.BindPorts = newPorts
 	}
 
+	// Remove the PortMappings entry whose value matches req.BindPort,
+	// so that GetUserPortByDst no longer resolves this user for the
+	// released forward port (prevents stale subscription links).
+	for dst, fwd := range user.PortMappings {
+		if fwd == req.BindPort {
+			delete(user.PortMappings, dst)
+		}
+	}
+
 	// Emit port bind event for release
 	m.emitEvent(UserEvent{
 		Type:     UserEventPortBind,
@@ -1096,22 +1261,13 @@ func (m *UserManager) ReleaseBindPort(req ReleaseBindPortRequest) error {
 
 	// Remove forward rule via ForwardManager
 	if m.forwardMgr != nil {
-		// Remove rules for this user
 		m.forwardMgr.RemoveRulesByUser(req.Username)
+	}
 
-		// Check if user is in deleting state and needs finalization
-		if user.IsDeleting() {
-			// Query remaining rules for this user
-			remainingRules := m.forwardMgr.GetRulesByUser(req.Username)
-			if len(remainingRules) == 0 {
-				// No more rules - finalize the deletion
-				if m.store != nil {
-					if err := m.store.Delete(req.Username); err != nil {
-						log.Warn("ReleaseBindPort: failed to delete from store", "user", req.Username, "err", err)
-					}
-				}
-				delete(m.users, req.Username)
-			}
+	// Persist updated PortMappings / BindPorts so restart doesn't resurrect stale mappings.
+	if m.store != nil {
+		if err := m.store.Save(user); err != nil {
+			log.Warn("[ReleaseBindPort] failed to persist after cleanup", "user", req.Username, "err", err)
 		}
 	}
 
@@ -1144,49 +1300,25 @@ func (m *UserManager) ReleaseInboundPorts(inboundTag string) error {
 	return nil
 }
 
-// StartExpiredUserCleanup starts a background goroutine that periodically
-// checks for expired users and cleans them up.
-// The interval parameter specifies how often to check for expired users.
-func (m *UserManager) StartExpiredUserCleanup(interval time.Duration) {
-	go func() {
-		ticker := time.NewTicker(interval)
-		for range ticker.C {
-			m.cleanupExpiredUsers()
-		}
-	}()
-}
-
-// cleanupExpiredUsers removes all expired users.
+// cleanupExpiredUsers marks expired users as deleting (tombstone).
+// This follows the same deletion flow as RemoveUser — no physical delete.
+// Caller must NOT hold m.mu (this method acquires it, and emitEvent may
+// trigger container handlers that call back into UserManager).
 func (m *UserManager) cleanupExpiredUsers() {
+	// Collect expired usernames under lock, then process outside lock
+	// to avoid holding mu during event emission / container callbacks.
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	var expired []string
 	for username, user := range m.users {
-		if user.IsExpired() {
-			// Capture ports for event
-			ports := make([]uint32, len(user.BindPorts))
-			copy(ports, user.BindPorts)
+		if user.IsExpired() && !user.IsDeleting() {
+			expired = append(expired, username)
+		}
+	}
+	m.mu.Unlock()
 
-			// Delete from store (best-effort; log failure but continue cleanup)
-			if m.store != nil {
-				if err := m.store.Delete(username); err != nil {
-					log.Warn("cleanupExpiredUsers: failed to delete from store", "user", username, "err", err)
-				}
-			}
-
-			// Clean up ports first
-			m.cleanupUserPorts(username, user.BindPorts)
-			// Clear bindings
-			user.BindPorts = nil
-			// Remove user
-			delete(m.users, username)
-
-			// Emit expire event
-			m.emitEvent(UserEvent{
-				Type:     UserEventExpire,
-				Username: username,
-				Ports:    ports,
-			})
+	for _, username := range expired {
+		if err := m.RemoveUser(RemoveUserRequest{Username: username}); err != nil {
+			log.Warn("cleanupExpiredUsers: RemoveUser failed", "user", username, "err", err)
 		}
 	}
 }
@@ -1210,7 +1342,7 @@ func (m *UserManager) AddUserForTest(username string, bindPorts []uint32) error 
 
 	user := &contracts.User{
 		Username:  username,
-		Password:  "test",
+		AuthToken: generateAuthToken(),
 		BindPorts: bindPorts,
 	}
 	m.users[username] = user
@@ -1231,6 +1363,162 @@ func (m *UserManager) SetPortMappingForTest(username string, dstPort, forwardPor
 		user.PortMappings = make(map[uint32]uint32)
 	}
 	user.PortMappings[dstPort] = forwardPort
+}
+
+// ============ Cluster Sync Methods ============
+
+// SyncUpsertUser receives a full user record from a remote node and applies it
+// locally after version arbitration. It does NOT update OriginNode/UpdatedAtUs
+// so that the originating node recognises its own version on the next heartbeat
+// (preventing sync loops).
+//
+// Returns (true, nil) if the record was applied, (false, nil) if skipped.
+func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
+	if incoming == nil || incoming.Username == "" {
+		return false, nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	existing, exists := m.users[incoming.Username]
+
+	// If local copy exists, check version arbitration.
+	if exists && !usync.IsNewer(incoming, existing) {
+		return false, nil
+	}
+
+	// Case 1: incoming is a tombstone (deleted).
+	if incoming.IsDeleting() {
+		if !exists {
+			// Remote deleted a user we never had — just store the tombstone.
+			m.users[incoming.Username] = incoming
+			if m.store != nil {
+				if err := m.store.Save(incoming); err != nil {
+					return false, fmt.Errorf("SyncUpsertUser: persist tombstone: %w", err)
+				}
+			}
+			return true, nil
+		}
+		// Local user exists and is not yet deleting — trigger local removal.
+		if !existing.IsDeleting() {
+			existing.MarkDeleting()
+		}
+		// Adopt remote version fields (do NOT re-stamp).
+		existing.UpdatedAtUs = incoming.UpdatedAtUs
+		existing.OriginNode = incoming.OriginNode
+		existing.Hash = incoming.Hash
+		existing.TargetGroup = incoming.TargetGroup
+
+		if m.store != nil {
+			if err := m.store.Save(existing); err != nil {
+				return false, fmt.Errorf("SyncUpsertUser: persist tombstone: %w", err)
+			}
+		}
+
+		// Emit remove event so containers clean up ports.
+		m.emitEvent(UserEvent{
+			Type:     UserEventRemove,
+			Username: existing.Username,
+			Ports:    existing.BindPorts,
+		})
+		return true, nil
+	}
+
+	// Case 2: incoming is an active user.
+	if !exists {
+		// New user from remote.
+		m.users[incoming.Username] = incoming
+		if m.store != nil {
+			if err := m.store.Save(incoming); err != nil {
+				return false, fmt.Errorf("SyncUpsertUser: persist new user: %w", err)
+			}
+		}
+		m.emitEvent(UserEvent{
+			Type:     UserEventAdd,
+			Username: incoming.Username,
+			User:     incoming,
+		})
+		return true, nil
+	}
+
+	// Existing user, incoming is newer — update fields.
+	existing.AuthToken = incoming.AuthToken
+	existing.ExpiryTime = incoming.ExpiryTime
+	existing.Role = incoming.Role
+	existing.TargetGroup = incoming.TargetGroup
+	existing.UpdatedAtUs = incoming.UpdatedAtUs
+	existing.OriginNode = incoming.OriginNode
+	existing.Hash = incoming.Hash
+	// Clear deletion state if the remote version is active.
+	if existing.IsDeleting() {
+		existing.MarkActive()
+	}
+
+	if m.store != nil {
+		if err := m.store.Save(existing); err != nil {
+			return false, fmt.Errorf("SyncUpsertUser: persist update: %w", err)
+		}
+	}
+	m.emitEvent(UserEvent{
+		Type:     UserEventUpdate,
+		Username: existing.Username,
+		User:     existing,
+	})
+	return true, nil
+}
+
+// ListDigests returns lightweight version summaries for all users (including
+// tombstones) for heartbeat delta-sync.
+func (m *UserManager) ListDigests() []usync.UserDigest {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	digests := make([]usync.UserDigest, 0, len(m.users))
+	for _, u := range m.users {
+		digests = append(digests, usync.UserDigest{
+			Username:    u.Username,
+			UpdatedAtUs: u.UpdatedAtUs,
+			OriginNode:  u.OriginNode,
+			Hash:        u.Hash,
+		})
+	}
+	return digests
+}
+
+// GetUserForSync returns a user by username including tombstones.
+// Returns nil if the user does not exist.
+func (m *UserManager) GetUserForSync(username string) *contracts.User {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.users[username]
+}
+
+// BackfillClusterFields fills in UpdatedAtUs/OriginNode/Hash for users loaded
+// from a database that predates cluster-sync support (UpdatedAtUs == 0).
+func (m *UserManager) BackfillClusterFields() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var count int
+	for _, u := range m.users {
+		if u.UpdatedAtUs != 0 {
+			continue
+		}
+		if u.TargetGroup == "" && m.defaultGroup != "" {
+			u.TargetGroup = m.defaultGroup
+		}
+		m.stampVersion(u)
+		if m.store != nil {
+			if err := m.store.Save(u); err != nil {
+				log.Warn("BackfillClusterFields: persist failed", "user", u.Username, "err", err)
+			}
+		}
+		count++
+	}
+	if count > 0 {
+		log.Info("BackfillClusterFields: backfilled cluster fields", "count", count)
+	}
 }
 
 // ============ Traffic Stats Collection (Forward-Only) ============
@@ -1621,6 +1909,21 @@ func (m *UserManager) StartTrafficStats(interval time.Duration) {
 		}
 	}
 	m.statsCollector.Start()
+}
+
+// StartMaintenance starts background maintenance tasks (expired user cleanup).
+// The interval specifies how often to check for expired users (default 1 minute if 0).
+func (m *UserManager) StartMaintenance(interval time.Duration) {
+	if interval == 0 {
+		interval = time.Minute
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			m.cleanupExpiredUsers()
+		}
+	}()
 }
 
 // StopTrafficStats stops the periodic traffic stats collection.

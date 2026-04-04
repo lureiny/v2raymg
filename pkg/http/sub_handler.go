@@ -19,13 +19,12 @@ func (handler *SubHandler) parseParam(c *gin.Context) map[string]string {
 	parasMap := map[string]string{}
 	parasMap["user"] = c.Query("user")
 	parasMap["pwd"] = c.Query("pwd")
-	parasMap["tags"] = c.DefaultQuery("tags", "")
+	parasMap["token"] = c.Query("token")
 	parasMap["excludeProtocols"] = c.DefaultQuery("exclude_protocols", "")
 	parasMap["target"] = c.DefaultQuery("target", handler.getHttpServer().Name)
 	parasMap["client"] = c.Query("client")
 	parasMap["useSNI"] = c.DefaultQuery("use_sni", "true")
 	parasMap["fake"] = c.DefaultQuery("fake", "false")
-	// 新增参数
 	parasMap["proxy_groups_url"] = c.Query("proxy_groups_url")
 	parasMap["rule_providers_url"] = c.Query("rule_providers_url")
 	parasMap["rules_url"] = c.Query("rules_url")
@@ -45,7 +44,6 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 		formatHint = clientName
 	}
 
-	tagList := splitAndFilter(parasMap["tags"])
 	excludeProtocols := splitAndFilter(parasMap["excludeProtocols"])
 
 	// 解析新参数
@@ -53,14 +51,15 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 	ruleProviders := c.QueryArray("rule_provider")
 	rules := c.QueryArray("rule")
 
+	token := parasMap["token"]
 	userPoint := &proto.User{
 		Name:   parasMap["user"],
 		Passwd: parasMap["pwd"],
-		Tags:   tagList,
 	}
 
-	if userPoint.Name == "" || userPoint.Passwd == "" {
-		log.Error("sub: invalid user", "user", parasMap["user"], "target", parasMap["target"])
+	// Dual auth: token takes priority; otherwise require user+pwd.
+	if token == "" && (userPoint.Name == "" || userPoint.Passwd == "") {
+		log.Error("sub: missing credentials", "user", parasMap["user"], "target", parasMap["target"])
 		c.String(200, "invalid user")
 		return
 	}
@@ -71,15 +70,21 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
+	getSubReq := &proto.GetSubReq{
+		ExcludeProtocols: excludeProtocols,
+		UseSni:           parasMap["useSNI"] == "true",
+		UserAgent:        formatHint,
+	}
+	if token != "" {
+		getSubReq.Token = token
+	} else {
+		getSubReq.User = userPoint
+	}
+
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
 	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(),
 		client.GetSubReqType,
-		&proto.GetSubReq{
-			User:             userPoint,
-			ExcludeProtocols: excludeProtocols,
-			UseSni:           parasMap["useSNI"] == "true",
-			UserAgent:        formatHint,
-		},
+		getSubReq,
 		handler.getHttpServer().GetClusterToken(),
 	)
 
@@ -141,7 +146,7 @@ func (handler *SubHandler) help() string {
 	return `/sub
 	获取订阅
 	基础参数:
-	  /sub?target={target}&user={user}&pwd={pwd}&tags={tags}&exclude_protocols={exclude_protocols}&use_sni={use_sni}&fake={fake}
+	  /sub?target={target}&user={user}&pwd={pwd}&exclude_protocols={exclude_protocols}&use_sni={use_sni}&fake={fake}
 
 	客户端格式:
 	  client=clash|surge|qv2ray (可选)

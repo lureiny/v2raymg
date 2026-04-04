@@ -506,13 +506,13 @@ func (hc *HysteriaContainer) GetUserSubscriptions(req contracts.SubscriptionRequ
 		params = "/"
 	}
 	uri := fmt.Sprintf("hysteria2://%s@%s:%d%s#%s",
-		req.User.Password, req.Host, hc.cfg.Port, params, nodeName)
+		req.User.AuthToken, req.Host, hc.cfg.Port, params, nodeName)
 
 	spec := contracts.SubscriptionSpec{
 		Protocol:   contracts.ProtocolHysteria2,
 		Host:       req.Host,
 		Port:       uint32(hc.cfg.Port),
-		Password:   req.User.Password,
+		Password:   req.User.AuthToken,
 		NodeName:   nodeName,
 		InboundTag: defaultInboundTag,
 		Username:   req.User.Username,

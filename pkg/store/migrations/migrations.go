@@ -119,4 +119,20 @@ ALTER TABLE users ADD COLUMN login_password TEXT NOT NULL DEFAULT '';`,
     updated_at INTEGER NOT NULL
 )`,
 	},
+	{
+		Version: 12,
+		SQL: `ALTER TABLE users ADD COLUMN target_group TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN updated_at_us INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN origin_node TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN hash TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_users_target_group ON users(target_group);`,
+	},
+	{
+		Version: 13,
+		SQL:     `ALTER TABLE users ADD COLUMN deletion_state TEXT NOT NULL DEFAULT '';`,
+	},
+	{
+		Version: 14,
+		SQL:     `ALTER TABLE users RENAME COLUMN password TO auth_token;`,
+	},
 }

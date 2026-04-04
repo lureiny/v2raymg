@@ -27,8 +27,8 @@ func TestAll_SQLNonEmpty(t *testing.T) {
 }
 
 func TestAll_Count(t *testing.T) {
-	if len(migrations.All) != 11 {
-		t.Errorf("expected 11 migrations, got %d", len(migrations.All))
+	if len(migrations.All) != 14 {
+		t.Errorf("expected 14 migrations, got %d", len(migrations.All))
 	}
 }
 

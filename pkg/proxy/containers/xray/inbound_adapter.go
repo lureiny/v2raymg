@@ -81,12 +81,12 @@ func (a *Adapter) MapUsers(users []contracts.UserSpec, protocol contracts.Protoc
 				}
 			}
 		case contracts.ProtocolTrojan:
-			if user.Password != "" {
-				userMap["password"] = user.Password
+			if user.AuthToken != "" {
+				userMap["password"] = user.AuthToken
 			}
 		case contracts.ProtocolShadowsocks:
-			if user.Password != "" {
-				userMap["password"] = user.Password
+			if user.AuthToken != "" {
+				userMap["password"] = user.AuthToken
 			}
 			if method, ok := user.GetExtension("method"); ok {
 				if methodStr, ok := method.(string); ok {
@@ -183,7 +183,7 @@ func (a *Adapter) ToProvider(spec contracts.InboundSpec) (NativeInbound, error) 
 						}
 						// Get password from first user
 						if len(users) > 0 {
-							password = users[0].Password
+							password = users[0].AuthToken
 						}
 						// Set method and password at settings level (single-user mode)
 						if method != "" {

@@ -254,7 +254,7 @@ func (s *EndNodeServer) GetStatus(ctx context.Context, in *proto.GetStatusReq) (
 	rsp.Status = &proto.NodeStatus{
 		NodeName:           s.cfg.Name,
 		OnlyGateway:        s.cfg.OnlyGateway,
-		ClusterUserEnabled: s.clusterUserEnabled,
+		ClusterUserEnabled: s.userMgr.IsClusterEnabled(),
 		MemTotal:           memTotal,
 		MemUsed:            memUsed,
 		MemAvailable:       memAvail,

@@ -48,12 +48,18 @@ type UserAddHandler struct{ HttpHandlerImp }
 
 func (handler *UserAddHandler) handlerFunc(c *gin.Context) {
 	var req struct {
-		Target string `json:"target"`
-		User   string `json:"user"`
-		Pwd    string `json:"pwd"`
-		Tags   string `json:"tags"`
-		Expire uint64 `json:"expire"`
-		TTL    uint64 `json:"ttl"`
+		Target                string `json:"target"`
+		User                  string `json:"user"`
+		Pwd                   string `json:"pwd"`
+		Expire                uint64 `json:"expire"`
+		TTL                   uint64 `json:"ttl"`
+		Role                  string `json:"role"`
+		Group                 string `json:"group"`
+		UploadBps             int64  `json:"upload_bps"`
+		DownloadBps           int64  `json:"download_bps"`
+		MaxClients            int32  `json:"max_clients"`
+		ClientRecycleDelaySec int32  `json:"client_recycle_delay_sec"`
+		ClientDrainSec        int32  `json:"client_drain_sec"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.String(400, "invalid request body: %v", err)
@@ -63,8 +69,18 @@ func (handler *UserAddHandler) handlerFunc(c *gin.Context) {
 		req.Target = handler.getHttpServer().Name
 	}
 	expire := calcExpire(req.Expire, req.TTL)
-	tagList := splitAndFilter(req.Tags)
-	userPoint := &proto.User{Name: req.User, Passwd: req.Pwd, ExpireTime: expire, Tags: tagList}
+	userPoint := &proto.User{
+		Name:                  req.User,
+		Passwd:                req.Pwd,
+		ExpireTime:            expire,
+		Role:                  req.Role,
+		Group:                 req.Group,
+		UploadBps:             req.UploadBps,
+		DownloadBps:           req.DownloadBps,
+		MaxClients:            req.MaxClients,
+		ClientRecycleDelaySec: req.ClientRecycleDelaySec,
+		ClientDrainSec:        req.ClientDrainSec,
+	}
 	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
 	if len(nodes) == 0 {
 		c.String(200, "no avaliable node")
@@ -90,8 +106,8 @@ func (handler *UserAddHandler) getRelativePath() string { return "/user" }
 func (handler *UserAddHandler) help() string {
 	return `POST /user
 	添加用户
-	body: {"target": "", "user": "", "pwd": "", "tags": "", "expire": 0, "ttl": 0}
-	user: 用户名, pwd: password, expire: 过期时间戳(与ttl同时存在时优先使用ttl), ttl: 存活时间(秒), tags: inbound tag列表(逗号分隔)`
+	body: {"target": "", "user": "", "pwd": "", "expire": 0, "ttl": 0}
+	user: 用户名, pwd: password, expire: 过期时间戳(与ttl同时存在时优先使用ttl), ttl: 存活时间(秒)`
 }
 
 // UserUpdateHandler PUT /user — 更新用户
@@ -99,11 +115,18 @@ type UserUpdateHandler struct{ HttpHandlerImp }
 
 func (handler *UserUpdateHandler) handlerFunc(c *gin.Context) {
 	var req struct {
-		Target string `json:"target"`
-		User   string `json:"user"`
-		Pwd    string `json:"pwd"`
-		Expire uint64 `json:"expire"`
-		TTL    uint64 `json:"ttl"`
+		Target                string `json:"target"`
+		User                  string `json:"user"`
+		Pwd                   string `json:"pwd"`
+		Expire                uint64 `json:"expire"`
+		TTL                   uint64 `json:"ttl"`
+		Role                  string `json:"role"`
+		UploadBps             int64  `json:"upload_bps"`
+		DownloadBps           int64  `json:"download_bps"`
+		MaxClients            int32  `json:"max_clients"`
+		ClientRecycleDelaySec int32  `json:"client_recycle_delay_sec"`
+		ClientDrainSec        int32  `json:"client_drain_sec"`
+		Group                 string `json:"group"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.String(400, "invalid request body: %v", err)
@@ -113,7 +136,18 @@ func (handler *UserUpdateHandler) handlerFunc(c *gin.Context) {
 		req.Target = handler.getHttpServer().Name
 	}
 	expire := calcExpire(req.Expire, req.TTL)
-	userPoint := &proto.User{Name: req.User, Passwd: req.Pwd, ExpireTime: expire}
+	userPoint := &proto.User{
+		Name:                  req.User,
+		Passwd:                req.Pwd,
+		ExpireTime:            expire,
+		Role:                  req.Role,
+		UploadBps:             req.UploadBps,
+		DownloadBps:           req.DownloadBps,
+		MaxClients:            req.MaxClients,
+		ClientRecycleDelaySec: req.ClientRecycleDelaySec,
+		ClientDrainSec:        req.ClientDrainSec,
+		Group:                 req.Group,
+	}
 	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
 	if len(nodes) == 0 {
 		c.String(200, "no avaliable node")
@@ -139,7 +173,7 @@ func (handler *UserUpdateHandler) getRelativePath() string { return "/user" }
 func (handler *UserUpdateHandler) help() string {
 	return `PUT /user
 	更新用户信息
-	body: {"target": "", "user": "", "pwd": "", "expire": 0, "ttl": 0}`
+	body: {"target": "", "user": "", "pwd": "", "expire": 0, "ttl": 0, "role": "", "upload_bps": 0, "download_bps": 0, "max_clients": 0, "client_recycle_delay_sec": 0, "client_drain_sec": 0}`
 }
 
 // UserDeleteHandler DELETE /user — 删除用户
@@ -149,7 +183,6 @@ func (handler *UserDeleteHandler) handlerFunc(c *gin.Context) {
 	var req struct {
 		Target string `json:"target"`
 		User   string `json:"user"`
-		Tags   string `json:"tags"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.String(400, "invalid request body: %v", err)
@@ -158,8 +191,7 @@ func (handler *UserDeleteHandler) handlerFunc(c *gin.Context) {
 	if req.Target == "" {
 		req.Target = handler.getHttpServer().Name
 	}
-	tagList := splitAndFilter(req.Tags)
-	userPoint := &proto.User{Name: req.User, Tags: tagList}
+	userPoint := &proto.User{Name: req.User}
 	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
 	if len(nodes) == 0 {
 		c.String(200, "no avaliable node")
@@ -185,7 +217,7 @@ func (handler *UserDeleteHandler) getRelativePath() string { return "/user" }
 func (handler *UserDeleteHandler) help() string {
 	return `DELETE /user
 	删除用户
-	body: {"target": "", "user": "", "tags": ""}`
+	body: {"target": "", "user": ""}`
 }
 
 // UserResetHandler POST /user/reset — 重置用户
@@ -244,7 +276,32 @@ func (handler *UserListHandler) handlerFunc(c *gin.Context) {
 	}
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
 	succList, _, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.GetUsersReqType, &proto.GetUsersReq{}, handler.getHttpServer().GetClusterToken())
-	c.JSON(200, succList)
+
+	result := map[string][]gin.H{}
+	for node, v := range succList {
+		users, ok := v.([]*proto.User)
+		if !ok {
+			continue
+		}
+		list := make([]gin.H, 0, len(users))
+		for _, u := range users {
+			list = append(list, gin.H{
+				"name":                      u.GetName(),
+				"expire_time":               u.GetExpireTime(),
+				"downlink":                  u.GetDownlink(),
+				"uplink":                    u.GetUplink(),
+				"role":                      u.GetRole(),
+				"upload_bps":                u.GetUploadBps(),
+				"download_bps":              u.GetDownloadBps(),
+				"max_clients":               u.GetMaxClients(),
+				"client_recycle_delay_sec":  u.GetClientRecycleDelaySec(),
+				"client_drain_sec":          u.GetClientDrainSec(),
+				"group":                     u.GetGroup(),
+			})
+		}
+		result[node] = list
+	}
+	c.JSON(200, result)
 }
 
 func (handler *UserListHandler) getHandlers() []gin.HandlerFunc {

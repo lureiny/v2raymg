@@ -17,7 +17,7 @@ func newTestManagerWithForward(t *testing.T) (*UserManager, *forward.DefaultForw
 	if err != nil {
 		t.Fatalf("NewDefaultForwardManager: %v", err)
 	}
-	mgr := NewUserManager(fwdMgr)
+	mgr := NewUserManager(fwdMgr, "test-node")
 	return mgr, fwdMgr
 }
 

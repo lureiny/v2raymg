@@ -18,11 +18,11 @@ func openTempManager(t *testing.T) *store.StoreManager {
 	return mgr
 }
 
-func insertUserRaw(t *testing.T, mgr *store.StoreManager, username, password, loginPassword string) {
+func insertUserRaw(t *testing.T, mgr *store.StoreManager, username, authToken, loginPassword string) {
 	t.Helper()
 	_, err := mgr.DB().DB().Exec(
-		`INSERT INTO users (username, password, login_password) VALUES (?, ?, ?)`,
-		username, password, loginPassword,
+		`INSERT INTO users (username, auth_token, login_password) VALUES (?, ?, ?)`,
+		username, authToken, loginPassword,
 	)
 	if err != nil {
 		t.Fatalf("insertUserRaw %q: %v", username, err)

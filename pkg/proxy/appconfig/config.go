@@ -181,7 +181,7 @@ type CenterNodeConfig struct {
 
 // ClusterUserConfig controls the ClusterUser sync layer and placement controller behaviour.
 type ClusterUserConfig struct {
-	// Enabled enables the ClusterUser sync layer and placement controller. Default: false.
+	// Enabled enables the ClusterUser sync layer and placement controller. Default: true.
 	Enabled bool `yaml:"enabled" json:"enabled"`
 	// SyncIntervalSec is the heartbeat delta-sync period in seconds. Default: 5.
 	SyncIntervalSec int `yaml:"sync_interval_sec" json:"sync_interval_sec"`
@@ -195,7 +195,7 @@ type ClusterUserConfig struct {
 // DefaultClusterUserConfig returns the default values for ClusterUserConfig.
 func DefaultClusterUserConfig() ClusterUserConfig {
 	return ClusterUserConfig{
-		Enabled:            false,
+		Enabled:            true,
 		SyncIntervalSec:    5,
 		BootstrapFromLocal: true,
 		DefaultGroup:       "default",

@@ -15,8 +15,10 @@ type UserSpec struct {
 	// Username is the unique identifier for the user.
 	Username string `json:"username,omitempty"`
 
-	// Password is the user's authentication credential (used by Trojan, Shadowsocks, SOCKS5).
-	Password string `json:"password,omitempty"`
+	// AuthToken is the user's unique authentication token, auto-generated on creation.
+	// Used for subscription access and Hysteria2 authentication.
+	// Not a user-chosen password — decoupled from the login password (LoginPassword).
+	AuthToken string `json:"auth_token,omitempty"`
 
 	// Level is the user's access level.
 	Level uint32 `json:"level"`
@@ -90,6 +92,22 @@ type UserSpec struct {
 	// When in "deleting" state, user is hidden from normal queries but
 	// can be queried for cleanup information.
 	DeletionState string `json:"deletion_state,omitempty"`
+
+	// TargetGroup is the cluster group this user belongs to.
+	// Used by cluster sync to determine which nodes should have this user.
+	// Empty means no group assignment (local-only or default group).
+	TargetGroup string `json:"target_group,omitempty"`
+
+	// UpdatedAtUs is the version timestamp in microseconds for cluster sync.
+	// Zero means the user has never been cluster-synced.
+	UpdatedAtUs int64 `json:"updated_at_us,omitempty"`
+
+	// OriginNode is the node name that produced the current version.
+	// Used for version arbitration during cluster sync.
+	OriginNode string `json:"origin_node,omitempty"`
+
+	// Hash is the SHA-256 digest of canonical fields for cluster conflict detection.
+	Hash string `json:"hash,omitempty"`
 
 	// Extensions holds provider-specific configuration.
 	// Keys are provider names (e.g., "xray", "sing-box"), values are provider-specific configs.

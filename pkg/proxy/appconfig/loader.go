@@ -267,14 +267,16 @@ func Validate(cfg *AppConfig) error {
 		}
 	}
 
-	enabledCount := 0
-	for _, c := range cfg.Containers.Containers {
-		if c.Enabled {
-			enabledCount++
+	if !strings.EqualFold(cfg.NodeType, "center") {
+		enabledCount := 0
+		for _, c := range cfg.Containers.Containers {
+			if c.Enabled {
+				enabledCount++
+			}
 		}
-	}
-	if enabledCount == 0 {
-		return fmt.Errorf("appconfig: at least one container entry must be enabled")
+		if enabledCount == 0 {
+			return fmt.Errorf("appconfig: at least one container entry must be enabled")
+		}
 	}
 
 	return nil

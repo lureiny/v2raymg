@@ -314,7 +314,7 @@ func (api *XrayAPI) AddUser(tag string, user contracts.UserSpec) error {
 		accountProto = &vlessaccount.Account{Id: uuid, Flow: flow}
 	case contracts.ProtocolTrojan:
 		accountType = "xray.proxy.trojan.Account"
-		password := user.Password
+		password := user.AuthToken
 		if password == "" {
 			password = "password"
 		}

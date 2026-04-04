@@ -8,9 +8,10 @@ import (
 
 	"github.com/google/uuid"
 	rpcClient "github.com/lureiny/v2raymg/pkg/rpc/client"
-	clusteruser "github.com/lureiny/v2raymg/pkg/cluster_user"
 	"github.com/lureiny/v2raymg/pkg/cluster"
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+	usync "github.com/lureiny/v2raymg/pkg/proxy/usermanager/sync"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 	pb "google.golang.org/protobuf/proto"
 )
@@ -115,27 +116,28 @@ func (s *EndNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.Heart
 	)
 
 	// Cluster user digest comparison (only when feature is enabled).
-	if s.syncer != nil {
+	if s.userMgr.IsClusterEnabled() {
 		protoDigests := heartBeatReq.GetUserDigests()
-		digests := make([]clusteruser.UserDigest, 0, len(protoDigests))
+		digests := make([]usync.UserDigest, 0, len(protoDigests))
 		for _, pd := range protoDigests {
 			if pd == nil {
 				continue
 			}
-			digests = append(digests, clusteruser.UserDigest{
+			digests = append(digests, usync.UserDigest{
 				Username:    pd.GetUsername(),
 				UpdatedAtUs: pd.GetUpdatedAtUs(),
 				OriginNode:  pd.GetOriginNode(),
-				Deleted:     pd.GetDeleted(),
 				Hash:        pd.GetHash(),
 			})
 		}
-		needFull, err := s.syncer.CompareDigests(digests)
+		getLocal := func(username string) (*contracts.User, error) {
+			u := s.userMgr.GetUserForSync(username)
+			return u, nil
+		}
+		needFull, err := usync.CompareDigests(getLocal, digests)
 		if err != nil {
 			log.Warn("heartbeat: compare digests had partial failures", "err", err)
 		}
-		// Always use partial results — CompareDigests adds users to needFull
-		// even on individual DB errors (self-healing behavior).
 		heartBeatRsp.NeedClusterUsers = needFull
 	}
 
@@ -215,22 +217,18 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 		Node:  &localNode.Node,
 	}
 	heartBeatMsg := &proto.HeartBeatReq{}
-	if s.clusterUserEnabled && s.clusterUserStore != nil {
-		if users, err := s.clusterUserStore.List(); err == nil {
-			digests := make([]*proto.UserDigest, 0, len(users))
-			for _, u := range users {
-				digests = append(digests, &proto.UserDigest{
-					Username:    u.Username,
-					UpdatedAtUs: u.UpdatedAtUs,
-					OriginNode:  u.OriginNode,
-					Deleted:     u.Deleted,
-					Hash:        u.Hash,
-				})
-			}
-			heartBeatMsg.UserDigests = digests
-		} else {
-			log.Error("heartbeat: list cluster users failed", "err", err, "dst_name", node.Name)
+	if s.userMgr.IsClusterEnabled() {
+		localDigests := s.userMgr.ListDigests()
+		digests := make([]*proto.UserDigest, 0, len(localDigests))
+		for _, d := range localDigests {
+			digests = append(digests, &proto.UserDigest{
+				Username:    d.Username,
+				UpdatedAtUs: d.UpdatedAtUs,
+				OriginNode:  d.OriginNode,
+				Hash:        d.Hash,
+			})
 		}
+		heartBeatMsg.UserDigests = digests
 	}
 	var heartBeatReq interface{} = heartBeatMsg
 	reqData, _ := pb.Marshal(heartBeatReq.(pb.Message))
@@ -261,20 +259,16 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 		node.ReportHeartBeatTime = time.Now().Unix()
 		addRemoteNode(heartBeatRsp, s, "End")
 
-		// Push full cluster user payloads to the remote node for any users it requested.
-		if s.clusterUserEnabled && s.clusterUserStore != nil {
+		// Push full user payloads to the remote node for any users it requested.
+		if s.userMgr.IsClusterEnabled() {
 			if needUsers := heartBeatRsp.GetNeedClusterUsers(); len(needUsers) > 0 {
-				toSend := make([]*proto.ClusterUserInfo, 0, len(needUsers))
+				toSend := make([]*proto.ClusterUserSync, 0, len(needUsers))
 				for _, username := range needUsers {
-					u, err := s.clusterUserStore.Get(username)
-					if err != nil {
-						log.Error("heartbeat: fetch cluster user for push", "username", username, "err", err, "dst_name", node.Name)
-						continue
-					}
+					u := s.userMgr.GetUserForSync(username)
 					if u == nil {
 						continue
 					}
-					toSend = append(toSend, clusterUserToProto(u))
+					toSend = append(toSend, userToProtoClusterUserSync(u))
 				}
 				if len(toSend) > 0 {
 					upsertData, _ := pb.Marshal(&proto.UpsertClusterUsersReq{Users: toSend})
@@ -371,6 +365,84 @@ func addRemoteNode(rsp *proto.HeartBeatRsp, s *EndNodeServer, remoteServerType s
 			})
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Proto <-> contracts.User conversion helpers
+// ---------------------------------------------------------------------------
+
+// userToProtoClusterUserSync converts a contracts.User to proto.ClusterUserSync.
+func userToProtoClusterUserSync(u *contracts.User) *proto.ClusterUserSync {
+	if u == nil {
+		return nil
+	}
+	return &proto.ClusterUserSync{
+		User:        userToProtoUser(u),
+		Deleted:     u.IsDeleting(),
+		UpdatedAtUs: u.UpdatedAtUs,
+		OriginNode:  u.OriginNode,
+		Hash:        u.Hash,
+	}
+}
+
+// userToProtoUser converts a contracts.User to proto.User.
+func userToProtoUser(u *contracts.User) *proto.User {
+	if u == nil {
+		return nil
+	}
+	var expire int64
+	if !u.ExpiryTime.IsZero() {
+		expire = u.ExpiryTime.Unix()
+	}
+	role := u.Role
+	if role == "" {
+		role = "normal"
+	}
+	return &proto.User{
+		Name:                  u.Username,
+		Passwd:                u.AuthToken,
+		ExpireTime:            expire,
+		Role:                  role,
+		Group:                 u.TargetGroup,
+		UploadBps:             u.BandwidthUploadBps,
+		DownloadBps:           u.BandwidthDownloadBps,
+		MaxClients:            int32(u.MaxClients),
+		ClientRecycleDelaySec: int32(u.ClientRecycleDelaySec),
+		ClientDrainSec:        int32(u.ClientDrainSec),
+		Uplink:                u.TrafficTotalUplink,
+		Downlink:              u.TrafficTotalDownlink,
+	}
+}
+
+// protoClusterUserSyncToUser converts a proto.ClusterUserSync to contracts.User.
+func protoClusterUserSyncToUser(p *proto.ClusterUserSync) *contracts.User {
+	if p == nil {
+		return nil
+	}
+	pu := p.GetUser()
+	if pu == nil {
+		return nil
+	}
+	u := &contracts.User{}
+	u.Username = pu.GetName()
+	u.AuthToken = pu.GetPasswd()
+	if pu.GetExpireTime() > 0 {
+		u.ExpiryTime = time.Unix(pu.GetExpireTime(), 0)
+	}
+	u.Role = pu.GetRole()
+	u.TargetGroup = pu.GetGroup()
+	if p.GetDeleted() {
+		u.MarkDeleting()
+	}
+	u.UpdatedAtUs = p.GetUpdatedAtUs()
+	u.OriginNode = p.GetOriginNode()
+	u.Hash = p.GetHash()
+	u.BandwidthUploadBps = pu.GetUploadBps()
+	u.BandwidthDownloadBps = pu.GetDownloadBps()
+	u.MaxClients = int(pu.GetMaxClients())
+	u.ClientRecycleDelaySec = int(pu.GetClientRecycleDelaySec())
+	u.ClientDrainSec = int(pu.GetClientDrainSec())
+	return u
 }
 
 func (s *EndNodeServer) heartBeatAndRegisterToNodeOrCenterNode() {

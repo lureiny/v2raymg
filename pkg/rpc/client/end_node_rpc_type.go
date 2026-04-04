@@ -33,10 +33,10 @@ const (
 	DeleteInboundByNameReqType
 	GetNodeGroupsReqType
 	SetNodeGroupsReqType
-	ListClusterUsersReqType
-	GetClusterUsersByNameReqType
+	_ // was ListClusterUsersReqType (removed)
+	_ // was GetClusterUsersByNameReqType (removed)
 	UpsertClusterUsersReqType
-	DeleteClusterUsersReqType
+	_ // was DeleteClusterUsersReqType (removed)
 	GetStatusReqType
 	GetProfileReqType
 )

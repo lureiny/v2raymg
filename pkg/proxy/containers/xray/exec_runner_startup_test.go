@@ -133,7 +133,7 @@ func TestExecutor_EnsureConfig_InvalidPath(t *testing.T) {
 // TestExecutor_Start_BinaryCheckFailure tests that Start fails when
 // binary check fails.
 func TestExecutor_Start_BinaryCheckFailure(t *testing.T) {
-	um := usermanager.NewUserManager(nil)
+	um := usermanager.NewUserManager(nil, "test-node")
 	cfg := ExecutorConfig{
 		BinaryPath:   "/nonexistent/xray",
 		AutoDownload: false,

@@ -68,14 +68,8 @@ func init() {
 	registerReqToEndNodeFunc(GetNodeGroupsReqType, ReqGetNodeGroups)
 	// set node groups
 	registerReqToEndNodeFunc(SetNodeGroupsReqType, ReqSetNodeGroups)
-	// list cluster users
-	registerReqToEndNodeFunc(ListClusterUsersReqType, ReqListClusterUsers)
-	// get cluster users by name
-	registerReqToEndNodeFunc(GetClusterUsersByNameReqType, ReqGetClusterUsersByName)
 	// upsert cluster users
 	registerReqToEndNodeFunc(UpsertClusterUsersReqType, ReqUpsertClusterUsers)
-	// delete cluster users
-	registerReqToEndNodeFunc(DeleteClusterUsersReqType, ReqDeleteClusterUsers)
 	// get status
 	registerReqToEndNodeFunc(GetStatusReqType, ReqGetStatus)
 	// get profile
@@ -569,38 +563,6 @@ func ReqSetNodeGroups(ctx context.Context, reqData []byte, endNodeAccessClient p
 	return nil, nil
 }
 
-func ReqListClusterUsers(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
-	req := &proto.ListClusterUsersReq{}
-	if err := pb.Unmarshal(reqData, req); err != nil {
-		return nil, fmt.Errorf("can't unmarshal req to ListClusterUsersReq > %v", err)
-	}
-	req.NodeAuthInfo = nodeAuthInfo
-	rsp, err := endNodeAccessClient.ListClusterUsers(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if err != nil {
-		return nil, err
-	}
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf("%s", rsp.GetMsg())
-	}
-	return rsp.GetUsers(), nil
-}
-
-func ReqGetClusterUsersByName(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
-	req := &proto.GetClusterUsersByNameReq{}
-	if err := pb.Unmarshal(reqData, req); err != nil {
-		return nil, fmt.Errorf("can't unmarshal req to GetClusterUsersByNameReq > %v", err)
-	}
-	req.NodeAuthInfo = nodeAuthInfo
-	rsp, err := endNodeAccessClient.GetClusterUsersByName(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if err != nil {
-		return nil, err
-	}
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf("%s", rsp.GetMsg())
-	}
-	return rsp.GetUsers(), nil
-}
-
 func ReqUpsertClusterUsers(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
 	req := &proto.UpsertClusterUsersReq{}
 	if err := pb.Unmarshal(reqData, req); err != nil {
@@ -608,22 +570,6 @@ func ReqUpsertClusterUsers(ctx context.Context, reqData []byte, endNodeAccessCli
 	}
 	req.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.UpsertClusterUsers(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if err != nil {
-		return nil, err
-	}
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf("%s", rsp.GetMsg())
-	}
-	return nil, nil
-}
-
-func ReqDeleteClusterUsers(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
-	req := &proto.DeleteClusterUsersReq{}
-	if err := pb.Unmarshal(reqData, req); err != nil {
-		return nil, fmt.Errorf("can't unmarshal req to DeleteClusterUsersReq > %v", err)
-	}
-	req.NodeAuthInfo = nodeAuthInfo
-	rsp, err := endNodeAccessClient.DeleteClusterUsers(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
 	if err != nil {
 		return nil, err
 	}

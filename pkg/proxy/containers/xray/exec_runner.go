@@ -912,6 +912,15 @@ func (e *Executor) handleUserEvent(event usermanager.UserEvent) error {
 	case usermanager.UserEventRemove:
 		// User removed from usermanager - need to remove from inbounds
 		e.removeUserFromInbounds(event.Username)
+
+	case usermanager.UserEventUpdate:
+		// Group (or other visibility-affecting fields) may have changed.
+		// Re-evaluate whether the user should have forwarding rules on this node.
+		if event.User != nil && !e.userMgr.IsUserVisible(event.User) {
+			e.removeUserFromInbounds(event.Username)
+		} else if event.User != nil {
+			e.syncUserToInbound(event.Username, event.User)
+		}
 	}
 
 	return nil
@@ -976,6 +985,12 @@ func (e *Executor) reconcileUsers() {
 
 	users := e.userMgr.ListUsers()
 
+	// Build a set of visible usernames for fast lookup.
+	visibleSet := make(map[string]struct{}, len(users))
+	for _, u := range users {
+		visibleSet[u.Username] = struct{}{}
+	}
+
 	// Sync to all inbounds
 	e.inboundsMu.RLock()
 	inbounds := make([]*XrayInbound, 0, len(e.inbounds))
@@ -985,6 +1000,17 @@ func (e *Executor) reconcileUsers() {
 	e.inboundsMu.RUnlock()
 
 	for _, inbound := range inbounds {
+		// Remove users that are tracked but no longer visible (e.g. group changed).
+		for username := range inbound.addedUsers {
+			if _, visible := visibleSet[username]; !visible {
+				if err := inbound.RemoveUser(username); err != nil {
+					log.Warn("[reconcileUsers] failed to remove stale user from inbound",
+						"user", username, "inbound", inbound.Tag(), "err", err)
+				}
+			}
+		}
+
+		// Add users that are visible but not yet tracked.
 		for _, user := range users {
 			// Skip users already tracked in this inbound's memory
 			if _, exists := inbound.addedUsers[user.Username]; exists {
@@ -1259,8 +1285,11 @@ func (in *XrayInbound) RemoveUser(email string) error {
 		return nil
 	}
 
-	// Check if user exists via UserManager (idempotent)
-	port, exists := in.userMgr.GetUserPortByDst(email, in.port)
+	// Use ForCleanup variant so we can find port mappings even when the user
+	// is already in "deleting" state. This is critical for two-phase deletion:
+	// RemoveUser marks deleting first, then emits UserEventRemove; we must
+	// still locate the port so ReleaseBindPort can finalize the deletion.
+	port, exists := in.userMgr.GetUserPortByDstForCleanup(email, in.port)
 	if !exists {
 		return nil
 	}
@@ -1395,9 +1424,9 @@ func (in *XrayInbound) getCredentialForUser(user contracts.UserSpec) (string, er
 		}
 		return password, nil
 	case contracts.ProtocolSOCKS5:
-		// SOCKS5 supports per-user auth; password is stored in the first-class field.
-		if user.Password != "" {
-			return user.Password, nil
+		// SOCKS5 supports per-user auth; auth token is used as the SOCKS5 password.
+		if user.AuthToken != "" {
+			return user.AuthToken, nil
 		}
 		return "", fmt.Errorf("password not found for user %s", user.Username)
 	default:

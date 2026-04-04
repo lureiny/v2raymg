@@ -5,12 +5,11 @@ import (
 	"sort"
 	"testing"
 
-	custore "github.com/lureiny/v2raymg/pkg/cluster_user/store"
 	"github.com/lureiny/v2raymg/pkg/store"
 	"github.com/lureiny/v2raymg/pkg/store/migrations"
 )
 
-func openNodeGroupsStore(t *testing.T) custore.NodeGroupsStore {
+func openNodeGroupsStore(t *testing.T) store.NodeGroupsStore {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -20,7 +19,7 @@ func openNodeGroupsStore(t *testing.T) custore.NodeGroupsStore {
 	if err := store.Migrate(db, migrations.All); err != nil {
 		t.Fatalf("store.Migrate: %v", err)
 	}
-	return custore.NewSQLiteNodeGroupsStore(db)
+	return store.NewSQLiteNodeGroupsStore(db)
 }
 
 func TestNodeGroupsStore_ListEmpty(t *testing.T) {

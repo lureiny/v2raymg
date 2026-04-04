@@ -19,43 +19,40 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	EndNodeAccess_GetUsers_FullMethodName              = "/proto.EndNodeAccess/GetUsers"
-	EndNodeAccess_GetProfile_FullMethodName            = "/proto.EndNodeAccess/GetProfile"
-	EndNodeAccess_AddUsers_FullMethodName              = "/proto.EndNodeAccess/AddUsers"
-	EndNodeAccess_DeleteUsers_FullMethodName           = "/proto.EndNodeAccess/DeleteUsers"
-	EndNodeAccess_UpdateUsers_FullMethodName           = "/proto.EndNodeAccess/UpdateUsers"
-	EndNodeAccess_ResetUser_FullMethodName             = "/proto.EndNodeAccess/ResetUser"
-	EndNodeAccess_GetSub_FullMethodName                = "/proto.EndNodeAccess/GetSub"
-	EndNodeAccess_GetBandWidthStats_FullMethodName     = "/proto.EndNodeAccess/GetBandWidthStats"
-	EndNodeAccess_HeartBeat_FullMethodName             = "/proto.EndNodeAccess/HeartBeat"
-	EndNodeAccess_RegisterNode_FullMethodName          = "/proto.EndNodeAccess/RegisterNode"
-	EndNodeAccess_SetGatewayModel_FullMethodName       = "/proto.EndNodeAccess/SetGatewayModel"
-	EndNodeAccess_SetPingCheck_FullMethodName          = "/proto.EndNodeAccess/SetPingCheck"
-	EndNodeAccess_AddInbound_FullMethodName            = "/proto.EndNodeAccess/AddInbound"
-	EndNodeAccess_DeleteInbound_FullMethodName         = "/proto.EndNodeAccess/DeleteInbound"
-	EndNodeAccess_TransferInbound_FullMethodName       = "/proto.EndNodeAccess/TransferInbound"
-	EndNodeAccess_CopyInbound_FullMethodName           = "/proto.EndNodeAccess/CopyInbound"
-	EndNodeAccess_CopyUser_FullMethodName              = "/proto.EndNodeAccess/CopyUser"
-	EndNodeAccess_GetInbound_FullMethodName            = "/proto.EndNodeAccess/GetInbound"
-	EndNodeAccess_ListInbound_FullMethodName           = "/proto.EndNodeAccess/ListInbound"
-	EndNodeAccess_DeleteInboundByName_FullMethodName   = "/proto.EndNodeAccess/DeleteInboundByName"
-	EndNodeAccess_UpdateProxy_FullMethodName           = "/proto.EndNodeAccess/UpdateProxy"
-	EndNodeAccess_AddAdaptiveConfig_FullMethodName     = "/proto.EndNodeAccess/AddAdaptiveConfig"
-	EndNodeAccess_DeleteAdaptiveConfig_FullMethodName  = "/proto.EndNodeAccess/DeleteAdaptiveConfig"
-	EndNodeAccess_Adaptive_FullMethodName              = "/proto.EndNodeAccess/Adaptive"
-	EndNodeAccess_FastAddInbound_FullMethodName        = "/proto.EndNodeAccess/FastAddInbound"
-	EndNodeAccess_ObtainNewCert_FullMethodName         = "/proto.EndNodeAccess/ObtainNewCert"
-	EndNodeAccess_TransferCert_FullMethodName          = "/proto.EndNodeAccess/TransferCert"
-	EndNodeAccess_GetCerts_FullMethodName              = "/proto.EndNodeAccess/GetCerts"
-	EndNodeAccess_GetPingMetric_FullMethodName         = "/proto.EndNodeAccess/GetPingMetric"
-	EndNodeAccess_GetNodeMetric_FullMethodName         = "/proto.EndNodeAccess/GetNodeMetric"
-	EndNodeAccess_GetNodeGroups_FullMethodName         = "/proto.EndNodeAccess/GetNodeGroups"
-	EndNodeAccess_SetNodeGroups_FullMethodName         = "/proto.EndNodeAccess/SetNodeGroups"
-	EndNodeAccess_ListClusterUsers_FullMethodName      = "/proto.EndNodeAccess/ListClusterUsers"
-	EndNodeAccess_GetClusterUsersByName_FullMethodName = "/proto.EndNodeAccess/GetClusterUsersByName"
-	EndNodeAccess_UpsertClusterUsers_FullMethodName    = "/proto.EndNodeAccess/UpsertClusterUsers"
-	EndNodeAccess_DeleteClusterUsers_FullMethodName    = "/proto.EndNodeAccess/DeleteClusterUsers"
-	EndNodeAccess_GetStatus_FullMethodName             = "/proto.EndNodeAccess/GetStatus"
+	EndNodeAccess_GetUsers_FullMethodName             = "/proto.EndNodeAccess/GetUsers"
+	EndNodeAccess_GetProfile_FullMethodName           = "/proto.EndNodeAccess/GetProfile"
+	EndNodeAccess_AddUsers_FullMethodName             = "/proto.EndNodeAccess/AddUsers"
+	EndNodeAccess_DeleteUsers_FullMethodName          = "/proto.EndNodeAccess/DeleteUsers"
+	EndNodeAccess_UpdateUsers_FullMethodName          = "/proto.EndNodeAccess/UpdateUsers"
+	EndNodeAccess_ResetUser_FullMethodName            = "/proto.EndNodeAccess/ResetUser"
+	EndNodeAccess_GetSub_FullMethodName               = "/proto.EndNodeAccess/GetSub"
+	EndNodeAccess_GetBandWidthStats_FullMethodName    = "/proto.EndNodeAccess/GetBandWidthStats"
+	EndNodeAccess_HeartBeat_FullMethodName            = "/proto.EndNodeAccess/HeartBeat"
+	EndNodeAccess_RegisterNode_FullMethodName         = "/proto.EndNodeAccess/RegisterNode"
+	EndNodeAccess_SetGatewayModel_FullMethodName      = "/proto.EndNodeAccess/SetGatewayModel"
+	EndNodeAccess_SetPingCheck_FullMethodName         = "/proto.EndNodeAccess/SetPingCheck"
+	EndNodeAccess_AddInbound_FullMethodName           = "/proto.EndNodeAccess/AddInbound"
+	EndNodeAccess_DeleteInbound_FullMethodName        = "/proto.EndNodeAccess/DeleteInbound"
+	EndNodeAccess_TransferInbound_FullMethodName      = "/proto.EndNodeAccess/TransferInbound"
+	EndNodeAccess_CopyInbound_FullMethodName          = "/proto.EndNodeAccess/CopyInbound"
+	EndNodeAccess_CopyUser_FullMethodName             = "/proto.EndNodeAccess/CopyUser"
+	EndNodeAccess_GetInbound_FullMethodName           = "/proto.EndNodeAccess/GetInbound"
+	EndNodeAccess_ListInbound_FullMethodName          = "/proto.EndNodeAccess/ListInbound"
+	EndNodeAccess_DeleteInboundByName_FullMethodName  = "/proto.EndNodeAccess/DeleteInboundByName"
+	EndNodeAccess_UpdateProxy_FullMethodName          = "/proto.EndNodeAccess/UpdateProxy"
+	EndNodeAccess_AddAdaptiveConfig_FullMethodName    = "/proto.EndNodeAccess/AddAdaptiveConfig"
+	EndNodeAccess_DeleteAdaptiveConfig_FullMethodName = "/proto.EndNodeAccess/DeleteAdaptiveConfig"
+	EndNodeAccess_Adaptive_FullMethodName             = "/proto.EndNodeAccess/Adaptive"
+	EndNodeAccess_FastAddInbound_FullMethodName       = "/proto.EndNodeAccess/FastAddInbound"
+	EndNodeAccess_ObtainNewCert_FullMethodName        = "/proto.EndNodeAccess/ObtainNewCert"
+	EndNodeAccess_TransferCert_FullMethodName         = "/proto.EndNodeAccess/TransferCert"
+	EndNodeAccess_GetCerts_FullMethodName             = "/proto.EndNodeAccess/GetCerts"
+	EndNodeAccess_GetPingMetric_FullMethodName        = "/proto.EndNodeAccess/GetPingMetric"
+	EndNodeAccess_GetNodeMetric_FullMethodName        = "/proto.EndNodeAccess/GetNodeMetric"
+	EndNodeAccess_GetNodeGroups_FullMethodName        = "/proto.EndNodeAccess/GetNodeGroups"
+	EndNodeAccess_SetNodeGroups_FullMethodName        = "/proto.EndNodeAccess/SetNodeGroups"
+	EndNodeAccess_UpsertClusterUsers_FullMethodName   = "/proto.EndNodeAccess/UpsertClusterUsers"
+	EndNodeAccess_GetStatus_FullMethodName            = "/proto.EndNodeAccess/GetStatus"
 )
 
 // EndNodeAccessClient is the client API for EndNodeAccess service.
@@ -101,10 +98,7 @@ type EndNodeAccessClient interface {
 	// cluster user
 	GetNodeGroups(ctx context.Context, in *GetNodeGroupsReq, opts ...grpc.CallOption) (*GetNodeGroupsRsp, error)
 	SetNodeGroups(ctx context.Context, in *SetNodeGroupsReq, opts ...grpc.CallOption) (*SetNodeGroupsRsp, error)
-	ListClusterUsers(ctx context.Context, in *ListClusterUsersReq, opts ...grpc.CallOption) (*ListClusterUsersRsp, error)
-	GetClusterUsersByName(ctx context.Context, in *GetClusterUsersByNameReq, opts ...grpc.CallOption) (*GetClusterUsersByNameRsp, error)
 	UpsertClusterUsers(ctx context.Context, in *UpsertClusterUsersReq, opts ...grpc.CallOption) (*UpsertClusterUsersRsp, error)
-	DeleteClusterUsers(ctx context.Context, in *DeleteClusterUsersReq, opts ...grpc.CallOption) (*DeleteClusterUsersRsp, error)
 	// status
 	GetStatus(ctx context.Context, in *GetStatusReq, opts ...grpc.CallOption) (*GetStatusRsp, error)
 }
@@ -437,40 +431,10 @@ func (c *endNodeAccessClient) SetNodeGroups(ctx context.Context, in *SetNodeGrou
 	return out, nil
 }
 
-func (c *endNodeAccessClient) ListClusterUsers(ctx context.Context, in *ListClusterUsersReq, opts ...grpc.CallOption) (*ListClusterUsersRsp, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListClusterUsersRsp)
-	err := c.cc.Invoke(ctx, EndNodeAccess_ListClusterUsers_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endNodeAccessClient) GetClusterUsersByName(ctx context.Context, in *GetClusterUsersByNameReq, opts ...grpc.CallOption) (*GetClusterUsersByNameRsp, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetClusterUsersByNameRsp)
-	err := c.cc.Invoke(ctx, EndNodeAccess_GetClusterUsersByName_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *endNodeAccessClient) UpsertClusterUsers(ctx context.Context, in *UpsertClusterUsersReq, opts ...grpc.CallOption) (*UpsertClusterUsersRsp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpsertClusterUsersRsp)
 	err := c.cc.Invoke(ctx, EndNodeAccess_UpsertClusterUsers_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endNodeAccessClient) DeleteClusterUsers(ctx context.Context, in *DeleteClusterUsersReq, opts ...grpc.CallOption) (*DeleteClusterUsersRsp, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeleteClusterUsersRsp)
-	err := c.cc.Invoke(ctx, EndNodeAccess_DeleteClusterUsers_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -530,10 +494,7 @@ type EndNodeAccessServer interface {
 	// cluster user
 	GetNodeGroups(context.Context, *GetNodeGroupsReq) (*GetNodeGroupsRsp, error)
 	SetNodeGroups(context.Context, *SetNodeGroupsReq) (*SetNodeGroupsRsp, error)
-	ListClusterUsers(context.Context, *ListClusterUsersReq) (*ListClusterUsersRsp, error)
-	GetClusterUsersByName(context.Context, *GetClusterUsersByNameReq) (*GetClusterUsersByNameRsp, error)
 	UpsertClusterUsers(context.Context, *UpsertClusterUsersReq) (*UpsertClusterUsersRsp, error)
-	DeleteClusterUsers(context.Context, *DeleteClusterUsersReq) (*DeleteClusterUsersRsp, error)
 	// status
 	GetStatus(context.Context, *GetStatusReq) (*GetStatusRsp, error)
 	mustEmbedUnimplementedEndNodeAccessServer()
@@ -642,17 +603,8 @@ func (UnimplementedEndNodeAccessServer) GetNodeGroups(context.Context, *GetNodeG
 func (UnimplementedEndNodeAccessServer) SetNodeGroups(context.Context, *SetNodeGroupsReq) (*SetNodeGroupsRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetNodeGroups not implemented")
 }
-func (UnimplementedEndNodeAccessServer) ListClusterUsers(context.Context, *ListClusterUsersReq) (*ListClusterUsersRsp, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListClusterUsers not implemented")
-}
-func (UnimplementedEndNodeAccessServer) GetClusterUsersByName(context.Context, *GetClusterUsersByNameReq) (*GetClusterUsersByNameRsp, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetClusterUsersByName not implemented")
-}
 func (UnimplementedEndNodeAccessServer) UpsertClusterUsers(context.Context, *UpsertClusterUsersReq) (*UpsertClusterUsersRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpsertClusterUsers not implemented")
-}
-func (UnimplementedEndNodeAccessServer) DeleteClusterUsers(context.Context, *DeleteClusterUsersReq) (*DeleteClusterUsersRsp, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method DeleteClusterUsers not implemented")
 }
 func (UnimplementedEndNodeAccessServer) GetStatus(context.Context, *GetStatusReq) (*GetStatusRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetStatus not implemented")
@@ -1254,42 +1206,6 @@ func _EndNodeAccess_SetNodeGroups_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EndNodeAccess_ListClusterUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListClusterUsersReq)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndNodeAccessServer).ListClusterUsers(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndNodeAccess_ListClusterUsers_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndNodeAccessServer).ListClusterUsers(ctx, req.(*ListClusterUsersReq))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndNodeAccess_GetClusterUsersByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetClusterUsersByNameReq)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndNodeAccessServer).GetClusterUsersByName(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndNodeAccess_GetClusterUsersByName_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndNodeAccessServer).GetClusterUsersByName(ctx, req.(*GetClusterUsersByNameReq))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _EndNodeAccess_UpsertClusterUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UpsertClusterUsersReq)
 	if err := dec(in); err != nil {
@@ -1304,24 +1220,6 @@ func _EndNodeAccess_UpsertClusterUsers_Handler(srv interface{}, ctx context.Cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(EndNodeAccessServer).UpsertClusterUsers(ctx, req.(*UpsertClusterUsersReq))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndNodeAccess_DeleteClusterUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteClusterUsersReq)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndNodeAccessServer).DeleteClusterUsers(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndNodeAccess_DeleteClusterUsers_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndNodeAccessServer).DeleteClusterUsers(ctx, req.(*DeleteClusterUsersReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1480,20 +1378,8 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _EndNodeAccess_SetNodeGroups_Handler,
 		},
 		{
-			MethodName: "ListClusterUsers",
-			Handler:    _EndNodeAccess_ListClusterUsers_Handler,
-		},
-		{
-			MethodName: "GetClusterUsersByName",
-			Handler:    _EndNodeAccess_GetClusterUsersByName_Handler,
-		},
-		{
 			MethodName: "UpsertClusterUsers",
 			Handler:    _EndNodeAccess_UpsertClusterUsers_Handler,
-		},
-		{
-			MethodName: "DeleteClusterUsers",
-			Handler:    _EndNodeAccess_DeleteClusterUsers_Handler,
 		},
 		{
 			MethodName: "GetStatus",

@@ -39,7 +39,7 @@ func TestSQLiteUserStore_SaveAndLoad(t *testing.T) {
 
 	user := &contracts.User{
 		Username:              "alice",
-		Password:              "secret",
+		AuthToken:             "secret",
 		Level:                 1,
 		TrafficLimit:          1000,
 		UploadLimit:           500,
@@ -67,8 +67,8 @@ func TestSQLiteUserStore_SaveAndLoad(t *testing.T) {
 	if got.Username != user.Username {
 		t.Errorf("Username: got %q, want %q", got.Username, user.Username)
 	}
-	if got.Password != user.Password {
-		t.Errorf("Password: got %q, want %q", got.Password, user.Password)
+	if got.AuthToken != user.AuthToken {
+		t.Errorf("AuthToken: got %q, want %q", got.AuthToken, user.AuthToken)
 	}
 	if got.Level != user.Level {
 		t.Errorf("Level: got %d, want %d", got.Level, user.Level)
@@ -102,12 +102,12 @@ func TestSQLiteUserStore_SaveAndLoad(t *testing.T) {
 func TestSQLiteUserStore_Upsert(t *testing.T) {
 	s := NewSQLiteUserStore(openTestDB(t))
 
-	u1 := &contracts.User{Username: "bob", Password: "pass1"}
+	u1 := &contracts.User{Username: "bob", AuthToken: "pass1"}
 	if err := s.Save(u1); err != nil {
 		t.Fatalf("Save 1: %v", err)
 	}
 
-	u2 := &contracts.User{Username: "bob", Password: "pass2"}
+	u2 := &contracts.User{Username: "bob", AuthToken: "pass2"}
 	if err := s.Save(u2); err != nil {
 		t.Fatalf("Save 2: %v", err)
 	}
@@ -119,15 +119,15 @@ func TestSQLiteUserStore_Upsert(t *testing.T) {
 	if len(users) != 1 {
 		t.Fatalf("expected 1 user, got %d", len(users))
 	}
-	if users[0].Password != "pass2" {
-		t.Errorf("expected password=pass2, got %q", users[0].Password)
+	if users[0].AuthToken != "pass2" {
+		t.Errorf("expected auth_token=pass2, got %q", users[0].AuthToken)
 	}
 }
 
 func TestSQLiteUserStore_Delete(t *testing.T) {
 	s := NewSQLiteUserStore(openTestDB(t))
 
-	user := &contracts.User{Username: "carol", Password: "pass"}
+	user := &contracts.User{Username: "carol", AuthToken: "pass"}
 	if err := s.Save(user); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestSQLiteUserStore_ExpiryTime(t *testing.T) {
 	s := NewSQLiteUserStore(openTestDB(t))
 
 	expiry := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
-	user := &contracts.User{Username: "dave", Password: "pass", ExpiryTime: expiry}
+	user := &contracts.User{Username: "dave", AuthToken: "pass", ExpiryTime: expiry}
 	if err := s.Save(user); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestSQLiteUserStore_ExpiryTime(t *testing.T) {
 func TestSQLiteUserStore_ZeroExpiryTime(t *testing.T) {
 	s := NewSQLiteUserStore(openTestDB(t))
 
-	user := &contracts.User{Username: "eve", Password: "pass"}
+	user := &contracts.User{Username: "eve", AuthToken: "pass"}
 	if err := s.Save(user); err != nil {
 		t.Fatalf("Save: %v", err)
 	}

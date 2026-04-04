@@ -18,7 +18,7 @@ func failingHasher(_ string) (string, error) {
 func newUserManagerWithHasher(t *testing.T) *UserManager {
 	t.Helper()
 	storeMgr := openTestStoreManager(t)
-	m, err := NewUserManagerWithStore(newMockForwardManager(), storeMgr)
+	m, err := NewUserManagerWithStore(newMockForwardManager(), storeMgr, "test-node")
 	if err != nil {
 		t.Fatalf("NewUserManagerWithStore: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestUpdateUserPassword_LoginPasswordUpdatedImmediately(t *testing.T) {
 func TestAddUser_WithoutHasher_LoginPasswordEmpty(t *testing.T) {
 	// Without a hasher, LoginPassword should remain empty — no panic.
 	storeMgr := openTestStoreManager(t)
-	m, err := NewUserManagerWithStore(newMockForwardManager(), storeMgr)
+	m, err := NewUserManagerWithStore(newMockForwardManager(), storeMgr, "test-node")
 	if err != nil {
 		t.Fatalf("NewUserManagerWithStore: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestAddUser_WithoutHasher_LoginPasswordEmpty(t *testing.T) {
 
 func TestAddUser_HasherFailure_ReturnsError(t *testing.T) {
 	storeMgr := openTestStoreManager(t)
-	m, err := NewUserManagerWithStore(newMockForwardManager(), storeMgr)
+	m, err := NewUserManagerWithStore(newMockForwardManager(), storeMgr, "test-node")
 	if err != nil {
 		t.Fatalf("NewUserManagerWithStore: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestAddUser_HasherFailure_ReturnsError(t *testing.T) {
 
 func TestUpdateUser_HasherFailure_ReturnsError(t *testing.T) {
 	storeMgr := openTestStoreManager(t)
-	m, err := NewUserManagerWithStore(newMockForwardManager(), storeMgr)
+	m, err := NewUserManagerWithStore(newMockForwardManager(), storeMgr, "test-node")
 	if err != nil {
 		t.Fatalf("NewUserManagerWithStore: %v", err)
 	}
@@ -152,10 +152,10 @@ func TestUpdateUser_HasherFailure_ReturnsError(t *testing.T) {
 		t.Fatal("expected error when hasher fails during UpdateUser")
 	}
 
-	// Password must not have changed.
+	// AuthToken and LoginPassword must not have changed.
 	after, _ := m.GetUser("bob")
-	if after.Password != "oldpass" {
-		t.Errorf("password changed despite hasher failure: got %q", after.Password)
+	if after.AuthToken != oldLP.AuthToken {
+		t.Errorf("AuthToken changed despite hasher failure: got %q, want %q", after.AuthToken, oldLP.AuthToken)
 	}
 	if after.LoginPassword != oldLP.LoginPassword {
 		t.Error("LoginPassword changed despite hasher failure")
@@ -164,7 +164,7 @@ func TestUpdateUser_HasherFailure_ReturnsError(t *testing.T) {
 
 func TestUpdateUserPassword_HasherFailure_ReturnsError(t *testing.T) {
 	storeMgr := openTestStoreManager(t)
-	m, err := NewUserManagerWithStore(newMockForwardManager(), storeMgr)
+	m, err := NewUserManagerWithStore(newMockForwardManager(), storeMgr, "test-node")
 	if err != nil {
 		t.Fatalf("NewUserManagerWithStore: %v", err)
 	}
@@ -182,10 +182,10 @@ func TestUpdateUserPassword_HasherFailure_ReturnsError(t *testing.T) {
 		t.Fatal("expected error when hasher fails during UpdateUserPassword")
 	}
 
-	// Password and LoginPassword must not have changed.
+	// AuthToken and LoginPassword must not have changed.
 	after, _ := m.GetUser("carol")
-	if after.Password != "oldpass" {
-		t.Errorf("password changed despite hasher failure: got %q", after.Password)
+	if after.AuthToken != oldLP.AuthToken {
+		t.Errorf("AuthToken changed despite hasher failure: got %q, want %q", after.AuthToken, oldLP.AuthToken)
 	}
 	if after.LoginPassword != oldLP.LoginPassword {
 		t.Error("LoginPassword changed despite hasher failure")

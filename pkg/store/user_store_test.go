@@ -26,7 +26,7 @@ func openUserStore(t *testing.T) *store.SQLiteUserStore {
 func TestUserStore_Role_RoundTrip(t *testing.T) {
 	s := openUserStore(t)
 
-	u := &contracts.User{Username: "alice", Password: "pass", Role: "admin"}
+	u := &contracts.User{Username: "alice", AuthToken: "pass", Role: "admin"}
 	if err := s.Save(u); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestUserStore_Role_RoundTrip(t *testing.T) {
 func TestUserStore_LoginPassword_RoundTrip(t *testing.T) {
 	s := openUserStore(t)
 
-	u := &contracts.User{Username: "bob", Password: "pass", LoginPassword: "$2a$10$fakehashvalue"}
+	u := &contracts.User{Username: "bob", AuthToken: "pass", LoginPassword: "$2a$10$fakehashvalue"}
 	if err := s.Save(u); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestUserStore_DefaultRole(t *testing.T) {
 	// Save normalises "" → "normal" before writing to the DB.
 	s := openUserStore(t)
 
-	u := &contracts.User{Username: "carol", Password: "pass"}
+	u := &contracts.User{Username: "carol", AuthToken: "pass"}
 	// Role intentionally left empty; Save should normalise to "normal".
 	if err := s.Save(u); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -92,7 +92,7 @@ func TestUserStore_RoleAndLoginPassword_DoNotInterferWithOtherFields(t *testing.
 
 	u := &contracts.User{
 		Username:      "dave",
-		Password:      "proxy-pass",
+		AuthToken:     "proxy-pass",
 		Role:          "normal",
 		LoginPassword: "$2a$10$loginhash",
 		TrafficLimit:  1024 * 1024,
@@ -110,8 +110,8 @@ func TestUserStore_RoleAndLoginPassword_DoNotInterferWithOtherFields(t *testing.
 		t.Fatalf("expected 1 user, got %d", len(users))
 	}
 	got := users[0]
-	if got.Password != "proxy-pass" {
-		t.Errorf("Password: got %q, want proxy-pass", got.Password)
+	if got.AuthToken != "proxy-pass" {
+		t.Errorf("AuthToken: got %q, want proxy-pass", got.AuthToken)
 	}
 	if got.Role != "normal" {
 		t.Errorf("Role: got %q, want normal", got.Role)
@@ -130,7 +130,7 @@ func TestUserStore_RoleAndLoginPassword_DoNotInterferWithOtherFields(t *testing.
 func TestUserStore_UpdateRole(t *testing.T) {
 	s := openUserStore(t)
 
-	u := &contracts.User{Username: "eve", Password: "pass", Role: "normal"}
+	u := &contracts.User{Username: "eve", AuthToken: "pass", Role: "normal"}
 	if err := s.Save(u); err != nil {
 		t.Fatalf("initial Save: %v", err)
 	}
@@ -153,10 +153,70 @@ func TestUserStore_UpdateRole(t *testing.T) {
 	}
 }
 
+func TestUserStore_ListByGroup(t *testing.T) {
+	s := openUserStore(t)
+
+	// Save users in different groups.
+	for _, u := range []*contracts.User{
+		{Username: "alice", AuthToken: "tok-a", TargetGroup: "groupA", DeletionState: ""},
+		{Username: "bob", AuthToken: "tok-b", TargetGroup: "groupA", DeletionState: "deleting"},
+		{Username: "carol", AuthToken: "tok-c", TargetGroup: "groupB"},
+		{Username: "dave", AuthToken: "tok-d", TargetGroup: ""},
+	} {
+		if err := s.Save(u); err != nil {
+			t.Fatalf("Save(%s): %v", u.Username, err)
+		}
+	}
+
+	// Query groupA — should return alice and bob (including tombstones).
+	users, err := s.ListByGroup("groupA")
+	if err != nil {
+		t.Fatalf("ListByGroup(groupA): %v", err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("expected 2 users in groupA, got %d", len(users))
+	}
+	// Verify ordering (ORDER BY username).
+	if users[0].Username != "alice" || users[1].Username != "bob" {
+		t.Errorf("unexpected order: %s, %s", users[0].Username, users[1].Username)
+	}
+	// Verify DeletionState is scanned correctly.
+	if users[1].DeletionState != "deleting" {
+		t.Errorf("expected bob DeletionState=deleting, got %q", users[1].DeletionState)
+	}
+
+	// Query groupB — should return carol only.
+	users, err = s.ListByGroup("groupB")
+	if err != nil {
+		t.Fatalf("ListByGroup(groupB): %v", err)
+	}
+	if len(users) != 1 || users[0].Username != "carol" {
+		t.Errorf("expected carol in groupB, got %v", users)
+	}
+
+	// Query empty group — should return dave.
+	users, err = s.ListByGroup("")
+	if err != nil {
+		t.Fatalf("ListByGroup(): %v", err)
+	}
+	if len(users) != 1 || users[0].Username != "dave" {
+		t.Errorf("expected dave in empty group, got %v", users)
+	}
+
+	// Query nonexistent group — should return empty slice.
+	users, err = s.ListByGroup("nope")
+	if err != nil {
+		t.Fatalf("ListByGroup(nope): %v", err)
+	}
+	if len(users) != 0 {
+		t.Errorf("expected 0 users in nope, got %d", len(users))
+	}
+}
+
 func TestUserStore_UpdateLoginPassword(t *testing.T) {
 	s := openUserStore(t)
 
-	u := &contracts.User{Username: "frank", Password: "pass", LoginPassword: "$2a$10$oldhash"}
+	u := &contracts.User{Username: "frank", AuthToken: "pass", LoginPassword: "$2a$10$oldhash"}
 	if err := s.Save(u); err != nil {
 		t.Fatalf("initial Save: %v", err)
 	}

@@ -132,7 +132,7 @@ func (m *mockForwardManager) Close() error {
 }
 
 func TestNewUserManager(t *testing.T) {
-	um := NewUserManager(nil)
+	um := NewUserManager(nil, "test-node")
 	if um == nil {
 		t.Error("NewUserManager returned nil")
 	}
@@ -140,7 +140,7 @@ func TestNewUserManager(t *testing.T) {
 
 func TestAddUser_Success(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	req := AddUserRequest{
 		Username: "testuser",
@@ -161,14 +161,14 @@ func TestAddUser_Success(t *testing.T) {
 	if user.Username != "testuser" {
 		t.Errorf("expected username testuser, got %s", user.Username)
 	}
-	if user.Password != "testpass" {
-		t.Errorf("expected password testpass, got %v", user.Password)
+	if user.AuthToken == "" {
+		t.Error("expected non-empty AuthToken after AddUser")
 	}
 }
 
 func TestAddUser_ValidationError(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// User with empty username
 	req := AddUserRequest{
@@ -184,7 +184,7 @@ func TestAddUser_ValidationError(t *testing.T) {
 
 func TestAddUser_AlreadyExists(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	req := AddUserRequest{
 		Username: "testuser",
@@ -205,7 +205,7 @@ func TestAddUser_AlreadyExists(t *testing.T) {
 
 func TestAddUser_DeletingUserRejected(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user first
 	req := AddUserRequest{
@@ -217,9 +217,8 @@ func TestAddUser_DeletingUserRejected(t *testing.T) {
 		t.Fatalf("AddUser failed: %v", err)
 	}
 
-	// Add a bind port to the user
-	user, _ := um.GetUser("testuser")
-	user.BindPorts = append(user.BindPorts, 12345)
+	// Add a forward rule so the user won't be finalized immediately on RemoveUser
+	mockFM.rules["testuser"] = &forward.ForwardRule{Username: "testuser", ListenPort: 12345}
 
 	// Mark user for deletion (soft delete)
 	err = um.RemoveUser(RemoveUserRequest{Username: "testuser"})
@@ -241,7 +240,7 @@ func TestAddUser_DeletingUserRejected(t *testing.T) {
 
 func TestRemoveUser_Success(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user first
 	req := AddUserRequest{
@@ -271,7 +270,7 @@ func TestRemoveUser_Success(t *testing.T) {
 
 func TestRemoveUser_Idempotent(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	removeReq := RemoveUserRequest{
 		Username: "nonexistent",
@@ -285,7 +284,7 @@ func TestRemoveUser_Idempotent(t *testing.T) {
 
 func TestRemoveUser_SoftDelete(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user with a port binding
 	req := AddUserRequest{
@@ -337,7 +336,7 @@ func TestRemoveUser_SoftDelete(t *testing.T) {
 
 func TestGetUser_Success(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user
 	req := AddUserRequest{
@@ -362,7 +361,7 @@ func TestGetUser_Success(t *testing.T) {
 
 func TestGetUser_NotFound(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	_, err := um.GetUser("nonexistent")
 	if err == nil {
@@ -372,7 +371,7 @@ func TestGetUser_NotFound(t *testing.T) {
 
 func TestListUsers(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add multiple users
 	users := []AddUserRequest{
@@ -397,7 +396,7 @@ func TestListUsers(t *testing.T) {
 
 func TestUpdateUserPassword(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user
 	req := AddUserRequest{
@@ -409,6 +408,10 @@ func TestUpdateUserPassword(t *testing.T) {
 		t.Fatalf("AddUser failed: %v", err)
 	}
 
+	// Capture AuthToken before update (it should not change)
+	userBefore, _ := um.GetUser("testuser")
+	authTokenBefore := userBefore.AuthToken
+
 	// Update password
 	updateReq := UpdateUserPasswordRequest{
 		Username:    "testuser",
@@ -419,16 +422,16 @@ func TestUpdateUserPassword(t *testing.T) {
 		t.Errorf("UpdateUserPassword returned error: %v", err)
 	}
 
-	// Verify password was updated
+	// Verify AuthToken is unchanged (password updates only affect LoginPassword)
 	user, _ := um.GetUser("testuser")
-	if user.Password != "newpass" {
-		t.Errorf("expected password newpass, got %v", user.Password)
+	if user.AuthToken != authTokenBefore {
+		t.Errorf("expected AuthToken to be unchanged, got %q, want %q", user.AuthToken, authTokenBefore)
 	}
 }
 
 func TestUpdateUserPassword_NotFound(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	updateReq := UpdateUserPasswordRequest{
 		Username:    "nonexistent",
@@ -442,7 +445,7 @@ func TestUpdateUserPassword_NotFound(t *testing.T) {
 
 func TestUserWithTTL(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user with very short TTL
 	req := AddUserRequest{
@@ -467,7 +470,7 @@ func TestUserWithTTL(t *testing.T) {
 
 func TestGetBindPort_AllocatesPort(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user
 	req := AddUserRequest{
@@ -503,7 +506,7 @@ func TestGetBindPort_AllocatesPort(t *testing.T) {
 
 func TestGetBindPort_EmptyContainerType(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user first
 	addReq := AddUserRequest{
@@ -530,7 +533,7 @@ func TestGetBindPort_EmptyContainerType(t *testing.T) {
 
 func TestGetBindPort_EmptyInboundTag(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user first
 	addReq := AddUserRequest{
@@ -557,7 +560,7 @@ func TestGetBindPort_EmptyInboundTag(t *testing.T) {
 
 func TestGetBindPort_EmptyBoth(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user first
 	addReq := AddUserRequest{
@@ -584,7 +587,7 @@ func TestGetBindPort_EmptyBoth(t *testing.T) {
 
 func TestGetBindPort_ExpiredUser(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add an expired user
 	req := AddUserRequest{
@@ -615,7 +618,7 @@ func TestGetBindPort_ExpiredUser(t *testing.T) {
 
 func TestReleaseBindPort_Idempotent(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user
 	req := AddUserRequest{
@@ -640,7 +643,7 @@ func TestReleaseBindPort_Idempotent(t *testing.T) {
 
 func TestGetUserPort_WithBoundPort(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user first
 	req := AddUserRequest{
@@ -678,7 +681,7 @@ func TestGetUserPort_WithBoundPort(t *testing.T) {
 }
 
 func TestGetUserPort_NoBoundPort(t *testing.T) {
-	um := NewUserManager(nil)
+	um := NewUserManager(nil, "test-node")
 
 	// Add a user without binding any port
 	req := AddUserRequest{
@@ -701,7 +704,7 @@ func TestGetUserPort_NoBoundPort(t *testing.T) {
 }
 
 func TestGetUserPort_NonExistentUser(t *testing.T) {
-	um := NewUserManager(nil)
+	um := NewUserManager(nil, "test-node")
 
 	// Test GetUserPort for non-existent user
 	port, found := um.GetUserPort("nonexistent")
@@ -784,7 +787,7 @@ func (m *mockStatsForwardManager) Close() error {
 }
 
 func TestUserManager_StartTrafficStats(t *testing.T) {
-	um := NewUserManager(nil)
+	um := NewUserManager(nil, "test-node")
 
 	// Should not panic
 	um.StartTrafficStats(time.Second)
@@ -809,7 +812,7 @@ func TestUserManager_GetUserTrafficStats_ForwardOnly(t *testing.T) {
 			},
 		},
 	}
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Start stats collection
 	um.StartTrafficStats(time.Second)
@@ -845,7 +848,7 @@ func TestUserManager_GetContainerTrafficStats_ForwardOnly(t *testing.T) {
 			},
 		},
 	}
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	um.StartTrafficStats(time.Second)
 	defer um.StopTrafficStats()
@@ -885,7 +888,7 @@ func TestUserManager_GetGlobalTrafficStats_ForwardOnly(t *testing.T) {
 			},
 		},
 	}
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	um.StartTrafficStats(time.Second)
 	defer um.StopTrafficStats()
@@ -901,13 +904,11 @@ func TestUserManager_GetGlobalTrafficStats_ForwardOnly(t *testing.T) {
 	}
 }
 
-// TestReleaseBindPort_FinalizeDelete tests that ReleaseBindPort triggers physical deletion
-// when user is in deleting state and has no more rules.
-// Note: Current implementation calls RemoveRulesByUser which removes ALL rules for the user,
-// so finalization happens on the first ReleaseBindPort call when user is in deleting state.
-func TestReleaseBindPort_FinalizeDelete(t *testing.T) {
+// TestReleaseBindPort_DeletingUserStaysAsTombstone tests that ReleaseBindPort
+// cleans up forward rules but keeps the tombstone in memory.
+func TestReleaseBindPort_DeletingUserStaysAsTombstone(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add forward rule to the mock
 	mockFM.rules["xray:inbound:12345"] = &forward.ForwardRule{
@@ -918,54 +919,50 @@ func TestReleaseBindPort_FinalizeDelete(t *testing.T) {
 	}
 
 	// Add a user
-	req := AddUserRequest{
-		Username: "testuser",
-		Password: "testpass",
-	}
-	err := um.AddUser(req)
+	err := um.AddUser(AddUserRequest{Username: "testuser", Password: "testpass"})
 	if err != nil {
 		t.Fatalf("AddUser failed: %v", err)
 	}
 
-	// Get the user and add bind port
-	user, _ := um.GetUser("testuser")
-	user.BindPorts = append(user.BindPorts, 12345)
-
-	// Mark user for deletion (soft delete)
+	// Mark user for deletion
 	err = um.RemoveUser(RemoveUserRequest{Username: "testuser"})
 	if err != nil {
 		t.Fatalf("RemoveUser failed: %v", err)
 	}
 
-	// Verify user is still in map but marked as deleting
-	deletingUser := um.GetUserIncludingDeleting("testuser")
-	if deletingUser == nil {
-		t.Fatal("expected user to still exist in map")
-	}
-	if !deletingUser.IsDeleting() {
-		t.Error("expected user to be marked as deleting")
-	}
-
-	// Release the port - should finalize because there are no more rules
+	// Release port
 	err = um.ReleaseBindPort(ReleaseBindPortRequest{Username: "testuser", BindPort: 12345})
 	if err != nil {
 		t.Errorf("ReleaseBindPort returned error: %v", err)
 	}
 
-	// User should be physically deleted now because:
-	// 1. User is in "deleting" state
-	// 2. ReleaseBindPort calls RemoveRulesByUser which removes ALL rules for the user
-	// 3. GetRulesByUser returns 0 rules, so finalization happens
-	deletingUser = um.GetUserIncludingDeleting("testuser")
-	if deletingUser != nil {
-		t.Error("expected user to be physically deleted after releasing port (finalization)")
+	// Tombstone should still be in memory
+	deletingUser := um.GetUserIncludingDeleting("testuser")
+	if deletingUser == nil {
+		t.Fatal("expected tombstone to still exist in map")
+	}
+	if !deletingUser.IsDeleting() {
+		t.Error("expected user to still be marked as deleting")
+	}
+
+	// Re-adding should succeed since no forward rules remain
+	err = um.AddUser(AddUserRequest{Username: "testuser", Password: "newpass"})
+	if err != nil {
+		t.Errorf("expected re-add to succeed after rules cleaned up, got: %v", err)
+	}
+	user, _ := um.GetUser("testuser")
+	if user == nil {
+		t.Fatal("expected user to exist after re-add")
+	}
+	if user.AuthToken == "" {
+		t.Error("expected non-empty AuthToken after re-add")
 	}
 }
 
 // TestReleaseBindPort_IdempotentWithDeleteState tests ReleaseBindPort idempotency with delete state.
 func TestReleaseBindPort_IdempotentWithDeleteState(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user
 	req := AddUserRequest{
@@ -1002,7 +999,7 @@ func TestReleaseBindPort_IdempotentWithDeleteState(t *testing.T) {
 // TestAddUser_DeletingUserWithRemainingRules tests that AddUser error includes remaining rules info.
 func TestAddUser_DeletingUserWithRemainingRules(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user
 	req := AddUserRequest{
@@ -1044,9 +1041,9 @@ func TestAddUser_DeletingUserWithRemainingRules(t *testing.T) {
 		if !strings.Contains(errMsg, "being deleted") {
 			t.Errorf("expected error to mention deletion, got: %v", errMsg)
 		}
-		// The error should include remaining rules info from forward manager
-		if !strings.Contains(errMsg, "remaining rules") {
-			t.Errorf("expected error to mention remaining rules, got: %v", errMsg)
+		// The error should include forward rules info
+		if !strings.Contains(errMsg, "forward rules") {
+			t.Errorf("expected error to mention forward rules, got: %v", errMsg)
 		}
 	}
 }
@@ -1054,7 +1051,7 @@ func TestAddUser_DeletingUserWithRemainingRules(t *testing.T) {
 // TestUserManager_SetUserBandwidthLimit tests setting user bandwidth limit via usermanager.
 func TestUserManager_SetUserBandwidthLimit(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user
 	req := AddUserRequest{
@@ -1094,7 +1091,7 @@ func TestUserManager_SetUserBandwidthLimit(t *testing.T) {
 // TestUserManager_GetUserBandwidthLimit tests getting user bandwidth limit.
 func TestUserManager_GetUserBandwidthLimit(t *testing.T) {
 	mockFM := newMockForwardManager()
-	um := NewUserManager(mockFM)
+	um := NewUserManager(mockFM, "test-node")
 
 	// Add a user
 	req := AddUserRequest{
@@ -1133,7 +1130,7 @@ func TestUserManager_GetUserBandwidthLimit(t *testing.T) {
 // TestUserManager_WithStore_AddUser verifies AddUser persists to store.
 func TestUserManager_WithStore_AddUser(t *testing.T) {
 	storeMgr := openTestStoreManager(t)
-	um, err := NewUserManagerWithStore(nil, storeMgr)
+	um, err := NewUserManagerWithStore(nil, storeMgr, "test-node")
 	if err != nil {
 		t.Fatalf("NewUserManagerWithStore: %v", err)
 	}
@@ -1152,15 +1149,15 @@ func TestUserManager_WithStore_AddUser(t *testing.T) {
 	if users[0].Username != "alice" {
 		t.Errorf("expected username=alice, got %q", users[0].Username)
 	}
-	if users[0].Password != "pass" {
-		t.Errorf("expected password=pass, got %q", users[0].Password)
+	if users[0].AuthToken == "" {
+		t.Error("expected non-empty AuthToken in store after AddUser")
 	}
 }
 
-// TestUserManager_WithStore_RemoveUser verifies RemoveUser physically deletes from store.
+// TestUserManager_WithStore_RemoveUser verifies RemoveUser keeps tombstone in store.
 func TestUserManager_WithStore_RemoveUser(t *testing.T) {
 	storeMgr := openTestStoreManager(t)
-	um, err := NewUserManagerWithStore(nil, storeMgr)
+	um, err := NewUserManagerWithStore(nil, storeMgr, "test-node")
 	if err != nil {
 		t.Fatalf("NewUserManagerWithStore: %v", err)
 	}
@@ -1172,19 +1169,23 @@ func TestUserManager_WithStore_RemoveUser(t *testing.T) {
 		t.Fatalf("RemoveUser: %v", err)
 	}
 
+	// Tombstone should remain in store
 	users, err := storeMgr.UserStore().Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(users) != 0 {
-		t.Errorf("expected 0 users in store after remove, got %d", len(users))
+	if len(users) != 1 {
+		t.Fatalf("expected 1 tombstone in store after remove, got %d", len(users))
+	}
+	if !users[0].IsDeleting() {
+		t.Error("expected user in store to be marked as deleting")
 	}
 }
 
 // TestUserManager_WithStore_UpdatePassword verifies UpdateUserPassword persists the new password.
 func TestUserManager_WithStore_UpdatePassword(t *testing.T) {
 	storeMgr := openTestStoreManager(t)
-	um, err := NewUserManagerWithStore(nil, storeMgr)
+	um, err := NewUserManagerWithStore(nil, storeMgr, "test-node")
 	if err != nil {
 		t.Fatalf("NewUserManagerWithStore: %v", err)
 	}
@@ -1203,14 +1204,14 @@ func TestUserManager_WithStore_UpdatePassword(t *testing.T) {
 	if len(users) != 1 {
 		t.Fatalf("expected 1 user in store, got %d", len(users))
 	}
-	if users[0].Password != "new" {
-		t.Errorf("expected password=new, got %q", users[0].Password)
+	if users[0].AuthToken == "" {
+		t.Error("expected non-empty AuthToken in store after UpdateUserPassword")
 	}
 }
 
 // TestUserManager_NilStore_Backward verifies NewUserManager (no store) works identically to before.
 func TestUserManager_NilStore_Backward(t *testing.T) {
-	um := NewUserManager(nil) // pure in-memory, no store
+	um := NewUserManager(nil, "test-node") // pure in-memory, no store
 
 	if err := um.AddUser(AddUserRequest{Username: "dave", Password: "pass"}); err != nil {
 		t.Fatalf("AddUser: %v", err)
@@ -1224,5 +1225,280 @@ func TestUserManager_NilStore_Backward(t *testing.T) {
 	}
 	if err := um.RemoveUser(RemoveUserRequest{Username: "dave"}); err != nil {
 		t.Fatalf("RemoveUser: %v", err)
+	}
+}
+
+// --- Group filtering tests ---
+
+// memNodeGroupsStore is an in-memory mock of NodeGroupsStore for testing.
+type memNodeGroupsStore struct {
+	groups []string
+}
+
+func (s *memNodeGroupsStore) List() ([]string, error) { return s.groups, nil }
+func (s *memNodeGroupsStore) Set(groups []string) error {
+	s.groups = groups
+	return nil
+}
+
+// addUserWithGroup adds a user and directly sets TargetGroup, bypassing stampVersion.
+// This is fine for group filtering tests which don't check hash consistency.
+func addUserWithGroup(t *testing.T, um *UserManager, username, group string) {
+	t.Helper()
+	if err := um.AddUser(AddUserRequest{Username: username, Password: "pass"}); err != nil {
+		t.Fatalf("AddUser(%s): %v", username, err)
+	}
+	if group != "" {
+		um.mu.Lock()
+		um.users[username].TargetGroup = group
+		um.mu.Unlock()
+	}
+}
+
+func TestListUsers_NoCluster_ReturnsAll(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+	addUserWithGroup(t, um, "u1", "asia")
+	addUserWithGroup(t, um, "u2", "europe")
+
+	users := um.ListUsers()
+	if len(users) != 2 {
+		t.Errorf("expected 2 users without cluster, got %d", len(users))
+	}
+}
+
+func TestListUsers_ClusterEnabled_NoGroups_ReturnsAll(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+	um.EnableClusterSync("default", &memNodeGroupsStore{groups: []string{}})
+
+	addUserWithGroup(t, um, "u1", "asia")
+	addUserWithGroup(t, um, "u2", "europe")
+
+	users := um.ListUsers()
+	if len(users) != 2 {
+		t.Errorf("expected 2 users with empty groups (fail-open), got %d", len(users))
+	}
+}
+
+func TestListUsers_ClusterEnabled_FiltersByGroup(t *testing.T) {
+	ngs := &memNodeGroupsStore{groups: []string{"asia", "europe"}}
+	um := NewUserManager(newMockForwardManager(), "test-node")
+	um.EnableClusterSync("default", ngs)
+
+	addUserWithGroup(t, um, "u-asia", "asia")
+	addUserWithGroup(t, um, "u-europe", "europe")
+	addUserWithGroup(t, um, "u-us", "us")
+
+	users := um.ListUsers()
+	names := make(map[string]bool)
+	for _, u := range users {
+		names[u.Username] = true
+	}
+
+	if !names["u-asia"] {
+		t.Error("expected u-asia to be visible")
+	}
+	if !names["u-europe"] {
+		t.Error("expected u-europe to be visible")
+	}
+	if names["u-us"] {
+		t.Error("expected u-us to be hidden")
+	}
+	if len(users) != 2 {
+		t.Errorf("expected 2 visible users, got %d", len(users))
+	}
+}
+
+func TestListUsersWithPasswd_FiltersByGroup(t *testing.T) {
+	ngs := &memNodeGroupsStore{groups: []string{"asia"}}
+	um := NewUserManager(newMockForwardManager(), "test-node")
+	um.EnableClusterSync("default", ngs)
+
+	addUserWithGroup(t, um, "u-asia", "asia")
+	addUserWithGroup(t, um, "u-us", "us")
+
+	result := um.ListUsersWithPasswd()
+	if _, ok := result["u-asia"]; !ok {
+		t.Error("expected u-asia in password map")
+	}
+	if _, ok := result["u-us"]; ok {
+		t.Error("expected u-us to be filtered from password map")
+	}
+}
+
+func TestSetNodeGroups_UpdatesCache(t *testing.T) {
+	ngs := &memNodeGroupsStore{groups: []string{"asia"}}
+	um := NewUserManager(newMockForwardManager(), "test-node")
+	um.EnableClusterSync("default", ngs)
+
+	addUserWithGroup(t, um, "u-asia", "asia")
+	addUserWithGroup(t, um, "u-us", "us")
+
+	// Initially only asia visible
+	if len(um.ListUsers()) != 1 {
+		t.Fatalf("expected 1 user with group=asia, got %d", len(um.ListUsers()))
+	}
+
+	// Change groups to include us
+	if err := um.SetNodeGroups([]string{"asia", "us"}); err != nil {
+		t.Fatalf("SetNodeGroups: %v", err)
+	}
+	if len(um.ListUsers()) != 2 {
+		t.Errorf("expected 2 users after adding us group, got %d", len(um.ListUsers()))
+	}
+}
+
+func TestListDigests_NotFilteredByGroup(t *testing.T) {
+	ngs := &memNodeGroupsStore{groups: []string{"asia"}}
+	um := NewUserManager(newMockForwardManager(), "test-node")
+	um.EnableClusterSync("default", ngs)
+
+	addUserWithGroup(t, um, "u-asia", "asia")
+	addUserWithGroup(t, um, "u-us", "us")
+
+	digests := um.ListDigests()
+	if len(digests) != 2 {
+		t.Errorf("expected 2 digests (unfiltered), got %d", len(digests))
+	}
+}
+
+func TestGetUserForSync_NotFilteredByGroup(t *testing.T) {
+	ngs := &memNodeGroupsStore{groups: []string{"asia"}}
+	um := NewUserManager(newMockForwardManager(), "test-node")
+	um.EnableClusterSync("default", ngs)
+
+	addUserWithGroup(t, um, "u-us", "us")
+
+	u := um.GetUserForSync("u-us")
+	if u == nil {
+		t.Error("expected GetUserForSync to return user outside node's groups")
+	}
+}
+
+// ============ AuthToken Tests ============
+
+func TestFindUserByToken(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+
+	// Add two users
+	if err := um.AddUser(AddUserRequest{Username: "alice", Password: "pass1"}); err != nil {
+		t.Fatalf("AddUser(alice): %v", err)
+	}
+	if err := um.AddUser(AddUserRequest{Username: "bob", Password: "pass2"}); err != nil {
+		t.Fatalf("AddUser(bob): %v", err)
+	}
+
+	alice, _ := um.GetUser("alice")
+	bob, _ := um.GetUser("bob")
+
+	// Find by valid token
+	found := um.FindUserByToken(alice.AuthToken)
+	if found == nil {
+		t.Fatal("expected to find alice by token")
+	}
+	if found.Username != "alice" {
+		t.Errorf("expected alice, got %s", found.Username)
+	}
+
+	found = um.FindUserByToken(bob.AuthToken)
+	if found == nil {
+		t.Fatal("expected to find bob by token")
+	}
+	if found.Username != "bob" {
+		t.Errorf("expected bob, got %s", found.Username)
+	}
+
+	// Empty token returns nil
+	if um.FindUserByToken("") != nil {
+		t.Error("expected nil for empty token")
+	}
+
+	// Nonexistent token returns nil
+	if um.FindUserByToken("deadbeef12345678deadbeef12345678") != nil {
+		t.Error("expected nil for nonexistent token")
+	}
+}
+
+func TestFindUserByToken_DeletedUser(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+
+	if err := um.AddUser(AddUserRequest{Username: "alice", Password: "pass"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	alice, _ := um.GetUser("alice")
+	token := alice.AuthToken
+
+	// Remove user
+	if err := um.RemoveUser(RemoveUserRequest{Username: "alice"}); err != nil {
+		t.Fatalf("RemoveUser: %v", err)
+	}
+
+	// Deleted user should not be findable by token
+	if um.FindUserByToken(token) != nil {
+		t.Error("expected nil for deleted user's token")
+	}
+}
+
+func TestFindUserByToken_ExpiredUser(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+
+	if err := um.AddUser(AddUserRequest{Username: "alice", Password: "pass", TTL: time.Nanosecond}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	alice := um.GetUserIncludingDeleting("alice")
+	token := alice.AuthToken
+
+	time.Sleep(time.Millisecond)
+
+	// Expired user should not be findable by token
+	if um.FindUserByToken(token) != nil {
+		t.Error("expected nil for expired user's token")
+	}
+}
+
+func TestResetAuthToken(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+
+	if err := um.AddUser(AddUserRequest{Username: "alice", Password: "pass"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	alice, _ := um.GetUser("alice")
+	oldToken := alice.AuthToken
+
+	// Reset token
+	newToken, err := um.ResetAuthToken("alice")
+	if err != nil {
+		t.Fatalf("ResetAuthToken: %v", err)
+	}
+	if newToken == "" {
+		t.Fatal("expected non-empty new token")
+	}
+	if newToken == oldToken {
+		t.Error("expected new token to differ from old token")
+	}
+
+	// Verify user has the new token
+	alice, _ = um.GetUser("alice")
+	if alice.AuthToken != newToken {
+		t.Errorf("expected AuthToken=%s, got %s", newToken, alice.AuthToken)
+	}
+
+	// Old token should no longer work
+	if um.FindUserByToken(oldToken) != nil {
+		t.Error("expected old token to no longer find user")
+	}
+
+	// New token should work
+	found := um.FindUserByToken(newToken)
+	if found == nil || found.Username != "alice" {
+		t.Error("expected new token to find alice")
+	}
+}
+
+func TestResetAuthToken_NonexistentUser(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+
+	_, err := um.ResetAuthToken("nonexistent")
+	if err == nil {
+		t.Error("expected error for nonexistent user")
 	}
 }

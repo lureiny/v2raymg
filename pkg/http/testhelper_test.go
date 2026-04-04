@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lureiny/v2raymg/pkg/cluster"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	proxyerrors "github.com/lureiny/v2raymg/pkg/proxy/errors"
 )
@@ -39,7 +40,7 @@ func newMockUserLister(users ...*contracts.User) *mockUserLister {
 func (m *mockUserLister) ListUsersWithPasswd() map[string]string {
 	out := make(map[string]string, len(m.users))
 	for k, u := range m.users {
-		out[k] = u.Password
+		out[k] = u.AuthToken
 	}
 	return out
 }
@@ -98,5 +99,14 @@ func newTestHttpServer(userLister UserLister) *HttpServer {
 		jwtExpireHours: 1,
 		handlersMap:    make(map[string]HttpHandlerInterface),
 		userLister:     userLister,
+		clusterNodes:   &stubTestClusterNodes{},
 	}
 }
+
+// stubTestClusterNodes is a minimal ClusterNodes for test helpers.
+type stubTestClusterNodes struct{}
+
+func (s *stubTestClusterNodes) GetNodesWithFilter(f cluster.NodeFilter) []*cluster.Node {
+	return nil
+}
+func (s *stubTestClusterNodes) GetClusterToken() string { return "" }

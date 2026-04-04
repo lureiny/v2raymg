@@ -10,13 +10,12 @@ import (
 
 // HttpServerConfig holds HTTP server configuration.
 type HttpServerConfig struct {
-	Listen             string
-	Port               int
-	Token              string
-	Name               string
-	JWTSecret          string
-	JWTExpireHours     int
-	ClusterUserEnabled bool
+	Listen         string
+	Port           int
+	Token          string
+	Name           string
+	JWTSecret      string
+	JWTExpireHours int
 }
 
 // ClusterNodes provides node lookup for routing HTTP requests to cluster members.
@@ -48,11 +47,11 @@ type HttpServer struct {
 	clusterNodes       ClusterNodes
 	localNode          *cluster.LocalNode
 	userLister         UserLister
-	clusterUserEnabled bool
+	clusterEnabled     bool
 }
 
 // Init initializes the HttpServer with config and dependencies.
-func (s *HttpServer) Init(cfg HttpServerConfig, localNode *cluster.LocalNode, clusterNodes ClusterNodes, certReader CertReader, userLister UserLister) {
+func (s *HttpServer) Init(cfg HttpServerConfig, localNode *cluster.LocalNode, clusterNodes ClusterNodes, certReader CertReader, userLister UserLister, clusterEnabled bool) {
 	s.Host = cfg.Listen
 	s.Port = cfg.Port
 	s.token = cfg.Token
@@ -63,7 +62,7 @@ func (s *HttpServer) Init(cfg HttpServerConfig, localNode *cluster.LocalNode, cl
 	s.clusterNodes = clusterNodes
 	s.certReader = certReader
 	s.userLister = userLister
-	s.clusterUserEnabled = cfg.ClusterUserEnabled
+	s.clusterEnabled = clusterEnabled
 	s.registerRoutes()
 }
 

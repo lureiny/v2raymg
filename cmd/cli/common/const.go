@@ -14,20 +14,22 @@ const (
 	Inbounds       = "api/inbounds"
 
 	CopyUserBetweenNodes = "api/copyUserBetweenNodes"
-	User                 = "api/user"
-	UserReset            = "api/user/reset"
-	Users                = "api/users"
+	User      = "api/user"
+	UserReset = "api/user/reset"
 
-	Stat   = "api/stat"
 	Update = "api/update"
 
 	RotatePort        = "api/rotatePort"
 	RotateInboundPort = "api/rotateInboundPort"
 	RotateAllPorts    = "api/rotateAllPorts"
 
-	UserRole = "api/user" // used as base path for /api/user/:name/role
+	UserRole        = "api/user" // used as base path for /api/user/:name/role
+	UserBandwidth   = "api/user" // used as base path for /api/user/:name/bandwidth
+	UserClientLimit = "api/user" // used as base path for /api/user/:name/client-limit
 
-	Logout  = "api/logout"
-	Profile = "api/profile"
-	Status  = "api/status"
+	Logout         = "api/logout"
+	Profile        = "api/profile"
+	ChangePassword = "api/profile/password"
+	Status         = "api/status"
+	TransferCert   = "api/cert/transfer"
 )
