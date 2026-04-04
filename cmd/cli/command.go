@@ -253,6 +253,14 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
+	// --- Status ---
+	m.RegisterHandler(getStatus, "GetStatus",
+		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("all")),
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
 	// --- Session lifecycle (JWT only) ---
 	m.RegisterHandler(logout, "Logout")
 	m.RegisterHandler(profile, "Profile")
@@ -616,4 +624,98 @@ func profile() error {
 	}
 	fmt.Println(result)
 	return nil
+}
+
+// ---- Status ----
+
+func getStatus(target string) error {
+	result, err := client.GetStatus(getHost(), getAuthToken(), target)
+	if err != nil {
+		return err
+	}
+
+	var data struct {
+		Nodes []struct {
+			NodeName           string  `json:"node_name"`
+			OnlyGateway        bool    `json:"only_gateway"`
+			ClusterUserEnabled bool    `json:"cluster_user_enabled"`
+			MemTotal           uint64  `json:"mem_total"`
+			MemUsed            uint64  `json:"mem_used"`
+			MemAvailable       uint64  `json:"mem_available"`
+			NumGoroutine       int32   `json:"num_goroutine"`
+			CpuPercent         float64 `json:"cpu_percent"`
+			NetRxBytes         uint64  `json:"net_rx_bytes"`
+			NetTxBytes         uint64  `json:"net_tx_bytes"`
+			TcpConnections     int32   `json:"tcp_connections"`
+			NetRxSpeed         float64 `json:"net_rx_speed"`
+			NetTxSpeed         float64 `json:"net_tx_speed"`
+		} `json:"nodes"`
+		Failed map[string]string `json:"failed"`
+	}
+
+	if err := json.Unmarshal([]byte(result), &data); err != nil {
+		// fallback: print raw
+		fmt.Println(result)
+		return nil
+	}
+
+	for i, n := range data.Nodes {
+		if i > 0 {
+			fmt.Println()
+		}
+		fmt.Printf("=== %s ===\n", n.NodeName)
+		fmt.Printf("  %-22s %s\n", "Gateway Mode:", formatBool(n.OnlyGateway))
+		fmt.Printf("  %-22s %s\n", "Cluster User:", formatBool(n.ClusterUserEnabled))
+		fmt.Printf("  %-22s %.1f%%\n", "CPU:", n.CpuPercent)
+		fmt.Printf("  %-22s %s / %s (available %s)\n", "Memory:",
+			formatBytes(n.MemUsed), formatBytes(n.MemTotal), formatBytes(n.MemAvailable))
+		fmt.Printf("  %-22s %d\n", "Goroutines:", n.NumGoroutine)
+		fmt.Printf("  %-22s RX %s / TX %s\n", "Network:",
+			formatBytes(n.NetRxBytes), formatBytes(n.NetTxBytes))
+		fmt.Printf("  %-22s RX %s/s / TX %s/s\n", "Network Speed:",
+			formatSpeed(n.NetRxSpeed), formatSpeed(n.NetTxSpeed))
+		fmt.Printf("  %-22s %d\n", "TCP Connections:", n.TcpConnections)
+	}
+
+	if len(data.Failed) > 0 {
+		fmt.Println()
+		fmt.Println("=== Failed Nodes ===")
+		for name, msg := range data.Failed {
+			fmt.Printf("  %s: %s\n", name, msg)
+		}
+	}
+
+	return nil
+}
+
+func formatBytes(b uint64) string {
+	const (
+		KB = 1024
+		MB = KB * 1024
+		GB = MB * 1024
+	)
+	switch {
+	case b >= GB:
+		return fmt.Sprintf("%.1f GB", float64(b)/float64(GB))
+	case b >= MB:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(MB))
+	case b >= KB:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}
+
+func formatSpeed(bytesPerSec float64) string {
+	if bytesPerSec < 0 {
+		return "N/A"
+	}
+	return formatBytes(uint64(bytesPerSec))
+}
+
+func formatBool(v bool) string {
+	if v {
+		return "enabled"
+	}
+	return "disabled"
 }

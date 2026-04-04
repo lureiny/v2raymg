@@ -1583,6 +1583,11 @@ func (m *UserManager) StartTrafficStats(interval time.Duration) {
 		m.statsCollector = newStatsCollector(m.forwardMgr, interval)
 	}
 	// Register callback to persist TotalUplink/TotalDownlink after each collect cycle.
+	// We track the last-seen statsCollector totals so we can compute the delta
+	// since the previous persist cycle and add it to the DB value. This avoids
+	// overwriting historical traffic when the process restarts (statsCollector
+	// totals start at zero on each run).
+	lastSeen := make(map[string][2]int64) // username -> [lastTotalUp, lastTotalDown]
 	m.statsCollector.onCollect = func(byUser map[string]UserTrafficStats) {
 		// Aggregate per-username (sum across inbounds)
 		totals := make(map[string][2]int64) // username -> [totalUp, totalDown]
@@ -1596,8 +1601,19 @@ func (m *UserManager) StartTrafficStats(interval time.Duration) {
 		defer m.mu.Unlock()
 		for username, t := range totals {
 			if u, ok := m.users[username]; ok {
-				u.TrafficTotalUplink = t[0]
-				u.TrafficTotalDownlink = t[1]
+				prev := lastSeen[username]
+				deltaUp := t[0] - prev[0]
+				deltaDown := t[1] - prev[1]
+				lastSeen[username] = t
+				if deltaUp <= 0 && deltaDown <= 0 {
+					continue
+				}
+				if deltaUp > 0 {
+					u.TrafficTotalUplink += deltaUp
+				}
+				if deltaDown > 0 {
+					u.TrafficTotalDownlink += deltaDown
+				}
 				if m.store != nil {
 					_ = m.store.Save(u)
 				}

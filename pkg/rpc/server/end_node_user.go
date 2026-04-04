@@ -11,6 +11,45 @@ import (
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
+func (s *EndNodeServer) GetProfile(ctx context.Context, req *proto.GetProfileReq) (*proto.GetProfileRsp, error) {
+	if s.clusterUserEnabled {
+		return &proto.GetProfileRsp{Code: 400, Msg: "local user API disabled: cluster_user is enabled"}, nil
+	}
+	user, err := s.userMgr.GetUser(req.GetUsername())
+	if err != nil {
+		return &proto.GetProfileRsp{Code: 404, Msg: "user not found"}, nil
+	}
+	role := user.Role
+	if role == "" {
+		role = "normal"
+	}
+	var expireTime int64
+	if !user.ExpiryTime.IsZero() {
+		expireTime = user.ExpiryTime.Unix()
+	}
+	rsp := &proto.GetProfileRsp{
+		Code:          0,
+		Username:      user.Username,
+		Role:          role,
+		ExpireTime:    expireTime,
+		TrafficLimit:  user.TrafficLimit,
+		Uplink:        user.TrafficTotalUplink,
+		Downlink:      user.TrafficTotalDownlink,
+		ProxyPassword: user.Password,
+	}
+	if fm := s.userMgr.GetForwardManager(); fm != nil {
+		rules := fm.GetRulesByUser(user.Username)
+		for _, r := range rules {
+			rsp.Inbounds = append(rsp.Inbounds, &proto.ProfileInbound{
+				Tag:       r.InboundTag,
+				Container: string(r.ContainerType),
+				Port:      int32(r.ListenPort),
+			})
+		}
+	}
+	return rsp, nil
+}
+
 func (s *EndNodeServer) GetUsers(ctx context.Context, getUsersReq *proto.GetUsersReq) (*proto.GetUsersRsp, error) {
 	if s.clusterUserEnabled {
 		return &proto.GetUsersRsp{Code: 400, Msg: "local user API disabled: cluster_user is enabled, use cluster user API instead"}, nil
@@ -22,10 +61,8 @@ func (s *EndNodeServer) GetUsers(ctx context.Context, getUsersReq *proto.GetUser
 			Name:   u.Username,
 			Passwd: u.Password,
 		}
-		if stats, ok := s.userMgr.GetUserTrafficStats(u.Username); ok {
-			protoUser.Downlink = stats.TotalDownlink
-			protoUser.Uplink = stats.TotalUplink
-		}
+		protoUser.Uplink = u.TrafficTotalUplink
+		protoUser.Downlink = u.TrafficTotalDownlink
 		getUsersRsp.Users = append(getUsersRsp.Users, protoUser)
 	}
 	return getUsersRsp, nil

@@ -34,6 +34,7 @@ func (s *HttpServer) registerRoutes() {
 	s.registerOn(userGroup, &RotateInboundPortHandler{}, "POST")
 	s.registerOn(userGroup, &RotateAllPortsHandler{}, "POST")
 	s.registerOn(userGroup, &ChangePasswordHandler{}, "PUT")
+	s.registerOn(userGroup, &StatusHandler{}, "GET")
 
 	// Admin routes — authenticated + admin role required
 	// X-Token holders are automatically treated as admin by AuthMiddleware.

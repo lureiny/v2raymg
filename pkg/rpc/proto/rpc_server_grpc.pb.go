@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	EndNodeAccess_GetUsers_FullMethodName              = "/proto.EndNodeAccess/GetUsers"
+	EndNodeAccess_GetProfile_FullMethodName            = "/proto.EndNodeAccess/GetProfile"
 	EndNodeAccess_AddUsers_FullMethodName              = "/proto.EndNodeAccess/AddUsers"
 	EndNodeAccess_DeleteUsers_FullMethodName           = "/proto.EndNodeAccess/DeleteUsers"
 	EndNodeAccess_UpdateUsers_FullMethodName           = "/proto.EndNodeAccess/UpdateUsers"
@@ -54,6 +55,7 @@ const (
 	EndNodeAccess_GetClusterUsersByName_FullMethodName = "/proto.EndNodeAccess/GetClusterUsersByName"
 	EndNodeAccess_UpsertClusterUsers_FullMethodName    = "/proto.EndNodeAccess/UpsertClusterUsers"
 	EndNodeAccess_DeleteClusterUsers_FullMethodName    = "/proto.EndNodeAccess/DeleteClusterUsers"
+	EndNodeAccess_GetStatus_FullMethodName             = "/proto.EndNodeAccess/GetStatus"
 )
 
 // EndNodeAccessClient is the client API for EndNodeAccess service.
@@ -62,6 +64,7 @@ const (
 type EndNodeAccessClient interface {
 	// user
 	GetUsers(ctx context.Context, in *GetUsersReq, opts ...grpc.CallOption) (*GetUsersRsp, error)
+	GetProfile(ctx context.Context, in *GetProfileReq, opts ...grpc.CallOption) (*GetProfileRsp, error)
 	AddUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	DeleteUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	UpdateUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
@@ -102,6 +105,8 @@ type EndNodeAccessClient interface {
 	GetClusterUsersByName(ctx context.Context, in *GetClusterUsersByNameReq, opts ...grpc.CallOption) (*GetClusterUsersByNameRsp, error)
 	UpsertClusterUsers(ctx context.Context, in *UpsertClusterUsersReq, opts ...grpc.CallOption) (*UpsertClusterUsersRsp, error)
 	DeleteClusterUsers(ctx context.Context, in *DeleteClusterUsersReq, opts ...grpc.CallOption) (*DeleteClusterUsersRsp, error)
+	// status
+	GetStatus(ctx context.Context, in *GetStatusReq, opts ...grpc.CallOption) (*GetStatusRsp, error)
 }
 
 type endNodeAccessClient struct {
@@ -116,6 +121,16 @@ func (c *endNodeAccessClient) GetUsers(ctx context.Context, in *GetUsersReq, opt
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetUsersRsp)
 	err := c.cc.Invoke(ctx, EndNodeAccess_GetUsers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *endNodeAccessClient) GetProfile(ctx context.Context, in *GetProfileReq, opts ...grpc.CallOption) (*GetProfileRsp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetProfileRsp)
+	err := c.cc.Invoke(ctx, EndNodeAccess_GetProfile_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -462,12 +477,23 @@ func (c *endNodeAccessClient) DeleteClusterUsers(ctx context.Context, in *Delete
 	return out, nil
 }
 
+func (c *endNodeAccessClient) GetStatus(ctx context.Context, in *GetStatusReq, opts ...grpc.CallOption) (*GetStatusRsp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetStatusRsp)
+	err := c.cc.Invoke(ctx, EndNodeAccess_GetStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EndNodeAccessServer is the server API for EndNodeAccess service.
 // All implementations must embed UnimplementedEndNodeAccessServer
 // for forward compatibility.
 type EndNodeAccessServer interface {
 	// user
 	GetUsers(context.Context, *GetUsersReq) (*GetUsersRsp, error)
+	GetProfile(context.Context, *GetProfileReq) (*GetProfileRsp, error)
 	AddUsers(context.Context, *UserOpReq) (*UserOpRsp, error)
 	DeleteUsers(context.Context, *UserOpReq) (*UserOpRsp, error)
 	UpdateUsers(context.Context, *UserOpReq) (*UserOpRsp, error)
@@ -508,6 +534,8 @@ type EndNodeAccessServer interface {
 	GetClusterUsersByName(context.Context, *GetClusterUsersByNameReq) (*GetClusterUsersByNameRsp, error)
 	UpsertClusterUsers(context.Context, *UpsertClusterUsersReq) (*UpsertClusterUsersRsp, error)
 	DeleteClusterUsers(context.Context, *DeleteClusterUsersReq) (*DeleteClusterUsersRsp, error)
+	// status
+	GetStatus(context.Context, *GetStatusReq) (*GetStatusRsp, error)
 	mustEmbedUnimplementedEndNodeAccessServer()
 }
 
@@ -520,6 +548,9 @@ type UnimplementedEndNodeAccessServer struct{}
 
 func (UnimplementedEndNodeAccessServer) GetUsers(context.Context, *GetUsersReq) (*GetUsersRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetUsers not implemented")
+}
+func (UnimplementedEndNodeAccessServer) GetProfile(context.Context, *GetProfileReq) (*GetProfileRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetProfile not implemented")
 }
 func (UnimplementedEndNodeAccessServer) AddUsers(context.Context, *UserOpReq) (*UserOpRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddUsers not implemented")
@@ -623,6 +654,9 @@ func (UnimplementedEndNodeAccessServer) UpsertClusterUsers(context.Context, *Ups
 func (UnimplementedEndNodeAccessServer) DeleteClusterUsers(context.Context, *DeleteClusterUsersReq) (*DeleteClusterUsersRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteClusterUsers not implemented")
 }
+func (UnimplementedEndNodeAccessServer) GetStatus(context.Context, *GetStatusReq) (*GetStatusRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetStatus not implemented")
+}
 func (UnimplementedEndNodeAccessServer) mustEmbedUnimplementedEndNodeAccessServer() {}
 func (UnimplementedEndNodeAccessServer) testEmbeddedByValue()                       {}
 
@@ -658,6 +692,24 @@ func _EndNodeAccess_GetUsers_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(EndNodeAccessServer).GetUsers(ctx, req.(*GetUsersReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EndNodeAccess_GetProfile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetProfileReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).GetProfile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EndNodeAccess_GetProfile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).GetProfile(ctx, req.(*GetProfileReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1274,6 +1326,24 @@ func _EndNodeAccess_DeleteClusterUsers_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EndNodeAccess_GetStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStatusReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).GetStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EndNodeAccess_GetStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).GetStatus(ctx, req.(*GetStatusReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EndNodeAccess_ServiceDesc is the grpc.ServiceDesc for EndNodeAccess service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1284,6 +1354,10 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetUsers",
 			Handler:    _EndNodeAccess_GetUsers_Handler,
+		},
+		{
+			MethodName: "GetProfile",
+			Handler:    _EndNodeAccess_GetProfile_Handler,
 		},
 		{
 			MethodName: "AddUsers",
@@ -1420,6 +1494,10 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteClusterUsers",
 			Handler:    _EndNodeAccess_DeleteClusterUsers_Handler,
+		},
+		{
+			MethodName: "GetStatus",
+			Handler:    _EndNodeAccess_GetStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -167,6 +167,11 @@ type EndNodeConfig struct {
 	JWTExpireHours int `yaml:"jwt_expire_hours" json:"jwt_expire_hours"`
 	// EnablePrometheus enables the Prometheus metrics endpoint.
 	EnablePrometheus bool `yaml:"enable_prometheus" json:"enable_prometheus"`
+	// MonitorInterfaces is an optional list of network interface names to use for
+	// bandwidth speed monitoring (e.g. ["eth0", "ens3"]).
+	// When empty, the interface with the default route is detected automatically.
+	// If auto-detection fails, all non-loopback interfaces are summed (fallback).
+	MonitorInterfaces []string `yaml:"monitor_interfaces" json:"monitor_interfaces"`
 }
 
 // CenterNodeConfig holds Center Node specific configuration.

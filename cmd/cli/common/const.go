@@ -29,4 +29,5 @@ const (
 
 	Logout  = "api/logout"
 	Profile = "api/profile"
+	Status  = "api/status"
 )

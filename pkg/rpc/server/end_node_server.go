@@ -73,7 +73,7 @@ func GetEndNodeServer() *EndNodeServer {
 
 var methodPrefixLen = len("/proto.EndNodeAccess/")
 
-var onlyGatewayMethods = "HeartBeat|RegisterNode|SetGatewayModel|GetPingMetric|GetNodeMetric|GetBandWidthStats|SetPingCheck"
+var onlyGatewayMethods = "HeartBeat|RegisterNode|SetGatewayModel|GetPingMetric|GetNodeMetric|GetBandWidthStats|SetPingCheck|GetStatus"
 
 func isOnlyGatewayMethod(fullMethod string) bool {
 	return strings.Contains(onlyGatewayMethods, fullMethod[methodPrefixLen:])
@@ -81,6 +81,7 @@ func isOnlyGatewayMethod(fullMethod string) bool {
 
 var methodRspMap = map[string]interface{}{
 	"GetUsers":             &proto.GetUsersRsp{},
+	"GetProfile":           &proto.GetProfileRsp{},
 	"AddUsers":             &proto.UserOpRsp{},
 	"DeleteUsers":          &proto.UserOpRsp{},
 	"UpdateUsers":          &proto.UserOpRsp{},
@@ -108,6 +109,7 @@ var methodRspMap = map[string]interface{}{
 	"GetClusterUsersByName":   &proto.GetClusterUsersByNameRsp{},
 	"UpsertClusterUsers":      &proto.UpsertClusterUsersRsp{},
 	"DeleteClusterUsers":      &proto.DeleteClusterUsersRsp{},
+	"GetStatus":               &proto.GetStatusRsp{},
 }
 
 func newEmptyRsp(fullMethod string) (interface{}, error) {
@@ -185,6 +187,8 @@ func (s *EndNodeServer) Init(
 	s.Port = cfg.RpcPort
 	s.Type = common.EndNodeType
 	s.Name = cfg.Name
+
+	InitNetSpeedMonitor(cfg.MonitorInterfaces)
 
 	s.centerNode = &cluster.Node{
 		Node: &proto.Node{

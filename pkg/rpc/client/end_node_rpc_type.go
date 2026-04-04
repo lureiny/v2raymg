@@ -37,4 +37,6 @@ const (
 	GetClusterUsersByNameReqType
 	UpsertClusterUsersReqType
 	DeleteClusterUsersReqType
+	GetStatusReqType
+	GetProfileReqType
 )

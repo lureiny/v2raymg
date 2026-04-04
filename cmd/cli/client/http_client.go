@@ -601,3 +601,23 @@ func Profile(host, token string) (string, error) {
 	err := DoGetRequest(reqUrl, token, map[string]interface{}{}, getCallBackFunc(cb))
 	return result, err
 }
+
+// GetStatus returns node status from GET /api/status.
+func GetStatus(host, token, target string) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	params := map[string]interface{}{}
+	if target != "" {
+		params["target"] = target
+	}
+	reqUrl := fmt.Sprintf("%s/%s", host, common.Status)
+	err := DoGetRequest(reqUrl, token, params, getCallBackFunc(cb))
+	return result, err
+}

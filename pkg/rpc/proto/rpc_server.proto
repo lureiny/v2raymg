@@ -42,6 +42,30 @@ message GetUsersRsp {
     repeated User users = 3;
 }
 
+message ProfileInbound {
+    string tag = 1;
+    string container = 2;
+    int32 port = 3;
+}
+
+message GetProfileReq {
+    NodeAuthInfo node_auth_info = 1;
+    string username = 2;
+}
+
+message GetProfileRsp {
+    int32 code = 1;
+    string msg = 2;
+    string username = 3;
+    string role = 4;
+    int64 expire_time = 5;
+    int64 traffic_limit = 6;
+    int64 uplink = 7;
+    int64 downlink = 8;
+    string proxy_password = 9;
+    repeated ProfileInbound inbounds = 10;
+}
+
 message UserOpReq {
     NodeAuthInfo node_auth_info = 1;
     repeated User users = 2;
@@ -351,9 +375,36 @@ message GetNodeMetricRsp {
     NodeMetrics node_metrics = 10;
 }
 
+message NodeStatus {
+  string node_name            = 1;
+  bool   only_gateway         = 2;
+  bool   cluster_user_enabled = 3;
+  uint64 mem_total            = 4;  // bytes, from /proc/meminfo MemTotal
+  uint64 mem_used             = 5;  // bytes, MemTotal - MemAvailable
+  uint64 mem_available        = 6;  // bytes, from /proc/meminfo MemAvailable
+  int32  num_goroutine        = 7;
+  double cpu_percent           = 8;
+  uint64 net_rx_bytes         = 9;
+  uint64 net_tx_bytes         = 10;
+  int32  tcp_connections      = 11;
+  double net_rx_speed         = 12;  // bytes/sec
+  double net_tx_speed         = 13;  // bytes/sec
+}
+
+message GetStatusReq {
+  NodeAuthInfo node_auth_info = 1;
+}
+
+message GetStatusRsp {
+  int32      code   = 1;
+  string     msg    = 2;
+  NodeStatus status = 3;
+}
+
 service EndNodeAccess {
     // user
     rpc GetUsers(GetUsersReq) returns (GetUsersRsp) {}
+    rpc GetProfile(GetProfileReq) returns (GetProfileRsp) {}
     rpc AddUsers(UserOpReq) returns (UserOpRsp) {}
     rpc DeleteUsers(UserOpReq) returns (UserOpRsp) {} // 支持tag级删除
     rpc UpdateUsers(UserOpReq) returns (UserOpRsp) {}
@@ -400,6 +451,9 @@ service EndNodeAccess {
     rpc GetClusterUsersByName(GetClusterUsersByNameReq) returns (GetClusterUsersByNameRsp) {}
     rpc UpsertClusterUsers(UpsertClusterUsersReq) returns (UpsertClusterUsersRsp) {}
     rpc DeleteClusterUsers(DeleteClusterUsersReq) returns (DeleteClusterUsersRsp) {}
+
+    // status
+    rpc GetStatus(GetStatusReq) returns (GetStatusRsp) {}
 }
 
 message GetNodeGroupsReq {
