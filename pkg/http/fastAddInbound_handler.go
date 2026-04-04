@@ -62,12 +62,10 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		Container  string `json:"container"` // "xray"(default) or "snell"
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.String(400, "invalid request body: %v", err)
+		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
-	if req.Target == "" {
-		req.Target = handler.getHttpServer().Name
-	}
+	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
 	if req.Protocol == "" {
 		req.Protocol = "vless"
 	}
@@ -76,13 +74,13 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 	}
 
 	if err := checkBuilder(req.Protocol, req.Stream); err != nil {
-		c.String(200, err.Error())
+		jsonErr(c, 400, err.Error())
 		return
 	}
 
 	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
 	if len(nodes) == 0 {
-		c.String(200, "no avaliable node")
+		jsonErr(c, 502, "no available node")
 		return
 	}
 
@@ -99,10 +97,10 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
 		log.Errorf("Err=%s|Target=%s", errMsg, req.Target)
-		c.String(200, errMsg)
+		jsonErr(c, 500, errMsg)
 		return
 	}
-	c.String(200, "Succ")
+	jsonOK(c)
 }
 
 func (handler *FastAddInboundHandler) getHandlers() []gin.HandlerFunc {
@@ -112,7 +110,7 @@ func (handler *FastAddInboundHandler) getHandlers() []gin.HandlerFunc {
 func (handler *FastAddInboundHandler) getRelativePath() string { return "/inbound/fast" }
 
 func (handler *FastAddInboundHandler) help() string {
-	return `POST /inbound/fast
+	return `POST /api/inbound/fast
 	快速添加指定配置的inbound
 	body: {"target": "", "tag": "", "protocol": "vless", "stream": "tcp", "domain": "", "is_xtls": false, "port": 0, "self_signed": false, "container": "xray"}
 	protocol: 协议类型, 支持vless, vmess, trojan

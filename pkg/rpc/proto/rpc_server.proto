@@ -6,7 +6,7 @@ package proto;
 
 message User {
     string name = 1;
-    string passwd = 2; // semantics: auth_token (for GetUsers/GetProfile) or login password input (for AddUsers/UpdateUsers)
+    string passwd = 2; // login password input (AddUsers/UpdateUsers only, never returned in responses)
     int64 expire_time = 3;
     reserved 4;
     int64 downlink = 5;
@@ -20,6 +20,7 @@ message User {
     int32 client_recycle_delay_sec = 11;
     int32 client_drain_sec = 12;
     string group = 13;
+    string auth_token = 14;  // proxy auth token (UUID), returned by GetUsers/ClusterSync
 }
 
 enum BuilderType {
@@ -43,6 +44,7 @@ message NodeAuthInfo {
 
 message GetUsersReq {
     NodeAuthInfo node_auth_info = 1;
+    bool include_all = 2; // If true, return all users regardless of group visibility (admin view).
 }
 
 message GetUsersRsp {
@@ -325,6 +327,16 @@ message GetCertsRsp {
     repeated Cert certs = 2;
 }
 
+message DeleteCertReq {
+    NodeAuthInfo node_auth_info = 1;
+    string domain = 2;
+}
+
+message DeleteCertRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
 message PingMetric {
     string host = 1; // ip or domain
     string source = 2;
@@ -395,6 +407,7 @@ message NodeStatus {
   int32  tcp_connections      = 11;
   double net_rx_speed         = 12;  // bytes/sec
   double net_tx_speed         = 13;  // bytes/sec
+  string version              = 14;  // build-time injected version string
 }
 
 message GetStatusReq {
@@ -445,6 +458,7 @@ service EndNodeAccess {
     rpc ObtainNewCert(ObtainNewCertReq) returns (ObtainNewCertRsp) {}
     rpc TransferCert(TransferCertReq) returns (TransferCertRsp) {}
     rpc GetCerts(GetCertsReq) returns (GetCertsRsp) {}
+    rpc DeleteCert(DeleteCertReq) returns (DeleteCertRsp) {}
 
     /// metric
     rpc GetPingMetric(GetPingMetricReq) returns (GetPingMetricRsp) {}

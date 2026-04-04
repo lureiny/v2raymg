@@ -63,7 +63,7 @@ func prometheusHandler(metricHandler *MetricHandler) gin.HandlerFunc {
 
 func (handler *MetricHandler) parseParam(c *gin.Context) map[string]string {
 	parasMap := map[string]string{}
-	parasMap["target"] = c.DefaultQuery("target", handler.getHttpServer().Name)
+	parasMap["target"] = getTargetFromQuery(c)
 	return parasMap
 }
 

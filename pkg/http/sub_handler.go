@@ -6,8 +6,10 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lureiny/v2raymg/pkg/rpc/client"
+	"github.com/lureiny/v2raymg/pkg/http/auth"
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+	"github.com/lureiny/v2raymg/pkg/rpc/client"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription"
 	_ "github.com/lureiny/v2raymg/pkg/proxy/core/subscription/converter" // register converters
@@ -21,7 +23,7 @@ func (handler *SubHandler) parseParam(c *gin.Context) map[string]string {
 	parasMap["pwd"] = c.Query("pwd")
 	parasMap["token"] = c.Query("token")
 	parasMap["excludeProtocols"] = c.DefaultQuery("exclude_protocols", "")
-	parasMap["target"] = c.DefaultQuery("target", handler.getHttpServer().Name)
+	parasMap["target"] = getTargetFromQuery(c)
 	parasMap["client"] = c.Query("client")
 	parasMap["useSNI"] = c.DefaultQuery("use_sni", "true")
 	parasMap["fake"] = c.DefaultQuery("fake", "false")
@@ -51,17 +53,50 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 	ruleProviders := c.QueryArray("rule_provider")
 	rules := c.QueryArray("rule")
 
+	// Authentication: resolve credentials to username at the HTTP layer.
+	// RPC GetSub only receives username — no auth logic downstream.
 	token := parasMap["token"]
-	userPoint := &proto.User{
-		Name:   parasMap["user"],
-		Passwd: parasMap["pwd"],
-	}
+	var username string
 
-	// Dual auth: token takes priority; otherwise require user+pwd.
-	if token == "" && (userPoint.Name == "" || userPoint.Passwd == "") {
-		log.Error("sub: missing credentials", "user", parasMap["user"], "target", parasMap["target"])
-		c.String(200, "invalid user")
-		return
+	ul := handler.getHttpServer().userLister
+	if token != "" {
+		// Token auth: token uniquely identifies a user.
+		type tokenFinder interface {
+			FindUserByToken(token string) *contracts.User
+		}
+		finder, ok := ul.(tokenFinder)
+		if !ok {
+			log.Error("sub: server does not support token lookup")
+			c.String(200, "invalid user")
+			return
+		}
+		user := finder.FindUserByToken(token)
+		if user == nil {
+			log.Error("sub: invalid token", "target", parasMap["target"])
+			c.String(200, "invalid user")
+			return
+		}
+		username = user.Username
+	} else {
+		// User+pwd auth: verify password locally.
+		name, pwd := parasMap["user"], parasMap["pwd"]
+		if name == "" || pwd == "" {
+			log.Error("sub: missing credentials", "user", name, "target", parasMap["target"])
+			c.String(200, "invalid user")
+			return
+		}
+		user, err := ul.GetUser(name)
+		if err != nil {
+			log.Error("sub: user not found", "user", name)
+			c.String(200, "invalid user")
+			return
+		}
+		if !auth.VerifyLoginPassword(user.LoginPassword, pwd) {
+			log.Error("sub: invalid password", "user", name)
+			c.String(200, "invalid user")
+			return
+		}
+		username = name
 	}
 
 	nodes := handler.getHttpServer().GetTargetNodes(parasMap["target"])
@@ -74,11 +109,7 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 		ExcludeProtocols: excludeProtocols,
 		UseSni:           parasMap["useSNI"] == "true",
 		UserAgent:        formatHint,
-	}
-	if token != "" {
-		getSubReq.Token = token
-	} else {
-		getSubReq.User = userPoint
+		User:             &proto.User{Name: username},
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())

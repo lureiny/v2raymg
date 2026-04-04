@@ -79,9 +79,9 @@ func (handler *RotateAllPortsHandler) getHandlers() []gin.HandlerFunc {
 func (handler *RotateAllPortsHandler) getRelativePath() string { return "/rotateAllPorts" }
 
 func (handler *RotateAllPortsHandler) help() string {
-	return `/rotateAllPorts
+	return `/api/rotateAllPorts
 	用户自助重置自身所有 inbound 的前置转发端口（JWT 鉴权，用户只能操作自己的 inbound）
-	POST /rotateAllPorts
+	POST /api/rotateAllPorts
 	Header: Authorization: Bearer <jwt>  OR  X-Token: <admin-token>
 	Body (optional): {"username": "target-user"}
 	  X-Token: body 必须提供 username 字段

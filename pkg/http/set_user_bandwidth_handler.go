@@ -40,9 +40,7 @@ func (handler *SetUserBandwidthHandler) handlerFunc(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "msg": "download_bps must be >= 0"})
 		return
 	}
-	if req.Target == "" {
-		req.Target = handler.getHttpServer().Name
-	}
+	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
 
 	userPoint := &proto.User{Name: username}
 	// Map JSON values to proto sentinel convention:

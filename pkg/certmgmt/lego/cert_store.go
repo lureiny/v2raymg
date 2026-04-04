@@ -116,6 +116,17 @@ func LoadCert(basePath, d string) (*domain.CertificateRecord, *domain.LegoResour
 	return &record, &resource, nil
 }
 
+// DeleteCert removes all certificate files (.crt, .key, .json, .meta.json) for the given domain.
+func DeleteCert(basePath, d string) error {
+	crt, key, res, meta := certPaths(basePath, d)
+	for _, p := range []string{crt, key, res, meta} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("%w: remove %s: %v", domain.ErrStorageIO, p, err)
+		}
+	}
+	return nil
+}
+
 // ListCerts scans basePath/certificates/ for .meta.json files and returns all records.
 func ListCerts(basePath string) ([]*domain.CertificateRecord, error) {
 	dir := filepath.Join(basePath, certsFolder)

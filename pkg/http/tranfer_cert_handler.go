@@ -18,33 +18,31 @@ func (handler *TransferCertHandler) handlerFunc(c *gin.Context) {
 		Domain string `json:"domain"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.String(400, "invalid request body: %v", err)
+		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
-	if req.Target == "" {
-		req.Target = handler.getHttpServer().Name
-	}
+	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
 	domain := req.Domain
 
 	cr := handler.getHttpServer().certReader
 	if cr == nil {
-		c.String(200, "cert reader not configured")
+		jsonErr(c, 500, "cert reader not configured")
 		return
 	}
 	certFile, keyFile, ok := cr.GetCertFiles(domain)
 	if !ok {
-		c.String(200, fmt.Sprintf("can't find domain's[%s] cert", domain))
+		jsonErr(c, 404, fmt.Sprintf("can't find domain's[%s] cert", domain))
 		return
 	}
 
 	certData, err := os.ReadFile(certFile)
 	if err != nil {
-		c.String(200, fmt.Sprintf("read cert file err > %v", err))
+		jsonErr(c, 500, fmt.Sprintf("read cert file err > %v", err))
 		return
 	}
 	keyData, err := os.ReadFile(keyFile)
 	if err != nil {
-		c.String(200, fmt.Sprintf("read key file err > %v", err))
+		jsonErr(c, 500, fmt.Sprintf("read key file err > %v", err))
 		return
 	}
 
@@ -56,7 +54,7 @@ func (handler *TransferCertHandler) handlerFunc(c *gin.Context) {
 		}
 	}
 	if len(filtered) == 0 {
-		c.String(200, "no avaliable node")
+		jsonErr(c, 502, "no available node")
 		return
 	}
 
@@ -83,7 +81,7 @@ func (handler *TransferCertHandler) getHandlers() []gin.HandlerFunc {
 func (handler *TransferCertHandler) getRelativePath() string { return "/cert/transfer" }
 
 func (handler *TransferCertHandler) help() string {
-	return `POST /cert/transfer
+	return `POST /api/cert/transfer
 	将本机证书文件传输到指定节点上
 	body: {"target": "", "domain": ""}`
 }

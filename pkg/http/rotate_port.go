@@ -86,8 +86,8 @@ func (handler *RotatePortHandler) getHandlers() []gin.HandlerFunc {
 func (handler *RotatePortHandler) getRelativePath() string { return "/rotatePort" }
 
 func (handler *RotatePortHandler) help() string {
-	return `/rotatePort
-	POST /rotatePort
+	return `/api/rotatePort
+	POST /api/rotatePort
 	Header: Authorization: Bearer <jwt>  OR  X-Token: <admin-token>
 	Body (optional): {"username": "target-user"}
 

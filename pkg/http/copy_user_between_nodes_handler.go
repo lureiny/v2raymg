@@ -17,7 +17,7 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 		DstNode string `json:"dst_node"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.String(400, "invalid request body: %v", err)
+		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
 	if req.SrcNode == "" {
@@ -28,19 +28,19 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 	}
 
 	if req.SrcNode == req.DstNode {
-		c.String(200, fmt.Sprintf("src target(%s) is same with dst target(%s)", req.SrcNode, req.DstNode))
+		jsonErr(c, 400, fmt.Sprintf("src target(%s) is same with dst target(%s)", req.SrcNode, req.DstNode))
 		return
 	}
 
 	srcNodes := handler.getHttpServer().GetTargetNodes(req.SrcNode)
 	if len(srcNodes) == 0 {
-		c.String(200, "no avaliable src node")
+		jsonErr(c, 502, "no available src node")
 		return
 	}
 
 	dstNodes := handler.getHttpServer().GetTargetNodes(req.DstNode)
 	if len(dstNodes) == 0 {
-		c.String(200, "no avaliable dst node")
+		jsonErr(c, 502, "no available dst node")
 		return
 	}
 
@@ -52,7 +52,7 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 	if len(failedList) > 0 {
 		errMsg := fmt.Sprintf("get src node user list err > %v", failedList[req.SrcNode])
 		log.Errorf("Err=%s|SrcNode=%s", errMsg, req.SrcNode)
-		c.String(200, errMsg)
+		jsonErr(c, 500, errMsg)
 		return
 	}
 
@@ -69,10 +69,10 @@ func (handler *CopyUserBetweenNodesHandler) handlerFunc(c *gin.Context) {
 	)
 
 	if len(failedList) > 0 {
-		c.String(200, joinFailedList(failedList))
+		jsonErr(c, 500, joinFailedList(failedList))
 		return
 	}
-	c.String(200, "Succ")
+	jsonOK(c)
 }
 
 func (handler *CopyUserBetweenNodesHandler) getHandlers() []gin.HandlerFunc {
@@ -84,7 +84,7 @@ func (handler *CopyUserBetweenNodesHandler) getRelativePath() string {
 }
 
 func (handler *CopyUserBetweenNodesHandler) help() string {
-	return `POST /copyUserBetweenNodes
+	return `POST /api/copyUserBetweenNodes
 	节点间复制用户, 将源节点上的用户添加到目标节点的默认inbound上
 	body: {"src_node": "", "dst_node": ""}
 	src_node: 源节点名称

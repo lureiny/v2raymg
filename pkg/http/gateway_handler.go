@@ -1,6 +1,8 @@
 package http
 
 import (
+	"fmt"
+
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/rpc/client"
@@ -15,16 +17,14 @@ func (handler *GatewayHandler) handlerFunc(c *gin.Context) {
 		EnableGatewayModel  bool   `json:"enable_gateway_model"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.String(400, "invalid request body: %v", err)
+		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
-	if req.Target == "" {
-		req.Target = handler.getHttpServer().Name
-	}
+	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
 
 	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
 	if len(nodes) == 0 {
-		c.String(200, "no avaliable node")
+		jsonErr(c, 502, "no available node")
 		return
 	}
 
@@ -35,10 +35,10 @@ func (handler *GatewayHandler) handlerFunc(c *gin.Context) {
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
 		log.Errorf("Err=%s|Target=%s", errMsg, req.Target)
-		c.String(200, errMsg)
+		jsonErr(c, 500, errMsg)
 		return
 	}
-	c.String(200, "Succ")
+	jsonOK(c)
 }
 
 func (handler *GatewayHandler) getHandlers() []gin.HandlerFunc {
@@ -48,7 +48,7 @@ func (handler *GatewayHandler) getHandlers() []gin.HandlerFunc {
 func (handler *GatewayHandler) getRelativePath() string { return "/gateway" }
 
 func (handler *GatewayHandler) help() string {
-	return `PUT /gateway
+	return `PUT /api/gateway
 	设置gateway模式
 	body: {"target": "", "enable_gateway_model": false}
 	enable_gateway_model: 是否开启gateway模式`

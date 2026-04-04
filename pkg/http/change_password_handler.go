@@ -70,8 +70,8 @@ func (handler *ChangePasswordHandler) getHandlers() []gin.HandlerFunc {
 func (handler *ChangePasswordHandler) getRelativePath() string { return "/profile/password" }
 
 func (handler *ChangePasswordHandler) help() string {
-	return `/profile/password
-	PUT /profile/password
+	return `/api/profile/password
+	PUT /api/profile/password
 	Header: Authorization: Bearer <jwt-token>
 	Body: {"old_password":"<current>","new_password":"<new>"}
 	Changes the authenticated user's own password. JWT required.`

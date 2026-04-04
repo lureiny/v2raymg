@@ -9,15 +9,19 @@ import (
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
-type CertHandler struct{ HttpHandlerImp }
+type DeleteCertHandler struct{ HttpHandlerImp }
 
-func (handler *CertHandler) handlerFunc(c *gin.Context) {
+func (handler *DeleteCertHandler) handlerFunc(c *gin.Context) {
 	var req struct {
 		Target string `json:"target"`
 		Domain string `json:"domain"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+	if req.Domain == "" {
+		jsonErr(c, 400, "domain is required")
 		return
 	}
 	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
@@ -27,7 +31,7 @@ func (handler *CertHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
-	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.ObtainNewCertType, &proto.ObtainNewCertReq{Domain: req.Domain}, handler.getHttpServer().GetClusterToken())
+	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.DeleteCertReqType, &proto.DeleteCertReq{Domain: req.Domain}, handler.getHttpServer().GetClusterToken())
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
 		log.Errorf("Err=%s", errMsg)
@@ -37,14 +41,14 @@ func (handler *CertHandler) handlerFunc(c *gin.Context) {
 	jsonOK(c)
 }
 
-func (handler *CertHandler) getHandlers() []gin.HandlerFunc {
+func (handler *DeleteCertHandler) getHandlers() []gin.HandlerFunc {
 	return []gin.HandlerFunc{handler.handlerFunc}
 }
 
-func (handler *CertHandler) getRelativePath() string { return "/cert" }
+func (handler *DeleteCertHandler) getRelativePath() string { return "/cert" }
 
-func (handler *CertHandler) help() string {
-	return `POST /api/cert
-	申请证书
+func (handler *DeleteCertHandler) help() string {
+	return `DELETE /api/cert
+	删除证书
 	body: {"target": "", "domain": ""}`
 }

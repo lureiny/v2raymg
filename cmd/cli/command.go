@@ -123,6 +123,13 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
+	m.RegisterHandler(listAllUsers, "ListAllUsers",
+		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("all")),
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
 	m.RegisterHandler(addUser, "AddUser",
 		prompt.WithSuggests([]prompt.Suggest{
 			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
@@ -484,6 +491,30 @@ func listUser(target string) error {
 				expireStr = time.Unix(u.GetExpireTime(), 0).Format("2006-01-02 15:04:05")
 			}
 			fmt.Printf("  %-16s role=%-8s group=%-10s expire=%s\n", u.GetName(), u.GetRole(), u.GetGroup(), expireStr)
+			fmt.Printf("    auth_token=%s\n", u.GetAuthToken())
+			fmt.Printf("    traffic   up=%-12d down=%-12d\n", u.GetUplink(), u.GetDownlink())
+			fmt.Printf("    bandwidth upload_bps=%-10d download_bps=%-10d\n", u.GetUploadBps(), u.GetDownloadBps())
+			fmt.Printf("    clients   max=%-4d recycle_delay=%ds drain=%ds\n",
+				u.GetMaxClients(), u.GetClientRecycleDelaySec(), u.GetClientDrainSec())
+		}
+	}
+	return nil
+}
+
+func listAllUsers(target string) error {
+	result, err := client.ListAllUsers(getHost(), getAuthToken(), target)
+	if err != nil {
+		return err
+	}
+	for node, users := range result {
+		fmt.Printf("=== %s ===\n", node)
+		for _, u := range users {
+			expireStr := "never"
+			if u.GetExpireTime() > 0 {
+				expireStr = time.Unix(u.GetExpireTime(), 0).Format("2006-01-02 15:04:05")
+			}
+			fmt.Printf("  %-16s role=%-8s group=%-10s expire=%s\n", u.GetName(), u.GetRole(), u.GetGroup(), expireStr)
+			fmt.Printf("    auth_token=%s\n", u.GetAuthToken())
 			fmt.Printf("    traffic   up=%-12d down=%-12d\n", u.GetUplink(), u.GetDownlink())
 			fmt.Printf("    bandwidth upload_bps=%-10d download_bps=%-10d\n", u.GetUploadBps(), u.GetDownloadBps())
 			fmt.Printf("    clients   max=%-4d recycle_delay=%ds drain=%ds\n",

@@ -11,7 +11,7 @@ type GetCertsHandler struct{ HttpHandlerImp }
 
 func (handler *GetCertsHandler) parseParam(c *gin.Context) map[string]string {
 	parasMap := map[string]string{}
-	parasMap["target"] = c.DefaultQuery("target", handler.getHttpServer().Name)
+	parasMap["target"] = getTargetFromQuery(c)
 	return parasMap
 }
 
@@ -54,11 +54,10 @@ func (handler *GetCertsHandler) getRelativePath() string {
 }
 
 func (handler *GetCertsHandler) help() string {
-	usage := `/getCerts
-	获取订阅
-	/getCerts?target={target}&token={token}
+	usage := `/api/getCerts
+	获取证书列表
+	/api/getCerts?target={target}
 	target: 目标节点
-	token: 用于验证操作权限
 	`
 	return usage
 }

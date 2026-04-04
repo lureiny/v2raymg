@@ -313,6 +313,26 @@ func ListUser(host, token, target string) (map[string][]*proto.User, error) {
 	return users, nil
 }
 
+func ListAllUsers(host, token, target string) (map[string][]*proto.User, error) {
+	users := map[string][]*proto.User{}
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(d, &users)
+	}
+
+	reqUrl := fmt.Sprintf("%s/%s", host, common.User)
+	err := DoGetRequest(reqUrl, token, map[string]interface{}{
+		"target": target,
+	}, getCallBackFunc(cb))
+	if err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
 func AddInBound(host, token, target, boundRawString string) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {
@@ -627,7 +647,7 @@ func Logout(host, token string) (string, error) {
 	return result, err
 }
 
-// Profile returns the current user's profile from GET /profile.
+// Profile returns the current user's profile from GET /api/user.
 // The token must be a Bearer JWT; X-Token is rejected by the server.
 func Profile(host, token string) (string, error) {
 	result := ""
@@ -639,7 +659,7 @@ func Profile(host, token string) (string, error) {
 		result = string(d)
 		return nil
 	}
-	reqUrl := fmt.Sprintf("%s/%s", host, common.Profile)
+	reqUrl := fmt.Sprintf("%s/%s", host, common.User)
 	err := DoGetRequest(reqUrl, token, map[string]interface{}{}, getCallBackFunc(cb))
 	return result, err
 }

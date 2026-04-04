@@ -90,6 +90,16 @@ func (m *mockUserLister) RotateAllUserPorts(username string) (map[string]uint32,
 	return map[string]uint32{"vless-tcp": 23456}, nil
 }
 
+// ResetAuthToken implements the tokenResetter interface.
+func (m *mockUserLister) ResetAuthToken(username string) (string, error) {
+	u, ok := m.users[username]
+	if !ok {
+		return "", fmt.Errorf("user %s not found", username)
+	}
+	u.AuthToken = "reset-mock-token"
+	return u.AuthToken, nil
+}
+
 // newTestHttpServer creates a minimal HttpServer for handler unit tests.
 func newTestHttpServer(userLister UserLister) *HttpServer {
 	return &HttpServer{

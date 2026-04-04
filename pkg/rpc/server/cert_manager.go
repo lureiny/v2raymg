@@ -12,6 +12,8 @@ type CertManager interface {
 	// GetCertInfo returns certificate metadata for the given domain, or nil if not found.
 	// Returns interface{} so implementations can return any cert record type.
 	GetCertInfo(domain string) interface{}
+	// DeleteCert removes the certificate for the given domain.
+	DeleteCert(domain string) error
 	// GetAllCert returns all managed certificates in proto format.
 	GetAllCert() []*proto.Cert
 }

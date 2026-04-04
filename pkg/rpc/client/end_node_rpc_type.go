@@ -39,4 +39,5 @@ const (
 	_ // was DeleteClusterUsersReqType (removed)
 	GetStatusReqType
 	GetProfileReqType
+	DeleteCertReqType
 )

@@ -44,7 +44,7 @@ func (handler *AuthHysteria2) handlerFunc(c *gin.Context) {
 	parasMap := handler.parseParam(c)
 	ul := handler.getHttpServer().userLister
 	if ul == nil {
-		c.String(403, "")
+		c.JSON(403, gin.H{"ok": false})
 		return
 	}
 	for name, passwd := range ul.ListUsersWithPasswd() {
@@ -57,7 +57,7 @@ func (handler *AuthHysteria2) handlerFunc(c *gin.Context) {
 			return
 		}
 	}
-	c.String(403, "")
+	c.JSON(403, gin.H{"ok": false})
 }
 
 func (handler *AuthHysteria2) getHandlers() []gin.HandlerFunc {

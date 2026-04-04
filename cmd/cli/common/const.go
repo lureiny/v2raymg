@@ -28,7 +28,6 @@ const (
 	UserClientLimit = "api/user" // used as base path for /api/user/:name/client-limit
 
 	Logout         = "api/logout"
-	Profile        = "api/profile"
 	ChangePassword = "api/profile/password"
 	Status         = "api/status"
 	TransferCert   = "api/cert/transfer"

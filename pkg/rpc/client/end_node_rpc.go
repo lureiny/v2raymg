@@ -74,6 +74,8 @@ func init() {
 	registerReqToEndNodeFunc(GetStatusReqType, ReqGetStatus)
 	// get profile
 	registerReqToEndNodeFunc(GetProfileReqType, ReqGetProfile)
+	// delete cert
+	registerReqToEndNodeFunc(DeleteCertReqType, ReqDeleteCert)
 }
 
 func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
@@ -375,6 +377,23 @@ func ReqGetCerts(ctx context.Context, reqData []byte, endNodeAccessClient proto.
 		return nil, err
 	}
 	return rsp.GetCerts(), nil
+}
+
+func ReqDeleteCert(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	deleteCertReq := &proto.DeleteCertReq{}
+	if err := pb.Unmarshal(reqData, deleteCertReq); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to DeleteCertReq > %v", reqData, err)
+	}
+
+	deleteCertReq.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.DeleteCert(ctx, deleteCertReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
+	}
+	return nil, nil
 }
 
 func ReqGetPingMetric(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {

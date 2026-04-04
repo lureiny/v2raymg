@@ -5,7 +5,7 @@
 VERSION    := $(shell git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD)
 COMMIT     := $(shell git rev-parse --short HEAD)
 BUILD_TIME := $(shell TZ=Asia/Shanghai date +"%Y-%m-%dT%H:%M:%S+08:00")
-PKG        := github.com/lureiny/v2raymg/cmd
+PKG        := github.com/lureiny/v2raymg/pkg/buildinfo
 LDFLAGS    := -s -w \
               -X $(PKG).Version=$(VERSION) \
               -X $(PKG).Commit=$(COMMIT) \

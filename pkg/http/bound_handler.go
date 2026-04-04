@@ -1,6 +1,8 @@
 package http
 
 import (
+	"fmt"
+
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/rpc/client"
@@ -17,20 +19,18 @@ func (handler *InboundAddHandler) handlerFunc(c *gin.Context) {
 		Container      string `json:"container"` // "xray"(default); other containers not yet supported
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.String(400, "invalid request body: %v", err)
+		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
 	// Only xray is supported via this raw-JSON path; other containers must use POST /inbound/fast
 	if req.Container != "" && req.Container != "xray" {
-		c.String(400, "container %q not supported via POST /inbound; use POST /inbound/fast instead", req.Container)
+		jsonErr(c, 400, fmt.Sprintf("container %q not supported via POST /inbound; use POST /inbound/fast instead", req.Container))
 		return
 	}
-	if req.Target == "" {
-		req.Target = handler.getHttpServer().Name
-	}
+	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
 	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
 	if len(nodes) == 0 {
-		c.String(200, "no avaliable node")
+		jsonErr(c, 502, "no available node")
 		return
 	}
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
@@ -38,10 +38,10 @@ func (handler *InboundAddHandler) handlerFunc(c *gin.Context) {
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
 		log.Errorf("Err=%s|OpType=addInbound|Target=%s", errMsg, req.Target)
-		c.String(200, errMsg)
+		jsonErr(c, 500, errMsg)
 		return
 	}
-	c.String(200, "Succ")
+	jsonOK(c)
 }
 
 func (handler *InboundAddHandler) getHandlers() []gin.HandlerFunc {
@@ -51,11 +51,11 @@ func (handler *InboundAddHandler) getHandlers() []gin.HandlerFunc {
 func (handler *InboundAddHandler) getRelativePath() string { return "/inbound" }
 
 func (handler *InboundAddHandler) help() string {
-	return `POST /inbound
+	return `POST /api/inbound
 	添加inbound（仅支持 xray container）
 	body: {"target": "", "bound_raw_string": "", "container": "xray"}
 	bound_raw_string: json中inbound配置base64编码后的字符串
-	container: 可选，目前仅支持 "xray"（默认）；其他container请使用 POST /inbound/fast`
+	container: 可选，目前仅支持 "xray"（默认）；其他container请使用 POST /api/inbound/fast`
 }
 
 // InboundDeleteHandler DELETE /inbound — 删除inbound
@@ -68,19 +68,17 @@ func (handler *InboundDeleteHandler) handlerFunc(c *gin.Context) {
 		Container string `json:"container"` // "xray"(default); other containers not yet supported
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.String(400, "invalid request body: %v", err)
+		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
 	if req.Container != "" && req.Container != "xray" {
-		c.String(400, "container %q not supported via DELETE /inbound; use POST /inbound/fast instead", req.Container)
+		jsonErr(c, 400, fmt.Sprintf("container %q not supported via DELETE /inbound; use POST /inbound/fast instead", req.Container))
 		return
 	}
-	if req.Target == "" {
-		req.Target = handler.getHttpServer().Name
-	}
+	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
 	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
 	if len(nodes) == 0 {
-		c.String(200, "no avaliable node")
+		jsonErr(c, 502, "no available node")
 		return
 	}
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
@@ -88,10 +86,10 @@ func (handler *InboundDeleteHandler) handlerFunc(c *gin.Context) {
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
 		log.Errorf("Err=%s|OpType=deleteInbound|Target=%s", errMsg, req.Target)
-		c.String(200, errMsg)
+		jsonErr(c, 500, errMsg)
 		return
 	}
-	c.String(200, "Succ")
+	jsonOK(c)
 }
 
 func (handler *InboundDeleteHandler) getHandlers() []gin.HandlerFunc {
@@ -101,7 +99,7 @@ func (handler *InboundDeleteHandler) getHandlers() []gin.HandlerFunc {
 func (handler *InboundDeleteHandler) getRelativePath() string { return "/inbound" }
 
 func (handler *InboundDeleteHandler) help() string {
-	return `DELETE /inbound
+	return `DELETE /api/inbound
 	删除inbound（仅支持 xray container）
 	body: {"target": "", "src_tag": "", "container": "xray"}
 	src_tag: 要删除inbound的tag
@@ -112,17 +110,17 @@ func (handler *InboundDeleteHandler) help() string {
 type InboundGetHandler struct{ HttpHandlerImp }
 
 func (handler *InboundGetHandler) handlerFunc(c *gin.Context) {
-	target := c.DefaultQuery("target", handler.getHttpServer().Name)
+	target := getTargetFromQuery(c)
 	srcTag := c.DefaultQuery("src_tag", "")
 	containerType := c.DefaultQuery("container", "xray")
 	// Only xray is supported; other containers not yet implemented
 	if containerType != "xray" {
-		c.String(400, "container %q not supported via GET /inbound", containerType)
+		jsonErr(c, 400, fmt.Sprintf("container %q not supported via GET /inbound", containerType))
 		return
 	}
 	nodes := handler.getHttpServer().GetTargetNodes(target)
 	if len(nodes) == 0 {
-		c.String(200, "no avaliable node")
+		jsonErr(c, 502, "no available node")
 		return
 	}
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
@@ -134,10 +132,10 @@ func (handler *InboundGetHandler) handlerFunc(c *gin.Context) {
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
 		log.Errorf("Err=%s|OpType=getInbound|Target=%s", errMsg, target)
-		c.String(200, errMsg)
+		jsonErr(c, 500, errMsg)
 		return
 	}
-	c.String(200, "Succ")
+	jsonOK(c)
 }
 
 func (handler *InboundGetHandler) getHandlers() []gin.HandlerFunc {
@@ -147,7 +145,7 @@ func (handler *InboundGetHandler) getHandlers() []gin.HandlerFunc {
 func (handler *InboundGetHandler) getRelativePath() string { return "/inbound" }
 
 func (handler *InboundGetHandler) help() string {
-	return `GET /inbound
+	return `GET /api/inbound
 	获取inbound详细配置（仅支持 xray container）
 	query: target, src_tag, container(默认xray)`
 }

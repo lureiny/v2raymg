@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/lureiny/v2raymg/pkg/buildinfo"
 	certmgmtservice "github.com/lureiny/v2raymg/pkg/certmgmt/service"
 	"github.com/lureiny/v2raymg/pkg/cluster"
 	"github.com/lureiny/v2raymg/pkg/collecter"
@@ -53,9 +54,9 @@ func printBanner() {
   ╚████╔╝ ███████╗██║  ██║██║  ██║   ██║   ██║ ╚═╝ ██║╚██████╔╝
    ╚═══╝  ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚═╝ ╚═════╝
 `)
-	fmt.Printf("  Version   : %s\n", Version)
-	fmt.Printf("  Commit    : %s\n", Commit)
-	fmt.Printf("  Built at  : %s\n", BuildTime)
+	fmt.Printf("  Version   : %s\n", buildinfo.Version)
+	fmt.Printf("  Commit    : %s\n", buildinfo.Commit)
+	fmt.Printf("  Built at  : %s\n", buildinfo.BuildTime)
 	fmt.Println()
 }
 

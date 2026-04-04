@@ -67,6 +67,12 @@ func (m *Manager) AddCertificates(d string, keyData, certData []byte) error {
 	return certmgmtlego.SaveCert(m.cfg.Path, record, resource)
 }
 
+// DeleteCert removes the certificate files for the given domain.
+// Implements pkg/rpc/server.CertManager.
+func (m *Manager) DeleteCert(d string) error {
+	return certmgmtlego.DeleteCert(m.cfg.Path, d)
+}
+
 // GetCert returns the certificate record for the given domain, or nil if not found.
 // The return type is interface{} to satisfy the CertManager interface without
 // importing the server package. Callers only need a nil check.

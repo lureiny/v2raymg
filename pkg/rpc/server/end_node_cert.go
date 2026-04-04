@@ -34,3 +34,12 @@ func (s *EndNodeServer) GetCerts(ctx context.Context, getCertsReq *proto.GetCert
 	getCertsRsp.Certs = s.certManager.GetAllCert()
 	return getCertsRsp, nil
 }
+
+func (s *EndNodeServer) DeleteCert(ctx context.Context, deleteCertReq *proto.DeleteCertReq) (*proto.DeleteCertRsp, error) {
+	deleteCertRsp := &proto.DeleteCertRsp{Code: 0}
+	if err := s.certManager.DeleteCert(deleteCertReq.GetDomain()); err != nil {
+		deleteCertRsp.Code = 1040
+		deleteCertRsp.Msg = err.Error()
+	}
+	return deleteCertRsp, nil
+}

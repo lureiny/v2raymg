@@ -1,6 +1,8 @@
 package http
 
 import (
+	"fmt"
+
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/rpc/client"
@@ -15,19 +17,17 @@ func (handler *UpdateHandler) handlerFunc(c *gin.Context) {
 		VersionTag string `json:"version_tag"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.String(400, "invalid request body: %v", err)
+		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
-	if req.Target == "" {
-		req.Target = handler.getHttpServer().Name
-	}
+	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
 	if req.VersionTag == "" {
 		req.VersionTag = "latest"
 	}
 
 	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
 	if len(nodes) == 0 {
-		c.String(200, "no avaliable node")
+		jsonErr(c, 502, "no available node")
 		return
 	}
 
@@ -40,10 +40,10 @@ func (handler *UpdateHandler) handlerFunc(c *gin.Context) {
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
 		log.Errorf("Err=%s|Target=%s|Tag=%s", errMsg, req.Target, req.VersionTag)
-		c.String(200, errMsg)
+		jsonErr(c, 500, errMsg)
 		return
 	}
-	c.String(200, "Succ")
+	jsonOK(c)
 }
 
 func (handler *UpdateHandler) getHandlers() []gin.HandlerFunc {
@@ -53,7 +53,7 @@ func (handler *UpdateHandler) getHandlers() []gin.HandlerFunc {
 func (handler *UpdateHandler) getRelativePath() string { return "/update" }
 
 func (handler *UpdateHandler) help() string {
-	return `POST /update
+	return `POST /api/update
 	更新目标节点的proxy版本
 	body: {"target": "", "version_tag": "latest"}
 	version_tag: github上目标tag, 默认为最新版`

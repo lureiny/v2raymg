@@ -36,8 +36,8 @@ func (handler *LogoutHandler) getHandlers() []gin.HandlerFunc {
 func (handler *LogoutHandler) getRelativePath() string { return "/logout" }
 
 func (handler *LogoutHandler) help() string {
-	return `/logout
-	POST /logout
+	return `/api/logout
+	POST /api/logout
 	Header: Authorization: Bearer <token>
 	Revokes the current JWT token.`
 }

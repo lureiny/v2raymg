@@ -1,6 +1,8 @@
 package http
 
 import (
+	"fmt"
+
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/rpc/client"
@@ -14,7 +16,7 @@ func (handler *NodeGroupsGetHandler) handlerFunc(c *gin.Context) {
 	name := c.Param("name")
 	nodes := handler.getHttpServer().GetTargetNodes(name)
 	if len(nodes) == 0 {
-		c.String(502, "no available node")
+		jsonErr(c, 502, "no available node")
 		return
 	}
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
@@ -22,7 +24,7 @@ func (handler *NodeGroupsGetHandler) handlerFunc(c *gin.Context) {
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
 		log.Errorf("Err=%s|Node=%s", errMsg, name)
-		c.String(500, errMsg)
+		jsonErr(c, 500, errMsg)
 		return
 	}
 	// Collect groups from the first (and typically only) node
@@ -46,7 +48,7 @@ func (handler *NodeGroupsGetHandler) getHandlers() []gin.HandlerFunc {
 func (handler *NodeGroupsGetHandler) getRelativePath() string { return "/node/:name/groups" }
 
 func (handler *NodeGroupsGetHandler) help() string {
-	return `GET /node/:name/groups
+	return `GET /api/node/:name/groups
 	获取节点所属 groups
 	path: name — 目标节点名`
 }
@@ -60,12 +62,12 @@ func (handler *NodeGroupsSetHandler) handlerFunc(c *gin.Context) {
 		Groups []string `json:"groups"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		c.String(400, "invalid request body: %v", err)
+		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
 	nodes := handler.getHttpServer().GetTargetNodes(name)
 	if len(nodes) == 0 {
-		c.String(502, "no available node")
+		jsonErr(c, 502, "no available node")
 		return
 	}
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
@@ -73,10 +75,10 @@ func (handler *NodeGroupsSetHandler) handlerFunc(c *gin.Context) {
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
 		log.Errorf("Err=%s|Node=%s", errMsg, name)
-		c.String(500, errMsg)
+		jsonErr(c, 500, errMsg)
 		return
 	}
-	c.String(200, "Succ")
+	jsonOK(c)
 }
 
 func (handler *NodeGroupsSetHandler) getHandlers() []gin.HandlerFunc {
@@ -86,7 +88,7 @@ func (handler *NodeGroupsSetHandler) getHandlers() []gin.HandlerFunc {
 func (handler *NodeGroupsSetHandler) getRelativePath() string { return "/node/:name/groups" }
 
 func (handler *NodeGroupsSetHandler) help() string {
-	return `PUT /node/:name/groups
+	return `PUT /api/node/:name/groups
 	设置节点所属 groups
 	path: name — 目标节点名
 	body: {"groups": ["default", "hk"]}`

@@ -34,9 +34,7 @@ func (handler *SetUserRoleHandler) handlerFunc(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "msg": "role must be 'admin' or 'normal'"})
 		return
 	}
-	if req.Target == "" {
-		req.Target = handler.getHttpServer().Name
-	}
+	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
 
 	userPoint := &proto.User{Name: username, Role: req.Role}
 	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
@@ -68,8 +66,8 @@ func (handler *SetUserRoleHandler) getHandlers() []gin.HandlerFunc {
 func (handler *SetUserRoleHandler) getRelativePath() string { return "/user/:name/role" }
 
 func (handler *SetUserRoleHandler) help() string {
-	return `/user/:name/role
-	PUT /user/:name/role
+	return `/api/user/:name/role
+	PUT /api/user/:name/role
 	Header: X-Token: <admin-token>  OR  Authorization: Bearer <admin-jwt>
 	Body: {"role":"admin"|"normal", "target":""}
 	Sets the frontend login role for the specified user.

@@ -90,7 +90,7 @@ func TestUpsertClusterUsers_PeerSync_NewUser(t *testing.T) {
 	now := time.Now().UnixMicro()
 	_, err := s.UpsertClusterUsers(context.Background(), &proto.UpsertClusterUsersReq{
 		Users: []*proto.ClusterUserSync{
-			{User: &proto.User{Name: "alice", Passwd: "pw"}, UpdatedAtUs: now, OriginNode: "remote-node", Hash: "abc"},
+			{User: &proto.User{Name: "alice", AuthToken: "56351d04-2641-487a-9b4f-12d8c01ebb27"}, UpdatedAtUs: now, OriginNode: "remote-node", Hash: "abc"},
 		},
 	})
 	if err != nil {
@@ -101,8 +101,8 @@ func TestUpsertClusterUsers_PeerSync_NewUser(t *testing.T) {
 	if u == nil {
 		t.Fatal("alice should exist after sync upsert")
 	}
-	if u.AuthToken != "pw" {
-		t.Errorf("expected pw, got %q", u.AuthToken)
+	if u.AuthToken != "56351d04-2641-487a-9b4f-12d8c01ebb27" {
+		t.Errorf("expected 56351d04-2641-487a-9b4f-12d8c01ebb27, got %q", u.AuthToken)
 	}
 }
 
@@ -119,7 +119,7 @@ func TestUpsertClusterUsers_PeerSync_OlderVersion_Skipped(t *testing.T) {
 	// Try to sync an older version
 	_, err := s.UpsertClusterUsers(context.Background(), &proto.UpsertClusterUsersReq{
 		Users: []*proto.ClusterUserSync{
-			{User: &proto.User{Name: "bob", Passwd: "old-pw"}, UpdatedAtUs: local.UpdatedAtUs - 1, OriginNode: "remote"},
+			{User: &proto.User{Name: "bob", AuthToken: "6f1a5723-52b2-496b-9542-0b6db4760a71"}, UpdatedAtUs: local.UpdatedAtUs - 1, OriginNode: "remote"},
 		},
 	})
 	if err != nil {
@@ -128,8 +128,8 @@ func TestUpsertClusterUsers_PeerSync_OlderVersion_Skipped(t *testing.T) {
 
 	// Password should remain unchanged
 	u := s.userMgr.GetUserForSync("bob")
-	if u.AuthToken == "old-pw" {
-		t.Errorf("older sync should have been skipped, but auth_token was overwritten to old-pw")
+	if u.AuthToken == "6f1a5723-52b2-496b-9542-0b6db4760a71" {
+		t.Errorf("older sync should have been skipped, but auth_token was overwritten")
 	}
 }
 

@@ -12,10 +12,10 @@ import (
 type StatusHandler struct{ HttpHandlerImp }
 
 func (handler *StatusHandler) handlerFunc(c *gin.Context) {
-	target := c.DefaultQuery("target", handler.getHttpServer().Name)
+	target := getTargetFromQuery(c)
 	nodes := handler.getHttpServer().GetTargetNodes(target)
 	if len(nodes) == 0 {
-		c.String(502, "no available node")
+		jsonErr(c, 502, "no available node")
 		return
 	}
 
@@ -41,6 +41,7 @@ func (handler *StatusHandler) handlerFunc(c *gin.Context) {
 		TcpConnections     int32   `json:"tcp_connections"`
 		NetRxSpeed         float64 `json:"net_rx_speed"`
 		NetTxSpeed         float64 `json:"net_tx_speed"`
+		Version            string  `json:"version"`
 	}
 
 	if failedList == nil {
@@ -68,6 +69,7 @@ func (handler *StatusHandler) handlerFunc(c *gin.Context) {
 			TcpConnections:     ns.GetTcpConnections(),
 			NetRxSpeed:         ns.GetNetRxSpeed(),
 			NetTxSpeed:         ns.GetNetTxSpeed(),
+			Version:            ns.GetVersion(),
 		})
 	}
 	sort.Slice(nodesList, func(i, j int) bool {

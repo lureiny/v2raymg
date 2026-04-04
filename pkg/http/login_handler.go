@@ -58,8 +58,8 @@ func (handler *LoginHandler) getHandlers() []gin.HandlerFunc {
 func (handler *LoginHandler) getRelativePath() string { return "/api/login" }
 
 func (handler *LoginHandler) help() string {
-	return `/login
-	POST /login
+	return `/api/login
+	POST /api/login
 	Body: {"username":"<name>","password":"<pass>"}
 	Returns JWT token for frontend authentication.`
 }

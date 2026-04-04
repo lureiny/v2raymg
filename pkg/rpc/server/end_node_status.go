@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lureiny/v2raymg/pkg/buildinfo"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
@@ -265,6 +266,7 @@ func (s *EndNodeServer) GetStatus(ctx context.Context, in *proto.GetStatusReq) (
 		TcpConnections:     getCachedTCPConns(),
 		NetRxSpeed:         rxSpeed,
 		NetTxSpeed:         txSpeed,
+		Version:            buildinfo.Version,
 	}
 	return rsp, nil
 }

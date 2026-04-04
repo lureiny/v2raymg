@@ -91,9 +91,9 @@ func (handler *RotateInboundPortHandler) getHandlers() []gin.HandlerFunc {
 func (handler *RotateInboundPortHandler) getRelativePath() string { return "/rotateInboundPort" }
 
 func (handler *RotateInboundPortHandler) help() string {
-	return `/rotateInboundPort
+	return `/api/rotateInboundPort
 	用户自助更换指定 container+inbound 的前置转发端口（JWT 鉴权，用户只能操作自己的 inbound）
-	POST /rotateInboundPort
+	POST /api/rotateInboundPort
 	Header: Authorization: Bearer <jwt>  OR  X-Token: <admin-token>
 	Body: {"container":"xray","inbound":"<tag>","port":0}
 	  X-Token: body 必须提供 username 字段

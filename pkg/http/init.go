@@ -29,11 +29,13 @@ func (s *HttpServer) registerRoutes() {
 	// User routes — any authenticated user (normal or admin)
 	userGroup := r.Group("/api", auth.AuthMiddleware(s.token, s.jwtSecret))
 	s.registerOn(userGroup, &LogoutHandler{}, "POST")
+	s.registerOn(userGroup, &UserListHandler{}, "GET")
 	s.registerOn(userGroup, &ProfileHandler{}, "GET")
 	s.registerOn(userGroup, &RotatePortHandler{}, "POST")
 	s.registerOn(userGroup, &RotateInboundPortHandler{}, "POST")
 	s.registerOn(userGroup, &RotateAllPortsHandler{}, "POST")
 	s.registerOn(userGroup, &ChangePasswordHandler{}, "PUT")
+	s.registerOn(userGroup, &UserResetAuthTokenHandler{}, "POST")
 	s.registerOn(userGroup, &StatusHandler{}, "GET")
 
 	// Admin routes — authenticated + admin role required
@@ -42,7 +44,6 @@ func (s *HttpServer) registerRoutes() {
 	s.registerOn(adminGroup, &NodeHandler{}, "GET")
 	s.registerOn(adminGroup, &GetCertsHandler{}, "GET")
 	// User CRUD routes — always registered; UserManager is now the single user store.
-	s.registerOn(adminGroup, &UserListHandler{}, "GET")
 	s.registerOn(adminGroup, &UserAddHandler{}, "POST")
 	s.registerOn(adminGroup, &UserUpdateHandler{}, "PUT")
 	s.registerOn(adminGroup, &UserDeleteHandler{}, "DELETE")
@@ -55,6 +56,7 @@ func (s *HttpServer) registerRoutes() {
 	s.registerOn(adminGroup, &FastAddInboundHandler{}, "POST")
 	s.registerOn(adminGroup, &CertHandler{}, "POST")
 	s.registerOn(adminGroup, &TransferCertHandler{}, "POST")
+	s.registerOn(adminGroup, &DeleteCertHandler{}, "DELETE")
 	s.registerOn(adminGroup, &UpdateHandler{}, "POST")
 	s.registerOn(adminGroup, &CopyUserBetweenNodesHandler{}, "POST")
 	s.registerOn(adminGroup, &GatewayHandler{}, "PUT")

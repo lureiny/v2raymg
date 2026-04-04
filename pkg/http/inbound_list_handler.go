@@ -1,6 +1,8 @@
 package http
 
 import (
+	"fmt"
+
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/rpc/client"
@@ -11,10 +13,10 @@ import (
 type InboundListHandler struct{ HttpHandlerImp }
 
 func (handler *InboundListHandler) handlerFunc(c *gin.Context) {
-	target := c.DefaultQuery("target", handler.getHttpServer().Name)
+	target := getTargetFromQuery(c)
 	nodes := handler.getHttpServer().GetTargetNodes(target)
 	if len(nodes) == 0 {
-		c.String(200, "no avaliable node")
+		jsonErr(c, 502, "no available node")
 		return
 	}
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
@@ -31,7 +33,7 @@ func (handler *InboundListHandler) handlerFunc(c *gin.Context) {
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
 		log.Errorf("Err=%s|OpType=listInbound|Target=%s", errMsg, target)
-		c.String(200, errMsg)
+		jsonErr(c, 500, errMsg)
 		return
 	}
 	c.JSON(200, []interface{}{})
@@ -44,7 +46,7 @@ func (handler *InboundListHandler) getHandlers() []gin.HandlerFunc {
 func (handler *InboundListHandler) getRelativePath() string { return "/inbounds" }
 
 func (handler *InboundListHandler) help() string {
-	return `GET /inbounds
+	return `GET /api/inbounds
 	列出所有节点的所有 inbound（跨 xray/snell/hysteria container）
 	query: target（默认当前节点）
 	返回: [{"container":"xray","name":"tag1"}, ...]`
@@ -60,23 +62,21 @@ func (handler *InboundDeleteByNameHandler) handlerFunc(c *gin.Context) {
 		Name      string `json:"name"`      // inbound tag
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.String(400, "invalid request body: %v", err)
+		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
 	if req.Container == "" {
-		c.String(400, "container is required")
+		jsonErr(c, 400, "container is required")
 		return
 	}
 	if req.Name == "" {
-		c.String(400, "name is required")
+		jsonErr(c, 400, "name is required")
 		return
 	}
-	if req.Target == "" {
-		req.Target = handler.getHttpServer().Name
-	}
+	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
 	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
 	if len(nodes) == 0 {
-		c.String(200, "no avaliable node")
+		jsonErr(c, 502, "no available node")
 		return
 	}
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
@@ -89,10 +89,10 @@ func (handler *InboundDeleteByNameHandler) handlerFunc(c *gin.Context) {
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
 		log.Errorf("Err=%s|OpType=deleteInboundByName|Target=%s|Container=%s|Name=%s", errMsg, req.Target, req.Container, req.Name)
-		c.String(200, errMsg)
+		jsonErr(c, 500, errMsg)
 		return
 	}
-	c.String(200, "Succ")
+	jsonOK(c)
 }
 
 func (handler *InboundDeleteByNameHandler) getHandlers() []gin.HandlerFunc {
@@ -102,7 +102,7 @@ func (handler *InboundDeleteByNameHandler) getHandlers() []gin.HandlerFunc {
 func (handler *InboundDeleteByNameHandler) getRelativePath() string { return "/inbounds" }
 
 func (handler *InboundDeleteByNameHandler) help() string {
-	return `DELETE /inbounds
+	return `DELETE /api/inbounds
 	按 container 类型 + name 删除 inbound
 	body: {"target": "", "container": "xray|snell|hysteria", "name": "<inbound tag>"}`
 }

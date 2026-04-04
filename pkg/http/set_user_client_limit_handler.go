@@ -46,9 +46,7 @@ func (handler *SetUserClientLimitHandler) handlerFunc(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 400, "msg": "drain_sec must be >= 0"})
 		return
 	}
-	if req.Target == "" {
-		req.Target = handler.getHttpServer().Name
-	}
+	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
 
 	userPoint := &proto.User{Name: username}
 	// Map JSON max_clients to proto sentinel:

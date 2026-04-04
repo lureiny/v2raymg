@@ -3,12 +3,11 @@
 package usermanager
 
 import (
-	crypto_rand "crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/errors"
@@ -17,13 +16,35 @@ import (
 	"github.com/lureiny/v2raymg/pkg/store"
 )
 
-// generateAuthToken creates a cryptographically random 32-character hex token.
+// generateAuthToken returns a new UUID v4 string.
 func generateAuthToken() string {
-	b := make([]byte, 16)
-	if _, err := crypto_rand.Read(b); err != nil {
-		panic("crypto/rand failed: " + err.Error())
+	return uuid.NewString()
+}
+
+// isValidUUIDv4 returns true if s is a standard RFC 4122 UUID version 4.
+// Checks format, version nibble (4), and variant bits (RFC 4122 = 10xx).
+func isValidUUIDv4(s string) bool {
+	u, err := uuid.Parse(s)
+	return err == nil && u.Version() == 4 && u.Variant() == uuid.RFC4122
+}
+
+// generateUniqueAuthTokenLocked generates a UUID that does not collide with any
+// existing user's AuthToken. Caller must hold m.mu (read or write).
+func (m *UserManager) generateUniqueAuthTokenLocked() string {
+	for {
+		token := generateAuthToken()
+		collision := false
+		for _, u := range m.users {
+			if u.AuthToken == token {
+				collision = true
+				break
+			}
+		}
+		if !collision {
+			return token
+		}
+		log.Warn("[generateUniqueAuthTokenLocked] UUID collision detected, retrying")
 	}
-	return hex.EncodeToString(b)
 }
 
 // UserEventType represents the type of user event.
@@ -136,6 +157,20 @@ func NewUserManagerWithStore(fm forward.ForwardManager, storeMgr *store.StoreMan
 	for _, u := range loaded {
 		m.users[u.Username] = u
 	}
+
+	// Migrate legacy auth tokens (non-UUID) to UUID format.
+	// Uses ResetAuthToken which goes through mutateUser (stampVersion + persist + event).
+	for _, u := range m.users {
+		if !isValidUUIDv4(u.AuthToken) {
+			oldLen := len(u.AuthToken)
+			if _, err := m.ResetAuthToken(u.Username); err != nil {
+				log.Warn("[migration] failed to reset auth_token", "user", u.Username, "err", err)
+				continue
+			}
+			log.Debug("[migration] regenerated auth_token for user", "user", u.Username, "old_len", oldLen)
+		}
+	}
+
 	return m, nil
 }
 
@@ -412,7 +447,7 @@ func (m *UserManager) AddUser(req AddUserRequest) error {
 
 	user := &contracts.User{
 		Username:  req.Username,
-		AuthToken: generateAuthToken(),
+		AuthToken: m.generateUniqueAuthTokenLocked(),
 	}
 
 	if req.TTL > 0 {
@@ -619,6 +654,22 @@ func (m *UserManager) ListUsers() []*contracts.User {
 			continue
 		}
 		if !m.isUserVisibleLocked(user) {
+			continue
+		}
+		users = append(users, user)
+	}
+	return users
+}
+
+// ListAllUsers returns all active (non-deleting, non-expired) users regardless of
+// group visibility. This is intended for admin views that need the full cluster user list.
+func (m *UserManager) ListAllUsers() []*contracts.User {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	users := make([]*contracts.User, 0, len(m.users))
+	for _, user := range m.users {
+		if user.IsDeleting() || user.IsExpired() {
 			continue
 		}
 		users = append(users, user)
@@ -864,11 +915,11 @@ type ReleaseBindPortRequest struct {
 // After releasing the port, if the user is in "deleting" state and has no more
 // forward rules, it will physically delete the user (finalize).
 
-// ResetAuthToken regenerates the user's auth token with a new random value.
+// ResetAuthToken regenerates the user's auth token with a new UUID.
 func (m *UserManager) ResetAuthToken(username string) (string, error) {
 	var newToken string
 	err := m.mutateUser(username, UserEventUpdate, func(user *contracts.User) error {
-		newToken = generateAuthToken()
+		newToken = m.generateUniqueAuthTokenLocked()
 		user.AuthToken = newToken
 		return nil
 	})
@@ -1427,7 +1478,11 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 
 	// Case 2: incoming is an active user.
 	if !exists {
-		// New user from remote.
+		// New user from remote. Ensure auth token is UUID.
+		if !isValidUUIDv4(incoming.AuthToken) {
+			incoming.AuthToken = m.generateUniqueAuthTokenLocked()
+			m.stampVersion(incoming)
+		}
 		m.users[incoming.Username] = incoming
 		if m.store != nil {
 			if err := m.store.Save(incoming); err != nil {
@@ -1443,6 +1498,10 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 	}
 
 	// Existing user, incoming is newer — update fields.
+	// Ensure auth token is UUID; if remote sends a legacy plaintext password, regenerate.
+	if !isValidUUIDv4(incoming.AuthToken) {
+		incoming.AuthToken = m.generateUniqueAuthTokenLocked()
+	}
 	existing.AuthToken = incoming.AuthToken
 	existing.ExpiryTime = incoming.ExpiryTime
 	existing.Role = incoming.Role

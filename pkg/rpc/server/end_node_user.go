@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lureiny/v2raymg/pkg/http/auth"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/forward"
@@ -52,10 +51,14 @@ func (s *EndNodeServer) GetProfile(ctx context.Context, req *proto.GetProfileReq
 
 func (s *EndNodeServer) GetUsers(ctx context.Context, getUsersReq *proto.GetUsersReq) (*proto.GetUsersRsp, error) {
 	getUsersRsp := &proto.GetUsersRsp{Code: 0}
-	users := s.userMgr.ListUsers()
+	var users []*contracts.User
+	if getUsersReq.GetIncludeAll() {
+		users = s.userMgr.ListAllUsers()
+	} else {
+		users = s.userMgr.ListUsers()
+	}
 	for _, u := range users {
 		pu := userToProtoUser(u)
-		pu.Passwd = "" // list 接口不返回 auth_token
 		getUsersRsp.Users = append(getUsersRsp.Users, pu)
 	}
 	return getUsersRsp, nil
@@ -64,7 +67,7 @@ func (s *EndNodeServer) GetUsers(ctx context.Context, getUsersReq *proto.GetUser
 func (s *EndNodeServer) AddUsers(ctx context.Context, addUsersReq *proto.UserOpReq) (*proto.UserOpRsp, error) {
 	addUsersRsp := &proto.UserOpRsp{Code: 0}
 	for _, user := range addUsersReq.GetUsers() {
-		log.Infof("AddUsers: name=%s passwd=%q expire_time=%d", user.Name, user.Passwd, user.ExpireTime)
+		log.Infof("AddUsers: name=%s expire_time=%d", user.Name, user.ExpireTime)
 
 		var ttl time.Duration
 		if user.ExpireTime > 0 {
@@ -229,43 +232,22 @@ func (s *EndNodeServer) GetSub(ctx context.Context, getSubReq *proto.GetSubReq) 
 	getSubRsp := &proto.GetSubRsp{Code: 0}
 	excludeProtocols := getSubReq.GetExcludeProtocols()
 
-	// Dual authentication: token-first, then user+pwd fallback.
-	var localUser *contracts.User
-
-	if token := getSubReq.GetToken(); token != "" {
-		// Method A: token-only auth — token uniquely identifies the user.
-		localUser = s.userMgr.FindUserByToken(token)
-		if localUser == nil {
-			log.Error("get sub failed", "err", "invalid token")
-			getSubRsp.Msg = "invalid token"
-			getSubRsp.Code = 300
-			return getSubRsp, nil
-		}
-	} else {
-		// Method B: user + password auth (backward compatible with old subscription links).
-		// Password is verified via SHA256+bcrypt against LoginPassword.
-		user := getSubReq.GetUser()
-		if user == nil || user.Name == "" || user.Passwd == "" {
-			log.Error("get sub failed", "err", "missing user credentials")
-			getSubRsp.Msg = "missing user credentials"
-			getSubRsp.Code = 300
-			return getSubRsp, nil
-		}
-		var err error
-		localUser, err = s.userMgr.GetUser(user.Name)
-		if err != nil {
-			errMsg := fmt.Sprintf("get sub err > %v", err)
-			log.Error("get sub failed", "err", errMsg, "user", user.Name)
-			getSubRsp.Msg = errMsg
-			getSubRsp.Code = 300
-			return getSubRsp, nil
-		}
-		if !auth.VerifyLoginPassword(localUser.LoginPassword, user.Passwd) {
-			log.Error("get sub failed", "err", "invalid password", "user", user.Name)
-			getSubRsp.Msg = "invalid password"
-			getSubRsp.Code = 300
-			return getSubRsp, nil
-		}
+	// No auth here — authentication is done at the HTTP handler layer.
+	// This RPC is protected by cluster token. Only username is needed.
+	user := getSubReq.GetUser()
+	if user == nil || user.Name == "" {
+		log.Error("get sub failed", "err", "missing username")
+		getSubRsp.Msg = "missing username"
+		getSubRsp.Code = 300
+		return getSubRsp, nil
+	}
+	localUser, err := s.userMgr.GetUser(user.Name)
+	if err != nil {
+		errMsg := fmt.Sprintf("get sub err > %v", err)
+		log.Error("get sub failed", "err", errMsg, "user", user.Name)
+		getSubRsp.Msg = errMsg
+		getSubRsp.Code = 300
+		return getSubRsp, nil
 	}
 
 	req := contracts.SubscriptionRequest{

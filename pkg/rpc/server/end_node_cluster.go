@@ -400,7 +400,7 @@ func userToProtoUser(u *contracts.User) *proto.User {
 	}
 	return &proto.User{
 		Name:                  u.Username,
-		Passwd:                u.AuthToken,
+		AuthToken:             u.AuthToken,
 		ExpireTime:            expire,
 		Role:                  role,
 		Group:                 u.TargetGroup,
@@ -425,7 +425,7 @@ func protoClusterUserSyncToUser(p *proto.ClusterUserSync) *contracts.User {
 	}
 	u := &contracts.User{}
 	u.Username = pu.GetName()
-	u.AuthToken = pu.GetPasswd()
+	u.AuthToken = pu.GetAuthToken()
 	if pu.GetExpireTime() > 0 {
 		u.ExpiryTime = time.Unix(pu.GetExpireTime(), 0)
 	}

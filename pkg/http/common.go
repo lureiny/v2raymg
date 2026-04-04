@@ -3,7 +3,17 @@ package http
 import (
 	"fmt"
 	"strings"
+
+	"github.com/gin-gonic/gin"
 )
+
+func jsonOK(c *gin.Context) {
+	c.JSON(200, gin.H{"code": 0, "msg": "ok"})
+}
+
+func jsonErr(c *gin.Context, status int, msg string) {
+	c.JSON(status, gin.H{"code": status, "msg": msg})
+}
 
 func joinFailedList(failedList map[string]string) string {
 	errMsgs := []string{}
