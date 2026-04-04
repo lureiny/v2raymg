@@ -10,6 +10,10 @@ import (
 
 	certmgmtservice "github.com/lureiny/v2raymg/pkg/certmgmt/service"
 	"github.com/lureiny/v2raymg/pkg/cluster"
+	clusteruserbootstrap "github.com/lureiny/v2raymg/pkg/cluster_user/bootstrap"
+	clusterusercontroller "github.com/lureiny/v2raymg/pkg/cluster_user/controller"
+	clusteruserstore "github.com/lureiny/v2raymg/pkg/cluster_user/store"
+	clusterusersyncer "github.com/lureiny/v2raymg/pkg/cluster_user/syncer"
 	"github.com/lureiny/v2raymg/pkg/collecter"
 	"github.com/lureiny/v2raymg/pkg/http"
 	"github.com/lureiny/v2raymg/pkg/http/auth"
@@ -197,6 +201,33 @@ func runEndNode(cfg *appconfig.AppConfig) {
 		pingCol,
 		nodeMetricCol,
 	)
+
+	// 9a. Cluster User sync layer (disabled by default)
+	if cuLayer := newClusterUserStores(cfg.ClusterUser, storeMgr.DB(), cfg.EndNode.Name); cuLayer != nil {
+		if cfg.ClusterUser.BootstrapFromLocal {
+			bootstrapper := clusteruserbootstrap.NewBootstrapper(
+				cuLayer.cuStore, cuLayer.ngStore, userMgr,
+				cfg.EndNode.Name, cfg.ClusterUser.DefaultGroup,
+			)
+			if err := bootstrapper.Bootstrap(context.Background()); err != nil {
+				log.Error("cluster user bootstrap failed, aborting startup to prevent accidental user deletion", "err", err)
+				os.Exit(1)
+			}
+		}
+
+		rpcServer.InitClusterUser(true, cuLayer.cuStore, cuLayer.ngStore, cuLayer.syncr)
+
+		placementCtrl := clusterusercontroller.New(cuLayer.cuStore, cuLayer.ngStore, userMgr, cfg.ClusterUser)
+		placementCtrl.Start()
+		defer placementCtrl.Stop()
+
+		log.Info("cluster user sync enabled",
+			"bootstrap_from_local", cfg.ClusterUser.BootstrapFromLocal,
+			"sync_interval_sec", cfg.ClusterUser.SyncIntervalSec,
+			"default_group", cfg.ClusterUser.DefaultGroup,
+		)
+	}
+
 	go rpcServer.Start()
 
 	// 10. HTTP Server
@@ -207,12 +238,13 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	httpServer := http.NewHttpServer()
 	httpServer.Init(
 		http.HttpServerConfig{
-			Listen:         httpListen,
-			Port:           cfg.EndNode.HttpPort,
-			Token:          cfg.EndNode.HttpToken,
-			Name:           cfg.EndNode.Name,
-			JWTSecret:      cfg.EndNode.JWTSecret,
-			JWTExpireHours: cfg.EndNode.JWTExpireHours,
+			Listen:             httpListen,
+			Port:               cfg.EndNode.HttpPort,
+			Token:              cfg.EndNode.HttpToken,
+			Name:               cfg.EndNode.Name,
+			JWTSecret:          cfg.EndNode.JWTSecret,
+			JWTExpireHours:     cfg.EndNode.JWTExpireHours,
+			ClusterUserEnabled: cfg.ClusterUser.Enabled,
 		},
 		localNode,
 		clusterMgr,
@@ -251,4 +283,23 @@ func convertStaticNodes(nodes []appconfig.StaticNodeConfig) []cluster.StaticNode
 		}
 	}
 	return out
+}
+
+// clusterUserStores holds the initialized stores and syncer for the ClusterUser sync layer.
+type clusterUserStores struct {
+	cuStore clusteruserstore.ClusterUserStore
+	ngStore clusteruserstore.NodeGroupsStore
+	syncr   *clusterusersyncer.Syncer
+}
+
+// newClusterUserStores creates SQLite-backed ClusterUser stores and Syncer.
+// Returns nil when cfg.Enabled is false, signalling that the feature is disabled.
+func newClusterUserStores(cfg appconfig.ClusterUserConfig, db *store.DB, nodeName string) *clusterUserStores {
+	if !cfg.Enabled {
+		return nil
+	}
+	cuStore := clusteruserstore.NewSQLiteClusterUserStore(db)
+	ngStore := clusteruserstore.NewSQLiteNodeGroupsStore(db)
+	syncr := clusterusersyncer.NewSyncer(cuStore, nodeName)
+	return &clusterUserStores{cuStore: cuStore, ngStore: ngStore, syncr: syncr}
 }

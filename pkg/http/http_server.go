@@ -10,12 +10,13 @@ import (
 
 // HttpServerConfig holds HTTP server configuration.
 type HttpServerConfig struct {
-	Listen         string
-	Port           int
-	Token          string
-	Name           string
-	JWTSecret      string
-	JWTExpireHours int
+	Listen             string
+	Port               int
+	Token              string
+	Name               string
+	JWTSecret          string
+	JWTExpireHours     int
+	ClusterUserEnabled bool
 }
 
 // ClusterNodes provides node lookup for routing HTTP requests to cluster members.
@@ -35,18 +36,19 @@ type CertReader interface {
 var GlobalHttpServer = &HttpServer{}
 
 type HttpServer struct {
-	RestfulServer  *gin.Engine
-	Host           string
-	Port           int
-	Name           string
-	token          string
-	jwtSecret      string
-	jwtExpireHours int
-	handlersMap    map[string]HttpHandlerInterface
-	certReader     CertReader
-	clusterNodes   ClusterNodes
-	localNode      *cluster.LocalNode
-	userLister     UserLister
+	RestfulServer      *gin.Engine
+	Host               string
+	Port               int
+	Name               string
+	token              string
+	jwtSecret          string
+	jwtExpireHours     int
+	handlersMap        map[string]HttpHandlerInterface
+	certReader         CertReader
+	clusterNodes       ClusterNodes
+	localNode          *cluster.LocalNode
+	userLister         UserLister
+	clusterUserEnabled bool
 }
 
 // Init initializes the HttpServer with config and dependencies.
@@ -61,6 +63,7 @@ func (s *HttpServer) Init(cfg HttpServerConfig, localNode *cluster.LocalNode, cl
 	s.clusterNodes = clusterNodes
 	s.certReader = certReader
 	s.userLister = userLister
+	s.clusterUserEnabled = cfg.ClusterUserEnabled
 	s.registerRoutes()
 }
 
@@ -104,7 +107,8 @@ func (s *HttpServer) RegisterHandler(handler HttpHandlerInterface, method string
 	}
 	relativePath := handler.getRelativePath()
 	handler.setHttpServer(s)
-	s.handlersMap[relativePath] = handler
+	key := method + " " + relativePath
+	s.handlersMap[key] = handler
 	handlers := handler.getHandlers()
 	switch method {
 	case "GET":

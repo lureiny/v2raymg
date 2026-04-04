@@ -83,4 +83,40 @@ var All = []store.Migration{
 		SQL: `ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'normal';
 ALTER TABLE users ADD COLUMN login_password TEXT NOT NULL DEFAULT '';`,
 	},
+	{
+		Version: 7,
+		SQL: `CREATE TABLE IF NOT EXISTS cluster_users (
+    username TEXT PRIMARY KEY,
+    password TEXT NOT NULL,
+    expire INTEGER NOT NULL DEFAULT 0,
+    role TEXT NOT NULL DEFAULT 'normal',
+    target_group TEXT NOT NULL DEFAULT 'default',
+    deleted INTEGER NOT NULL DEFAULT 0,
+    updated_at_us INTEGER NOT NULL,
+    origin_node TEXT NOT NULL,
+    hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+)`,
+	},
+	{
+		Version: 8,
+		SQL: `CREATE INDEX IF NOT EXISTS idx_cluster_users_target_group ON cluster_users(target_group)`,
+	},
+	{
+		Version: 9,
+		SQL: `CREATE INDEX IF NOT EXISTS idx_cluster_users_updated_at_us ON cluster_users(updated_at_us)`,
+	},
+	{
+		Version: 10,
+		SQL: `CREATE INDEX IF NOT EXISTS idx_cluster_users_group_deleted ON cluster_users(target_group, deleted)`,
+	},
+	{
+		Version: 11,
+		SQL: `CREATE TABLE IF NOT EXISTS local_node_groups (
+    group_name TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+)`,
+	},
 }

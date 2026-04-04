@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	rpcClient "github.com/lureiny/v2raymg/pkg/rpc/client"
+	clusteruser "github.com/lureiny/v2raymg/pkg/cluster_user"
 	"github.com/lureiny/v2raymg/pkg/cluster"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
@@ -112,6 +113,32 @@ func (s *EndNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.Heart
 			return node.Name != s.Name && node.IsCompleteRegister()
 		},
 	)
+
+	// Cluster user digest comparison (only when feature is enabled).
+	if s.syncer != nil {
+		protoDigests := heartBeatReq.GetUserDigests()
+		digests := make([]clusteruser.UserDigest, 0, len(protoDigests))
+		for _, pd := range protoDigests {
+			if pd == nil {
+				continue
+			}
+			digests = append(digests, clusteruser.UserDigest{
+				Username:    pd.GetUsername(),
+				UpdatedAtUs: pd.GetUpdatedAtUs(),
+				OriginNode:  pd.GetOriginNode(),
+				Deleted:     pd.GetDeleted(),
+				Hash:        pd.GetHash(),
+			})
+		}
+		needFull, err := s.syncer.CompareDigests(digests)
+		if err != nil {
+			log.Warn("heartbeat: compare digests had partial failures", "err", err)
+		}
+		// Always use partial results — CompareDigests adds users to needFull
+		// even on individual DB errors (self-healing behavior).
+		heartBeatRsp.NeedClusterUsers = needFull
+	}
+
 	return heartBeatRsp, nil
 }
 
@@ -137,15 +164,23 @@ func (s *EndNodeServer) registerToEndNode(node *cluster.Node, wg *sync.WaitGroup
 	var registerNodeReq interface{} = &proto.RegisterNodeReq{}
 	reqData, _ := pb.Marshal(registerNodeReq.(pb.Message))
 	rsp, err := rpcClient.ReqRegisterNode(rpcClient.NewContext(), reqData, c, nodeAuthInfo, s.clusterState.GetClusterToken())
-	registerRsp := rsp.(*proto.RegisterNodeRsp)
-	errMsg := ""
 	if err != nil {
-		errMsg = fmt.Sprintf("register to end node failed > %v", err)
-	} else if registerRsp.GetCode() != 0 {
-		errMsg = registerRsp.GetMsg()
+		log.Error("register to end node failed",
+			"err", fmt.Sprintf("register to end node failed > %v", err),
+			"dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name,
+		)
+		return
 	}
-	if errMsg != "" {
-		if !node.IsLocal() && (registerRsp.GetCode() > 0 && registerRsp.GetCode() != 102) && err == nil {
+	registerRsp, ok := rsp.(*proto.RegisterNodeRsp)
+	if !ok || registerRsp == nil {
+		log.Error("register to end node failed", "err", "unexpected nil response",
+			"dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name,
+		)
+		return
+	}
+	if registerRsp.GetCode() != 0 {
+		errMsg := registerRsp.GetMsg()
+		if !node.IsLocal() && registerRsp.GetCode() > 0 && registerRsp.GetCode() != 102 {
 			s.clusterState.Delete(node.GetName())
 			s.clusterState.AddToWrongNodeList(node)
 		}
@@ -179,23 +214,78 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 		Token: node.OutToken,
 		Node:  &localNode.Node,
 	}
-	var heartBeatReq interface{} = &proto.HeartBeatReq{}
+	heartBeatMsg := &proto.HeartBeatReq{}
+	if s.clusterUserEnabled && s.clusterUserStore != nil {
+		if users, err := s.clusterUserStore.List(); err == nil {
+			digests := make([]*proto.UserDigest, 0, len(users))
+			for _, u := range users {
+				digests = append(digests, &proto.UserDigest{
+					Username:    u.Username,
+					UpdatedAtUs: u.UpdatedAtUs,
+					OriginNode:  u.OriginNode,
+					Deleted:     u.Deleted,
+					Hash:        u.Hash,
+				})
+			}
+			heartBeatMsg.UserDigests = digests
+		} else {
+			log.Error("heartbeat: list cluster users failed", "err", err, "dst_name", node.Name)
+		}
+	}
+	var heartBeatReq interface{} = heartBeatMsg
 	reqData, _ := pb.Marshal(heartBeatReq.(pb.Message))
 	rsp, err := rpcClient.ReqHeartBeat(rpcClient.NewContext(), reqData, c, nodeAuthInfo, s.clusterState.GetClusterToken())
-	heartBeatRsp := rsp.(*proto.HeartBeatRsp)
-	if err != nil || heartBeatRsp.GetCode() != 0 {
-		errMsg := fmt.Sprintf("heartbeat to end node failed > %v", err)
-		if heartBeatRsp.GetCode() != 0 {
-			errMsg = heartBeatRsp.GetMsg()
-			node.ReportHeartBeatTime = time.Now().Unix()
-		}
+	if err != nil {
 		node.OutToken = ""
 		log.Error("heartbeat to end node failed",
-			"err", errMsg, "dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name,
+			"err", fmt.Sprintf("heartbeat to end node failed > %v", err),
+			"dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name,
+		)
+		return
+	}
+	heartBeatRsp, ok := rsp.(*proto.HeartBeatRsp)
+	if !ok || heartBeatRsp == nil {
+		node.OutToken = ""
+		log.Error("heartbeat to end node failed", "err", "unexpected nil response",
+			"dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name,
+		)
+		return
+	}
+	if heartBeatRsp.GetCode() != 0 {
+		node.OutToken = ""
+		node.ReportHeartBeatTime = time.Now().Unix()
+		log.Error("heartbeat to end node failed",
+			"err", heartBeatRsp.GetMsg(), "dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name,
 		)
 	} else {
 		node.ReportHeartBeatTime = time.Now().Unix()
 		addRemoteNode(heartBeatRsp, s, "End")
+
+		// Push full cluster user payloads to the remote node for any users it requested.
+		if s.clusterUserEnabled && s.clusterUserStore != nil {
+			if needUsers := heartBeatRsp.GetNeedClusterUsers(); len(needUsers) > 0 {
+				toSend := make([]*proto.ClusterUserInfo, 0, len(needUsers))
+				for _, username := range needUsers {
+					u, err := s.clusterUserStore.Get(username)
+					if err != nil {
+						log.Error("heartbeat: fetch cluster user for push", "username", username, "err", err, "dst_name", node.Name)
+						continue
+					}
+					if u == nil {
+						continue
+					}
+					toSend = append(toSend, clusterUserToProto(u))
+				}
+				if len(toSend) > 0 {
+					upsertData, _ := pb.Marshal(&proto.UpsertClusterUsersReq{Users: toSend})
+					if _, err := rpcClient.ReqUpsertClusterUsers(rpcClient.NewContext(), upsertData, c, nodeAuthInfo, s.clusterState.GetClusterToken()); err != nil {
+						log.Error("heartbeat: push cluster users failed", "dst_name", node.Name, "count", len(toSend), "err", err)
+					} else {
+						log.Debug("heartbeat: pushed cluster users", "dst_name", node.Name, "requested", len(needUsers), "pushed", len(toSend))
+					}
+				}
+			}
+		}
 	}
 }
 

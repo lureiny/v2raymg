@@ -174,6 +174,29 @@ type CenterNodeConfig struct {
 	NodeConfig `yaml:",inline"`
 }
 
+// ClusterUserConfig controls the ClusterUser sync layer and placement controller behaviour.
+type ClusterUserConfig struct {
+	// Enabled enables the ClusterUser sync layer and placement controller. Default: false.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// SyncIntervalSec is the heartbeat delta-sync period in seconds. Default: 5.
+	SyncIntervalSec int `yaml:"sync_interval_sec" json:"sync_interval_sec"`
+	// BootstrapFromLocal controls whether the node imports existing usermgr users
+	// when cluster_users is empty for the first time. Default: true.
+	BootstrapFromLocal bool `yaml:"bootstrap_from_local" json:"bootstrap_from_local"`
+	// DefaultGroup is the default group name. Default: "default".
+	DefaultGroup string `yaml:"default_group" json:"default_group"`
+}
+
+// DefaultClusterUserConfig returns the default values for ClusterUserConfig.
+func DefaultClusterUserConfig() ClusterUserConfig {
+	return ClusterUserConfig{
+		Enabled:            false,
+		SyncIntervalSec:    5,
+		BootstrapFromLocal: true,
+		DefaultGroup:       "default",
+	}
+}
+
 // AppConfig is the top-level configuration for the v2raymg proxy refactor stack.
 // It is loaded from a YAML or JSON file and used to initialize all subsystems.
 type AppConfig struct {
@@ -187,4 +210,5 @@ type AppConfig struct {
 	Subscription SubscriptionConfig             `yaml:"subscription" json:"subscription"`
 	EndNode      EndNodeConfig                  `yaml:"end_node"     json:"end_node"`
 	CenterNode   CenterNodeConfig               `yaml:"center_node"  json:"center_node"`
+	ClusterUser  ClusterUserConfig              `yaml:"cluster_user" json:"cluster_user"`
 }

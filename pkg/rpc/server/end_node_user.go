@@ -12,6 +12,9 @@ import (
 )
 
 func (s *EndNodeServer) GetUsers(ctx context.Context, getUsersReq *proto.GetUsersReq) (*proto.GetUsersRsp, error) {
+	if s.clusterUserEnabled {
+		return &proto.GetUsersRsp{Code: 400, Msg: "local user API disabled: cluster_user is enabled, use cluster user API instead"}, nil
+	}
 	getUsersRsp := &proto.GetUsersRsp{Code: 0}
 	users := s.userMgr.ListUsers()
 	for _, u := range users {
@@ -29,6 +32,9 @@ func (s *EndNodeServer) GetUsers(ctx context.Context, getUsersReq *proto.GetUser
 }
 
 func (s *EndNodeServer) AddUsers(ctx context.Context, addUsersReq *proto.UserOpReq) (*proto.UserOpRsp, error) {
+	if s.clusterUserEnabled {
+		return &proto.UserOpRsp{Code: 400, Msg: "local user API disabled: cluster_user is enabled, use cluster user API instead"}, nil
+	}
 	addUsersRsp := &proto.UserOpRsp{Code: 0}
 	for _, user := range addUsersReq.GetUsers() {
 		log.Infof("AddUsers: name=%s passwd=%q expire_time=%d tags=%v", user.Name, user.Passwd, user.ExpireTime, user.Tags)
@@ -54,6 +60,9 @@ func (s *EndNodeServer) AddUsers(ctx context.Context, addUsersReq *proto.UserOpR
 }
 
 func (s *EndNodeServer) DeleteUsers(ctx context.Context, deleteUsersReq *proto.UserOpReq) (*proto.UserOpRsp, error) {
+	if s.clusterUserEnabled {
+		return &proto.UserOpRsp{Code: 400, Msg: "local user API disabled: cluster_user is enabled, use cluster user API instead"}, nil
+	}
 	deleteUsersRsp := &proto.UserOpRsp{Code: 0}
 	for _, user := range deleteUsersReq.GetUsers() {
 		err := s.userMgr.RemoveUser(usermanager.RemoveUserRequest{Username: user.Name})
@@ -69,6 +78,9 @@ func (s *EndNodeServer) DeleteUsers(ctx context.Context, deleteUsersReq *proto.U
 }
 
 func (s *EndNodeServer) UpdateUsers(ctx context.Context, updateUsersReq *proto.UserOpReq) (*proto.UserOpRsp, error) {
+	if s.clusterUserEnabled {
+		return &proto.UserOpRsp{Code: 400, Msg: "local user API disabled: cluster_user is enabled, use cluster user API instead"}, nil
+	}
 	updateUsersRsp := &proto.UserOpRsp{Code: 0}
 	var err error
 	for _, user := range updateUsersReq.GetUsers() {
@@ -81,6 +93,9 @@ func (s *EndNodeServer) UpdateUsers(ctx context.Context, updateUsersReq *proto.U
 }
 
 func (s *EndNodeServer) ResetUser(ctx context.Context, resetUserReq *proto.UserOpReq) (*proto.UserOpRsp, error) {
+	if s.clusterUserEnabled {
+		return &proto.UserOpRsp{Code: 400, Msg: "local user API disabled: cluster_user is enabled, use cluster user API instead"}, nil
+	}
 	rsp := &proto.UserOpRsp{Code: 0}
 	for _, u := range resetUserReq.GetUsers() {
 		username := u.GetName()
@@ -94,25 +109,6 @@ func (s *EndNodeServer) ResetUser(ctx context.Context, resetUserReq *proto.UserO
 		log.Info("ResetUser: port rotated", "user", username)
 	}
 	return rsp, nil
-}
-
-func (s *EndNodeServer) ClearUsers(ctx context.Context, clearUsersReq *proto.ClearUsersReq) (*proto.ClearUsersRsp, error) {
-	clearUsersRsp := &proto.ClearUsersRsp{Code: 0}
-	for _, name := range clearUsersReq.Users {
-		if _, err := s.userMgr.GetUser(name); err != nil {
-			log.Debug("clear users: user not found", "user", name)
-			continue
-		}
-		err := s.userMgr.RemoveUser(usermanager.RemoveUserRequest{Username: name})
-		if err != nil {
-			log.Error("clear user failed", "err", err.Error(), "user", name)
-			clearUsersRsp.Msg += fmt.Sprintf("user: %s clear failed, %s\n", name, err.Error())
-		}
-	}
-	if len(clearUsersRsp.Msg) > 0 {
-		clearUsersRsp.Code = 1040
-	}
-	return clearUsersRsp, nil
 }
 
 func (s *EndNodeServer) GetSub(ctx context.Context, getSubReq *proto.GetSubReq) (*proto.GetSubRsp, error) {

@@ -299,26 +299,6 @@ func ListUser(host, token, target string) (map[string][]*proto.User, error) {
 	return users, nil
 }
 
-func ClearUser(host, token, target, users string) (string, error) {
-	result := ""
-	cb := func(resp *http.Response) error {
-		d, err := readBody(resp)
-		if err != nil {
-			return err
-		}
-		result = string(d)
-		return nil
-	}
-
-	reqUrl := fmt.Sprintf("%s/%s", host, common.Users)
-	body := map[string]interface{}{
-		"target": target,
-		"users":  users,
-	}
-	err := DoDeleteRequest(reqUrl, token, body, getCallBackFunc(cb))
-	return result, err
-}
-
 func AddInBound(host, token, target, boundRawString string) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {

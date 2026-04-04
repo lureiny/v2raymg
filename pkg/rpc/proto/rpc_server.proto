@@ -67,8 +67,29 @@ message GetSubRsp {
     string formatted_sub = 4;      // formatted subscription string (all protocols including snell)
 }
 
+message UserDigest {
+    string username = 1;
+    int64 updated_at_us = 2;
+    string origin_node = 3;
+    bool deleted = 4;
+    string hash = 5;
+}
+
+message ClusterUserInfo {
+    string username = 1;
+    string password = 2;
+    int64 expire = 3;
+    string role = 4;
+    string target_group = 5;
+    bool deleted = 6;
+    int64 updated_at_us = 7;
+    string origin_node = 8;
+    string hash = 9;
+}
+
 message HeartBeatReq {
     NodeAuthInfo node_auth_info = 1;
+    repeated UserDigest user_digests = 2;  // 本节点持有的 user 摘要列表（cluster_user.enabled=true 时填充）
 }
 
 message Node {
@@ -82,6 +103,7 @@ message HeartBeatRsp {
     int32 code = 1;
     string msg = 2;
     map<string, Node> nodesMap = 3;
+    repeated string need_cluster_users = 4;  // 对端需要我补发完整 payload 的用户名列表
 }
 
 message Nodes {
@@ -273,16 +295,6 @@ message GetCertsRsp {
     repeated Cert certs = 2;
 }
 
-message ClearUsersReq {
-    NodeAuthInfo node_auth_info = 1;
-    repeated string users = 2;
-}
-
-message ClearUsersRsp {
-    int32 code = 1;
-    string msg = 2;
-}
-
 message PingMetric {
     string host = 1; // ip or domain
     string source = 2;
@@ -344,7 +356,6 @@ service EndNodeAccess {
     rpc GetUsers(GetUsersReq) returns (GetUsersRsp) {}
     rpc AddUsers(UserOpReq) returns (UserOpRsp) {}
     rpc DeleteUsers(UserOpReq) returns (UserOpRsp) {} // 支持tag级删除
-    rpc ClearUsers(ClearUsersReq) returns (ClearUsersRsp) {} // 完全删除
     rpc UpdateUsers(UserOpReq) returns (UserOpRsp) {}
     rpc ResetUser(UserOpReq) returns (UserOpRsp) {}
     rpc GetSub(GetSubReq) returns (GetSubRsp) {}
@@ -381,6 +392,67 @@ service EndNodeAccess {
     /// metric
     rpc GetPingMetric(GetPingMetricReq) returns (GetPingMetricRsp) {}
     rpc GetNodeMetric(GetNodeMetricReq) returns (GetNodeMetricRsp) {}
+
+    // cluster user
+    rpc GetNodeGroups(GetNodeGroupsReq) returns (GetNodeGroupsRsp) {}
+    rpc SetNodeGroups(SetNodeGroupsReq) returns (SetNodeGroupsRsp) {}
+    rpc ListClusterUsers(ListClusterUsersReq) returns (ListClusterUsersRsp) {}
+    rpc GetClusterUsersByName(GetClusterUsersByNameReq) returns (GetClusterUsersByNameRsp) {}
+    rpc UpsertClusterUsers(UpsertClusterUsersReq) returns (UpsertClusterUsersRsp) {}
+    rpc DeleteClusterUsers(DeleteClusterUsersReq) returns (DeleteClusterUsersRsp) {}
+}
+
+message GetNodeGroupsReq {
+    NodeAuthInfo node_auth_info = 1;
+}
+message GetNodeGroupsRsp {
+    int32 code = 1;
+    string msg = 2;
+    repeated string groups = 3;
+}
+message SetNodeGroupsReq {
+    NodeAuthInfo node_auth_info = 1;
+    repeated string groups = 2;
+}
+message SetNodeGroupsRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+
+message ListClusterUsersReq {
+    NodeAuthInfo node_auth_info = 1;
+    string group = 2;
+}
+message ListClusterUsersRsp {
+    int32 code = 1;
+    string msg = 2;
+    repeated ClusterUserInfo users = 3;
+}
+message GetClusterUsersByNameReq {
+    NodeAuthInfo node_auth_info = 1;
+    repeated string usernames = 2;
+}
+message GetClusterUsersByNameRsp {
+    int32 code = 1;
+    string msg = 2;
+    repeated ClusterUserInfo users = 3;
+}
+message UpsertClusterUsersReq {
+    NodeAuthInfo node_auth_info = 1;
+    repeated ClusterUserInfo users = 2;
+    bool from_admin = 3;  // true = Admin HTTP 写入（自动填充 version），false = Peer sync 写入（需版本仲裁）
+}
+message UpsertClusterUsersRsp {
+    int32 code = 1;
+    string msg = 2;
+}
+message DeleteClusterUsersReq {
+    NodeAuthInfo node_auth_info = 1;
+    repeated string usernames = 2;
+}
+message DeleteClusterUsersRsp {
+    int32 code = 1;
+    string msg = 2;
 }
 
 message GetClutersReq {

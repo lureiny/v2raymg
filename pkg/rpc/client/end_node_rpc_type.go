@@ -23,7 +23,7 @@ const (
 	FastAddInboundType
 	TransferCertType
 	GetCertsType
-	ClearUsersType
+	_ // ClearUsersType removed — use DeleteClusterUsers tombstone instead
 	GetPingMetricType
 	RegisterNodeType
 	HeartBeatType
@@ -31,4 +31,10 @@ const (
 	GetNodeMetricType
 	ListInboundReqType
 	DeleteInboundByNameReqType
+	GetNodeGroupsReqType
+	SetNodeGroupsReqType
+	ListClusterUsersReqType
+	GetClusterUsersByNameReqType
+	UpsertClusterUsersReqType
+	DeleteClusterUsersReqType
 )

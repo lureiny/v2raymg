@@ -52,8 +52,6 @@ func init() {
 	registerReqToEndNodeFunc(TransferCertType, ReqTransferCert)
 	// get certs
 	registerReqToEndNodeFunc(GetCertsType, ReqGetCerts)
-	// clear users
-	registerReqToEndNodeFunc(ClearUsersType, ReqClearUsers)
 	// get ping metric
 	registerReqToEndNodeFunc(GetPingMetricType, ReqGetPingMetric)
 	// register node
@@ -66,6 +64,18 @@ func init() {
 	registerReqToEndNodeFunc(ListInboundReqType, ReqListInbound)
 	// delete inbound by name
 	registerReqToEndNodeFunc(DeleteInboundByNameReqType, ReqDeleteInboundByName)
+	// get node groups
+	registerReqToEndNodeFunc(GetNodeGroupsReqType, ReqGetNodeGroups)
+	// set node groups
+	registerReqToEndNodeFunc(SetNodeGroupsReqType, ReqSetNodeGroups)
+	// list cluster users
+	registerReqToEndNodeFunc(ListClusterUsersReqType, ReqListClusterUsers)
+	// get cluster users by name
+	registerReqToEndNodeFunc(GetClusterUsersByNameReqType, ReqGetClusterUsersByName)
+	// upsert cluster users
+	registerReqToEndNodeFunc(UpsertClusterUsersReqType, ReqUpsertClusterUsers)
+	// delete cluster users
+	registerReqToEndNodeFunc(DeleteClusterUsersReqType, ReqDeleteClusterUsers)
 }
 
 func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
@@ -96,10 +106,13 @@ func NewEndNodeClient(nodes []*cluster.Node, localNode *cluster.LocalNode) *EndN
 }
 
 func processUserOpRsp(rsp *proto.UserOpRsp, err error) (interface{}, error) {
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
+	if err != nil {
+		return nil, err
 	}
-	return nil, err
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
+	}
+	return nil, nil
 }
 
 func ReqRegisterNode(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
@@ -176,7 +189,7 @@ func ReqGetSub(ctx context.Context, reqData []byte, endNodeAccessClient proto.En
 		return nil, err
 	}
 	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return rsp.GetUris(), nil
 }
@@ -193,7 +206,7 @@ func ReqGetBandwidthStats(ctx context.Context, reqData []byte, endNodeAccessClie
 		return []*proto.Stats{}, err
 	}
 	if rsp.GetCode() != 0 {
-		return []*proto.Stats{}, fmt.Errorf(rsp.GetMsg())
+		return []*proto.Stats{}, fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return rsp.GetStats(), nil
 
@@ -207,10 +220,13 @@ func ReqAddInbound(ctx context.Context, reqData []byte, endNodeAccessClient prot
 
 	addInboundReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.AddInbound(ctx, addInboundReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
+	if err != nil {
+		return nil, err
 	}
-	return nil, err
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
+	}
+	return nil, nil
 }
 
 func ReqDeleteInbound(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
@@ -221,10 +237,13 @@ func ReqDeleteInbound(ctx context.Context, reqData []byte, endNodeAccessClient p
 
 	deleteInboundReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.DeleteInbound(ctx, deleteInboundReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
+	if err != nil {
+		return nil, err
 	}
-	return nil, err
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
+	}
+	return nil, nil
 }
 
 func ReqGetUsers(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
@@ -235,11 +254,11 @@ func ReqGetUsers(ctx context.Context, reqData []byte, endNodeAccessClient proto.
 
 	getUsersReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.GetUsers(ctx, getUsersReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
-	}
 	if err != nil {
 		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return rsp.GetUsers(), nil
 }
@@ -252,11 +271,11 @@ func ReqGetInbound(ctx context.Context, reqData []byte, endNodeAccessClient prot
 
 	getInboundReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.GetInbound(ctx, getInboundReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return "", fmt.Errorf(rsp.GetMsg())
-	}
 	if err != nil {
 		return "", err
+	}
+	if rsp.GetCode() != 0 {
+		return "", fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return rsp.GetData(), nil
 }
@@ -269,11 +288,11 @@ func ReqUpdateProxy(ctx context.Context, reqData []byte, endNodeAccessClient pro
 
 	updateProxyReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.UpdateProxy(ctx, updateProxyReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
-	}
 	if err != nil {
 		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return nil, nil
 }
@@ -286,11 +305,11 @@ func ReqSetGatewayModel(ctx context.Context, reqData []byte, endNodeAccessClient
 
 	setGatewayModelReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.SetGatewayModel(ctx, setGatewayModelReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
-	}
 	if err != nil {
 		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return nil, nil
 }
@@ -303,11 +322,11 @@ func ReqObtainNewCert(ctx context.Context, reqData []byte, endNodeAccessClient p
 
 	obtainNewCertReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.ObtainNewCert(ctx, obtainNewCertReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
-	}
 	if err != nil {
 		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return nil, nil
 }
@@ -320,11 +339,11 @@ func ReqFastAddInbound(ctx context.Context, reqData []byte, endNodeAccessClient 
 
 	fastAddInboundReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.FastAddInbound(ctx, fastAddInboundReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
-	}
 	if err != nil {
 		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return nil, nil
 }
@@ -337,11 +356,11 @@ func ReqTransferCert(ctx context.Context, reqData []byte, endNodeAccessClient pr
 
 	transferCertReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.TransferCert(ctx, transferCertReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
-	}
 	if err != nil {
 		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return nil, nil
 }
@@ -360,23 +379,6 @@ func ReqGetCerts(ctx context.Context, reqData []byte, endNodeAccessClient proto.
 	return rsp.GetCerts(), nil
 }
 
-func ReqClearUsers(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
-	clearUsersReq := &proto.ClearUsersReq{}
-	if err := pb.Unmarshal(reqData, clearUsersReq); err != nil {
-		return nil, fmt.Errorf("can't unmarshal req[%v] to ClearUsersReq > %v", reqData, err)
-	}
-
-	clearUsersReq.NodeAuthInfo = nodeAuthInfo
-	rsp, err := endNodeAccessClient.ClearUsers(ctx, clearUsersReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
-	}
-	if err != nil {
-		return nil, err
-	}
-	return nil, nil
-}
-
 func ReqGetPingMetric(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
 	getPingMetricReq := &proto.GetPingMetricReq{}
 	if err := pb.Unmarshal(reqData, getPingMetricReq); err != nil {
@@ -385,11 +387,11 @@ func ReqGetPingMetric(ctx context.Context, reqData []byte, endNodeAccessClient p
 
 	getPingMetricReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.GetPingMetric(ctx, getPingMetricReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
-	}
 	if err != nil {
 		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return rsp.GetMetric(), nil
 }
@@ -402,11 +404,11 @@ func ReqSetPingCheck(ctx context.Context, reqData []byte, endNodeAccessClient pr
 
 	setPingCheckReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.SetPingCheck(ctx, setPingCheckReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
-	}
 	if err != nil {
 		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return nil, nil
 }
@@ -418,11 +420,11 @@ func ReqGetNodeMetric(ctx context.Context, reqData []byte, endNodeAccessClient p
 
 	getNodeMetricReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.GetNodeMetric(ctx, getNodeMetricReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
-	}
 	if err != nil {
 		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return rsp.GetNodeMetrics(), nil
 }
@@ -510,7 +512,7 @@ func ReqListInbound(ctx context.Context, reqData []byte, endNodeAccessClient pro
 		return nil, err
 	}
 	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return rsp.GetInbounds(), nil
 }
@@ -526,7 +528,103 @@ func ReqDeleteInboundByName(ctx context.Context, reqData []byte, endNodeAccessCl
 		return nil, err
 	}
 	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf(rsp.GetMsg())
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
 	}
 	return "Succ", nil
+}
+
+func ReqGetNodeGroups(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.GetNodeGroupsReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req to GetNodeGroupsReq > %v", err)
+	}
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.GetNodeGroups(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
+	}
+	return rsp.GetGroups(), nil
+}
+
+func ReqSetNodeGroups(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.SetNodeGroupsReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req to SetNodeGroupsReq > %v", err)
+	}
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.SetNodeGroups(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
+	}
+	return nil, nil
+}
+
+func ReqListClusterUsers(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.ListClusterUsersReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req to ListClusterUsersReq > %v", err)
+	}
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.ListClusterUsers(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
+	}
+	return rsp.GetUsers(), nil
+}
+
+func ReqGetClusterUsersByName(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.GetClusterUsersByNameReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req to GetClusterUsersByNameReq > %v", err)
+	}
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.GetClusterUsersByName(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
+	}
+	return rsp.GetUsers(), nil
+}
+
+func ReqUpsertClusterUsers(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.UpsertClusterUsersReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req to UpsertClusterUsersReq > %v", err)
+	}
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.UpsertClusterUsers(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
+	}
+	return nil, nil
+}
+
+func ReqDeleteClusterUsers(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.DeleteClusterUsersReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req to DeleteClusterUsersReq > %v", err)
+	}
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.DeleteClusterUsers(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
+	}
+	return nil, nil
 }

@@ -165,14 +165,6 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
-	m.RegisterHandler(clearUsers, "ClearUsers",
-		prompt.WithSuggests([]prompt.Suggest{
-			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
-			userNamesSuggest,
-		}),
-		prompt.WithGetSuggestMethod(GetSuggest),
-	)
-
 	m.RegisterHandler(addAllUserToInbound, "AddAllUserToInbound",
 		prompt.WithSuggests([]prompt.Suggest{
 			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
@@ -468,15 +460,6 @@ func listUser(target string) error {
 			fmt.Println(user)
 		}
 	}
-	return nil
-}
-
-func clearUsers(target, users string) error {
-	result, err := client.ClearUser(getHost(), getAuthToken(), target, users)
-	if err != nil {
-		return err
-	}
-	fmt.Println(result)
 	return nil
 }
 

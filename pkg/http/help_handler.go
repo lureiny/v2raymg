@@ -11,17 +11,27 @@ type HelpHandler struct{ HttpHandlerImp }
 
 func (handler *HelpHandler) handlerFunc(c *gin.Context) {
 	relativePath := c.Param("relativePath")
-	if h, ok := handler.getHttpServer().handlersMap[relativePath]; !ok {
+	// Try to find a handler whose relativePath matches (keys are "METHOD path").
+	var matched HttpHandlerInterface
+	if relativePath != "" && relativePath != "/" {
+		for _, h := range handler.getHttpServer().handlersMap {
+			if h.getRelativePath() == relativePath {
+				matched = h
+				break
+			}
+		}
+	}
+	if matched != nil {
+		c.String(200, matched.help())
+	} else {
 		helpInfos := []string{}
-		for _, handler := range handler.getHttpServer().handlersMap {
-			if handler.help() != "" {
-				helpInfos = append(helpInfos, handler.help())
+		for _, h := range handler.getHttpServer().handlersMap {
+			if h.help() != "" {
+				helpInfos = append(helpInfos, h.help())
 			}
 		}
 		sort.Strings(helpInfos)
 		c.String(200, strings.Join(helpInfos, "\n"))
-	} else {
-		c.String(200, h.help())
 	}
 }
 

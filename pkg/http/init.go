@@ -40,11 +40,15 @@ func (s *HttpServer) registerRoutes() {
 	adminGroup := r.Group("/api", auth.AuthMiddleware(s.token, s.jwtSecret), auth.AdminOnly())
 	s.registerOn(adminGroup, &NodeHandler{}, "GET")
 	s.registerOn(adminGroup, &GetCertsHandler{}, "GET")
-	s.registerOn(adminGroup, &UserListHandler{}, "GET")
-	s.registerOn(adminGroup, &UserAddHandler{}, "POST")
-	s.registerOn(adminGroup, &UserUpdateHandler{}, "PUT")
-	s.registerOn(adminGroup, &UserDeleteHandler{}, "DELETE")
-	s.registerOn(adminGroup, &UserResetHandler{}, "POST")
+	// User CRUD routes — disabled when clusterUser is enabled to prevent
+	// two user management systems from running simultaneously.
+	if !s.clusterUserEnabled {
+		s.registerOn(adminGroup, &UserListHandler{}, "GET")
+		s.registerOn(adminGroup, &UserAddHandler{}, "POST")
+		s.registerOn(adminGroup, &UserUpdateHandler{}, "PUT")
+		s.registerOn(adminGroup, &UserDeleteHandler{}, "DELETE")
+		s.registerOn(adminGroup, &UserResetHandler{}, "POST")
+	}
 	s.registerOn(adminGroup, &InboundGetHandler{}, "GET")
 	s.registerOn(adminGroup, &InboundAddHandler{}, "POST")
 	s.registerOn(adminGroup, &InboundDeleteHandler{}, "DELETE")
@@ -57,15 +61,26 @@ func (s *HttpServer) registerRoutes() {
 	s.registerOn(adminGroup, &CopyUserBetweenNodesHandler{}, "POST")
 	s.registerOn(adminGroup, &GatewayHandler{}, "PUT")
 	s.registerOn(adminGroup, &PingCheckHandler{}, "PUT")
-	s.registerOn(adminGroup, &ClearUserHandler{}, "DELETE")
 	s.registerOn(adminGroup, &SetUserRoleHandler{}, "PUT")
+	// Node Groups and ClusterUser routes — only registered when feature is enabled.
+	// When disabled, accessing these paths returns 404 to preserve the "default-off
+	// is invisible" contract.
+	if s.clusterUserEnabled {
+		s.registerOn(adminGroup, &NodeGroupsGetHandler{}, "GET")
+		s.registerOn(adminGroup, &NodeGroupsSetHandler{}, "PUT")
+		s.registerOn(adminGroup, &ClusterUserListHandler{}, "GET")
+		s.registerOn(adminGroup, &ClusterUserAddHandler{}, "POST")
+		s.registerOn(adminGroup, &ClusterUserUpdateHandler{}, "PUT")
+		s.registerOn(adminGroup, &ClusterUserDeleteHandler{}, "DELETE")
+	}
 }
 
 // registerOn registers a handler on the given router (engine or group).
 func (s *HttpServer) registerOn(router gin.IRouter, handler HttpHandlerInterface, method string) {
 	relativePath := handler.getRelativePath()
 	handler.setHttpServer(s)
-	s.handlersMap[relativePath] = handler
+	key := method + " " + relativePath
+	s.handlersMap[key] = handler
 	handlers := handler.getHandlers()
 	switch method {
 	case "GET":

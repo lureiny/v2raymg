@@ -6,6 +6,7 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lureiny/v2raymg/pkg/cluster"
@@ -18,6 +19,8 @@ import (
 	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription"
 	"github.com/lureiny/v2raymg/pkg/proxy/usermanager"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
+	clusteruserstore "github.com/lureiny/v2raymg/pkg/cluster_user/store"
+	"github.com/lureiny/v2raymg/pkg/cluster_user/syncer"
 
 	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/encoding"
@@ -50,6 +53,13 @@ type EndNodeServer struct {
 	userMgr      *usermanager.UserManager
 	containerMgr *container.ContainerMgr
 	subMgr       *subscription.Manager
+
+	// cluster user feature
+	clusterUserMu      sync.Mutex
+	clusterUserEnabled bool
+	clusterUserStore   clusteruserstore.ClusterUserStore
+	nodeGroupsStore    clusteruserstore.NodeGroupsStore
+	syncer             *syncer.Syncer
 }
 
 const (
@@ -73,7 +83,6 @@ var methodRspMap = map[string]interface{}{
 	"GetUsers":             &proto.GetUsersRsp{},
 	"AddUsers":             &proto.UserOpRsp{},
 	"DeleteUsers":          &proto.UserOpRsp{},
-	"ClearUsers":           &proto.ClearUsersRsp{},
 	"UpdateUsers":          &proto.UserOpRsp{},
 	"ResetUser":            &proto.UserOpRsp{},
 	"GetSub":               &proto.GetSubRsp{},
@@ -86,13 +95,19 @@ var methodRspMap = map[string]interface{}{
 	"ListInbound":             &proto.ListInboundRsp{},
 	"DeleteInboundByName":     &proto.InboundOpRsp{},
 	"UpdateProxy":             &proto.UpdateProxyRsp{},
-	"FastAddInbound":       &proto.FastAddInboundReq{},
+	"FastAddInbound":       &proto.FastAddInboundRsp{},
 	"SetGatewayModel":      &proto.SetGatewayModelRsp{},
 	"ObtainNewCert":        &proto.ObtainNewCertRsp{},
 	"TransferCert":         &proto.TransferCertRsp{},
 	"GetCerts":             &proto.GetCertsRsp{},
-	"GetPingMetric":        &proto.GetPingMetricRsp{},
-	"GetNodeMetric":        &proto.GetNodeMetricRsp{},
+	"GetPingMetric":           &proto.GetPingMetricRsp{},
+	"GetNodeMetric":           &proto.GetNodeMetricRsp{},
+	"GetNodeGroups":           &proto.GetNodeGroupsRsp{},
+	"SetNodeGroups":           &proto.SetNodeGroupsRsp{},
+	"ListClusterUsers":        &proto.ListClusterUsersRsp{},
+	"GetClusterUsersByName":   &proto.GetClusterUsersByNameRsp{},
+	"UpsertClusterUsers":      &proto.UpsertClusterUsersRsp{},
+	"DeleteClusterUsers":      &proto.DeleteClusterUsersRsp{},
 }
 
 func newEmptyRsp(fullMethod string) (interface{}, error) {
@@ -177,6 +192,20 @@ func (s *EndNodeServer) Init(
 			Port: int32(cfg.Cluster.CenterNodePort),
 		},
 	}
+}
+
+// InitClusterUser injects cluster user feature dependencies into the server.
+// Call this after Init() when cluster_user.enabled = true.
+func (s *EndNodeServer) InitClusterUser(
+	enabled bool,
+	cuStore clusteruserstore.ClusterUserStore,
+	ngStore clusteruserstore.NodeGroupsStore,
+	sync *syncer.Syncer,
+) {
+	s.clusterUserEnabled = enabled
+	s.clusterUserStore = cuStore
+	s.nodeGroupsStore = ngStore
+	s.syncer = sync
 }
 
 func (s *EndNodeServer) filter() {
