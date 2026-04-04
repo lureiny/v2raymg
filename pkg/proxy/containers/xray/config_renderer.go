@@ -112,8 +112,15 @@ func (r *Renderer) applyUserBindings(inbounds []interface{}, userBindings map[st
 		}
 		protocol := contracts.Protocol(protocolStr)
 
-		// Build users for this protocol
-		userMaps, err := r.adapter.MapUsers(users, protocol)
+		// Convert UserSpec list to map format for MapUsers
+		userMaps := make([]map[string]any, 0, len(users))
+		for _, u := range users {
+			userMaps = append(userMaps, map[string]any{
+				"email":    u.Username,
+				"password": u.AuthToken,
+			})
+		}
+		nativeMaps, err := r.adapter.MapUsers(userMaps, protocol)
 		if err != nil {
 			return nil, fmt.Errorf("failed to map users for inbound %s: %w", tag, err)
 		}
@@ -128,19 +135,14 @@ func (r *Renderer) applyUserBindings(inbounds []interface{}, userBindings map[st
 		// Add users based on protocol
 		switch protocol {
 		case contracts.ProtocolVMess, contracts.ProtocolVLess, contracts.ProtocolTrojan:
-			// Convert []map[string]interface{} to []interface{} for proper JSON serialization
-			clientSlice := make([]interface{}, len(userMaps))
-			for i, m := range userMaps {
+			clientSlice := make([]interface{}, len(nativeMaps))
+			for i, m := range nativeMaps {
 				clientSlice[i] = m
 			}
 			settings["clients"] = clientSlice
 		case contracts.ProtocolShadowsocks:
-			if len(users) > 0 {
-				if uuid, ok := users[0].GetExtension("uuid"); ok {
-					if uuidStr, ok := uuid.(string); ok {
-						settings["password"] = uuidStr
-					}
-				}
+			if len(users) > 0 && users[0].AuthToken != "" {
+				settings["password"] = users[0].AuthToken
 			}
 		}
 

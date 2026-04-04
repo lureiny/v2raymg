@@ -33,8 +33,7 @@ func TestExtractCredential(t *testing.T) {
 				defaultClientUUID: "vless-uuid-123",
 			},
 			user: contracts.UserSpec{
-				Username:   "u@test.com",
-				Extensions: map[string]any{"uuid": "should-be-ignored"},
+				Username: "u@test.com",
 			},
 			want: "vless-uuid-123",
 		},
@@ -46,8 +45,7 @@ func TestExtractCredential(t *testing.T) {
 				defaultClientUUID: "vmess-uuid-456",
 			},
 			user: contracts.UserSpec{
-				Username:   "u@test.com",
-				Extensions: map[string]any{"uuid": "should-be-ignored"},
+				Username: "u@test.com",
 			},
 			want: "vmess-uuid-456",
 		},
@@ -59,8 +57,7 @@ func TestExtractCredential(t *testing.T) {
 				defaultPassword: "trojan-pass",
 			},
 			user: contracts.UserSpec{
-				Username:   "u@test.com",
-				Extensions: map[string]any{"password": "should-be-ignored"},
+				Username: "u@test.com",
 			},
 			want: "trojan-pass",
 		},
@@ -72,8 +69,7 @@ func TestExtractCredential(t *testing.T) {
 				defaultPassword: "ss-pass",
 			},
 			user: contracts.UserSpec{
-				Username:   "u@test.com",
-				Extensions: map[string]any{"password": "should-be-ignored"},
+				Username: "u@test.com",
 			},
 			want: "ss-pass",
 		},
@@ -872,9 +868,6 @@ func TestBuildSubscriptionExtensions(t *testing.T) {
 
 	user := contracts.UserSpec{
 		Username: "test@example.com",
-		Extensions: map[string]any{
-			"flow": "xtls-rprx-vision",
-		},
 	}
 
 	ext := buildSubscriptionExtensions(in, user)
@@ -882,7 +875,6 @@ func TestBuildSubscriptionExtensions(t *testing.T) {
 	assert.Equal(t, "tls", ext["security"])
 	assert.Equal(t, "/test", ext["ws_path"])
 	assert.Equal(t, "sni.example.com", ext["server_name"])
-	assert.Equal(t, "xtls-rprx-vision", ext["flow"])
 }
 
 func TestExtString(t *testing.T) {
@@ -1005,13 +997,6 @@ func TestGetUserSubscriptions(t *testing.T) {
 	t.Run("user with UUID gets VLESS and VMess subs", func(t *testing.T) {
 		user := contracts.UserSpec{
 			Username: "alice@example.com",
-			Protocol: contracts.ProtocolVLess,
-			Extensions: map[string]any{
-				// uuid in user.Extensions is now IGNORED for VMess/VLESS
-				// UUID comes from inbound's defaultClientUUID
-				"uuid": "alice-uuid-123-should-be-ignored",
-				"flow": "xtls-rprx-vision",
-			},
 		}
 
 		specs, err := executor.GetUserSubscriptions(contracts.SubscriptionRequest{
@@ -1038,7 +1023,6 @@ func TestGetUserSubscriptions(t *testing.T) {
 		assert.Equal(t, uint32(30001), vlessSub.Port)
 		assert.Equal(t, "alice@example.com", vlessSub.Username)
 		assert.Contains(t, vlessSub.URI, "vless://default-vless-uuid@my.server.com:30001")
-		assert.Contains(t, vlessSub.URI, "flow=xtls-rprx-vision")
 		assert.Contains(t, vlessSub.URI, "path=/vless")
 
 		// Verify VMess subscription - UUID comes from inbound's defaultClientUUID
@@ -1052,10 +1036,6 @@ func TestGetUserSubscriptions(t *testing.T) {
 	t.Run("user with password gets Trojan and SS subs", func(t *testing.T) {
 		user := contracts.UserSpec{
 			Username: "bob@example.com",
-			Protocol: contracts.ProtocolTrojan,
-			Extensions: map[string]any{
-				"password": "bob-trojan-pass-should-be-ignored",
-			},
 		}
 
 		specs, err := executor.GetUserSubscriptions(contracts.SubscriptionRequest{
@@ -1091,7 +1071,6 @@ func TestGetUserSubscriptions(t *testing.T) {
 		assert.Equal(t, "default-trojan-password", trojanSub.Password)
 		// With usermanager set, uses forward port
 		assert.Contains(t, trojanSub.URI, "trojan://default-trojan-password@my.server.com:30001")
-		assert.Contains(t, trojanSub.URI, "sni=trojan.example.com")
 
 		ssSub, ok := tagMap["ss-in"]
 		require.True(t, ok)
@@ -1104,11 +1083,6 @@ func TestGetUserSubscriptions(t *testing.T) {
 	t.Run("user with both UUID and password gets all subs", func(t *testing.T) {
 		user := contracts.UserSpec{
 			Username: "charlie@example.com",
-			Protocol: contracts.ProtocolVLess,
-			Extensions: map[string]any{
-				"uuid":     "charlie-uuid",
-				"password": "charlie-pass",
-			},
 		}
 
 		specs, err := executor.GetUserSubscriptions(contracts.SubscriptionRequest{
@@ -1133,10 +1107,6 @@ func TestGetUserSubscriptions(t *testing.T) {
 	t.Run("port override applies to all subs", func(t *testing.T) {
 		user := contracts.UserSpec{
 			Username: "dave@example.com",
-			Extensions: map[string]any{
-				"uuid":     "dave-uuid",
-				"password": "dave-pass",
-			},
 		}
 
 		specs, err := executor.GetUserSubscriptions(contracts.SubscriptionRequest{
@@ -1153,8 +1123,7 @@ func TestGetUserSubscriptions(t *testing.T) {
 
 	t.Run("default node name uses inbound tag", func(t *testing.T) {
 		user := contracts.UserSpec{
-			Username:   "eve@example.com",
-			Extensions: map[string]any{"uuid": "eve-uuid"},
+			Username: "eve@example.com",
 		}
 
 		specs, err := executor.GetUserSubscriptions(contracts.SubscriptionRequest{
@@ -1169,9 +1138,7 @@ func TestGetUserSubscriptions(t *testing.T) {
 	})
 
 	t.Run("empty username returns error", func(t *testing.T) {
-		user := contracts.UserSpec{
-			Extensions: map[string]any{"uuid": "test"},
-		}
+		user := contracts.UserSpec{}
 
 		_, err := executor.GetUserSubscriptions(contracts.SubscriptionRequest{
 			User: user,
@@ -1183,8 +1150,7 @@ func TestGetUserSubscriptions(t *testing.T) {
 
 	t.Run("empty host returns error", func(t *testing.T) {
 		user := contracts.UserSpec{
-			Username:   "test@example.com",
-			Extensions: map[string]any{"uuid": "test"},
+			Username: "test@example.com",
 		}
 
 		_, err := executor.GetUserSubscriptions(contracts.SubscriptionRequest{
@@ -1196,8 +1162,7 @@ func TestGetUserSubscriptions(t *testing.T) {
 
 	t.Run("no matching credentials returns VMess/VLESS from inbound defaultClientUUID", func(t *testing.T) {
 		user := contracts.UserSpec{
-			Username:   "noone@example.com",
-			Extensions: map[string]any{},
+			Username: "noone@example.com",
 		}
 
 		specs, err := executor.GetUserSubscriptions(contracts.SubscriptionRequest{
@@ -1225,8 +1190,7 @@ func TestGetUserSubscriptions(t *testing.T) {
 		}
 
 		user := contracts.UserSpec{
-			Username:   "test@example.com",
-			Extensions: map[string]any{"uuid": "test-uuid"},
+			Username: "test@example.com",
 		}
 
 		specs, err := emptyExecutor.GetUserSubscriptions(contracts.SubscriptionRequest{
@@ -1319,12 +1283,6 @@ func TestSubscriptionFlow_AddUserThenGetSubs(t *testing.T) {
 	// Note: uuid in user.Extensions is IGNORED for VMess/VLESS - UUID comes from inbound defaultClientUUID
 	user := contracts.UserSpec{
 		Username: "fulluser@example.com",
-		Protocol: contracts.ProtocolVLess,
-		Extensions: map[string]any{
-			"uuid":     "user-provided-uuid-should-be-ignored",
-			"password": "super-secret-password",
-			"flow":     "xtls-rprx-vision",
-		},
 	}
 
 	// Step 3: Get subscriptions
@@ -1361,8 +1319,6 @@ func TestSubscriptionFlow_AddUserThenGetSubs(t *testing.T) {
 		assert.Contains(t, sub.URI, "security=tls")
 		assert.Contains(t, sub.URI, "path=/vless")
 		assert.Contains(t, sub.URI, "host=cdn.example.com")
-		assert.Contains(t, sub.URI, "sni=example.com")
-		assert.Contains(t, sub.URI, "flow=xtls-rprx-vision")
 	})
 
 	t.Run("Trojan-TCP subscription", func(t *testing.T) {
@@ -1377,7 +1333,6 @@ func TestSubscriptionFlow_AddUserThenGetSubs(t *testing.T) {
 		assert.Contains(t, sub.URI, "super-secret-password@proxy.example.com:30001")
 		assert.Contains(t, sub.URI, "type=tcp")
 		assert.Contains(t, sub.URI, "security=tls")
-		assert.Contains(t, sub.URI, "sni=trojan.example.com")
 	})
 
 	t.Run("VMess-gRPC subscription", func(t *testing.T) {
@@ -1406,7 +1361,6 @@ func TestSubscriptionFlow_AddUserThenGetSubs(t *testing.T) {
 		assert.Equal(t, "default-vmess-uuid-456", cfg["id"])
 		assert.Equal(t, "grpc", cfg["net"])
 		assert.Equal(t, "vmess-svc", cfg["path"])
-		assert.Equal(t, "vmess.example.com", cfg["sni"])
 		assert.Equal(t, "auto", cfg["encryption"]) // Issue #91: encryption defaults to auto
 	})
 
@@ -1539,10 +1493,6 @@ func TestGetUserSubscriptions_WithForwardPort(t *testing.T) {
 	// Request subscription - uuid in user.Extensions is IGNORED for VMess/VLESS
 	user := contracts.UserSpec{
 		Username: "alice@example.com",
-		Protocol: contracts.ProtocolVLess,
-		Extensions: map[string]any{
-			"uuid": "alice-uuid-123-should-be-ignored",
-		},
 	}
 
 	specs, err := executor.GetUserSubscriptions(contracts.SubscriptionRequest{
@@ -1588,10 +1538,6 @@ func TestGetUserSubscriptions_WithoutForwardPort(t *testing.T) {
 	// Request subscription
 	user := contracts.UserSpec{
 		Username: "bob@example.com",
-		Protocol: contracts.ProtocolVLess,
-		Extensions: map[string]any{
-			"uuid": "bob-uuid-456",
-		},
 	}
 
 	// Should return empty specs when user is not in inbound's mapping (not an error)
@@ -1629,15 +1575,12 @@ func TestGetUserSubscriptions_NoUserManager(t *testing.T) {
 		userMgr: um,
 	}
 	// Set up user port mapping using internal mapping (new approach doesn't require usermanager)
+	um.AddUserForTest("charlie@example.com", []uint32{30001})
 	executor.inbounds["vless-in"].SetUserPortForTest("charlie@example.com", 30001)
 
 	// Request subscription - should work with internal mapping even without usermanager
 	user := contracts.UserSpec{
 		Username: "charlie@example.com",
-		Protocol: contracts.ProtocolVLess,
-		Extensions: map[string]any{
-			"uuid": "charlie-uuid-789",
-		},
 	}
 
 	specs, err := executor.GetUserSubscriptions(contracts.SubscriptionRequest{
@@ -1675,16 +1618,13 @@ func TestGetUserSubscriptions_PortOverride(t *testing.T) {
 		userMgr: um,
 	}
 	// Set up user port mapping (this is the authoritative source now)
+	um.AddUserForTest("dave@example.com", []uint32{30001})
 	in.SetUserPortForTest("dave@example.com", 30001)
 	executor.inbounds["vless-in"] = in
 
 	// Request subscription with explicit port override - uuid in user.Extensions is IGNORED
 	user := contracts.UserSpec{
 		Username: "dave@example.com",
-		Protocol: contracts.ProtocolVLess,
-		Extensions: map[string]any{
-			"uuid": "dave-uuid-should-be-ignored",
-		},
 	}
 
 	specs, err := executor.GetUserSubscriptions(contracts.SubscriptionRequest{

@@ -64,23 +64,6 @@ func TestUserSpec_MarkActive(t *testing.T) {
 	}
 }
 
-func TestUserSpec_GetExtension_NilMap(t *testing.T) {
-	u := &contracts.UserSpec{}
-	val, ok := u.GetExtension("key")
-	if ok || val != nil {
-		t.Error("expected nil, false for nil Extensions map")
-	}
-}
-
-func TestUserSpec_SetExtension_NilMap(t *testing.T) {
-	u := &contracts.UserSpec{}
-	u.SetExtension("key", "value")
-	val, ok := u.GetExtension("key")
-	if !ok || val != "value" {
-		t.Errorf("expected value after SetExtension, got %v, %v", val, ok)
-	}
-}
-
 // TestUserSpec_NewFields locks the zero-value semantics and JSON behaviour of the
 // Role and LoginPassword fields added for frontend authentication.
 func TestUserSpec_NewFields(t *testing.T) {
@@ -148,18 +131,3 @@ func TestUserSpec_LoginPasswordField(t *testing.T) {
 	}
 }
 
-func TestUserSpec_GetSetExtension(t *testing.T) {
-	u := &contracts.UserSpec{
-		Extensions: map[string]any{"existing": 42},
-	}
-	val, ok := u.GetExtension("existing")
-	if !ok || val != 42 {
-		t.Errorf("GetExtension: got %v, %v", val, ok)
-	}
-
-	u.SetExtension("new", "data")
-	val, ok = u.GetExtension("new")
-	if !ok || val != "data" {
-		t.Errorf("after SetExtension: got %v, %v", val, ok)
-	}
-}

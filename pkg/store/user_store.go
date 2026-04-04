@@ -40,10 +40,10 @@ func NewSQLiteUserStore(db *DB) *SQLiteUserStore {
 }
 
 // Load reads all user rows from the database and returns them as User objects.
-// Fields not persisted (BindPorts, Extensions, Protocol, TTL) are left at zero values.
+// Fields not persisted (BindPorts, Extensions, Protocol) are left at zero values.
 func (s *SQLiteUserStore) Load() ([]*contracts.User, error) {
 	rows, err := s.db.DB().Query(`
-		SELECT username, auth_token, level, expiry_time,
+		SELECT username, auth_token, expiry_time,
 		       traffic_limit, upload_limit, download_limit,
 		       bandwidth_upload_bps, bandwidth_download_bps,
 		       max_clients, client_recycle_delay_sec, client_drain_sec,
@@ -65,7 +65,7 @@ func (s *SQLiteUserStore) Load() ([]*contracts.User, error) {
 		var portMappingsStr string
 
 		if err := rows.Scan(
-			&u.Username, &u.AuthToken, &u.Level, &expiryStr,
+			&u.Username, &u.AuthToken, &expiryStr,
 			&u.TrafficLimit, &u.UploadLimit, &u.DownloadLimit,
 			&u.BandwidthUploadBps, &u.BandwidthDownloadBps,
 			&u.MaxClients, &u.ClientRecycleDelaySec, &u.ClientDrainSec,
@@ -132,7 +132,7 @@ func (s *SQLiteUserStore) Save(user *contracts.User) error {
 
 	_, err := s.db.DB().Exec(`
 		INSERT OR REPLACE INTO users (
-			username, auth_token, level, expiry_time,
+			username, auth_token, expiry_time,
 			traffic_limit, upload_limit, download_limit,
 			bandwidth_upload_bps, bandwidth_download_bps,
 			max_clients, client_recycle_delay_sec, client_drain_sec,
@@ -142,8 +142,8 @@ func (s *SQLiteUserStore) Save(user *contracts.User) error {
 			target_group, updated_at_us, origin_node, hash,
 			deletion_state,
 			updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-		user.Username, user.AuthToken, user.Level, expiryArg,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+		user.Username, user.AuthToken, expiryArg,
 		user.TrafficLimit, user.UploadLimit, user.DownloadLimit,
 		user.BandwidthUploadBps, user.BandwidthDownloadBps,
 		user.MaxClients, user.ClientRecycleDelaySec, user.ClientDrainSec,
@@ -172,7 +172,7 @@ func (s *SQLiteUserStore) Delete(username string) error {
 // Returns (nil, nil) if the user does not exist.
 func (s *SQLiteUserStore) Get(username string) (*contracts.User, error) {
 	row := s.db.DB().QueryRow(`
-		SELECT username, auth_token, level, expiry_time,
+		SELECT username, auth_token, expiry_time,
 		       traffic_limit, upload_limit, download_limit,
 		       bandwidth_upload_bps, bandwidth_download_bps,
 		       max_clients, client_recycle_delay_sec, client_drain_sec,
@@ -188,7 +188,7 @@ func (s *SQLiteUserStore) Get(username string) (*contracts.User, error) {
 	var portMappingsStr string
 
 	if err := row.Scan(
-		&u.Username, &u.AuthToken, &u.Level, &expiryStr,
+		&u.Username, &u.AuthToken, &expiryStr,
 		&u.TrafficLimit, &u.UploadLimit, &u.DownloadLimit,
 		&u.BandwidthUploadBps, &u.BandwidthDownloadBps,
 		&u.MaxClients, &u.ClientRecycleDelaySec, &u.ClientDrainSec,
@@ -227,7 +227,7 @@ func (s *SQLiteUserStore) Get(username string) (*contracts.User, error) {
 // ListByGroup returns all users with the given target_group.
 func (s *SQLiteUserStore) ListByGroup(group string) ([]*contracts.User, error) {
 	rows, err := s.db.DB().Query(`
-		SELECT username, auth_token, level, expiry_time,
+		SELECT username, auth_token, expiry_time,
 		       traffic_limit, upload_limit, download_limit,
 		       bandwidth_upload_bps, bandwidth_download_bps,
 		       max_clients, client_recycle_delay_sec, client_drain_sec,
@@ -250,7 +250,7 @@ func (s *SQLiteUserStore) ListByGroup(group string) ([]*contracts.User, error) {
 		var portMappingsStr string
 
 		if err := rows.Scan(
-			&u.Username, &u.AuthToken, &u.Level, &expiryStr,
+			&u.Username, &u.AuthToken, &expiryStr,
 			&u.TrafficLimit, &u.UploadLimit, &u.DownloadLimit,
 			&u.BandwidthUploadBps, &u.BandwidthDownloadBps,
 			&u.MaxClients, &u.ClientRecycleDelaySec, &u.ClientDrainSec,

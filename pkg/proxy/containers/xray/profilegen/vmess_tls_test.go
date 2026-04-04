@@ -43,11 +43,10 @@ func TestGenerateVMessTLSInboundSpec_DefaultTCP(t *testing.T) {
 	assert.Equal(t, "example.com", serverName)
 
 	// Validate user exists
-	users, ok := spec.Extensions["users"].([]contracts.UserSpec)
+	users, ok := spec.Extensions["users"].([]map[string]any)
 	require.True(t, ok, "users should be in extensions")
 	require.Len(t, users, 1)
-	assert.NotEmpty(t, users[0].Extensions["uuid"])
-	assert.Equal(t, contracts.ProtocolVMess, users[0].Protocol)
+	assert.NotEmpty(t, users[0]["uuid"])
 
 	// Verify no security=none
 	assert.NotEqual(t, "none", security)
@@ -123,9 +122,9 @@ func TestGenerateVMessTLSInboundSpec_Randomness(t *testing.T) {
 	require.NoError(t, err)
 
 	// UUIDs should be different
-	users1 := spec1.Extensions["users"].([]contracts.UserSpec)
-	users2 := spec2.Extensions["users"].([]contracts.UserSpec)
-	assert.NotEqual(t, users1[0].Extensions["uuid"], users2[0].Extensions["uuid"])
+	users1 := spec1.Extensions["users"].([]map[string]any)
+	users2 := spec2.Extensions["users"].([]map[string]any)
+	assert.NotEqual(t, users1[0]["uuid"], users2[0]["uuid"])
 
 	// Tags should be different (or at least one should be auto-generated differently)
 	assert.NotEqual(t, spec1.Tag, spec2.Tag)
@@ -253,18 +252,17 @@ func TestGenerateVMessTLSInboundSpec_UserExtensions(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	users := spec.Extensions["users"].([]contracts.UserSpec)
+	users := spec.Extensions["users"].([]map[string]any)
 	require.Len(t, users, 1)
 
 	user := users[0]
-	assert.Equal(t, "auto@vmess.local", user.Username)
-	assert.Equal(t, uint32(0), user.Level)
+	assert.Equal(t, "auto@vmess.local", user["email"].(string))
 	// Check VMess-specific extensions
-	uuid, ok := user.Extensions["uuid"].(string)
+	uuid, ok := user["uuid"].(string)
 	require.True(t, ok, "uuid should be set")
 	assert.NotEmpty(t, uuid)
 
-	alterID, ok := user.Extensions["alter_id"].(uint32)
+	alterID, ok := user["alter_id"].(uint32)
 	require.True(t, ok, "alter_id should be set")
 	assert.Equal(t, uint32(0), alterID)
 }

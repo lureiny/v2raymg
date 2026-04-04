@@ -245,15 +245,11 @@ func GenerateShadowsocksInboundSpec(p GenerateShadowsocksParams) (contracts.Inbo
 		tag = fmt.Sprintf("ss-%s-%d", p.Transport, randInt64()%10000)
 	}
 
-	// Create user with password as first-class field; method stays in extensions (protocol-specific)
-	user := contracts.UserSpec{
-		Username: fmt.Sprintf("auto@ss.local"),
-		Level:    0,
-		Protocol: contracts.ProtocolShadowsocks,
-		AuthToken: password,
-		Extensions: map[string]any{
-			"method": p.Method,
-		},
+	// Create default user config map for inbound_adapter
+	defaultUser := map[string]any{
+		"email":    "auto@ss.local",
+		"password": password,
+		"method":   p.Method,
 	}
 
 	// Build extensions for xray adapter
@@ -289,7 +285,7 @@ func GenerateShadowsocksInboundSpec(p GenerateShadowsocksParams) (contracts.Inbo
 
 	// Attach user to spec via special extension key
 	// The adapter will read this to build the client list
-	spec.Extensions["users"] = []contracts.UserSpec{user}
+	spec.Extensions["users"] = []map[string]any{defaultUser}
 
 	return spec, nil
 }

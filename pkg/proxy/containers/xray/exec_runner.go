@@ -1469,26 +1469,6 @@ func (in *XrayInbound) buildSubscriptionExtensions(user contracts.UserSpec) map[
 		}
 	}
 
-	// User-specific fields (flow for VLESS, alter_id for VMess, etc.)
-	if v, ok := user.GetExtension("flow"); ok {
-		if s, ok := v.(string); ok && s != "" {
-			ext["flow"] = s
-		}
-	}
-	if v, ok := user.GetExtension("alter_id"); ok {
-		ext["alter_id"] = v
-	}
-	if v, ok := user.GetExtension("method"); ok {
-		if s, ok := v.(string); ok && s != "" {
-			ext["method"] = s
-		}
-	}
-	if v, ok := user.GetExtension("username"); ok {
-		if s, ok := v.(string); ok && s != "" {
-			ext["username"] = s
-		}
-	}
-
 	return ext
 }
 

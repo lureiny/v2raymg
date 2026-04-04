@@ -20,15 +20,6 @@ type UserSpec struct {
 	// Not a user-chosen password — decoupled from the login password (LoginPassword).
 	AuthToken string `json:"auth_token,omitempty"`
 
-	// Level is the user's access level.
-	Level uint32 `json:"level"`
-
-	// Protocol is the proxy protocol.
-	Protocol Protocol `json:"protocol"`
-
-	// TTL is the time to live (for expiry).
-	TTL time.Time `json:"ttl,omitempty"`
-
 	// ExpiryTime is the user's expiry time.
 	// Zero means never expires.
 	ExpiryTime time.Time `json:"expiry_time,omitempty"`
@@ -109,10 +100,6 @@ type UserSpec struct {
 	// Hash is the SHA-256 digest of canonical fields for cluster conflict detection.
 	Hash string `json:"hash,omitempty"`
 
-	// Extensions holds provider-specific configuration.
-	// Keys are provider names (e.g., "xray", "sing-box"), values are provider-specific configs.
-	// Examples for xray: UUID, AlterID, Flow, Method, etc.
-	Extensions map[string]any `json:"extensions,omitempty"`
 }
 
 // IsExpired returns true if the user has expired.
@@ -125,11 +112,7 @@ func (u *UserSpec) IsExpired() bool {
 
 // IsValid checks if the user spec is valid.
 func (u *UserSpec) IsValid() bool {
-	if u.Username == "" {
-		return false
-	}
-	// Basic validation - extensions may contain protocol-specific required fields
-	return u.Protocol.IsValid()
+	return u.Username != ""
 }
 
 // Validate performs basic validation on UserSpec.
@@ -137,27 +120,7 @@ func (u *UserSpec) Validate() error {
 	if u.Username == "" {
 		return fmt.Errorf("username is required")
 	}
-	if !u.Protocol.IsValid() {
-		return fmt.Errorf("invalid protocol: %s", u.Protocol)
-	}
 	return nil
-}
-
-// GetExtension returns a provider-specific extension value.
-func (u *UserSpec) GetExtension(key string) (any, bool) {
-	if u.Extensions == nil {
-		return nil, false
-	}
-	val, ok := u.Extensions[key]
-	return val, ok
-}
-
-// SetExtension sets a provider-specific extension value.
-func (u *UserSpec) SetExtension(key string, value any) {
-	if u.Extensions == nil {
-		u.Extensions = make(map[string]any)
-	}
-	u.Extensions[key] = value
 }
 
 // DeletionState constants

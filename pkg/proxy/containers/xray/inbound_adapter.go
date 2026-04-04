@@ -44,54 +44,45 @@ func (a *Adapter) ValidateInbound(spec contracts.InboundSpec) error {
 	return spec.Validate()
 }
 
-// MapUsers maps user specs to Xray native user format.
-func (a *Adapter) MapUsers(users []contracts.UserSpec, protocol contracts.Protocol) ([]map[string]any, error) {
+// MapUsers maps user config maps (produced by profilegen) to Xray native user format.
+// Each entry is a map[string]any with fields: email, uuid, alter_id, flow, password, method.
+func (a *Adapter) MapUsers(users []map[string]any, protocol contracts.Protocol) ([]map[string]any, error) {
 	if len(users) == 0 {
 		return nil, nil
 	}
 
 	result := make([]map[string]any, 0, len(users))
-	for _, user := range users {
+	for _, u := range users {
+		email, _ := u["email"].(string)
 		userMap := map[string]any{
-			"email": user.Username,
-			"level": user.Level,
+			"email": email,
 		}
 
 		switch protocol {
 		case contracts.ProtocolVMess:
-			if uuid, ok := user.GetExtension("uuid"); ok {
-				if uuidStr, ok := uuid.(string); ok {
-					userMap["id"] = uuidStr
-				}
+			if uuid, ok := u["uuid"].(string); ok && uuid != "" {
+				userMap["id"] = uuid
 			}
-			if alterID, ok := user.GetExtension("alter_id"); ok {
-				if alterIDUint, ok := alterID.(uint32); ok {
-					userMap["alterId"] = alterIDUint
-				}
+			if alterID, ok := u["alter_id"].(uint32); ok {
+				userMap["alterId"] = alterID
 			}
 		case contracts.ProtocolVLess:
-			if uuid, ok := user.GetExtension("uuid"); ok {
-				if uuidStr, ok := uuid.(string); ok {
-					userMap["id"] = uuidStr
-				}
+			if uuid, ok := u["uuid"].(string); ok && uuid != "" {
+				userMap["id"] = uuid
 			}
-			if flow, ok := user.GetExtension("flow"); ok {
-				if flowStr, ok := flow.(string); ok {
-					userMap["flow"] = flowStr
-				}
+			if flow, ok := u["flow"].(string); ok && flow != "" {
+				userMap["flow"] = flow
 			}
 		case contracts.ProtocolTrojan:
-			if user.AuthToken != "" {
-				userMap["password"] = user.AuthToken
+			if pw, ok := u["password"].(string); ok && pw != "" {
+				userMap["password"] = pw
 			}
 		case contracts.ProtocolShadowsocks:
-			if user.AuthToken != "" {
-				userMap["password"] = user.AuthToken
+			if pw, ok := u["password"].(string); ok && pw != "" {
+				userMap["password"] = pw
 			}
-			if method, ok := user.GetExtension("method"); ok {
-				if methodStr, ok := method.(string); ok {
-					userMap["method"] = methodStr
-				}
+			if method, ok := u["method"].(string); ok && method != "" {
+				userMap["method"] = method
 			}
 		}
 
@@ -155,9 +146,9 @@ func (a *Adapter) ToProvider(spec contracts.InboundSpec) (NativeInbound, error) 
 	// Build protocol-specific settings
 	settings := a.buildSettings(spec)
 	if settings != nil {
-		// Check if users are provided in extensions
+		// Check if users are provided in extensions (set by profilegen as []map[string]any)
 		if usersIface, ok := spec.Extensions["users"]; ok {
-			if users, ok := usersIface.([]contracts.UserSpec); ok && len(users) > 0 {
+			if users, ok := usersIface.([]map[string]any); ok && len(users) > 0 {
 				// Map users to native format and add to settings
 				nativeUsers, err := a.MapUsers(users, spec.Protocol)
 				if err != nil {
@@ -170,22 +161,11 @@ func (a *Adapter) ToProvider(spec contracts.InboundSpec) (NativeInbound, error) 
 						settings["clients"] = nativeUsers
 					case contracts.ProtocolShadowsocks:
 						// Shadowsocks single-user mode: use method/password at settings level
-						// Get method from spec.Extensions first, then fall back to user extension
 						method := getString("method")
-						password := ""
-						if method == "" && len(users) > 0 {
-							// Fall back to first user's method
-							if m, ok := users[0].GetExtension("method"); ok {
-								if methodStr, ok := m.(string); ok {
-									method = methodStr
-								}
-							}
+						if method == "" {
+							method, _ = users[0]["method"].(string)
 						}
-						// Get password from first user
-						if len(users) > 0 {
-							password = users[0].AuthToken
-						}
-						// Set method and password at settings level (single-user mode)
+						password, _ := users[0]["password"].(string)
 						if method != "" {
 							settings["method"] = method
 						}

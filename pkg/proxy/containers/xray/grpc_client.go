@@ -296,36 +296,17 @@ func (api *XrayAPI) AddUser(tag string, user contracts.UserSpec) error {
 	var accountType string
 	var accountProto proto.Message
 
-	switch user.Protocol {
-	case contracts.ProtocolVMess:
-		accountType = "xray.proxy.vmess.Account"
-		uuid, _ := user.Extensions["uuid"].(string)
-		if uuid == "" {
-			uuid = "00000000-0000-0000-0000-000000000000"
-		}
-		accountProto = &vmess.Account{Id: uuid}
-	case contracts.ProtocolVLess:
-		accountType = "xray.proxy.vless.Account"
-		uuid, _ := user.Extensions["uuid"].(string)
-		if uuid == "" {
-			uuid = "00000000-0000-0000-0000-000000000000"
-		}
-		flow, _ := user.Extensions["flow"].(string)
-		accountProto = &vlessaccount.Account{Id: uuid, Flow: flow}
-	case contracts.ProtocolTrojan:
-		accountType = "xray.proxy.trojan.Account"
-		password := user.AuthToken
-		if password == "" {
-			password = "password"
-		}
-		accountProto = &trojan.Account{Password: password}
-	default:
-		accountType = "xray.proxy.vmess.Account"
-		accountProto = &vmess.Account{Id: "00000000-0000-0000-0000-000000000000"}
+	// Use AuthToken as the credential; default to VMess with a placeholder UUID.
+	// This method is currently unused in the production path (users are managed via forward ports).
+	accountType = "xray.proxy.trojan.Account"
+	password := user.AuthToken
+	if password == "" {
+		password = "password"
 	}
+	accountProto = &trojan.Account{Password: password}
 
 	// Build typed operation using types package
-	operation, err := types.NewAddUserOperation(user.Username, user.Level, accountType, accountProto)
+	operation, err := types.NewAddUserOperation(user.Username, 0, accountType, accountProto)
 	if err != nil {
 		return fmt.Errorf("failed to create add user operation: %w", err)
 	}

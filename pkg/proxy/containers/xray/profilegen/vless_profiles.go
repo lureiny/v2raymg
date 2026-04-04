@@ -318,19 +318,13 @@ func GenerateVLessInboundSpec(p GenerateVLessParams) (contracts.InboundSpec, err
 		tag = fmt.Sprintf("vless-%s-%s-%s-%d", p.Transport, security, p.Host, randInt64()%10000)
 	}
 
-	// Create user with UUID and flow in extensions
-	user := contracts.UserSpec{
-		Username:  fmt.Sprintf("auto@vless.local"),
-		Level:     0,
-		Protocol:  contracts.ProtocolVLess,
-		Extensions: map[string]any{
-			"uuid": uuidStr,
-		},
+	// Create default user config map for inbound_adapter
+	defaultUser := map[string]any{
+		"email": "auto@vless.local",
+		"uuid":  uuidStr,
 	}
-
-	// Add flow if specified
 	if p.Flow != "" {
-		user.Extensions["flow"] = p.Flow
+		defaultUser["flow"] = p.Flow
 	}
 
 	// Build extensions for xray adapter
@@ -414,7 +408,7 @@ func GenerateVLessInboundSpec(p GenerateVLessParams) (contracts.InboundSpec, err
 	}
 
 	// Attach user to spec via special extension key
-	spec.Extensions["users"] = []contracts.UserSpec{user}
+	spec.Extensions["users"] = []map[string]any{defaultUser}
 
 	return spec, nil
 }

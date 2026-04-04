@@ -96,7 +96,6 @@ func TestUserStore_RoleAndLoginPassword_DoNotInterferWithOtherFields(t *testing.
 		Role:          "normal",
 		LoginPassword: "$2a$10$loginhash",
 		TrafficLimit:  1024 * 1024,
-		Level:         2,
 	}
 	if err := s.Save(u); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -121,9 +120,6 @@ func TestUserStore_RoleAndLoginPassword_DoNotInterferWithOtherFields(t *testing.
 	}
 	if got.TrafficLimit != 1024*1024 {
 		t.Errorf("TrafficLimit: got %d, want %d", got.TrafficLimit, 1024*1024)
-	}
-	if got.Level != 2 {
-		t.Errorf("Level: got %d, want 2", got.Level)
 	}
 }
 

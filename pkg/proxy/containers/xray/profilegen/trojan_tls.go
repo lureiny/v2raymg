@@ -127,12 +127,10 @@ func GenerateTrojanTLSInboundSpec(p GenerateTrojanTLSParams) (contracts.InboundS
 		tag = fmt.Sprintf("trojan-%s-tls-%d", p.Transport, randInt64()%10000)
 	}
 
-	// Create user with password as first-class field
-	user := contracts.UserSpec{
-		Username: fmt.Sprintf("auto@trojan.local"),
-		Level:    0,
-		Protocol: contracts.ProtocolTrojan,
-		AuthToken: password,
+	// Create default user config map for inbound_adapter
+	defaultUser := map[string]any{
+		"email":    "auto@trojan.local",
+		"password": password,
 	}
 
 	// Build extensions for xray adapter
@@ -168,7 +166,7 @@ func GenerateTrojanTLSInboundSpec(p GenerateTrojanTLSParams) (contracts.InboundS
 
 	// Attach user to spec via special extension key
 	// The adapter will read this to build the client list
-	spec.Extensions["users"] = []contracts.UserSpec{user}
+	spec.Extensions["users"] = []map[string]any{defaultUser}
 
 	return spec, nil
 }

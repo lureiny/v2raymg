@@ -36,10 +36,10 @@ func TestGenerateVLessInboundSpec_DefaultTCP(t *testing.T) {
 	assert.Equal(t, "tls", security)
 
 	// Validate user exists
-	users, ok := spec.Extensions["users"].([]contracts.UserSpec)
+	users, ok := spec.Extensions["users"].([]map[string]any)
+	require.True(t, ok, "users should be in extensions")
 	require.Len(t, users, 1)
-	assert.NotEmpty(t, users[0].Extensions["uuid"])
-	assert.Equal(t, contracts.ProtocolVLess, users[0].Protocol)
+	assert.NotEmpty(t, users[0]["uuid"])
 }
 
 func TestGenerateVLessInboundSpec_WithWS(t *testing.T) {
@@ -103,8 +103,8 @@ func TestGenerateVLessInboundSpec_WithReality(t *testing.T) {
 	assert.Equal(t, "reality", security)
 
 	// Check flow is auto-set
-	users := spec.Extensions["users"].([]contracts.UserSpec)
-	flow, ok := users[0].Extensions["flow"].(string)
+	users := spec.Extensions["users"].([]map[string]any)
+	flow, ok := users[0]["flow"].(string)
 	require.True(t, ok)
 	assert.Equal(t, "xtls-rprx-vision", flow)
 
@@ -208,8 +208,8 @@ func TestGenerateVLessInboundSpec_WithCustomUUID(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	users := spec.Extensions["users"].([]contracts.UserSpec)
-	uuid, ok := users[0].Extensions["uuid"].(string)
+	users := spec.Extensions["users"].([]map[string]any)
+	uuid, ok := users[0]["uuid"].(string)
 	require.True(t, ok)
 	assert.Equal(t, customUUID, uuid)
 }
@@ -222,8 +222,8 @@ func TestGenerateVLessInboundSpec_WithCustomFlow(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	users := spec.Extensions["users"].([]contracts.UserSpec)
-	flow, ok := users[0].Extensions["flow"].(string)
+	users := spec.Extensions["users"].([]map[string]any)
+	flow, ok := users[0]["flow"].(string)
 	require.True(t, ok)
 	assert.Equal(t, "xtls-rprx-vision", flow)
 }
@@ -259,9 +259,9 @@ func TestGenerateVLessInboundSpec_Randomness(t *testing.T) {
 	require.NoError(t, err)
 
 	// UUIDs should be different
-	users1 := spec1.Extensions["users"].([]contracts.UserSpec)
-	users2 := spec2.Extensions["users"].([]contracts.UserSpec)
-	assert.NotEqual(t, users1[0].Extensions["uuid"], users2[0].Extensions["uuid"])
+	users1 := spec1.Extensions["users"].([]map[string]any)
+	users2 := spec2.Extensions["users"].([]map[string]any)
+	assert.NotEqual(t, users1[0]["uuid"], users2[0]["uuid"])
 }
 
 func TestGenerateVLessInboundSpec_InvalidTransport(t *testing.T) {
@@ -300,8 +300,8 @@ func TestGenerateVLessInboundSpec_XHTTP_Reality_NoFlow(t *testing.T) {
 	assert.Equal(t, "xhttp", transport)
 
 	// Flow should NOT be set for xhttp + reality
-	users := spec.Extensions["users"].([]contracts.UserSpec)
-	flow, ok := users[0].Extensions["flow"]
+	users := spec.Extensions["users"].([]map[string]any)
+	flow, ok := users[0]["flow"]
 	assert.False(t, ok, "flow should not be set for xhttp + reality")
 	assert.Nil(t, flow)
 }
@@ -320,8 +320,8 @@ func TestGenerateVLessInboundSpec_SplitHTTP_Reality_NoFlow(t *testing.T) {
 	assert.Equal(t, "splithttp", transport)
 
 	// Flow should NOT be set for splithttp + reality
-	users := spec.Extensions["users"].([]contracts.UserSpec)
-	flow, ok := users[0].Extensions["flow"]
+	users := spec.Extensions["users"].([]map[string]any)
+	flow, ok := users[0]["flow"]
 	assert.False(t, ok, "flow should not be set for splithttp + reality")
 	assert.Nil(t, flow)
 }
@@ -340,8 +340,8 @@ func TestGenerateVLessInboundSpec_H3_Reality_NoFlow(t *testing.T) {
 	assert.Equal(t, "h3", transport)
 
 	// Flow should NOT be set for h3 + reality
-	users := spec.Extensions["users"].([]contracts.UserSpec)
-	flow, ok := users[0].Extensions["flow"]
+	users := spec.Extensions["users"].([]map[string]any)
+	flow, ok := users[0]["flow"]
 	assert.False(t, ok, "flow should not be set for h3 + reality")
 	assert.Nil(t, flow)
 }
@@ -360,8 +360,8 @@ func TestGenerateVLessInboundSpec_TCP_Reality_WithFlow(t *testing.T) {
 	assert.Equal(t, "tcp", transport)
 
 	// Flow SHOULD be set for tcp + reality
-	users := spec.Extensions["users"].([]contracts.UserSpec)
-	flow, ok := users[0].Extensions["flow"].(string)
+	users := spec.Extensions["users"].([]map[string]any)
+	flow, ok := users[0]["flow"].(string)
 	require.True(t, ok)
 	assert.Equal(t, "xtls-rprx-vision", flow)
 }
@@ -380,8 +380,8 @@ func TestGenerateVLessInboundSpec_XHTTP_XTLS_WithFlow(t *testing.T) {
 	assert.Equal(t, "xhttp", transport)
 
 	// Flow SHOULD be set for xhttp + xtls (not reality)
-	users := spec.Extensions["users"].([]contracts.UserSpec)
-	flow, ok := users[0].Extensions["flow"].(string)
+	users := spec.Extensions["users"].([]map[string]any)
+	flow, ok := users[0]["flow"].(string)
 	require.True(t, ok)
 	assert.Equal(t, "xtls-rprx-vision", flow)
 }

@@ -1509,6 +1509,11 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 	existing.UpdatedAtUs = incoming.UpdatedAtUs
 	existing.OriginNode = incoming.OriginNode
 	existing.Hash = incoming.Hash
+	existing.BandwidthUploadBps = incoming.BandwidthUploadBps
+	existing.BandwidthDownloadBps = incoming.BandwidthDownloadBps
+	existing.MaxClients = incoming.MaxClients
+	existing.ClientRecycleDelaySec = incoming.ClientRecycleDelaySec
+	existing.ClientDrainSec = incoming.ClientDrainSec
 	// Clear deletion state if the remote version is active.
 	if existing.IsDeleting() {
 		existing.MarkActive()

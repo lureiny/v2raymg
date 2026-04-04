@@ -40,7 +40,6 @@ func TestSQLiteUserStore_SaveAndLoad(t *testing.T) {
 	user := &contracts.User{
 		Username:              "alice",
 		AuthToken:             "secret",
-		Level:                 1,
 		TrafficLimit:          1000,
 		UploadLimit:           500,
 		DownloadLimit:         500,
@@ -69,9 +68,6 @@ func TestSQLiteUserStore_SaveAndLoad(t *testing.T) {
 	}
 	if got.AuthToken != user.AuthToken {
 		t.Errorf("AuthToken: got %q, want %q", got.AuthToken, user.AuthToken)
-	}
-	if got.Level != user.Level {
-		t.Errorf("Level: got %d, want %d", got.Level, user.Level)
 	}
 	if got.TrafficLimit != user.TrafficLimit {
 		t.Errorf("TrafficLimit: got %d, want %d", got.TrafficLimit, user.TrafficLimit)

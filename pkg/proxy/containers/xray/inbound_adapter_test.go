@@ -158,9 +158,9 @@ func TestAdapter_ValidateInbound(t *testing.T) {
 
 func TestAdapter_MapUsers(t *testing.T) {
 	adapter := NewAdapter()
-	users := []contracts.UserSpec{
-		{Username: "user1@example.com", Extensions: map[string]any{"uuid": "uuid1"}},
-		{Username: "user2@example.com", Extensions: map[string]any{"uuid": "uuid2"}},
+	users := []map[string]any{
+		{"email": "user1@example.com", "uuid": "uuid1"},
+		{"email": "user2@example.com", "uuid": "uuid2"},
 	}
 
 	userMaps, err := adapter.MapUsers(users, contracts.ProtocolVMess)

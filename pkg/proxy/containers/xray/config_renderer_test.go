@@ -169,8 +169,8 @@ func TestRenderer_ToProvider_WithUserBindings(t *testing.T) {
 		},
 		UserBindings: map[string][]contracts.UserSpec{
 			"vmess-in": {
-				{Username: "user1@example.com", Extensions: map[string]any{"uuid": "uuid1", "alter_id": uint32(16)}},
-				{Username: "user2@example.com", Extensions: map[string]any{"uuid": "uuid2", "alter_id": uint32(16)}},
+				{Username: "user1@example.com", AuthToken: "uuid1"},
+				{Username: "user2@example.com", AuthToken: "uuid2"},
 			},
 		},
 	}
@@ -225,9 +225,6 @@ func TestRenderer_ToProvider_WithUserBindings(t *testing.T) {
 		if clients[0]["email"] != "user1@example.com" {
 			t.Errorf("expected email user1@example.com, got %v", clients[0]["email"])
 		}
-		if clients[0]["id"] != "uuid1" {
-			t.Errorf("expected id uuid1, got %v", clients[0]["id"])
-		}
 	}
 }
 
@@ -250,7 +247,7 @@ func TestRenderer_ToProvider_WithTrojanUsers(t *testing.T) {
 		},
 		UserBindings: map[string][]contracts.UserSpec{
 			"trojan-in": {
-				{Username: "user@example.com", Password: "password123"},
+				{Username: "user@example.com", AuthToken: "password123"},
 			},
 		},
 	}

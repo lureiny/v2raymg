@@ -135,15 +135,11 @@ func GenerateVMessTLSInboundSpec(p GenerateVMessTLSParams) (contracts.InboundSpe
 		tag = fmt.Sprintf("vmess-%s-tls-%d", p.Transport, randInt64()%10000)
 	}
 
-	// Create user with UUID in extensions
-	user := contracts.UserSpec{
-		Username:  fmt.Sprintf("auto@vmess.local"),
-		Level:     0,
-		Protocol:  contracts.ProtocolVMess,
-		Extensions: map[string]any{
-			"uuid":      uuidStr,
-			"alter_id":  uint32(0), // Recommended for TLS
-		},
+	// Create default user config map for inbound_adapter
+	defaultUser := map[string]any{
+		"email":     "auto@vmess.local",
+		"uuid":      uuidStr,
+		"alter_id":  uint32(0),
 	}
 
 	// Build extensions for xray adapter
@@ -189,7 +185,7 @@ func GenerateVMessTLSInboundSpec(p GenerateVMessTLSParams) (contracts.InboundSpe
 
 	// Attach user to spec via special extension key
 	// The adapter will read this to build the client list
-	spec.Extensions["users"] = []contracts.UserSpec{user}
+	spec.Extensions["users"] = []map[string]any{defaultUser}
 
 	return spec, nil
 }

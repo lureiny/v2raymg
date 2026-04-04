@@ -210,27 +210,6 @@ func buildSubscriptionExtensions(in *XrayInbound, user contracts.UserSpec) map[s
 		}
 	}
 
-	// Copy user-specific fields (flow for VLESS, alter_id for VMess, method for SS)
-	if v, ok := user.GetExtension("flow"); ok {
-		if s, ok := v.(string); ok && s != "" {
-			ext["flow"] = s
-		}
-	}
-	if v, ok := user.GetExtension("alter_id"); ok {
-		ext["alter_id"] = v
-	}
-	if v, ok := user.GetExtension("method"); ok {
-		if s, ok := v.(string); ok && s != "" {
-			ext["method"] = s
-		}
-	}
-	// Copy username for SOCKS5
-	if v, ok := user.GetExtension("username"); ok {
-		if s, ok := v.(string); ok && s != "" {
-			ext["username"] = s
-		}
-	}
-
 	return ext
 }
 
