@@ -80,6 +80,13 @@ func (handler *MetricHandler) getRelativePath() string {
 	return "/api/metrics"
 }
 
+func (handler *MetricHandler) help() string {
+	return `/api/metrics
+	GET 返回 Prometheus 格式的监控指标（流量/ping/节点系统指标）
+	可选 query 参数: target=<节点名>（不填则聚合所有节点）
+	需要认证 (X-Token 或 JWT)`
+}
+
 func RegisterPrometheus(s *HttpServer) {
 	s.RegisterHandler(&MetricHandler{}, "GET")
 }

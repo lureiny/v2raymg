@@ -30,6 +30,23 @@ type CenterNodeServer struct {
 
 func (s *CenterNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.HeartBeatReq) (*proto.HeartBeatRsp, error) {
 	heartBeatRsp := &proto.HeartBeatRsp{}
+
+	// Validate heartbeat timestamp (skip if 0 for backward compatibility).
+	if ts := heartBeatReq.GetTimestampUs(); ts != 0 {
+		drift := time.Now().UnixMicro() - ts
+		if drift < 0 {
+			drift = -drift
+		}
+		if drift > heartbeatMaxDriftUs {
+			heartBeatRsp.Code = 105
+			heartBeatRsp.Msg = "heartbeat timestamp drift too large"
+			log.Error("heartbeat rejected", "err", "timestamp drift exceeds 30s",
+				"src_name", heartBeatReq.GetNodeAuthInfo().GetNode().GetName(),
+				"drift_ms", drift/1000)
+			return heartBeatRsp, nil
+		}
+	}
+
 	node := &c.Node{
 		Node:             heartBeatReq.GetNodeAuthInfo().GetNode(),
 		CreateTime:       time.Now().Unix(),

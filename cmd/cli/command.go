@@ -227,6 +227,7 @@ func InitPromptAndRegister() *prompt.Prompt {
 	// --- User role management (admin only) ---
 	m.RegisterHandler(setUserRole, "SetUserRole",
 		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
 			userNameSuggest,
 			{Text: "role", Description: "role: admin or normal", Default: "normal"},
 		}),
@@ -249,8 +250,8 @@ func InitPromptAndRegister() *prompt.Prompt {
 			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
 			userNameSuggest,
 			{Text: "max_clients", Description: "max unique client IPs (0=unlimited)", Default: int(0)},
-			{Text: "recycle_delay_sec", Description: "idle slot recycle delay", Default: int(60)},
-			{Text: "drain_sec", Description: "drain timeout after EOF", Default: int(2)},
+			{Text: "recycle_delay_sec", Description: "idle slot recycle delay (-1=no change)", Default: int(-1)},
+			{Text: "drain_sec", Description: "drain timeout after EOF (-1=no change)", Default: int(-1)},
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
@@ -557,6 +558,9 @@ func rotatePort(username string) error {
 }
 
 func rotateInboundPort(container, inbound string, port int, username string) error {
+	if port < 0 || port > 65535 {
+		return fmt.Errorf("port must be between 0 and 65535")
+	}
 	result, err := client.RotateInboundPort(getHost(), getAuthToken(), username, container, inbound, port)
 	if err != nil {
 		return err
@@ -576,8 +580,8 @@ func rotateAllPorts(username string) error {
 
 // ---- User role management (admin only) ----
 
-func setUserRole(username, role string) error {
-	result, err := client.SetUserRole(getHost(), getAuthToken(), username, role)
+func setUserRole(target, username, role string) error {
+	result, err := client.SetUserRole(getHost(), getAuthToken(), target, username, role)
 	if err != nil {
 		return err
 	}
@@ -598,6 +602,9 @@ func setUserBandwidth(target, username string, uploadBps, downloadBps int64) err
 	if downloadBps >= 0 {
 		down = &downloadBps
 	}
+	if up == nil && down == nil {
+		return fmt.Errorf("at least one of upload_bps or download_bps must be specified (>= 0)")
+	}
 	result, err := client.SetUserBandwidth(getHost(), getAuthToken(), target, username, up, down)
 	if err != nil {
 		return err
@@ -607,10 +614,20 @@ func setUserBandwidth(target, username string, uploadBps, downloadBps int64) err
 }
 
 func setUserClientLimit(target, username string, maxClients, recycleDelaySec, drainSec int) error {
-	if maxClients < 0 || recycleDelaySec < 0 || drainSec < 0 {
-		return fmt.Errorf("client limit values must be >= 0")
+	if maxClients < 0 {
+		return fmt.Errorf("max_clients must be >= 0")
 	}
-	result, err := client.SetUserClientLimit(getHost(), getAuthToken(), target, username, maxClients, recycleDelaySec, drainSec)
+	if recycleDelaySec < -1 || drainSec < -1 {
+		return fmt.Errorf("recycle_delay_sec and drain_sec must be >= 0 or -1 (no change)")
+	}
+	var recycle, drain *int
+	if recycleDelaySec >= 0 {
+		recycle = &recycleDelaySec
+	}
+	if drainSec >= 0 {
+		drain = &drainSec
+	}
+	result, err := client.SetUserClientLimit(getHost(), getAuthToken(), target, username, maxClients, recycle, drain)
 	if err != nil {
 		return err
 	}

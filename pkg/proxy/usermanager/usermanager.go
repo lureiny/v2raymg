@@ -1436,6 +1436,16 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 
 	// If local copy exists, check version arbitration.
 	if exists && !usync.IsNewer(incoming, existing) {
+		// Even when the remote version is not newer, adopt LoginPassword
+		// if local is empty and remote has one. This handles the case where
+		// a node upgraded from an old version has a newer timestamp but no
+		// password, while an older-timestamped node already has the password.
+		if existing.LoginPassword == "" && incoming.LoginPassword != "" {
+			existing.LoginPassword = incoming.LoginPassword
+			if m.store != nil {
+				_ = m.store.Save(existing)
+			}
+		}
 		return false, nil
 	}
 
@@ -1514,6 +1524,10 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 	existing.MaxClients = incoming.MaxClients
 	existing.ClientRecycleDelaySec = incoming.ClientRecycleDelaySec
 	existing.ClientDrainSec = incoming.ClientDrainSec
+	// Only update LoginPassword if incoming has one (old nodes send empty).
+	if incoming.LoginPassword != "" {
+		existing.LoginPassword = incoming.LoginPassword
+	}
 	// Clear deletion state if the remote version is active.
 	if existing.IsDeleting() {
 		existing.MarkActive()

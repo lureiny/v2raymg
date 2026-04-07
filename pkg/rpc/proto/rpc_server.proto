@@ -21,6 +21,7 @@ message User {
     int32 client_drain_sec = 12;
     string group = 13;
     string auth_token = 14;  // proxy auth token (UUID), returned by GetUsers/ClusterSync
+    string login_password_hash = 15; // bcrypt hash of login password, propagated via ClusterSync
 }
 
 enum BuilderType {
@@ -122,6 +123,7 @@ message ClusterUserSync {
 message HeartBeatReq {
     NodeAuthInfo node_auth_info = 1;
     repeated UserDigest user_digests = 2;  // 本节点持有的 user 摘要列表（cluster_user.enabled=true 时填充）
+    int64 timestamp_us = 3;  // 发起心跳的时间（微秒），用于防重放和流量特征消除
 }
 
 message Node {

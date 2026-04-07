@@ -54,6 +54,12 @@ func ComputeHash(u *contracts.User) string {
 	writeField(strconv.Itoa(u.MaxClients))
 	writeField(strconv.Itoa(u.ClientRecycleDelaySec))
 	writeField(strconv.Itoa(u.ClientDrainSec))
+	// LoginPassword is only included when non-empty so that the hash stays
+	// compatible with old nodes that don't have this field. When empty (old
+	// node or user without password), the hash matches the old computation.
+	if u.LoginPassword != "" {
+		writeField(u.LoginPassword)
+	}
 
 	return fmt.Sprintf("%x", h.Sum(nil))
 }

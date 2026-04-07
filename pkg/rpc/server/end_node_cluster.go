@@ -102,6 +102,23 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 
 func (s *EndNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.HeartBeatReq) (*proto.HeartBeatRsp, error) {
 	heartBeatRsp := &proto.HeartBeatRsp{}
+
+	// Validate heartbeat timestamp (skip if 0 for backward compatibility).
+	if ts := heartBeatReq.GetTimestampUs(); ts != 0 {
+		drift := time.Now().UnixMicro() - ts
+		if drift < 0 {
+			drift = -drift
+		}
+		if drift > heartbeatMaxDriftUs {
+			heartBeatRsp.Code = 105
+			heartBeatRsp.Msg = "heartbeat timestamp drift too large"
+			log.Error("heartbeat rejected", "err", "timestamp drift exceeds 30s",
+				"src_name", heartBeatReq.GetNodeAuthInfo().GetNode().GetName(),
+				"drift_ms", drift/1000)
+			return heartBeatRsp, nil
+		}
+	}
+
 	node := s.clusterState.Get(heartBeatReq.GetNodeAuthInfo().Node.GetName())
 	if node == nil {
 		heartBeatRsp.Code = 104
@@ -216,7 +233,9 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 		Token: node.OutToken,
 		Node:  &localNode.Node,
 	}
-	heartBeatMsg := &proto.HeartBeatReq{}
+	heartBeatMsg := &proto.HeartBeatReq{
+		TimestampUs: time.Now().UnixMicro(),
+	}
 	if s.userMgr.IsClusterEnabled() {
 		localDigests := s.userMgr.ListDigests()
 		digests := make([]*proto.UserDigest, 0, len(localDigests))
@@ -328,6 +347,7 @@ func (s *EndNodeServer) heartbeatToCenterNode() {
 			Token: "",
 			Node:  &localNode.Node,
 		},
+		TimestampUs: time.Now().UnixMicro(),
 	}
 	rsp, err := c.HeartBeat(rpcClient.NewContext(), heartBeatReq)
 	if err != nil {
@@ -411,6 +431,7 @@ func userToProtoUser(u *contracts.User) *proto.User {
 		ClientDrainSec:        int32(u.ClientDrainSec),
 		Uplink:                u.TrafficTotalUplink,
 		Downlink:              u.TrafficTotalDownlink,
+		LoginPasswordHash:     u.LoginPassword,
 	}
 }
 
@@ -442,6 +463,7 @@ func protoClusterUserSyncToUser(p *proto.ClusterUserSync) *contracts.User {
 	u.MaxClients = int(pu.GetMaxClients())
 	u.ClientRecycleDelaySec = int(pu.GetClientRecycleDelaySec())
 	u.ClientDrainSec = int(pu.GetClientDrainSec())
+	u.LoginPassword = pu.GetLoginPasswordHash()
 	return u
 }
 

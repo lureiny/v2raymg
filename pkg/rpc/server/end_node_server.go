@@ -56,6 +56,7 @@ type EndNodeServer struct {
 const (
 	heartbeatInterval        = 10 * time.Second
 	clearInvalidNodeInterval = 20 * time.Second
+	heartbeatMaxDriftUs      = 30 * 1000 * 1000 // 30 seconds in microseconds
 )
 
 func GetEndNodeServer() *EndNodeServer {

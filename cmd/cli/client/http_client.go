@@ -560,7 +560,7 @@ func RotateAllPorts(host, token, username string) (string, error) {
 
 // SetUserRole sets the frontend login role ("admin" or "normal") for the given user.
 // Requires admin auth (X-Token or admin JWT).
-func SetUserRole(host, token, username, role string) (string, error) {
+func SetUserRole(host, token, target, username, role string) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {
 		d, err := readBody(resp)
@@ -573,6 +573,9 @@ func SetUserRole(host, token, username, role string) (string, error) {
 	reqUrl := fmt.Sprintf("%s/%s/%s/role", host, common.UserRole, username)
 	body := map[string]interface{}{
 		"role": role,
+	}
+	if target != "" {
+		body["target"] = target
 	}
 	err := DoPutRequest(reqUrl, token, body, getCallBackFunc(cb))
 	return result, err
@@ -607,7 +610,8 @@ func SetUserBandwidth(host, token, target, username string, uploadBps, downloadB
 
 // SetUserClientLimit sets client connection limits for a user.
 // maxClients=0 means remove the limit (unlimited).
-func SetUserClientLimit(host, token, target, username string, maxClients, recycleDelaySec, drainSec int) (string, error) {
+// recycleDelaySec/drainSec: nil = no change, non-nil = set value.
+func SetUserClientLimit(host, token, target, username string, maxClients int, recycleDelaySec, drainSec *int) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {
 		d, err := readBody(resp)
@@ -619,12 +623,16 @@ func SetUserClientLimit(host, token, target, username string, maxClients, recycl
 	}
 	reqUrl := fmt.Sprintf("%s/%s/%s/client-limit", host, common.UserClientLimit, username)
 	body := map[string]interface{}{
-		"max_clients":       maxClients,
-		"recycle_delay_sec": recycleDelaySec,
-		"drain_sec":         drainSec,
+		"max_clients": maxClients,
 	}
 	if target != "" {
 		body["target"] = target
+	}
+	if recycleDelaySec != nil {
+		body["recycle_delay_sec"] = *recycleDelaySec
+	}
+	if drainSec != nil {
+		body["drain_sec"] = *drainSec
 	}
 	err := DoPutRequest(reqUrl, token, body, getCallBackFunc(cb))
 	return result, err
