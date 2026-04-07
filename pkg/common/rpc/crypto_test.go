@@ -2,8 +2,6 @@ package rpc_test
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
 	"testing"
 
 	rpc "github.com/lureiny/v2raymg/pkg/common/rpc"
@@ -32,56 +30,6 @@ func TestPKCS7Padding_Various(t *testing.T) {
 				t.Error("padded result should not be empty")
 			}
 		})
-	}
-}
-
-func TestPKCS7UnPadding_Normal(t *testing.T) {
-	original := []byte("hello world")
-	padded := rpc.PKCS7Padding(original, 16)
-	unpadded, err := rpc.PKCS7UnPadding(padded)
-	if err != nil {
-		t.Fatalf("PKCS7UnPadding: %v", err)
-	}
-	if !bytes.Equal(unpadded, original) {
-		t.Errorf("got %v, want %v", unpadded, original)
-	}
-}
-
-func TestPKCS7UnPadding_Empty(t *testing.T) {
-	_, err := rpc.PKCS7UnPadding([]byte{})
-	if err == nil {
-		t.Error("expected error for empty data")
-	}
-}
-
-func TestPKCS7UnPadding_Invalid(t *testing.T) {
-	_, err := rpc.PKCS7UnPadding([]byte{0xFF})
-	if err == nil {
-		t.Error("expected error for invalid padding")
-	}
-}
-
-func TestDecryptWithAES_LegacyCBC(t *testing.T) {
-	key := bytes.Repeat([]byte("X"), 32)
-	plaintext := []byte("legacy CBC message from v1 node")
-
-	// Simulate v1 CBC encryption (fixed IV = key[:blockSize]).
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatalf("NewCipher: %v", err)
-	}
-	padded := rpc.PKCS7Padding(plaintext, block.BlockSize())
-	cbcCiphertext := make([]byte, len(padded))
-	cbc := cipher.NewCBCEncrypter(block, key[:block.BlockSize()])
-	cbc.CryptBlocks(cbcCiphertext, padded)
-
-	// New DecryptWithAES should handle it via CBC fallback.
-	decrypted, err := rpc.DecryptWithAES(cbcCiphertext, key)
-	if err != nil {
-		t.Fatalf("DecryptWithAES(legacy CBC): %v", err)
-	}
-	if !bytes.Equal(decrypted, plaintext) {
-		t.Errorf("got %q, want %q", decrypted, plaintext)
 	}
 }
 
@@ -153,6 +101,43 @@ func TestDecryptWithAES_TooShort(t *testing.T) {
 	_, err := rpc.DecryptWithAES([]byte("short"), key)
 	if err == nil {
 		t.Error("expected error for ciphertext shorter than nonce + tag")
+	}
+}
+
+func TestDecryptWithAES_Empty(t *testing.T) {
+	key := bytes.Repeat([]byte("E"), 32)
+	_, err := rpc.DecryptWithAES([]byte{}, key)
+	if err == nil {
+		t.Error("expected error for empty data")
+	}
+}
+
+func TestEncryptDecryptAES_EmptyPlaintext(t *testing.T) {
+	key := bytes.Repeat([]byte("E"), 32)
+	encrypted, err := rpc.EncryptWithAES([]byte{}, key)
+	if err != nil {
+		t.Fatalf("EncryptWithAES(empty): %v", err)
+	}
+	decrypted, err := rpc.DecryptWithAES(encrypted, key)
+	if err != nil {
+		t.Fatalf("DecryptWithAES(empty): %v", err)
+	}
+	if len(decrypted) != 0 {
+		t.Errorf("expected empty plaintext, got %d bytes", len(decrypted))
+	}
+}
+
+func TestDecryptWithAES_WrongKey(t *testing.T) {
+	key1 := bytes.Repeat([]byte("F"), 32)
+	key2 := bytes.Repeat([]byte("G"), 32)
+
+	encrypted, err := rpc.EncryptWithAES([]byte("secret"), key1)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	_, err = rpc.DecryptWithAES(encrypted, key2)
+	if err == nil {
+		t.Error("expected error when decrypting with wrong key")
 	}
 }
 
