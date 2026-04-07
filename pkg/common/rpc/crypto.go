@@ -29,29 +29,9 @@ func PKCS7UnPadding(plaintextWithPadding []byte) ([]byte, error) {
 	return plaintextWithPadding[:(length - unpaddingNum)], nil
 }
 
-// EncryptWithAES encrypts plaintext using AES-256-CBC.
-//
-// This is the legacy encryption format, kept for backward compatibility during
-// rolling upgrades. A future version will switch to AES-256-GCM (EncryptWithAESGCM).
-func EncryptWithAES(plaintext, key []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-
-	blockSize := block.BlockSize()
-	plaintextWithPadding := PKCS7Padding(plaintext, blockSize)
-	blockMode := cipher.NewCBCEncrypter(block, key[:blockSize])
-	encryptedData := make([]byte, len(plaintextWithPadding))
-	blockMode.CryptBlocks(encryptedData, plaintextWithPadding)
-	return encryptedData, nil
-}
-
-// EncryptWithAESGCM encrypts plaintext using AES-256-GCM with a random nonce.
+// EncryptWithAES encrypts plaintext using AES-256-GCM with a random nonce.
 // Output format: nonce (12 bytes) + ciphertext + GCM tag (16 bytes).
-//
-// This will replace EncryptWithAES once all nodes are upgraded.
-func EncryptWithAESGCM(plaintext, key []byte) ([]byte, error) {
+func EncryptWithAES(plaintext, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -72,10 +52,9 @@ func EncryptWithAESGCM(plaintext, key []byte) ([]byte, error) {
 
 // DecryptWithAES decrypts data using a try-GCM-then-fallback-CBC strategy.
 //
-// It first attempts AES-256-GCM decryption (nonce + ciphertext + tag format).
-// If GCM authentication fails, it falls back to legacy AES-256-CBC decryption.
-// This allows seamless rolling upgrades: new nodes can receive from both
-// old (CBC) and new (GCM) senders.
+// It first attempts AES-256-GCM decryption. If GCM authentication fails,
+// it falls back to legacy AES-256-CBC decryption for backward compatibility
+// with v1 nodes that still send CBC-encrypted messages.
 func DecryptWithAES(encryptedData, key []byte) ([]byte, error) {
 	if len(encryptedData) == 0 {
 		return nil, fmt.Errorf("empty data")
@@ -86,7 +65,7 @@ func DecryptWithAES(encryptedData, key []byte) ([]byte, error) {
 		return plaintext, nil
 	}
 
-	// Fallback to CBC.
+	// Fallback to legacy CBC.
 	return decryptCBC(encryptedData, key)
 }
 

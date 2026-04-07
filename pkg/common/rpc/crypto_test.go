@@ -2,6 +2,8 @@ package rpc_test
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"testing"
 
 	rpc "github.com/lureiny/v2raymg/pkg/common/rpc"
@@ -59,8 +61,31 @@ func TestPKCS7UnPadding_Invalid(t *testing.T) {
 	}
 }
 
-// Test CBC encrypt + decrypt roundtrip (legacy path).
-func TestEncryptDecryptAES_CBC_Roundtrip(t *testing.T) {
+func TestDecryptWithAES_LegacyCBC(t *testing.T) {
+	key := bytes.Repeat([]byte("X"), 32)
+	plaintext := []byte("legacy CBC message from v1 node")
+
+	// Simulate v1 CBC encryption (fixed IV = key[:blockSize]).
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	padded := rpc.PKCS7Padding(plaintext, block.BlockSize())
+	cbcCiphertext := make([]byte, len(padded))
+	cbc := cipher.NewCBCEncrypter(block, key[:block.BlockSize()])
+	cbc.CryptBlocks(cbcCiphertext, padded)
+
+	// New DecryptWithAES should handle it via CBC fallback.
+	decrypted, err := rpc.DecryptWithAES(cbcCiphertext, key)
+	if err != nil {
+		t.Fatalf("DecryptWithAES(legacy CBC): %v", err)
+	}
+	if !bytes.Equal(decrypted, plaintext) {
+		t.Errorf("got %q, want %q", decrypted, plaintext)
+	}
+}
+
+func TestEncryptDecryptAES_Roundtrip(t *testing.T) {
 	key := bytes.Repeat([]byte("A"), 32)
 	plaintext := []byte("secret message for testing")
 
@@ -81,35 +106,15 @@ func TestEncryptDecryptAES_CBC_Roundtrip(t *testing.T) {
 	}
 }
 
-// Test GCM encrypt + decrypt roundtrip.
-func TestEncryptDecryptAES_GCM_Roundtrip(t *testing.T) {
+func TestEncryptWithAES_RandomNonce(t *testing.T) {
 	key := bytes.Repeat([]byte("B"), 32)
-	plaintext := []byte("secret message for GCM testing")
-
-	encrypted, err := rpc.EncryptWithAESGCM(plaintext, key)
-	if err != nil {
-		t.Fatalf("EncryptWithAESGCM: %v", err)
-	}
-
-	decrypted, err := rpc.DecryptWithAES(encrypted, key)
-	if err != nil {
-		t.Fatalf("DecryptWithAES (GCM): %v", err)
-	}
-	if !bytes.Equal(decrypted, plaintext) {
-		t.Errorf("decrypted: got %q, want %q", decrypted, plaintext)
-	}
-}
-
-// Test GCM produces different ciphertext each time (random nonce).
-func TestEncryptWithAESGCM_RandomNonce(t *testing.T) {
-	key := bytes.Repeat([]byte("C"), 32)
 	plaintext := []byte("same message")
 
-	enc1, err := rpc.EncryptWithAESGCM(plaintext, key)
+	enc1, err := rpc.EncryptWithAES(plaintext, key)
 	if err != nil {
 		t.Fatalf("first encrypt: %v", err)
 	}
-	enc2, err := rpc.EncryptWithAESGCM(plaintext, key)
+	enc2, err := rpc.EncryptWithAES(plaintext, key)
 	if err != nil {
 		t.Fatalf("second encrypt: %v", err)
 	}
@@ -117,7 +122,6 @@ func TestEncryptWithAESGCM_RandomNonce(t *testing.T) {
 		t.Error("two encryptions of same plaintext should produce different ciphertext")
 	}
 
-	// Both should decrypt correctly
 	dec1, _ := rpc.DecryptWithAES(enc1, key)
 	dec2, _ := rpc.DecryptWithAES(enc2, key)
 	if !bytes.Equal(dec1, plaintext) || !bytes.Equal(dec2, plaintext) {
@@ -125,12 +129,11 @@ func TestEncryptWithAESGCM_RandomNonce(t *testing.T) {
 	}
 }
 
-// Test GCM tamper detection.
-func TestDecryptWithAES_GCM_TamperedData(t *testing.T) {
-	key := bytes.Repeat([]byte("D"), 32)
+func TestDecryptWithAES_TamperedData(t *testing.T) {
+	key := bytes.Repeat([]byte("C"), 32)
 	plaintext := []byte("authenticated message")
 
-	encrypted, err := rpc.EncryptWithAESGCM(plaintext, key)
+	encrypted, err := rpc.EncryptWithAES(plaintext, key)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -145,24 +148,16 @@ func TestDecryptWithAES_GCM_TamperedData(t *testing.T) {
 	}
 }
 
-// Test decrypt with empty data.
-func TestDecryptWithAES_Empty(t *testing.T) {
-	key := bytes.Repeat([]byte("E"), 32)
-	_, err := rpc.DecryptWithAES([]byte{}, key)
+func TestDecryptWithAES_TooShort(t *testing.T) {
+	key := bytes.Repeat([]byte("D"), 32)
+	_, err := rpc.DecryptWithAES([]byte("short"), key)
 	if err == nil {
-		t.Error("expected error for empty data")
+		t.Error("expected error for ciphertext shorter than nonce + tag")
 	}
 }
 
 func TestEncryptWithAES_InvalidKey(t *testing.T) {
 	_, err := rpc.EncryptWithAES([]byte("data"), []byte("short"))
-	if err == nil {
-		t.Error("expected error for invalid key length")
-	}
-}
-
-func TestEncryptWithAESGCM_InvalidKey(t *testing.T) {
-	_, err := rpc.EncryptWithAESGCM([]byte("data"), []byte("short"))
 	if err == nil {
 		t.Error("expected error for invalid key length")
 	}
