@@ -83,7 +83,6 @@ var methodRspMap = map[string]interface{}{
 	"HeartBeat":            &proto.HeartBeatRsp{},
 	"RegisterNode":         &proto.RegisterNodeRsp{},
 	"AddInbound":              &proto.InboundOpRsp{},
-	"DeleteInbound":           &proto.InboundOpRsp{},
 	"GetInbound":              &proto.GetInboundRsp{},
 	"ListInbound":             &proto.ListInboundRsp{},
 	"DeleteInboundByName":     &proto.InboundOpRsp{},

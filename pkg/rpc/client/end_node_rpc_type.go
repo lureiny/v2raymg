@@ -3,27 +3,21 @@ package client
 type ReqToEndNodeType int
 
 const (
-	AddUsersReqType = iota
+	AddUsersReqType ReqToEndNodeType = iota
 	DeleteUsersReqType
 	UpdateUsersReqType
 	ResetUserReqType
 	GetSubReqType
 	GetBandWidthStatsReqType
 	AddInboundReqType
-	DeleteInboundReqType
 	GetUsersReqType
 	GetInboundReqType
-	_ // was GetTagReqType (removed)
 	UpdateProxyReqType
-	_ // was AddAdaptiveConfigReqType
-	_ // was DeleteAdaptiveConfigReqType
-	_ // was AdaptiveReqType
 	SetGatewayModelReqType
 	ObtainNewCertType
 	FastAddInboundType
 	TransferCertType
 	GetCertsType
-	_ // ClearUsersType removed — use DeleteClusterUsers tombstone instead
 	GetPingMetricType
 	RegisterNodeType
 	HeartBeatType
@@ -33,10 +27,7 @@ const (
 	DeleteInboundByNameReqType
 	GetNodeGroupsReqType
 	SetNodeGroupsReqType
-	_ // was ListClusterUsersReqType (removed)
-	_ // was GetClusterUsersByNameReqType (removed)
 	UpsertClusterUsersReqType
-	_ // was DeleteClusterUsersReqType (removed)
 	GetStatusReqType
 	GetProfileReqType
 	DeleteCertReqType

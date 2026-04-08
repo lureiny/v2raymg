@@ -34,8 +34,6 @@ func init() {
 	registerReqToEndNodeFunc(GetBandWidthStatsReqType, ReqGetBandwidthStats)
 	// add inbound
 	registerReqToEndNodeFunc(AddInboundReqType, ReqAddInbound)
-	// delete inbound
-	registerReqToEndNodeFunc(DeleteInboundReqType, ReqDeleteInbound)
 	// get users
 	registerReqToEndNodeFunc(GetUsersReqType, ReqGetUsers)
 	// get inbound
@@ -220,23 +218,6 @@ func ReqAddInbound(ctx context.Context, reqData []byte, endNodeAccessClient prot
 
 	addInboundReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.AddInbound(ctx, addInboundReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
-	if err != nil {
-		return nil, err
-	}
-	if rsp.GetCode() != 0 {
-		return nil, fmt.Errorf("%s", rsp.GetMsg())
-	}
-	return nil, nil
-}
-
-func ReqDeleteInbound(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
-	deleteInboundReq := &proto.InboundOpReq{}
-	if err := pb.Unmarshal(reqData, deleteInboundReq); err != nil {
-		return nil, fmt.Errorf("can't unmarshal req[%v] to delete inbound req > %v", reqData, err)
-	}
-
-	deleteInboundReq.NodeAuthInfo = nodeAuthInfo
-	rsp, err := endNodeAccessClient.DeleteInbound(ctx, deleteInboundReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
 	if err != nil {
 		return nil, err
 	}

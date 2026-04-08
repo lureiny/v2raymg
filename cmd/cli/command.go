@@ -75,14 +75,6 @@ func InitPromptAndRegister() *prompt.Prompt {
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
 
-	m.RegisterHandler(deleteInbound, "DeleteInbound",
-		prompt.WithSuggests([]prompt.Suggest{
-			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
-			srcTagSuggest,
-		}),
-		prompt.WithGetSuggestMethod(GetSuggest),
-	)
-
 	m.RegisterHandler(getInbound, "GetInbound",
 		prompt.WithSuggests([]prompt.Suggest{
 			targetSuggest,
@@ -373,15 +365,6 @@ func fastAddInbound(target, tag, protocol, stream, domain, container string, isX
 
 func addInbound(target, boundRawString string) error {
 	result, err := client.AddInBound(getHost(), getAuthToken(), target, boundRawString)
-	if err != nil {
-		return err
-	}
-	fmt.Println(result)
-	return nil
-}
-
-func deleteInbound(target, srcTag string) error {
-	result, err := client.DeleteInBound(getHost(), getAuthToken(), target, srcTag)
 	if err != nil {
 		return err
 	}

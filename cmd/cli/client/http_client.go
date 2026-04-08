@@ -353,26 +353,6 @@ func AddInBound(host, token, target, boundRawString string) (string, error) {
 	return result, err
 }
 
-func DeleteInBound(host, token, target, srcTag string) (string, error) {
-	result := ""
-	cb := func(resp *http.Response) error {
-		d, err := readBody(resp)
-		if err != nil {
-			return err
-		}
-		result = string(d)
-		return nil
-	}
-
-	reqUrl := fmt.Sprintf("%s/%s", host, common.Inbound)
-	body := map[string]interface{}{
-		"target":  target,
-		"src_tag": srcTag,
-	}
-	err := DoDeleteRequest(reqUrl, token, body, getCallBackFunc(cb))
-	return result, err
-}
-
 func GetInBound(host, token, target, srcTag string) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {

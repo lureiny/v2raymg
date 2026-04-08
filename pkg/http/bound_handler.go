@@ -58,54 +58,6 @@ func (handler *InboundAddHandler) help() string {
 	container: 可选，目前仅支持 "xray"（默认）；其他container请使用 POST /api/inbound/fast`
 }
 
-// InboundDeleteHandler DELETE /inbound — 删除inbound
-type InboundDeleteHandler struct{ HttpHandlerImp }
-
-func (handler *InboundDeleteHandler) handlerFunc(c *gin.Context) {
-	var req struct {
-		Target    string `json:"target"`
-		SrcTag    string `json:"src_tag"`
-		Container string `json:"container"` // "xray"(default); other containers not yet supported
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
-		return
-	}
-	if req.Container != "" && req.Container != "xray" {
-		jsonErr(c, 400, fmt.Sprintf("container %q not supported via DELETE /inbound; use POST /inbound/fast instead", req.Container))
-		return
-	}
-	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
-	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
-	if len(nodes) == 0 {
-		jsonErr(c, 502, "no available node")
-		return
-	}
-	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
-	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.DeleteInboundReqType, &proto.InboundOpReq{InboundInfo: req.SrcTag}, handler.getHttpServer().GetClusterToken())
-	if len(failedList) != 0 {
-		errMsg := joinFailedList(failedList)
-		log.Errorf("Err=%s|OpType=deleteInbound|Target=%s", errMsg, req.Target)
-		jsonErr(c, 500, errMsg)
-		return
-	}
-	jsonOK(c)
-}
-
-func (handler *InboundDeleteHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{handler.handlerFunc}
-}
-
-func (handler *InboundDeleteHandler) getRelativePath() string { return "/inbound" }
-
-func (handler *InboundDeleteHandler) help() string {
-	return `DELETE /api/inbound
-	删除inbound（仅支持 xray container）
-	body: {"target": "", "src_tag": "", "container": "xray"}
-	src_tag: 要删除inbound的tag
-	container: 可选，目前仅支持 "xray"（默认）`
-}
-
 // InboundGetHandler GET /inbound — 获取inbound
 type InboundGetHandler struct{ HttpHandlerImp }
 

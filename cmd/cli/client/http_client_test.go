@@ -229,7 +229,7 @@ func TestSetUserRole_SendsCorrectRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	SetUserRole(srv.URL, "admin-token", "bob", "admin")
+	SetUserRole(srv.URL, "admin-token", "", "bob", "admin")
 
 	if captured.method != "PUT" {
 		t.Fatalf("expected PUT, got %s", captured.method)
@@ -325,7 +325,8 @@ func TestSetUserClientLimit_SendsCorrectRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	SetUserClientLimit(srv.URL, "my-token", "", "bob", 3, 60, 2)
+	recycleDelay, drain := 60, 2
+	SetUserClientLimit(srv.URL, "my-token", "", "bob", 3, &recycleDelay, &drain)
 
 	if captured.method != "PUT" {
 		t.Fatalf("expected PUT, got %s", captured.method)

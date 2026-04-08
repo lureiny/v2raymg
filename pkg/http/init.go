@@ -50,7 +50,6 @@ func (s *HttpServer) registerRoutes() {
 	s.registerOn(adminGroup, &UserResetHandler{}, "POST")
 	s.registerOn(adminGroup, &InboundGetHandler{}, "GET")
 	s.registerOn(adminGroup, &InboundAddHandler{}, "POST")
-	s.registerOn(adminGroup, &InboundDeleteHandler{}, "DELETE")
 	s.registerOn(adminGroup, &InboundListHandler{}, "GET")
 	s.registerOn(adminGroup, &InboundDeleteByNameHandler{}, "DELETE")
 	s.registerOn(adminGroup, &FastAddInboundHandler{}, "POST")

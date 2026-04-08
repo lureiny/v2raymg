@@ -441,7 +441,6 @@ service EndNodeAccess {
     
     // inbound
     rpc AddInbound(InboundOpReq) returns (InboundOpRsp) {}
-    rpc DeleteInbound(InboundOpReq) returns (InboundOpRsp) {}
     rpc TransferInbound(TransferInboundReq) returns (InboundOpRsp) {}
     rpc CopyInbound(CopyInboundReq) returns (InboundOpRsp) {}
     rpc CopyUser(CopyUserReq) returns (InboundOpRsp) {}

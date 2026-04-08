@@ -534,36 +534,33 @@ func (e *Executor) RemoveInboundConfig(tag string) error {
 	}
 
 	// Phase 2: Release all user ports (outside lock)
-	// This ensures synchronous completion before returning
 	_ = xrayIn.ReleaseAllUserPorts()
 
-	// Phase 2.5: Remove from xray runtime via gRPC (idempotent)
-	api := NewXrayAPI(e.grpcAPIAddress)
-	if err := api.RemoveInbound(tag); err != nil {
-		log.Warn("[RemoveInboundConfig] failed to remove inbound via gRPC, continuing with local cleanup", "tag", tag, "err", err)
-		// Continue anyway - local cleanup is still important
-	}
-
-	// Phase 3: Second lock - verify and delete
-	e.inboundsMu.Lock()
-	defer e.inboundsMu.Unlock()
-
-	// Verify inbound still exists before deleting
-	if _, exists := e.inbounds[tag]; !exists {
-		return nil // Already deleted by another operation
-	}
-
-	// Clean up temporary cert/key files created by FastAddInbound (Bug 2)
-	for _, f := range xrayIn.tempCertFiles {
-		if f != "" {
-			_ = os.Remove(f)
-		}
-	}
-
-	// Delete from persistent store (best effort — log only, don't block memory delete)
+	// Phase 3: Delete persistent store first — ensures restart won't resurrect the inbound
 	if e.storeMgr != nil {
 		if err := e.storeMgr.InboundStore().Delete(tag); err != nil {
 			log.Warn("[RemoveInboundConfig] failed to delete inbound from store", "tag", tag, "err", err)
+		}
+	}
+
+	// Phase 4: Remove from xray runtime via gRPC (idempotent)
+	api := NewXrayAPI(e.grpcAPIAddress)
+	if err := api.RemoveInbound(tag); err != nil {
+		log.Warn("[RemoveInboundConfig] failed to remove inbound via gRPC, continuing with local cleanup", "tag", tag, "err", err)
+	}
+
+	// Phase 5: Delete from memory
+	e.inboundsMu.Lock()
+	defer e.inboundsMu.Unlock()
+
+	if _, exists := e.inbounds[tag]; !exists {
+		return nil
+	}
+
+	// Clean up temporary cert/key files
+	for _, f := range xrayIn.tempCertFiles {
+		if f != "" {
+			_ = os.Remove(f)
 		}
 	}
 

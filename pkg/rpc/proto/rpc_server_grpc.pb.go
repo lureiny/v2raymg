@@ -32,7 +32,6 @@ const (
 	EndNodeAccess_SetGatewayModel_FullMethodName      = "/proto.EndNodeAccess/SetGatewayModel"
 	EndNodeAccess_SetPingCheck_FullMethodName         = "/proto.EndNodeAccess/SetPingCheck"
 	EndNodeAccess_AddInbound_FullMethodName           = "/proto.EndNodeAccess/AddInbound"
-	EndNodeAccess_DeleteInbound_FullMethodName        = "/proto.EndNodeAccess/DeleteInbound"
 	EndNodeAccess_TransferInbound_FullMethodName      = "/proto.EndNodeAccess/TransferInbound"
 	EndNodeAccess_CopyInbound_FullMethodName          = "/proto.EndNodeAccess/CopyInbound"
 	EndNodeAccess_CopyUser_FullMethodName             = "/proto.EndNodeAccess/CopyUser"
@@ -76,7 +75,6 @@ type EndNodeAccessClient interface {
 	SetPingCheck(ctx context.Context, in *SetPingCheckReq, opts ...grpc.CallOption) (*SetPingCheckRsp, error)
 	// inbound
 	AddInbound(ctx context.Context, in *InboundOpReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
-	DeleteInbound(ctx context.Context, in *InboundOpReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
 	TransferInbound(ctx context.Context, in *TransferInboundReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
 	CopyInbound(ctx context.Context, in *CopyInboundReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
 	CopyUser(ctx context.Context, in *CopyUserReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
@@ -237,16 +235,6 @@ func (c *endNodeAccessClient) AddInbound(ctx context.Context, in *InboundOpReq, 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(InboundOpRsp)
 	err := c.cc.Invoke(ctx, EndNodeAccess_AddInbound_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endNodeAccessClient) DeleteInbound(ctx context.Context, in *InboundOpReq, opts ...grpc.CallOption) (*InboundOpRsp, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(InboundOpRsp)
-	err := c.cc.Invoke(ctx, EndNodeAccess_DeleteInbound_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +471,6 @@ type EndNodeAccessServer interface {
 	SetPingCheck(context.Context, *SetPingCheckReq) (*SetPingCheckRsp, error)
 	// inbound
 	AddInbound(context.Context, *InboundOpReq) (*InboundOpRsp, error)
-	DeleteInbound(context.Context, *InboundOpReq) (*InboundOpRsp, error)
 	TransferInbound(context.Context, *TransferInboundReq) (*InboundOpRsp, error)
 	CopyInbound(context.Context, *CopyInboundReq) (*InboundOpRsp, error)
 	CopyUser(context.Context, *CopyUserReq) (*InboundOpRsp, error)
@@ -558,9 +545,6 @@ func (UnimplementedEndNodeAccessServer) SetPingCheck(context.Context, *SetPingCh
 }
 func (UnimplementedEndNodeAccessServer) AddInbound(context.Context, *InboundOpReq) (*InboundOpRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddInbound not implemented")
-}
-func (UnimplementedEndNodeAccessServer) DeleteInbound(context.Context, *InboundOpReq) (*InboundOpRsp, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method DeleteInbound not implemented")
 }
 func (UnimplementedEndNodeAccessServer) TransferInbound(context.Context, *TransferInboundReq) (*InboundOpRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TransferInbound not implemented")
@@ -880,23 +864,6 @@ func _EndNodeAccess_AddInbound_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EndNodeAccess_DeleteInbound_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(InboundOpReq)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndNodeAccessServer).DeleteInbound(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndNodeAccess_DeleteInbound_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndNodeAccessServer).DeleteInbound(ctx, req.(*InboundOpReq))
-	}
-	return interceptor(ctx, in, info, handler)
-}
 
 func _EndNodeAccess_TransferInbound_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TransferInboundReq)
@@ -1334,10 +1301,6 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AddInbound",
 			Handler:    _EndNodeAccess_AddInbound_Handler,
-		},
-		{
-			MethodName: "DeleteInbound",
-			Handler:    _EndNodeAccess_DeleteInbound_Handler,
 		},
 		{
 			MethodName: "TransferInbound",

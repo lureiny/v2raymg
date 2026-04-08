@@ -81,7 +81,6 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 | **Inbound 管理** |
 | GET | `/api/inbound` | Admin | 获取 inbound 配置 |
 | POST | `/api/inbound` | Admin | 添加 inbound（raw JSON） |
-| DELETE | `/api/inbound` | Admin | 删除 inbound（按 tag） |
 | POST | `/api/inbound/fast` | Admin | 快速添加 inbound |
 | GET | `/api/inbounds` | Admin | 列出所有 inbound（跨容器） |
 | DELETE | `/api/inbounds` | Admin | 删除 inbound（按容器+名称） |
@@ -505,24 +504,6 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 {
   "target": "节点名",
   "bound_raw_string": "base64编码的inbound配置JSON",
-  "container": "xray"
-}
-```
-
-**Response (200):**
-```json
-{"code": 0, "msg": "ok"}
-```
-
----
-
-#### DELETE /api/inbound - 删除 Inbound（按 tag）
-
-**Request:**
-```json
-{
-  "target": "节点名",
-  "src_tag": "inbound-tag",
   "container": "xray"
 }
 ```

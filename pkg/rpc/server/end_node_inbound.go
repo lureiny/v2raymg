@@ -82,29 +82,6 @@ func (s *EndNodeServer) AddInbound(ctx context.Context, inboundOpReq *proto.Inbo
 	return inboundOpRsp, nil
 }
 
-func (s *EndNodeServer) DeleteInbound(ctx context.Context, inboundOpReq *proto.InboundOpReq) (*proto.InboundOpRsp, error) {
-	inboundOpRsp := &proto.InboundOpRsp{Code: 0}
-	tag := inboundOpReq.GetInboundInfo()
-	rapi, err := s.getXrayRuntimeAPI()
-	if err != nil {
-		errMsg := fmt.Sprintf("get xray runtime api err > %v", err)
-		log.Error("delete inbound failed", "err", errMsg)
-		inboundOpRsp.Code = 601
-		inboundOpRsp.Msg = errMsg
-		return inboundOpRsp, nil
-	}
-	err = rapi.RemoveInboundNative(tag)
-	if err != nil {
-		errMsg := fmt.Sprintf("delete inbound err > %v", err)
-		log.Error("delete inbound failed", "err", errMsg, "tag", tag)
-		inboundOpRsp.Msg = errMsg
-		inboundOpRsp.Code = 601
-		return inboundOpRsp, nil
-	}
-	return inboundOpRsp, nil
-}
-
-
 
 func (s *EndNodeServer) GetInbound(ctx context.Context, getInboundReq *proto.GetInboundReq) (*proto.GetInboundRsp, error) {
 	getInboundRsp := &proto.GetInboundRsp{Code: 0}
