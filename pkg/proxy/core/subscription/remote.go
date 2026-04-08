@@ -1,10 +1,7 @@
 package subscription
 
 import (
-	"encoding/base64"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
@@ -29,16 +26,12 @@ func (f *RemoteFetcher) Fetch() ([]contracts.SubscriptionSpec, error) {
 	var errs []string
 
 	for _, url := range f.urls {
-		uris, err := fetchURIsFromURL(url)
+		uris, err := FetchExternalSub(url)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("[%s]: %v", url, err))
 			continue
 		}
 		for _, uri := range uris {
-			uri = strings.TrimSpace(uri)
-			if uri == "" {
-				continue
-			}
 			specs = append(specs, contracts.SubscriptionSpec{
 				URI: uri,
 			})
@@ -49,39 +42,4 @@ func (f *RemoteFetcher) Fetch() ([]contracts.SubscriptionSpec, error) {
 		return nil, fmt.Errorf("all remote subscription sources failed: %s", strings.Join(errs, "; "))
 	}
 	return specs, nil
-}
-
-// fetchURIsFromURL 从单个 URL 拉取订阅内容，base64 解码后返回 URI 列表。
-// 如果内容不是合法的 base64，则原样按行分割返回（兼容未编码格式）。
-func fetchURIsFromURL(rawURL string) ([]string, error) {
-	req, err := http.NewRequest("GET", rawURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("User-Agent", "v2raymg/1.0")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http get: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("http status %d", resp.StatusCode)
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
-	}
-
-	// 尝试 base64 解码（standard encoding，与旧版保持一致）
-	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(data)))
-	if err != nil {
-		// 不是 base64，原样按行返回
-		return strings.Split(string(data), "\n"), nil
-	}
-	return strings.Split(string(decoded), "\n"), nil
 }

@@ -52,6 +52,7 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 	proxyGroups := c.QueryArray("proxy_group")
 	ruleProviders := c.QueryArray("rule_provider")
 	rules := c.QueryArray("rule")
+	extSubs := c.QueryArray("ext_sub")
 
 	// Authentication: resolve credentials to username at the HTTP layer.
 	// RPC GetSub only receives username — no auth logic downstream.
@@ -143,7 +144,17 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 			log.Warn("[SubHandler] node returned unexpected type", "node", n, "type", fmt.Sprintf("%T", v))
 		}
 	}
-	log.Info("[SubHandler] total URIs", "count", len(allURIs))
+	log.Info("[SubHandler] total URIs from cluster", "count", len(allURIs))
+
+	// 拉取外部扩展订阅（在 HTTP handler 层处理，不下沉到 RPC）
+	if len(extSubs) > 0 {
+		extURIs, truncated := subscription.FetchAndMergeExtSubs(extSubs)
+		if truncated {
+			log.Warn("ext_sub count exceeds limit, truncated", "count", len(extSubs), "max", subscription.MaxExtSubs)
+		}
+		allURIs = append(allURIs, extURIs...)
+		log.Info("[SubHandler] total URIs after merge", "count", len(allURIs))
+	}
 
 	// 构建 ConvertOptions（仅 Clash 格式需要）
 	var opts *subscription.ConvertOptions
@@ -178,6 +189,14 @@ func (handler *SubHandler) help() string {
 	获取订阅
 	基础参数:
 	  /sub?target={target}&user={user}&pwd={pwd}&exclude_protocols={exclude_protocols}&use_sni={use_sni}&fake={fake}
+
+	扩展订阅:
+	  ext_sub=URL
+	  - 可重复传多个（最多 10 个，超出部分会被截断）
+	  - handler 拉取链接内容后解码（base64 或明文，按换行分割）
+	  - 解码后的 URI 与集群订阅合并，统一转换输出
+	  - 单个链接拉取失败不影响其他结果
+	  - 示例: ext_sub=https://example.com/sub1&ext_sub=https://example.com/sub2
 
 	客户端格式:
 	  client=clash|surge|qv2ray (可选)

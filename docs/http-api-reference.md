@@ -805,6 +805,7 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 | `use_sni` | bool | 否 | 使用 SNI，默认 true |
 | `fake` | bool | 否 | 返回假数据，默认 false |
 | `client` | string | 否 | 客户端格式：clash/surge/qv2ray（覆盖 User-Agent） |
+| `ext_sub` | []string | 否 | 外部订阅链接（最多 10 个），拉取后与集群订阅合并 |
 | `proxy_group` | []string | 否 | Clash 自定义代理组 |
 | `rule_provider` | []string | 否 | Clash 规则提供者 |
 | `rule` | []string | 否 | Clash 自定义规则 |
