@@ -61,6 +61,10 @@ func InitPromptAndRegister() *prompt.Prompt {
 			streamSuggest,
 			domainSuggest,
 			containerSuggest,
+			securitySuggest,
+			realityTargetSuggest,
+			realityServerNamesSuggest,
+			realityShortIDsSuggest,
 			isXtlsSuggest,
 			portSuggest,
 		}),
@@ -192,15 +196,9 @@ func InitPromptAndRegister() *prompt.Prompt {
 	)
 
 	// --- Port rotation (JWT auth via AuthMiddleware) ---
-	m.RegisterHandler(rotatePort, "RotatePort",
-		prompt.WithSuggests([]prompt.Suggest{
-			getSuggestWithTemplate(userNameSuggest, WihtDefault("")),
-		}),
-		prompt.WithGetSuggestMethod(GetSuggest),
-	)
-
 	m.RegisterHandler(rotateInboundPort, "RotateInboundPort",
 		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
 			containerSuggest,
 			{Text: "inbound", Description: "inbound tag", Default: ""},
 			{Text: "port", Description: "new listen port (0 = auto)", Default: int(0)},
@@ -211,6 +209,7 @@ func InitPromptAndRegister() *prompt.Prompt {
 
 	m.RegisterHandler(rotateAllPorts, "RotateAllPorts",
 		prompt.WithSuggests([]prompt.Suggest{
+			getSuggestWithTemplate(targetSuggest, WihtDefault("")),
 			getSuggestWithTemplate(userNameSuggest, WihtDefault("")),
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
@@ -342,7 +341,7 @@ func applyCert(target, domain string) error {
 
 // ---- Inbound ----
 
-func fastAddInbound(target, tag, protocol, stream, domain, container string, isXtls bool, port int) error {
+func fastAddInbound(target, tag, protocol, stream, domain, container, security, realityTarget, realityServerNames, realityShortIDs string, isXtls bool, port int) error {
 	node := getNode(target)
 	if domain == "" && node != nil {
 		domain = node.GetHost()
@@ -355,7 +354,25 @@ func fastAddInbound(target, tag, protocol, stream, domain, container string, isX
 		rand.Seed(time.Now().UnixNano())
 		port = 10000 + rand.Intn(40000)
 	}
-	result, err := client.FastAddInbound(getHost(), getAuthToken(), target, tag, protocol, stream, domain, container, isXtls, port)
+
+	// Parse comma-separated Reality params
+	var serverNames, shortIDs []string
+	if realityServerNames != "" {
+		for _, s := range strings.Split(realityServerNames, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				serverNames = append(serverNames, s)
+			}
+		}
+	}
+	if realityShortIDs != "" {
+		for _, s := range strings.Split(realityShortIDs, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				shortIDs = append(shortIDs, s)
+			}
+		}
+	}
+
+	result, err := client.FastAddInbound(getHost(), getAuthToken(), target, tag, protocol, stream, domain, container, security, realityTarget, serverNames, shortIDs, isXtls, port)
 	if err != nil {
 		return err
 	}
@@ -531,20 +548,11 @@ func setPingCheck(target string, enable bool) error {
 // ---- Port rotation (JWT auth via AuthMiddleware) ----
 // username is optional: empty = operate on own account (normal JWT); non-empty = admin targeting another user.
 
-func rotatePort(username string) error {
-	result, err := client.RotatePort(getHost(), getAuthToken(), username)
-	if err != nil {
-		return err
-	}
-	fmt.Println(result)
-	return nil
-}
-
-func rotateInboundPort(container, inbound string, port int, username string) error {
+func rotateInboundPort(target, container, inbound string, port int, username string) error {
 	if port < 0 || port > 65535 {
 		return fmt.Errorf("port must be between 0 and 65535")
 	}
-	result, err := client.RotateInboundPort(getHost(), getAuthToken(), username, container, inbound, port)
+	result, err := client.RotateInboundPort(getHost(), getAuthToken(), target, username, container, inbound, port)
 	if err != nil {
 		return err
 	}
@@ -552,8 +560,8 @@ func rotateInboundPort(container, inbound string, port int, username string) err
 	return nil
 }
 
-func rotateAllPorts(username string) error {
-	result, err := client.RotateAllPorts(getHost(), getAuthToken(), username)
+func rotateAllPorts(target, username string) error {
+	result, err := client.RotateAllPorts(getHost(), getAuthToken(), target, username)
 	if err != nil {
 		return err
 	}

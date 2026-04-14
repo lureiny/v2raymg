@@ -31,4 +31,6 @@ const (
 	GetStatusReqType
 	GetProfileReqType
 	DeleteCertReqType
+	RotateInboundPortReqType
+	RotateAllPortsReqType
 )

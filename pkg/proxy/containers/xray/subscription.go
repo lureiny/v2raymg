@@ -250,12 +250,15 @@ func generateVLESSURI(spec contracts.SubscriptionSpec) (string, error) {
 	}
 
 	// Add Reality-specific params (issue #91)
+	// Note: reality_server_names / reality_short_ids may be stored as either
+	// string (pre-joined) or []string (from profilegen/adapter). extStringOrJoinSlice
+	// handles both shapes.
 	if security == "reality" {
-		if serverNames := extString(spec.Extensions, "reality_server_names"); serverNames != "" {
-			params = append(params, "serverNames="+serverNames)
+		if names := extStringOrJoinSlice(spec.Extensions, "reality_server_names"); names != "" {
+			params = append(params, "serverNames="+names)
 		}
-		if shortID := extString(spec.Extensions, "reality_short_ids"); shortID != "" {
-			params = append(params, "sid="+shortID)
+		if shortIDs := extStringOrJoinSlice(spec.Extensions, "reality_short_ids"); shortIDs != "" {
+			params = append(params, "sid="+shortIDs)
 		}
 	}
 
@@ -561,6 +564,29 @@ func extStringSlice(m map[string]any, key string) []string {
 		}
 	}
 	return nil
+}
+
+// extStringOrJoinSlice reads a value from extensions that may be stored as either
+// `string` (used directly) or `[]string` (comma-joined).
+// Returns empty string when the key is missing or the type is unsupported.
+// This handles the historical inconsistency where profilegen/adapter store Reality
+// SNI/shortId lists as []string, while some call sites pass them as a pre-joined
+// comma-separated string.
+func extStringOrJoinSlice(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	v, ok := m[key]
+	if !ok {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case []string:
+		return strings.Join(val, ",")
+	}
+	return ""
 }
 
 func vmessTransportName(transport string) string {

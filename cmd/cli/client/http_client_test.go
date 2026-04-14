@@ -42,61 +42,6 @@ func TestSetAuthHeader_EmptyToken(t *testing.T) {
 	}
 }
 
-// --- RotatePort request body tests ---
-
-func TestRotatePort_SendsTokenAndEmptyBody(t *testing.T) {
-	var captured struct {
-		method string
-		path   string
-		token  string
-		xtoken string
-		body   map[string]interface{}
-	}
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		captured.method = r.Method
-		captured.path = r.URL.Path
-		captured.token = r.Header.Get("Authorization")
-		captured.xtoken = r.Header.Get("X-Token")
-		json.NewDecoder(r.Body).Decode(&captured.body)
-		w.WriteHeader(200)
-		w.Write([]byte(`{"code":0,"msg":"ok"}`))
-	}))
-	defer srv.Close()
-
-	RotatePort(srv.URL, "Bearer testjwt", "")
-
-	if captured.method != "POST" {
-		t.Fatalf("expected POST, got %s", captured.method)
-	}
-	if captured.path != "/api/rotatePort" {
-		t.Fatalf("expected /api/rotatePort, got %s", captured.path)
-	}
-	if captured.token != "Bearer testjwt" {
-		t.Fatalf("expected Authorization header, got %q", captured.token)
-	}
-	if _, ok := captured.body["username"]; ok {
-		t.Fatal("expected no username in body when empty")
-	}
-}
-
-func TestRotatePort_SendsUsernameWhenSet(t *testing.T) {
-	var capturedBody map[string]interface{}
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&capturedBody)
-		w.WriteHeader(200)
-		w.Write([]byte(`{}`))
-	}))
-	defer srv.Close()
-
-	RotatePort(srv.URL, "Bearer admin-jwt", "alice")
-
-	if capturedBody["username"] != "alice" {
-		t.Fatalf("expected username=alice in body, got %v", capturedBody["username"])
-	}
-}
-
 // --- RotateInboundPort request body tests ---
 
 func TestRotateInboundPort_SendsContainerAndInbound(t *testing.T) {
@@ -109,7 +54,7 @@ func TestRotateInboundPort_SendsContainerAndInbound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	RotateInboundPort(srv.URL, "Bearer jwt", "", "xray", "vless-tcp", 0)
+	RotateInboundPort(srv.URL, "Bearer jwt", "", "", "xray", "vless-tcp", 0)
 
 	if capturedBody["container"] != "xray" {
 		t.Fatalf("expected container=xray, got %v", capturedBody["container"])
@@ -119,6 +64,26 @@ func TestRotateInboundPort_SendsContainerAndInbound(t *testing.T) {
 	}
 	if _, ok := capturedBody["username"]; ok {
 		t.Fatal("expected no username when not set")
+	}
+}
+
+func TestRotateInboundPort_SendsTarget(t *testing.T) {
+	var capturedBody map[string]interface{}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.WriteHeader(200)
+		w.Write([]byte(`{"code":0,"port":12345}`))
+	}))
+	defer srv.Close()
+
+	RotateInboundPort(srv.URL, "Bearer jwt", "node-2", "alice", "xray", "vless-tcp", 0)
+
+	if capturedBody["target"] != "node-2" {
+		t.Fatalf("expected target=node-2, got %v", capturedBody["target"])
+	}
+	if capturedBody["username"] != "alice" {
+		t.Fatalf("expected username=alice, got %v", capturedBody["username"])
 	}
 }
 
@@ -134,10 +99,30 @@ func TestRotateAllPorts_EmptyBodyWhenNoUsername(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	RotateAllPorts(srv.URL, "Bearer jwt", "")
+	RotateAllPorts(srv.URL, "Bearer jwt", "", "")
 
 	if _, ok := capturedBody["username"]; ok {
 		t.Fatal("expected no username field when not specified")
+	}
+}
+
+func TestRotateAllPorts_SendsTarget(t *testing.T) {
+	var capturedBody map[string]interface{}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.WriteHeader(200)
+		w.Write([]byte(`{"code":0}`))
+	}))
+	defer srv.Close()
+
+	RotateAllPorts(srv.URL, "Bearer jwt", "node-3", "bob")
+
+	if capturedBody["target"] != "node-3" {
+		t.Fatalf("expected target=node-3, got %v", capturedBody["target"])
+	}
+	if capturedBody["username"] != "bob" {
+		t.Fatalf("expected username=bob, got %v", capturedBody["username"])
 	}
 }
 

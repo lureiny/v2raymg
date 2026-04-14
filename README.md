@@ -62,7 +62,6 @@ Public routes (`/sub`, `/api/login`, `/api/authHysteria2`) do not require authen
 | GET | `/api/profile` | Get current user profile |
 | PUT | `/api/profile/password` | Change password |
 | POST | `/api/user/reset-token` | Reset auth token |
-| POST | `/api/rotatePort` | Rotate user port |
 | POST | `/api/rotateInboundPort` | Rotate inbound port |
 | POST | `/api/rotateAllPorts` | Rotate all ports |
 | POST | `/api/logout` | Logout |

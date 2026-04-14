@@ -223,36 +223,6 @@ POST /login
 - `traffic_limit`：0 表示无限制，单位 bytes
 - 管理员和普通用户返回相同结构，`role` 字段不同
 
-### POST /rotatePort（200）
-
-```json
-{"code": 0, "msg": "ok"}
-```
-
-**认证**：需要 JWT 或 X-Token（均走 AuthMiddleware）。
-
-**最终行为规则**：
-
-| 调用方 | body username | 行为 | 错误码 |
-|---|---|---|---|
-| X-Token | 缺失 / 空 | **400 参数错误**（不是 401） | `code:400` |
-| X-Token | 有效 username | 轮换该用户端口 | `code:0` |
-| X-Token | 不存在的 username | 业务错误（用户找不到） | `code:300` |
-| admin JWT | 未指定 | 轮换 token 对应用户自己的端口 | `code:0` |
-| admin JWT | 有效 username | 轮换指定用户端口 | `code:0` |
-| admin JWT | 不存在的 username | 业务错误 | `code:300` |
-| 普通用户 JWT | 未指定 / 等于自己 | 轮换自己的端口 | `code:0` |
-| 普通用户 JWT | 他人 username | **403 权限不足** | HTTP 403 |
-| 无 token | — | **401 未认证** | HTTP 401 |
-
-```
-POST /rotatePort
-Header: Authorization: Bearer <jwt>  OR  X-Token: <admin-token>
-Body (optional): {"username": "target-user"}
-```
-
----
-
 ## 九、UserLister 接口扩展
 
 `login handler` 和 `profile handler` 需要按用户名查询完整 `UserSpec`（含 `LoginPassword`、`Role`），需在 `UserLister` 接口中新增方法：
@@ -409,7 +379,7 @@ ALTER TABLE users ADD COLUMN login_password TEXT NOT NULL DEFAULT '';
 - 查看个人信息（`GET /profile`）
 - 修改密码（后续可增加 `PUT /user/password`）
 - 订阅信息（`GET /sub`）
-- 端口轮换（`POST /rotatePort`）
+- 端口轮换（`POST /rotateAllPorts`、`POST /rotateInboundPort`）
 
 **管理员面板**：
 - 用户管理（CRUD + role 设置）

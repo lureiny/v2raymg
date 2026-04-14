@@ -145,7 +145,7 @@ func ApplyCert(host, token, target, domain string) (string, error) {
 	return result, err
 }
 
-func FastAddInbound(host, token, target, tag, protocol, stream, domain, container string, isXtls bool, port int) (string, error) {
+func FastAddInbound(host, token, target, tag, protocol, stream, domain, container, security, realityTarget string, realityServerNames, realityShortIDs []string, isXtls bool, port int) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {
 		d, err := readBody(resp)
@@ -158,14 +158,18 @@ func FastAddInbound(host, token, target, tag, protocol, stream, domain, containe
 
 	reqUrl := fmt.Sprintf("%s/%s", host, common.FastAddInbound)
 	body := map[string]interface{}{
-		"target":    target,
-		"tag":       tag,
-		"protocol":  protocol,
-		"stream":    stream,
-		"domain":    domain,
-		"isXtls":    isXtls,
-		"port":      port,
-		"container": container,
+		"target":               target,
+		"tag":                  tag,
+		"protocol":             protocol,
+		"stream":               stream,
+		"domain":               domain,
+		"is_xtls":              isXtls,
+		"port":                 port,
+		"container":            container,
+		"security":             security,
+		"reality_target":       realityTarget,
+		"reality_server_names": realityServerNames,
+		"reality_short_ids":    realityShortIDs,
 	}
 	err := DoPostRequest(reqUrl, token, body, getCallBackFunc(cb))
 	return result, err
@@ -470,31 +474,11 @@ func DeleteInboundByName(host, token, target, container, name string) (string, e
 	return result, err
 }
 
-// RotatePort resets all forward ports for the authenticated user (JWT auth via AuthMiddleware).
-// username is optional: empty = operate on the token's own user; non-empty = target user (admin only).
-func RotatePort(host, token, username string) (string, error) {
-	result := ""
-	cb := func(resp *http.Response) error {
-		d, err := readBody(resp)
-		if err != nil {
-			return err
-		}
-		result = string(d)
-		return nil
-	}
-	reqUrl := fmt.Sprintf("%s/%s", host, common.RotatePort)
-	body := map[string]interface{}{}
-	if username != "" {
-		body["username"] = username
-	}
-	err := DoPostRequest(reqUrl, token, body, getCallBackFunc(cb))
-	return result, err
-}
-
 // RotateInboundPort resets the forward port for a specific container+inbound (JWT auth via AuthMiddleware).
+// target is optional: empty = local node; non-empty = target node name.
 // username is optional: empty = token's own user; non-empty = target user (admin only).
 // port=0 means auto-allocate; port>0 requests a specific port.
-func RotateInboundPort(host, token, username, container, inbound string, port int) (string, error) {
+func RotateInboundPort(host, token, target, username, container, inbound string, port int) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {
 		d, err := readBody(resp)
@@ -510,6 +494,9 @@ func RotateInboundPort(host, token, username, container, inbound string, port in
 		"inbound":   inbound,
 		"port":      port,
 	}
+	if target != "" {
+		body["target"] = target
+	}
 	if username != "" {
 		body["username"] = username
 	}
@@ -518,8 +505,9 @@ func RotateInboundPort(host, token, username, container, inbound string, port in
 }
 
 // RotateAllPorts resets all forward ports for the authenticated user using make-before-break (JWT auth).
+// target is optional: empty = local node; non-empty = target node name.
 // username is optional: empty = token's own user; non-empty = target user (admin only).
-func RotateAllPorts(host, token, username string) (string, error) {
+func RotateAllPorts(host, token, target, username string) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {
 		d, err := readBody(resp)
@@ -531,6 +519,9 @@ func RotateAllPorts(host, token, username string) (string, error) {
 	}
 	reqUrl := fmt.Sprintf("%s/%s", host, common.RotateAllPorts)
 	body := map[string]interface{}{}
+	if target != "" {
+		body["target"] = target
+	}
 	if username != "" {
 		body["username"] = username
 	}

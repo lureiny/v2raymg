@@ -2712,9 +2712,13 @@ type FastAddInboundReq struct {
 	StreamBuilderType  BuilderType            `protobuf:"varint,3,opt,name=streamBuilderType,proto3,enum=proto.BuilderType" json:"streamBuilderType,omitempty"`
 	Port               int32                  `protobuf:"varint,4,opt,name=port,proto3" json:"port,omitempty"`
 	Domain             string                 `protobuf:"bytes,5,opt,name=domain,proto3" json:"domain,omitempty"`
-	IsXtls             bool                   `protobuf:"varint,6,opt,name=isXtls,proto3" json:"isXtls,omitempty"`
+	IsXtls             bool                   `protobuf:"varint,6,opt,name=isXtls,proto3" json:"isXtls,omitempty"` // deprecated: use security field instead
 	Tag                string                 `protobuf:"bytes,7,opt,name=tag,proto3" json:"tag,omitempty"`
-	ContainerType      string                 `protobuf:"bytes,8,opt,name=container_type,json=containerType,proto3" json:"container_type,omitempty"` // "xray"(default) or "snell"
+	ContainerType      string                 `protobuf:"bytes,8,opt,name=container_type,json=containerType,proto3" json:"container_type,omitempty"`                   // "xray"(default) or "snell"
+	Security           string                 `protobuf:"bytes,9,opt,name=security,proto3" json:"security,omitempty"`                                                  // "tls"/"xtls"/"reality"; overrides isXtls when non-empty
+	RealityTarget      string                 `protobuf:"bytes,10,opt,name=reality_target,json=realityTarget,proto3" json:"reality_target,omitempty"`                  // Reality target server, e.g. "www.example.com:443"
+	RealityServerNames []string               `protobuf:"bytes,11,rep,name=reality_server_names,json=realityServerNames,proto3" json:"reality_server_names,omitempty"` // allowed SNI list for Reality
+	RealityShortIds    []string               `protobuf:"bytes,12,rep,name=reality_short_ids,json=realityShortIds,proto3" json:"reality_short_ids,omitempty"`          // short ID list for Reality
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -2803,6 +2807,34 @@ func (x *FastAddInboundReq) GetContainerType() string {
 		return x.ContainerType
 	}
 	return ""
+}
+
+func (x *FastAddInboundReq) GetSecurity() string {
+	if x != nil {
+		return x.Security
+	}
+	return ""
+}
+
+func (x *FastAddInboundReq) GetRealityTarget() string {
+	if x != nil {
+		return x.RealityTarget
+	}
+	return ""
+}
+
+func (x *FastAddInboundReq) GetRealityServerNames() []string {
+	if x != nil {
+		return x.RealityServerNames
+	}
+	return nil
+}
+
+func (x *FastAddInboundReq) GetRealityShortIds() []string {
+	if x != nil {
+		return x.RealityShortIds
+	}
+	return nil
 }
 
 type FastAddInboundRsp struct {
@@ -4365,6 +4397,254 @@ func (x *UpsertClusterUsersRsp) GetMsg() string {
 	return ""
 }
 
+type RotateInboundPortReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeAuthInfo  *NodeAuthInfo          `protobuf:"bytes,1,opt,name=node_auth_info,json=nodeAuthInfo,proto3" json:"node_auth_info,omitempty"`
+	Username      string                 `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
+	Container     string                 `protobuf:"bytes,3,opt,name=container,proto3" json:"container,omitempty"`
+	Inbound       string                 `protobuf:"bytes,4,opt,name=inbound,proto3" json:"inbound,omitempty"`
+	Port          uint32                 `protobuf:"varint,5,opt,name=port,proto3" json:"port,omitempty"` // 0 = auto-allocate, >0 = preferred port
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RotateInboundPortReq) Reset() {
+	*x = RotateInboundPortReq{}
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[69]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RotateInboundPortReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RotateInboundPortReq) ProtoMessage() {}
+
+func (x *RotateInboundPortReq) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[69]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RotateInboundPortReq.ProtoReflect.Descriptor instead.
+func (*RotateInboundPortReq) Descriptor() ([]byte, []int) {
+	return file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP(), []int{69}
+}
+
+func (x *RotateInboundPortReq) GetNodeAuthInfo() *NodeAuthInfo {
+	if x != nil {
+		return x.NodeAuthInfo
+	}
+	return nil
+}
+
+func (x *RotateInboundPortReq) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *RotateInboundPortReq) GetContainer() string {
+	if x != nil {
+		return x.Container
+	}
+	return ""
+}
+
+func (x *RotateInboundPortReq) GetInbound() string {
+	if x != nil {
+		return x.Inbound
+	}
+	return ""
+}
+
+func (x *RotateInboundPortReq) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+type RotateInboundPortRsp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Code          int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
+	Msg           string                 `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
+	Port          uint32                 `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"` // newly allocated port
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RotateInboundPortRsp) Reset() {
+	*x = RotateInboundPortRsp{}
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[70]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RotateInboundPortRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RotateInboundPortRsp) ProtoMessage() {}
+
+func (x *RotateInboundPortRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[70]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RotateInboundPortRsp.ProtoReflect.Descriptor instead.
+func (*RotateInboundPortRsp) Descriptor() ([]byte, []int) {
+	return file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP(), []int{70}
+}
+
+func (x *RotateInboundPortRsp) GetCode() int32 {
+	if x != nil {
+		return x.Code
+	}
+	return 0
+}
+
+func (x *RotateInboundPortRsp) GetMsg() string {
+	if x != nil {
+		return x.Msg
+	}
+	return ""
+}
+
+func (x *RotateInboundPortRsp) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+type RotateAllPortsReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeAuthInfo  *NodeAuthInfo          `protobuf:"bytes,1,opt,name=node_auth_info,json=nodeAuthInfo,proto3" json:"node_auth_info,omitempty"`
+	Username      string                 `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RotateAllPortsReq) Reset() {
+	*x = RotateAllPortsReq{}
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[71]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RotateAllPortsReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RotateAllPortsReq) ProtoMessage() {}
+
+func (x *RotateAllPortsReq) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[71]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RotateAllPortsReq.ProtoReflect.Descriptor instead.
+func (*RotateAllPortsReq) Descriptor() ([]byte, []int) {
+	return file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP(), []int{71}
+}
+
+func (x *RotateAllPortsReq) GetNodeAuthInfo() *NodeAuthInfo {
+	if x != nil {
+		return x.NodeAuthInfo
+	}
+	return nil
+}
+
+func (x *RotateAllPortsReq) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+type RotateAllPortsRsp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Code          int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
+	Msg           string                 `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
+	Ports         map[string]uint32      `protobuf:"bytes,3,rep,name=ports,proto3" json:"ports,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"` // inbound tag → new listen port
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RotateAllPortsRsp) Reset() {
+	*x = RotateAllPortsRsp{}
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[72]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RotateAllPortsRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RotateAllPortsRsp) ProtoMessage() {}
+
+func (x *RotateAllPortsRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[72]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RotateAllPortsRsp.ProtoReflect.Descriptor instead.
+func (*RotateAllPortsRsp) Descriptor() ([]byte, []int) {
+	return file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP(), []int{72}
+}
+
+func (x *RotateAllPortsRsp) GetCode() int32 {
+	if x != nil {
+		return x.Code
+	}
+	return 0
+}
+
+func (x *RotateAllPortsRsp) GetMsg() string {
+	if x != nil {
+		return x.Msg
+	}
+	return ""
+}
+
+func (x *RotateAllPortsRsp) GetPorts() map[string]uint32 {
+	if x != nil {
+		return x.Ports
+	}
+	return nil
+}
+
 type GetClutersReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ClusterName   string                 `protobuf:"bytes,1,opt,name=cluster_name,json=clusterName,proto3" json:"cluster_name,omitempty"`
@@ -4374,7 +4654,7 @@ type GetClutersReq struct {
 
 func (x *GetClutersReq) Reset() {
 	*x = GetClutersReq{}
-	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[69]
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4386,7 +4666,7 @@ func (x *GetClutersReq) String() string {
 func (*GetClutersReq) ProtoMessage() {}
 
 func (x *GetClutersReq) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[69]
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4399,7 +4679,7 @@ func (x *GetClutersReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClutersReq.ProtoReflect.Descriptor instead.
 func (*GetClutersReq) Descriptor() ([]byte, []int) {
-	return file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP(), []int{69}
+	return file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *GetClutersReq) GetClusterName() string {
@@ -4418,7 +4698,7 @@ type GetClutersRsp struct {
 
 func (x *GetClutersRsp) Reset() {
 	*x = GetClutersRsp{}
-	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[70]
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4430,7 +4710,7 @@ func (x *GetClutersRsp) String() string {
 func (*GetClutersRsp) ProtoMessage() {}
 
 func (x *GetClutersRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[70]
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4443,7 +4723,7 @@ func (x *GetClutersRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClutersRsp.ProtoReflect.Descriptor instead.
 func (*GetClutersRsp) Descriptor() ([]byte, []int) {
-	return file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP(), []int{70}
+	return file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *GetClutersRsp) GetClusterNames() []string {
@@ -4462,7 +4742,7 @@ type GetNodesReq struct {
 
 func (x *GetNodesReq) Reset() {
 	*x = GetNodesReq{}
-	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[71]
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4474,7 +4754,7 @@ func (x *GetNodesReq) String() string {
 func (*GetNodesReq) ProtoMessage() {}
 
 func (x *GetNodesReq) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[71]
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4487,7 +4767,7 @@ func (x *GetNodesReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodesReq.ProtoReflect.Descriptor instead.
 func (*GetNodesReq) Descriptor() ([]byte, []int) {
-	return file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP(), []int{71}
+	return file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *GetNodesReq) GetClusterName() string {
@@ -4507,7 +4787,7 @@ type GetNodesRsp struct {
 
 func (x *GetNodesRsp) Reset() {
 	*x = GetNodesRsp{}
-	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[72]
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4519,7 +4799,7 @@ func (x *GetNodesRsp) String() string {
 func (*GetNodesRsp) ProtoMessage() {}
 
 func (x *GetNodesRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[72]
+	mi := &file_pkg_rpc_proto_rpc_server_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4532,7 +4812,7 @@ func (x *GetNodesRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodesRsp.ProtoReflect.Descriptor instead.
 func (*GetNodesRsp) Descriptor() ([]byte, []int) {
-	return file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP(), []int{72}
+	return file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *GetNodesRsp) GetClusterName() string {
@@ -4752,7 +5032,7 @@ const file_pkg_rpc_proto_rpc_server_proto_rawDesc = "" +
 	"\x06domain\x18\x02 \x01(\tR\x06domain\"8\n" +
 	"\x10ObtainNewCertRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
-	"\x03msg\x18\x02 \x01(\tR\x03msg\"\xd1\x02\n" +
+	"\x03msg\x18\x02 \x01(\tR\x03msg\"\xf2\x03\n" +
 	"\x11FastAddInboundReq\x129\n" +
 	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x12B\n" +
 	"\x12inboundBuilderType\x18\x02 \x01(\x0e2\x12.proto.BuilderTypeR\x12inboundBuilderType\x12@\n" +
@@ -4761,7 +5041,12 @@ const file_pkg_rpc_proto_rpc_server_proto_rawDesc = "" +
 	"\x06domain\x18\x05 \x01(\tR\x06domain\x12\x16\n" +
 	"\x06isXtls\x18\x06 \x01(\bR\x06isXtls\x12\x10\n" +
 	"\x03tag\x18\a \x01(\tR\x03tag\x12%\n" +
-	"\x0econtainer_type\x18\b \x01(\tR\rcontainerType\"9\n" +
+	"\x0econtainer_type\x18\b \x01(\tR\rcontainerType\x12\x1a\n" +
+	"\bsecurity\x18\t \x01(\tR\bsecurity\x12%\n" +
+	"\x0ereality_target\x18\n" +
+	" \x01(\tR\rrealityTarget\x120\n" +
+	"\x14reality_server_names\x18\v \x03(\tR\x12realityServerNames\x12*\n" +
+	"\x11reality_short_ids\x18\f \x03(\tR\x0frealityShortIds\"9\n" +
 	"\x11FastAddInboundRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
 	"\x03msg\x18\x02 \x01(\tR\x03msg\"\x9e\x01\n" +
@@ -4880,7 +5165,28 @@ const file_pkg_rpc_proto_rpc_server_proto_rawDesc = "" +
 	"from_admin\x18\x03 \x01(\bR\tfromAdmin\"=\n" +
 	"\x15UpsertClusterUsersRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
-	"\x03msg\x18\x02 \x01(\tR\x03msg\"2\n" +
+	"\x03msg\x18\x02 \x01(\tR\x03msg\"\xb9\x01\n" +
+	"\x14RotateInboundPortReq\x129\n" +
+	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x12\x1a\n" +
+	"\busername\x18\x02 \x01(\tR\busername\x12\x1c\n" +
+	"\tcontainer\x18\x03 \x01(\tR\tcontainer\x12\x18\n" +
+	"\ainbound\x18\x04 \x01(\tR\ainbound\x12\x12\n" +
+	"\x04port\x18\x05 \x01(\rR\x04port\"P\n" +
+	"\x14RotateInboundPortRsp\x12\x12\n" +
+	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
+	"\x03msg\x18\x02 \x01(\tR\x03msg\x12\x12\n" +
+	"\x04port\x18\x03 \x01(\rR\x04port\"j\n" +
+	"\x11RotateAllPortsReq\x129\n" +
+	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x12\x1a\n" +
+	"\busername\x18\x02 \x01(\tR\busername\"\xae\x01\n" +
+	"\x11RotateAllPortsRsp\x12\x12\n" +
+	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
+	"\x03msg\x18\x02 \x01(\tR\x03msg\x129\n" +
+	"\x05ports\x18\x03 \x03(\v2#.proto.RotateAllPortsRsp.PortsEntryR\x05ports\x1a8\n" +
+	"\n" +
+	"PortsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01\"2\n" +
 	"\rGetClutersReq\x12!\n" +
 	"\fcluster_name\x18\x01 \x01(\tR\vclusterName\"4\n" +
 	"\rGetClutersRsp\x12#\n" +
@@ -4905,7 +5211,7 @@ const file_pkg_rpc_proto_rpc_server_proto_rawDesc = "" +
 	"\x0fQuicBuilderType\x10\x16\x12\x13\n" +
 	"\x0fMkcpBuilderType\x10\x17\x12\x13\n" +
 	"\x0fGrpcBuilderType\x10\x18\x12\x13\n" +
-	"\x0fHttpBuilderType\x10\x192\xad\x11\n" +
+	"\x0fHttpBuilderType\x10\x192\x89\x12\n" +
 	"\rEndNodeAccess\x124\n" +
 	"\bGetUsers\x12\x12.proto.GetUsersReq\x1a\x12.proto.GetUsersRsp\"\x00\x12:\n" +
 	"\n" +
@@ -4913,7 +5219,9 @@ const file_pkg_rpc_proto_rpc_server_proto_rawDesc = "" +
 	"\bAddUsers\x12\x10.proto.UserOpReq\x1a\x10.proto.UserOpRsp\"\x00\x123\n" +
 	"\vDeleteUsers\x12\x10.proto.UserOpReq\x1a\x10.proto.UserOpRsp\"\x00\x123\n" +
 	"\vUpdateUsers\x12\x10.proto.UserOpReq\x1a\x10.proto.UserOpRsp\"\x00\x121\n" +
-	"\tResetUser\x12\x10.proto.UserOpReq\x1a\x10.proto.UserOpRsp\"\x00\x12.\n" +
+	"\tResetUser\x12\x10.proto.UserOpReq\x1a\x10.proto.UserOpRsp\"\x00\x12O\n" +
+	"\x11RotateInboundPort\x12\x1b.proto.RotateInboundPortReq\x1a\x1b.proto.RotateInboundPortRsp\"\x00\x12F\n" +
+	"\x0eRotateAllPorts\x12\x18.proto.RotateAllPortsReq\x1a\x18.proto.RotateAllPortsRsp\"\x00\x12.\n" +
 	"\x06GetSub\x12\x10.proto.GetSubReq\x1a\x10.proto.GetSubRsp\"\x00\x12O\n" +
 	"\x11GetBandWidthStats\x12\x1b.proto.GetBandwidthStatsReq\x1a\x1b.proto.GetBandwidthStatsRsp\"\x00\x127\n" +
 	"\tHeartBeat\x12\x13.proto.HeartBeatReq\x1a\x13.proto.HeartBeatRsp\"\x00\x12@\n" +
@@ -4921,8 +5229,7 @@ const file_pkg_rpc_proto_rpc_server_proto_rawDesc = "" +
 	"\x0fSetGatewayModel\x12\x19.proto.SetGatewayModelReq\x1a\x19.proto.SetGatewayModelRsp\"\x00\x12@\n" +
 	"\fSetPingCheck\x12\x16.proto.SetPingCheckReq\x1a\x16.proto.SetPingCheckRsp\"\x00\x128\n" +
 	"\n" +
-	"AddInbound\x12\x13.proto.InboundOpReq\x1a\x13.proto.InboundOpRsp\"\x00\x12;\n" +
-	"\rDeleteInbound\x12\x13.proto.InboundOpReq\x1a\x13.proto.InboundOpRsp\"\x00\x12C\n" +
+	"AddInbound\x12\x13.proto.InboundOpReq\x1a\x13.proto.InboundOpRsp\"\x00\x12C\n" +
 	"\x0fTransferInbound\x12\x19.proto.TransferInboundReq\x1a\x13.proto.InboundOpRsp\"\x00\x12;\n" +
 	"\vCopyInbound\x12\x15.proto.CopyInboundReq\x1a\x13.proto.InboundOpRsp\"\x00\x125\n" +
 	"\bCopyUser\x12\x12.proto.CopyUserReq\x1a\x13.proto.InboundOpRsp\"\x00\x12:\n" +
@@ -4967,7 +5274,7 @@ func file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_rpc_proto_rpc_server_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pkg_rpc_proto_rpc_server_proto_msgTypes = make([]protoimpl.MessageInfo, 76)
+var file_pkg_rpc_proto_rpc_server_proto_msgTypes = make([]protoimpl.MessageInfo, 81)
 var file_pkg_rpc_proto_rpc_server_proto_goTypes = []any{
 	(BuilderType)(0),               // 0: proto.BuilderType
 	(*User)(nil),                   // 1: proto.User
@@ -5039,13 +5346,18 @@ var file_pkg_rpc_proto_rpc_server_proto_goTypes = []any{
 	(*SetNodeGroupsRsp)(nil),       // 67: proto.SetNodeGroupsRsp
 	(*UpsertClusterUsersReq)(nil),  // 68: proto.UpsertClusterUsersReq
 	(*UpsertClusterUsersRsp)(nil),  // 69: proto.UpsertClusterUsersRsp
-	(*GetClutersReq)(nil),          // 70: proto.GetClutersReq
-	(*GetClutersRsp)(nil),          // 71: proto.GetClutersRsp
-	(*GetNodesReq)(nil),            // 72: proto.GetNodesReq
-	(*GetNodesRsp)(nil),            // 73: proto.GetNodesRsp
-	nil,                            // 74: proto.HeartBeatRsp.NodesMapEntry
-	nil,                            // 75: proto.Nodes.NodesEntry
-	nil,                            // 76: proto.GetNodesRsp.NodesMapEntry
+	(*RotateInboundPortReq)(nil),   // 70: proto.RotateInboundPortReq
+	(*RotateInboundPortRsp)(nil),   // 71: proto.RotateInboundPortRsp
+	(*RotateAllPortsReq)(nil),      // 72: proto.RotateAllPortsReq
+	(*RotateAllPortsRsp)(nil),      // 73: proto.RotateAllPortsRsp
+	(*GetClutersReq)(nil),          // 74: proto.GetClutersReq
+	(*GetClutersRsp)(nil),          // 75: proto.GetClutersRsp
+	(*GetNodesReq)(nil),            // 76: proto.GetNodesReq
+	(*GetNodesRsp)(nil),            // 77: proto.GetNodesRsp
+	nil,                            // 78: proto.HeartBeatRsp.NodesMapEntry
+	nil,                            // 79: proto.Nodes.NodesEntry
+	nil,                            // 80: proto.RotateAllPortsRsp.PortsEntry
+	nil,                            // 81: proto.GetNodesRsp.NodesMapEntry
 }
 var file_pkg_rpc_proto_rpc_server_proto_depIdxs = []int32{
 	15, // 0: proto.NodeAuthInfo.node:type_name -> proto.Node
@@ -5060,8 +5372,8 @@ var file_pkg_rpc_proto_rpc_server_proto_depIdxs = []int32{
 	1,  // 9: proto.ClusterUserSync.user:type_name -> proto.User
 	2,  // 10: proto.HeartBeatReq.node_auth_info:type_name -> proto.NodeAuthInfo
 	12, // 11: proto.HeartBeatReq.user_digests:type_name -> proto.UserDigest
-	74, // 12: proto.HeartBeatRsp.nodesMap:type_name -> proto.HeartBeatRsp.NodesMapEntry
-	75, // 13: proto.Nodes.nodes:type_name -> proto.Nodes.NodesEntry
+	78, // 12: proto.HeartBeatRsp.nodesMap:type_name -> proto.HeartBeatRsp.NodesMapEntry
+	79, // 13: proto.Nodes.nodes:type_name -> proto.Nodes.NodesEntry
 	2,  // 14: proto.RegisterNodeReq.node_auth_info:type_name -> proto.NodeAuthInfo
 	2,  // 15: proto.GetBandwidthStatsReq.node_auth_info:type_name -> proto.NodeAuthInfo
 	21, // 16: proto.GetBandwidthStatsRsp.stats:type_name -> proto.Stats
@@ -5097,93 +5409,98 @@ var file_pkg_rpc_proto_rpc_server_proto_depIdxs = []int32{
 	2,  // 46: proto.SetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
 	2,  // 47: proto.UpsertClusterUsersReq.node_auth_info:type_name -> proto.NodeAuthInfo
 	13, // 48: proto.UpsertClusterUsersReq.users:type_name -> proto.ClusterUserSync
-	76, // 49: proto.GetNodesRsp.nodesMap:type_name -> proto.GetNodesRsp.NodesMapEntry
-	15, // 50: proto.HeartBeatRsp.NodesMapEntry.value:type_name -> proto.Node
-	17, // 51: proto.Nodes.NodesEntry.value:type_name -> proto.Nodes
-	15, // 52: proto.GetNodesRsp.NodesMapEntry.value:type_name -> proto.Node
-	3,  // 53: proto.EndNodeAccess.GetUsers:input_type -> proto.GetUsersReq
-	6,  // 54: proto.EndNodeAccess.GetProfile:input_type -> proto.GetProfileReq
-	8,  // 55: proto.EndNodeAccess.AddUsers:input_type -> proto.UserOpReq
-	8,  // 56: proto.EndNodeAccess.DeleteUsers:input_type -> proto.UserOpReq
-	8,  // 57: proto.EndNodeAccess.UpdateUsers:input_type -> proto.UserOpReq
-	8,  // 58: proto.EndNodeAccess.ResetUser:input_type -> proto.UserOpReq
-	10, // 59: proto.EndNodeAccess.GetSub:input_type -> proto.GetSubReq
-	20, // 60: proto.EndNodeAccess.GetBandWidthStats:input_type -> proto.GetBandwidthStatsReq
-	14, // 61: proto.EndNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
-	18, // 62: proto.EndNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
-	39, // 63: proto.EndNodeAccess.SetGatewayModel:input_type -> proto.SetGatewayModelReq
-	56, // 64: proto.EndNodeAccess.SetPingCheck:input_type -> proto.SetPingCheckReq
-	23, // 65: proto.EndNodeAccess.AddInbound:input_type -> proto.InboundOpReq
-	23, // 66: proto.EndNodeAccess.DeleteInbound:input_type -> proto.InboundOpReq
-	25, // 67: proto.EndNodeAccess.TransferInbound:input_type -> proto.TransferInboundReq
-	26, // 68: proto.EndNodeAccess.CopyInbound:input_type -> proto.CopyInboundReq
-	27, // 69: proto.EndNodeAccess.CopyUser:input_type -> proto.CopyUserReq
-	28, // 70: proto.EndNodeAccess.GetInbound:input_type -> proto.GetInboundReq
-	31, // 71: proto.EndNodeAccess.ListInbound:input_type -> proto.ListInboundReq
-	33, // 72: proto.EndNodeAccess.DeleteInboundByName:input_type -> proto.DeleteInboundByNameReq
-	34, // 73: proto.EndNodeAccess.UpdateProxy:input_type -> proto.UpdateProxyReq
-	36, // 74: proto.EndNodeAccess.AddAdaptiveConfig:input_type -> proto.AdaptiveOpReq
-	36, // 75: proto.EndNodeAccess.DeleteAdaptiveConfig:input_type -> proto.AdaptiveOpReq
-	37, // 76: proto.EndNodeAccess.Adaptive:input_type -> proto.AdaptiveReq
-	43, // 77: proto.EndNodeAccess.FastAddInbound:input_type -> proto.FastAddInboundReq
-	41, // 78: proto.EndNodeAccess.ObtainNewCert:input_type -> proto.ObtainNewCertReq
-	45, // 79: proto.EndNodeAccess.TransferCert:input_type -> proto.TransferCertReq
-	48, // 80: proto.EndNodeAccess.GetCerts:input_type -> proto.GetCertsReq
-	50, // 81: proto.EndNodeAccess.DeleteCert:input_type -> proto.DeleteCertReq
-	54, // 82: proto.EndNodeAccess.GetPingMetric:input_type -> proto.GetPingMetricReq
-	59, // 83: proto.EndNodeAccess.GetNodeMetric:input_type -> proto.GetNodeMetricReq
-	64, // 84: proto.EndNodeAccess.GetNodeGroups:input_type -> proto.GetNodeGroupsReq
-	66, // 85: proto.EndNodeAccess.SetNodeGroups:input_type -> proto.SetNodeGroupsReq
-	68, // 86: proto.EndNodeAccess.UpsertClusterUsers:input_type -> proto.UpsertClusterUsersReq
-	62, // 87: proto.EndNodeAccess.GetStatus:input_type -> proto.GetStatusReq
-	70, // 88: proto.CenterNodeAdmin.GetCluters:input_type -> proto.GetClutersReq
-	72, // 89: proto.CenterNodeAdmin.GetNodes:input_type -> proto.GetNodesReq
-	14, // 90: proto.CenterNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
-	18, // 91: proto.CenterNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
-	4,  // 92: proto.EndNodeAccess.GetUsers:output_type -> proto.GetUsersRsp
-	7,  // 93: proto.EndNodeAccess.GetProfile:output_type -> proto.GetProfileRsp
-	9,  // 94: proto.EndNodeAccess.AddUsers:output_type -> proto.UserOpRsp
-	9,  // 95: proto.EndNodeAccess.DeleteUsers:output_type -> proto.UserOpRsp
-	9,  // 96: proto.EndNodeAccess.UpdateUsers:output_type -> proto.UserOpRsp
-	9,  // 97: proto.EndNodeAccess.ResetUser:output_type -> proto.UserOpRsp
-	11, // 98: proto.EndNodeAccess.GetSub:output_type -> proto.GetSubRsp
-	22, // 99: proto.EndNodeAccess.GetBandWidthStats:output_type -> proto.GetBandwidthStatsRsp
-	16, // 100: proto.EndNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
-	19, // 101: proto.EndNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
-	40, // 102: proto.EndNodeAccess.SetGatewayModel:output_type -> proto.SetGatewayModelRsp
-	57, // 103: proto.EndNodeAccess.SetPingCheck:output_type -> proto.SetPingCheckRsp
-	24, // 104: proto.EndNodeAccess.AddInbound:output_type -> proto.InboundOpRsp
-	24, // 105: proto.EndNodeAccess.DeleteInbound:output_type -> proto.InboundOpRsp
-	24, // 106: proto.EndNodeAccess.TransferInbound:output_type -> proto.InboundOpRsp
-	24, // 107: proto.EndNodeAccess.CopyInbound:output_type -> proto.InboundOpRsp
-	24, // 108: proto.EndNodeAccess.CopyUser:output_type -> proto.InboundOpRsp
-	29, // 109: proto.EndNodeAccess.GetInbound:output_type -> proto.GetInboundRsp
-	32, // 110: proto.EndNodeAccess.ListInbound:output_type -> proto.ListInboundRsp
-	24, // 111: proto.EndNodeAccess.DeleteInboundByName:output_type -> proto.InboundOpRsp
-	35, // 112: proto.EndNodeAccess.UpdateProxy:output_type -> proto.UpdateProxyRsp
-	38, // 113: proto.EndNodeAccess.AddAdaptiveConfig:output_type -> proto.AdaptiveRsp
-	38, // 114: proto.EndNodeAccess.DeleteAdaptiveConfig:output_type -> proto.AdaptiveRsp
-	38, // 115: proto.EndNodeAccess.Adaptive:output_type -> proto.AdaptiveRsp
-	44, // 116: proto.EndNodeAccess.FastAddInbound:output_type -> proto.FastAddInboundRsp
-	42, // 117: proto.EndNodeAccess.ObtainNewCert:output_type -> proto.ObtainNewCertRsp
-	46, // 118: proto.EndNodeAccess.TransferCert:output_type -> proto.TransferCertRsp
-	49, // 119: proto.EndNodeAccess.GetCerts:output_type -> proto.GetCertsRsp
-	51, // 120: proto.EndNodeAccess.DeleteCert:output_type -> proto.DeleteCertRsp
-	55, // 121: proto.EndNodeAccess.GetPingMetric:output_type -> proto.GetPingMetricRsp
-	60, // 122: proto.EndNodeAccess.GetNodeMetric:output_type -> proto.GetNodeMetricRsp
-	65, // 123: proto.EndNodeAccess.GetNodeGroups:output_type -> proto.GetNodeGroupsRsp
-	67, // 124: proto.EndNodeAccess.SetNodeGroups:output_type -> proto.SetNodeGroupsRsp
-	69, // 125: proto.EndNodeAccess.UpsertClusterUsers:output_type -> proto.UpsertClusterUsersRsp
-	63, // 126: proto.EndNodeAccess.GetStatus:output_type -> proto.GetStatusRsp
-	71, // 127: proto.CenterNodeAdmin.GetCluters:output_type -> proto.GetClutersRsp
-	73, // 128: proto.CenterNodeAdmin.GetNodes:output_type -> proto.GetNodesRsp
-	16, // 129: proto.CenterNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
-	19, // 130: proto.CenterNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
-	92, // [92:131] is the sub-list for method output_type
-	53, // [53:92] is the sub-list for method input_type
-	53, // [53:53] is the sub-list for extension type_name
-	53, // [53:53] is the sub-list for extension extendee
-	0,  // [0:53] is the sub-list for field type_name
+	2,  // 49: proto.RotateInboundPortReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 50: proto.RotateAllPortsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	80, // 51: proto.RotateAllPortsRsp.ports:type_name -> proto.RotateAllPortsRsp.PortsEntry
+	81, // 52: proto.GetNodesRsp.nodesMap:type_name -> proto.GetNodesRsp.NodesMapEntry
+	15, // 53: proto.HeartBeatRsp.NodesMapEntry.value:type_name -> proto.Node
+	17, // 54: proto.Nodes.NodesEntry.value:type_name -> proto.Nodes
+	15, // 55: proto.GetNodesRsp.NodesMapEntry.value:type_name -> proto.Node
+	3,  // 56: proto.EndNodeAccess.GetUsers:input_type -> proto.GetUsersReq
+	6,  // 57: proto.EndNodeAccess.GetProfile:input_type -> proto.GetProfileReq
+	8,  // 58: proto.EndNodeAccess.AddUsers:input_type -> proto.UserOpReq
+	8,  // 59: proto.EndNodeAccess.DeleteUsers:input_type -> proto.UserOpReq
+	8,  // 60: proto.EndNodeAccess.UpdateUsers:input_type -> proto.UserOpReq
+	8,  // 61: proto.EndNodeAccess.ResetUser:input_type -> proto.UserOpReq
+	70, // 62: proto.EndNodeAccess.RotateInboundPort:input_type -> proto.RotateInboundPortReq
+	72, // 63: proto.EndNodeAccess.RotateAllPorts:input_type -> proto.RotateAllPortsReq
+	10, // 64: proto.EndNodeAccess.GetSub:input_type -> proto.GetSubReq
+	20, // 65: proto.EndNodeAccess.GetBandWidthStats:input_type -> proto.GetBandwidthStatsReq
+	14, // 66: proto.EndNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
+	18, // 67: proto.EndNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
+	39, // 68: proto.EndNodeAccess.SetGatewayModel:input_type -> proto.SetGatewayModelReq
+	56, // 69: proto.EndNodeAccess.SetPingCheck:input_type -> proto.SetPingCheckReq
+	23, // 70: proto.EndNodeAccess.AddInbound:input_type -> proto.InboundOpReq
+	25, // 71: proto.EndNodeAccess.TransferInbound:input_type -> proto.TransferInboundReq
+	26, // 72: proto.EndNodeAccess.CopyInbound:input_type -> proto.CopyInboundReq
+	27, // 73: proto.EndNodeAccess.CopyUser:input_type -> proto.CopyUserReq
+	28, // 74: proto.EndNodeAccess.GetInbound:input_type -> proto.GetInboundReq
+	31, // 75: proto.EndNodeAccess.ListInbound:input_type -> proto.ListInboundReq
+	33, // 76: proto.EndNodeAccess.DeleteInboundByName:input_type -> proto.DeleteInboundByNameReq
+	34, // 77: proto.EndNodeAccess.UpdateProxy:input_type -> proto.UpdateProxyReq
+	36, // 78: proto.EndNodeAccess.AddAdaptiveConfig:input_type -> proto.AdaptiveOpReq
+	36, // 79: proto.EndNodeAccess.DeleteAdaptiveConfig:input_type -> proto.AdaptiveOpReq
+	37, // 80: proto.EndNodeAccess.Adaptive:input_type -> proto.AdaptiveReq
+	43, // 81: proto.EndNodeAccess.FastAddInbound:input_type -> proto.FastAddInboundReq
+	41, // 82: proto.EndNodeAccess.ObtainNewCert:input_type -> proto.ObtainNewCertReq
+	45, // 83: proto.EndNodeAccess.TransferCert:input_type -> proto.TransferCertReq
+	48, // 84: proto.EndNodeAccess.GetCerts:input_type -> proto.GetCertsReq
+	50, // 85: proto.EndNodeAccess.DeleteCert:input_type -> proto.DeleteCertReq
+	54, // 86: proto.EndNodeAccess.GetPingMetric:input_type -> proto.GetPingMetricReq
+	59, // 87: proto.EndNodeAccess.GetNodeMetric:input_type -> proto.GetNodeMetricReq
+	64, // 88: proto.EndNodeAccess.GetNodeGroups:input_type -> proto.GetNodeGroupsReq
+	66, // 89: proto.EndNodeAccess.SetNodeGroups:input_type -> proto.SetNodeGroupsReq
+	68, // 90: proto.EndNodeAccess.UpsertClusterUsers:input_type -> proto.UpsertClusterUsersReq
+	62, // 91: proto.EndNodeAccess.GetStatus:input_type -> proto.GetStatusReq
+	74, // 92: proto.CenterNodeAdmin.GetCluters:input_type -> proto.GetClutersReq
+	76, // 93: proto.CenterNodeAdmin.GetNodes:input_type -> proto.GetNodesReq
+	14, // 94: proto.CenterNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
+	18, // 95: proto.CenterNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
+	4,  // 96: proto.EndNodeAccess.GetUsers:output_type -> proto.GetUsersRsp
+	7,  // 97: proto.EndNodeAccess.GetProfile:output_type -> proto.GetProfileRsp
+	9,  // 98: proto.EndNodeAccess.AddUsers:output_type -> proto.UserOpRsp
+	9,  // 99: proto.EndNodeAccess.DeleteUsers:output_type -> proto.UserOpRsp
+	9,  // 100: proto.EndNodeAccess.UpdateUsers:output_type -> proto.UserOpRsp
+	9,  // 101: proto.EndNodeAccess.ResetUser:output_type -> proto.UserOpRsp
+	71, // 102: proto.EndNodeAccess.RotateInboundPort:output_type -> proto.RotateInboundPortRsp
+	73, // 103: proto.EndNodeAccess.RotateAllPorts:output_type -> proto.RotateAllPortsRsp
+	11, // 104: proto.EndNodeAccess.GetSub:output_type -> proto.GetSubRsp
+	22, // 105: proto.EndNodeAccess.GetBandWidthStats:output_type -> proto.GetBandwidthStatsRsp
+	16, // 106: proto.EndNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
+	19, // 107: proto.EndNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
+	40, // 108: proto.EndNodeAccess.SetGatewayModel:output_type -> proto.SetGatewayModelRsp
+	57, // 109: proto.EndNodeAccess.SetPingCheck:output_type -> proto.SetPingCheckRsp
+	24, // 110: proto.EndNodeAccess.AddInbound:output_type -> proto.InboundOpRsp
+	24, // 111: proto.EndNodeAccess.TransferInbound:output_type -> proto.InboundOpRsp
+	24, // 112: proto.EndNodeAccess.CopyInbound:output_type -> proto.InboundOpRsp
+	24, // 113: proto.EndNodeAccess.CopyUser:output_type -> proto.InboundOpRsp
+	29, // 114: proto.EndNodeAccess.GetInbound:output_type -> proto.GetInboundRsp
+	32, // 115: proto.EndNodeAccess.ListInbound:output_type -> proto.ListInboundRsp
+	24, // 116: proto.EndNodeAccess.DeleteInboundByName:output_type -> proto.InboundOpRsp
+	35, // 117: proto.EndNodeAccess.UpdateProxy:output_type -> proto.UpdateProxyRsp
+	38, // 118: proto.EndNodeAccess.AddAdaptiveConfig:output_type -> proto.AdaptiveRsp
+	38, // 119: proto.EndNodeAccess.DeleteAdaptiveConfig:output_type -> proto.AdaptiveRsp
+	38, // 120: proto.EndNodeAccess.Adaptive:output_type -> proto.AdaptiveRsp
+	44, // 121: proto.EndNodeAccess.FastAddInbound:output_type -> proto.FastAddInboundRsp
+	42, // 122: proto.EndNodeAccess.ObtainNewCert:output_type -> proto.ObtainNewCertRsp
+	46, // 123: proto.EndNodeAccess.TransferCert:output_type -> proto.TransferCertRsp
+	49, // 124: proto.EndNodeAccess.GetCerts:output_type -> proto.GetCertsRsp
+	51, // 125: proto.EndNodeAccess.DeleteCert:output_type -> proto.DeleteCertRsp
+	55, // 126: proto.EndNodeAccess.GetPingMetric:output_type -> proto.GetPingMetricRsp
+	60, // 127: proto.EndNodeAccess.GetNodeMetric:output_type -> proto.GetNodeMetricRsp
+	65, // 128: proto.EndNodeAccess.GetNodeGroups:output_type -> proto.GetNodeGroupsRsp
+	67, // 129: proto.EndNodeAccess.SetNodeGroups:output_type -> proto.SetNodeGroupsRsp
+	69, // 130: proto.EndNodeAccess.UpsertClusterUsers:output_type -> proto.UpsertClusterUsersRsp
+	63, // 131: proto.EndNodeAccess.GetStatus:output_type -> proto.GetStatusRsp
+	75, // 132: proto.CenterNodeAdmin.GetCluters:output_type -> proto.GetClutersRsp
+	77, // 133: proto.CenterNodeAdmin.GetNodes:output_type -> proto.GetNodesRsp
+	16, // 134: proto.CenterNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
+	19, // 135: proto.CenterNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
+	96, // [96:136] is the sub-list for method output_type
+	56, // [56:96] is the sub-list for method input_type
+	56, // [56:56] is the sub-list for extension type_name
+	56, // [56:56] is the sub-list for extension extendee
+	0,  // [0:56] is the sub-list for field type_name
 }
 
 func init() { file_pkg_rpc_proto_rpc_server_proto_init() }
@@ -5197,7 +5514,7 @@ func file_pkg_rpc_proto_rpc_server_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_rpc_proto_rpc_server_proto_rawDesc), len(file_pkg_rpc_proto_rpc_server_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   76,
+			NumMessages:   81,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

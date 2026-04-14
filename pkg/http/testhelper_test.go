@@ -17,19 +17,13 @@ func init() {
 type mockUserLister struct {
 	users map[string]*contracts.User
 	// optional overrides for interface extensions
-	roleSetErrors        map[string]error
-	rotatePortErrs       map[string]error
-	rotateInboundPortErr map[string]error // keyed by username
-	rotateAllPortsErr    map[string]error // keyed by username
+	roleSetErrors map[string]error
 }
 
 func newMockUserLister(users ...*contracts.User) *mockUserLister {
 	m := &mockUserLister{
-		users:                make(map[string]*contracts.User),
-		roleSetErrors:        make(map[string]error),
-		rotatePortErrs:       make(map[string]error),
-		rotateInboundPortErr: make(map[string]error),
-		rotateAllPortsErr:    make(map[string]error),
+		users:         make(map[string]*contracts.User),
+		roleSetErrors: make(map[string]error),
 	}
 	for _, u := range users {
 		m.users[u.Username] = u
@@ -64,30 +58,6 @@ func (m *mockUserLister) SetUserRole(username, role string) error {
 	}
 	u.Role = role
 	return nil
-}
-
-// RotateUserPort implements the portRotator interface used by RotatePortHandler.
-func (m *mockUserLister) RotateUserPort(username string) error {
-	if err, ok := m.rotatePortErrs[username]; ok {
-		return err
-	}
-	return nil
-}
-
-// RotateUserPortForInbound implements the inboundPortRotator interface.
-func (m *mockUserLister) RotateUserPortForInbound(username string, containerType contracts.ContainerType, inboundTag string, preferredPort uint32) (uint32, error) {
-	if err, ok := m.rotateInboundPortErr[username]; ok {
-		return 0, err
-	}
-	return 12345, nil
-}
-
-// RotateAllUserPorts implements the allPortRotator interface.
-func (m *mockUserLister) RotateAllUserPorts(username string) (map[string]uint32, error) {
-	if err, ok := m.rotateAllPortsErr[username]; ok {
-		return nil, err
-	}
-	return map[string]uint32{"vless-tcp": 23456}, nil
 }
 
 // ResetAuthToken implements the tokenResetter interface.

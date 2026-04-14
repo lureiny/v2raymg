@@ -215,8 +215,8 @@ func (s *EndNodeServer) ResetUser(ctx context.Context, resetUserReq *proto.UserO
 			rsp.Msg = errMsg
 			return rsp, nil
 		}
-		// Rotate ports.
-		if err := s.userMgr.RotateUserPort(username); err != nil {
+		// Rotate ports (make-before-break for all inbound).
+		if _, err := s.userMgr.RotateAllUserPorts(username); err != nil {
 			errMsg := fmt.Sprintf("rotate port for user %s: %v", username, err)
 			log.Error("ResetUser failed", "user", username, "err", errMsg)
 			rsp.Code = 300
@@ -289,4 +289,37 @@ func (s *EndNodeServer) GetBandWidthStats(ctx context.Context, getBandwidthStats
 		getBandWidthStatsRsp.Stats = s.statsCollector.DrainStats()
 	}
 	return getBandWidthStatsRsp, nil
+}
+
+func (s *EndNodeServer) RotateInboundPort(ctx context.Context, req *proto.RotateInboundPortReq) (*proto.RotateInboundPortRsp, error) {
+	rsp := &proto.RotateInboundPortRsp{Code: 0}
+	newPort, err := s.userMgr.RotateUserPortForInbound(req.GetUsername(), contracts.ContainerType(req.GetContainer()), req.GetInbound(), req.GetPort())
+	if err != nil {
+		log.Error("RotateInboundPort failed", "user", req.GetUsername(), "container", req.GetContainer(), "inbound", req.GetInbound(), "err", err)
+		rsp.Code = 300
+		rsp.Msg = err.Error()
+		return rsp, nil
+	}
+	rsp.Port = newPort
+	return rsp, nil
+}
+
+func (s *EndNodeServer) RotateAllPorts(ctx context.Context, req *proto.RotateAllPortsReq) (*proto.RotateAllPortsRsp, error) {
+	rsp := &proto.RotateAllPortsRsp{Code: 0}
+	ports, err := s.userMgr.RotateAllUserPorts(req.GetUsername())
+	if err != nil {
+		log.Error("RotateAllPorts failed", "user", req.GetUsername(), "err", err)
+		if len(ports) > 0 {
+			// 301 = partial success: some inbounds rotated, others failed.
+			rsp.Code = 301
+		} else {
+			// 300 = full failure: no inbound was rotated.
+			rsp.Code = 300
+		}
+		rsp.Msg = err.Error()
+		rsp.Ports = ports
+		return rsp, nil
+	}
+	rsp.Ports = ports
+	return rsp, nil
 }

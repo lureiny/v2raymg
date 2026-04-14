@@ -51,15 +51,19 @@ func checkBuilder(protocol, stream string) error {
 
 func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 	var req struct {
-		Target     string `json:"target"`
-		Tag        string `json:"tag"`
-		Protocol   string `json:"protocol"`
-		Stream     string `json:"stream"`
-		Domain     string `json:"domain"`
-		IsXtls     bool   `json:"is_xtls"`
-		Port       int32  `json:"port"`
-		SelfSigned bool   `json:"self_signed"`
-		Container  string `json:"container"` // "xray"(default) or "snell"
+		Target             string   `json:"target"`
+		Tag                string   `json:"tag"`
+		Protocol           string   `json:"protocol"`
+		Stream             string   `json:"stream"`
+		Domain             string   `json:"domain"`
+		IsXtls             bool     `json:"is_xtls"`   // deprecated: use security field instead
+		Port               int32    `json:"port"`
+		SelfSigned         bool     `json:"self_signed"`
+		Container          string   `json:"container"` // "xray"(default) or "snell"
+		Security           string   `json:"security"`                // "tls"/"xtls"/"reality"
+		RealityTarget      string   `json:"reality_target"`          // e.g. "www.example.com:443"
+		RealityServerNames []string `json:"reality_server_names"`
+		RealityShortIDs    []string `json:"reality_short_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
@@ -93,6 +97,10 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		IsXtls:             req.IsXtls,
 		Tag:                req.Tag,
 		ContainerType:      req.Container,
+		Security:           req.Security,
+		RealityTarget:      req.RealityTarget,
+		RealityServerNames: req.RealityServerNames,
+		RealityShortIds:    req.RealityShortIDs,
 	}, handler.getHttpServer().GetClusterToken())
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
@@ -112,10 +120,13 @@ func (handler *FastAddInboundHandler) getRelativePath() string { return "/inboun
 func (handler *FastAddInboundHandler) help() string {
 	return `POST /api/inbound/fast
 	快速添加指定配置的inbound
-	body: {"target": "", "tag": "", "protocol": "vless", "stream": "tcp", "domain": "", "is_xtls": false, "port": 0, "self_signed": false, "container": "xray"}
+	body: {"target": "", "tag": "", "protocol": "vless", "stream": "tcp", "domain": "", "security": "tls", "port": 0, "container": "xray", "reality_target": "", "reality_server_names": [], "reality_short_ids": []}
 	protocol: 协议类型, 支持vless, vmess, trojan
 	stream: 传输层协议, 支持tcp, ws, quic, mkcp, grpc, http
-	is_xtls: 是否使用xtls, 默认使用tls
-	domain: 证书的域名
+	security: 安全类型, 支持tls(默认), xtls, reality
+	domain: 证书的域名 (tls/xtls 时使用)
+	reality_target: Reality 伪装目标, 如 "www.example.com:443" (security=reality 时使用)
+	reality_server_names: 允许的 SNI 列表 (security=reality 时使用)
+	reality_short_ids: short ID 列表 (security=reality 时使用)
 	container: container类型, 支持xray(默认), snell（snell不支持FastAddInbound）`
 }

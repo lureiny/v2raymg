@@ -31,7 +31,6 @@ func (s *HttpServer) registerRoutes() {
 	s.registerOn(userGroup, &LogoutHandler{}, "POST")
 	s.registerOn(userGroup, &UserListHandler{}, "GET")
 	s.registerOn(userGroup, &ProfileHandler{}, "GET")
-	s.registerOn(userGroup, &RotatePortHandler{}, "POST")
 	s.registerOn(userGroup, &RotateInboundPortHandler{}, "POST")
 	s.registerOn(userGroup, &RotateAllPortsHandler{}, "POST")
 	s.registerOn(userGroup, &ChangePasswordHandler{}, "PUT")

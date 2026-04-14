@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+	"golang.org/x/crypto/curve25519"
 )
 
 // GenerateVLessParams defines parameters for generating a VLESS inbound spec.
@@ -244,9 +245,14 @@ func (p *GenerateVLessParams) applyDefaults() {
 			p.RealityPrivateKey = ""
 		} else if !hasPrivate && !hasPublic {
 			// Auto-generate key pair if not provided
-			privateKey, publicKey := generateRandomKeyPair()
-			p.RealityPrivateKey = privateKey
-			p.RealityPublicKey = publicKey
+			privateKey, publicKey, err := generateRandomKeyPair()
+			if err != nil {
+				p.RealityPrivateKey = ""
+				p.RealityPublicKey = ""
+			} else {
+				p.RealityPrivateKey = privateKey
+				p.RealityPublicKey = publicKey
+			}
 		}
 	}
 }
@@ -260,25 +266,26 @@ func generateRandomBase64Key() string {
 
 // generateRandomKeyPair generates a random X25519 key pair encoded in base64.
 // Returns (privateKey, publicKey) as base64-encoded strings.
-func generateRandomKeyPair() (string, string) {
+func generateRandomKeyPair() (string, string, error) {
 	// Generate a random 32-byte scalar for X25519
 	privateKey := [32]byte{}
-	rand.Read(privateKey[:])
+	if _, err := rand.Read(privateKey[:]); err != nil {
+		return "", "", fmt.Errorf("failed to generate random scalar: %w", err)
+	}
 
 	// Apply X25519 clamping
 	privateKey[0] &= 248
 	privateKey[31] &= 127
 	privateKey[31] |= 64
 
+	// Derive public key from private key using curve25519
+	var publicKey [32]byte
+	curve25519.ScalarBaseMult(&publicKey, &privateKey)
+
 	privateKeyB64 := base64.RawURLEncoding.EncodeToString(privateKey[:])
+	publicKeyB64 := base64.RawURLEncoding.EncodeToString(publicKey[:])
 
-	// Note: We can't compute public key without crypto/25519 imported
-	// For simplicity, we'll return a placeholder that adapter will accept
-	// The adapter's DeriveRealityPublicKey can compute the public key from private
-	// For now, just return the private key as both (the adapter will derive public if needed)
-	publicKeyB64 := privateKeyB64 // Placeholder - adapter will derive actual public key
-
-	return privateKeyB64, publicKeyB64
+	return privateKeyB64, publicKeyB64, nil
 }
 
 // GenerateVLessInboundSpec generates a VLESS inbound spec based on params.

@@ -270,11 +270,11 @@ func TestRotateAllUserPorts_Success(t *testing.T) {
 		t.Errorf("inbound-b port unchanged: %d", portB)
 	}
 
-	// result map must match GetUserPortByDst
-	if result["inbound-a"] != newA {
-		t.Errorf("result[inbound-a]=%d, GetUserPortByDst=%d", result["inbound-a"], newA)
+	// result map keys are "container:inboundTag"
+	if result["xray:inbound-a"] != newA {
+		t.Errorf("result[xray:inbound-a]=%d, GetUserPortByDst=%d", result["xray:inbound-a"], newA)
 	}
-	if result["inbound-b"] != newB {
-		t.Errorf("result[inbound-b]=%d, GetUserPortByDst=%d", result["inbound-b"], newB)
+	if result["xray:inbound-b"] != newB {
+		t.Errorf("result[xray:inbound-b]=%d, GetUserPortByDst=%d", result["xray:inbound-b"], newB)
 	}
 }

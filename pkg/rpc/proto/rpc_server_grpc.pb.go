@@ -25,6 +25,8 @@ const (
 	EndNodeAccess_DeleteUsers_FullMethodName          = "/proto.EndNodeAccess/DeleteUsers"
 	EndNodeAccess_UpdateUsers_FullMethodName          = "/proto.EndNodeAccess/UpdateUsers"
 	EndNodeAccess_ResetUser_FullMethodName            = "/proto.EndNodeAccess/ResetUser"
+	EndNodeAccess_RotateInboundPort_FullMethodName    = "/proto.EndNodeAccess/RotateInboundPort"
+	EndNodeAccess_RotateAllPorts_FullMethodName       = "/proto.EndNodeAccess/RotateAllPorts"
 	EndNodeAccess_GetSub_FullMethodName               = "/proto.EndNodeAccess/GetSub"
 	EndNodeAccess_GetBandWidthStats_FullMethodName    = "/proto.EndNodeAccess/GetBandWidthStats"
 	EndNodeAccess_HeartBeat_FullMethodName            = "/proto.EndNodeAccess/HeartBeat"
@@ -66,6 +68,8 @@ type EndNodeAccessClient interface {
 	DeleteUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	UpdateUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	ResetUser(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
+	RotateInboundPort(ctx context.Context, in *RotateInboundPortReq, opts ...grpc.CallOption) (*RotateInboundPortRsp, error)
+	RotateAllPorts(ctx context.Context, in *RotateAllPortsReq, opts ...grpc.CallOption) (*RotateAllPortsRsp, error)
 	GetSub(ctx context.Context, in *GetSubReq, opts ...grpc.CallOption) (*GetSubRsp, error)
 	GetBandWidthStats(ctx context.Context, in *GetBandwidthStatsReq, opts ...grpc.CallOption) (*GetBandwidthStatsRsp, error)
 	// system
@@ -165,6 +169,26 @@ func (c *endNodeAccessClient) ResetUser(ctx context.Context, in *UserOpReq, opts
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UserOpRsp)
 	err := c.cc.Invoke(ctx, EndNodeAccess_ResetUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *endNodeAccessClient) RotateInboundPort(ctx context.Context, in *RotateInboundPortReq, opts ...grpc.CallOption) (*RotateInboundPortRsp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RotateInboundPortRsp)
+	err := c.cc.Invoke(ctx, EndNodeAccess_RotateInboundPort_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *endNodeAccessClient) RotateAllPorts(ctx context.Context, in *RotateAllPortsReq, opts ...grpc.CallOption) (*RotateAllPortsRsp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RotateAllPortsRsp)
+	err := c.cc.Invoke(ctx, EndNodeAccess_RotateAllPorts_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -462,6 +486,8 @@ type EndNodeAccessServer interface {
 	DeleteUsers(context.Context, *UserOpReq) (*UserOpRsp, error)
 	UpdateUsers(context.Context, *UserOpReq) (*UserOpRsp, error)
 	ResetUser(context.Context, *UserOpReq) (*UserOpRsp, error)
+	RotateInboundPort(context.Context, *RotateInboundPortReq) (*RotateInboundPortRsp, error)
+	RotateAllPorts(context.Context, *RotateAllPortsReq) (*RotateAllPortsRsp, error)
 	GetSub(context.Context, *GetSubReq) (*GetSubRsp, error)
 	GetBandWidthStats(context.Context, *GetBandwidthStatsReq) (*GetBandwidthStatsRsp, error)
 	// system
@@ -524,6 +550,12 @@ func (UnimplementedEndNodeAccessServer) UpdateUsers(context.Context, *UserOpReq)
 }
 func (UnimplementedEndNodeAccessServer) ResetUser(context.Context, *UserOpReq) (*UserOpRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResetUser not implemented")
+}
+func (UnimplementedEndNodeAccessServer) RotateInboundPort(context.Context, *RotateInboundPortReq) (*RotateInboundPortRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RotateInboundPort not implemented")
+}
+func (UnimplementedEndNodeAccessServer) RotateAllPorts(context.Context, *RotateAllPortsReq) (*RotateAllPortsRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RotateAllPorts not implemented")
 }
 func (UnimplementedEndNodeAccessServer) GetSub(context.Context, *GetSubReq) (*GetSubRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetSub not implemented")
@@ -738,6 +770,42 @@ func _EndNodeAccess_ResetUser_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EndNodeAccess_RotateInboundPort_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RotateInboundPortReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).RotateInboundPort(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EndNodeAccess_RotateInboundPort_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).RotateInboundPort(ctx, req.(*RotateInboundPortReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EndNodeAccess_RotateAllPorts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RotateAllPortsReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).RotateAllPorts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EndNodeAccess_RotateAllPorts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).RotateAllPorts(ctx, req.(*RotateAllPortsReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _EndNodeAccess_GetSub_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetSubReq)
 	if err := dec(in); err != nil {
@@ -863,7 +931,6 @@ func _EndNodeAccess_AddInbound_Handler(srv interface{}, ctx context.Context, dec
 	}
 	return interceptor(ctx, in, info, handler)
 }
-
 
 func _EndNodeAccess_TransferInbound_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TransferInboundReq)
@@ -1273,6 +1340,14 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResetUser",
 			Handler:    _EndNodeAccess_ResetUser_Handler,
+		},
+		{
+			MethodName: "RotateInboundPort",
+			Handler:    _EndNodeAccess_RotateInboundPort_Handler,
+		},
+		{
+			MethodName: "RotateAllPorts",
+			Handler:    _EndNodeAccess_RotateAllPorts_Handler,
 		},
 		{
 			MethodName: "GetSub",

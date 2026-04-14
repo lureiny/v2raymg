@@ -74,6 +74,10 @@ func init() {
 	registerReqToEndNodeFunc(GetProfileReqType, ReqGetProfile)
 	// delete cert
 	registerReqToEndNodeFunc(DeleteCertReqType, ReqDeleteCert)
+	// rotate inbound port
+	registerReqToEndNodeFunc(RotateInboundPortReqType, ReqRotateInboundPort)
+	// rotate all ports
+	registerReqToEndNodeFunc(RotateAllPortsReqType, ReqRotateAllPorts)
 }
 
 func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
@@ -607,6 +611,36 @@ func ReqGetProfile(ctx context.Context, reqData []byte, endNodeAccessClient prot
 	}
 	if rsp.GetCode() != 0 {
 		return nil, fmt.Errorf("%s", rsp.GetMsg())
+	}
+	return rsp, nil
+}
+
+// ReqRotateInboundPort always returns the full response (including business error code)
+// so the HTTP handler can distinguish RPC transport failure from business failure.
+func ReqRotateInboundPort(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.RotateInboundPortReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req to RotateInboundPortReq > %v", err)
+	}
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.RotateInboundPort(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// ReqRotateAllPorts always returns the full response (including partial success with code=300)
+// so the HTTP handler can forward the ports map even on partial failure.
+func ReqRotateAllPorts(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.RotateAllPortsReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req to RotateAllPortsReq > %v", err)
+	}
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.RotateAllPorts(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
 	}
 	return rsp, nil
 }

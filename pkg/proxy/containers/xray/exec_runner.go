@@ -999,7 +999,9 @@ func (e *Executor) reconcileUsers() {
 
 	for _, inbound := range inbounds {
 		// Remove users that are tracked but no longer visible (e.g. group changed).
-		for username := range inbound.addedUsers {
+		// Snapshot the tracked user set first so we can iterate without holding the lock,
+		// then call RemoveUser (which re-acquires the lock via unmarkAddedUser).
+		for _, username := range inbound.listAddedUsers() {
 			if _, visible := visibleSet[username]; !visible {
 				if err := inbound.RemoveUser(username); err != nil {
 					log.Warn("[reconcileUsers] failed to remove stale user from inbound",
@@ -1011,7 +1013,7 @@ func (e *Executor) reconcileUsers() {
 		// Add users that are visible but not yet tracked.
 		for _, user := range users {
 			// Skip users already tracked in this inbound's memory
-			if _, exists := inbound.addedUsers[user.Username]; exists {
+			if inbound.hasAddedUser(user.Username) {
 				continue
 			}
 			if _, err := inbound.AddUser(user.Username, user); err != nil {
@@ -1041,7 +1043,7 @@ func (e *Executor) reconcileUsersForInbound(tag string) {
 
 	users := e.userMgr.ListUsers()
 	for _, user := range users {
-		if _, exists := inbound.addedUsers[user.Username]; exists {
+		if inbound.hasAddedUser(user.Username) {
 			continue
 		}
 		if _, err := inbound.AddUser(user.Username, user); err != nil {
@@ -1128,8 +1130,51 @@ type XrayInbound struct {
 	// addedUsers tracks users that have been successfully added to this inbound.
 	// Reconcile uses this to skip users that are already wired up, avoiding
 	// redundant GetBindPort calls every cycle.
-	addedUsers map[string]struct{}
+	//
+	// All access MUST go through the helper methods (hasAddedUser, listAddedUsers,
+	// markAddedUser, unmarkAddedUser) which serialize access via addedUsersMu.
+	// Direct map access is not permitted because multiple goroutines (user event
+	// handler, periodic reconcile loop, new inbound registration) touch this map
+	// concurrently.
+	addedUsersMu sync.Mutex
+	addedUsers   map[string]struct{}
+}
 
+// hasAddedUser reports whether the given user is already tracked on this inbound.
+// Thread-safe.
+func (in *XrayInbound) hasAddedUser(email string) bool {
+	in.addedUsersMu.Lock()
+	defer in.addedUsersMu.Unlock()
+	_, ok := in.addedUsers[email]
+	return ok
+}
+
+// listAddedUsers returns a snapshot of the currently tracked user names.
+// Thread-safe. Callers may iterate over the returned slice freely.
+func (in *XrayInbound) listAddedUsers() []string {
+	in.addedUsersMu.Lock()
+	defer in.addedUsersMu.Unlock()
+	out := make([]string, 0, len(in.addedUsers))
+	for u := range in.addedUsers {
+		out = append(out, u)
+	}
+	return out
+}
+
+// markAddedUser records that the given user has been wired up on this inbound.
+// Thread-safe.
+func (in *XrayInbound) markAddedUser(email string) {
+	in.addedUsersMu.Lock()
+	defer in.addedUsersMu.Unlock()
+	in.addedUsers[email] = struct{}{}
+}
+
+// unmarkAddedUser removes the given user from the tracking set.
+// Thread-safe. Idempotent.
+func (in *XrayInbound) unmarkAddedUser(email string) {
+	in.addedUsersMu.Lock()
+	defer in.addedUsersMu.Unlock()
+	delete(in.addedUsers, email)
 }
 
 // Tag returns the inbound tag.
@@ -1247,12 +1292,12 @@ func (in *XrayInbound) AddUser(email string, user *contracts.User) (uint32, erro
 	}
 
 	// Fast path: user already tracked in memory
-	if _, exists := in.addedUsers[email]; exists {
+	if in.hasAddedUser(email) {
 		if port, ok := in.userMgr.GetUserPortByDst(email, in.port); ok {
 			return port, nil
 		}
 		// Stale tracking — forward rule gone, fall through to recreate
-		delete(in.addedUsers, email)
+		in.unmarkAddedUser(email)
 	}
 
 	// Call GetBindPort to allocate forward rule
@@ -1267,7 +1312,7 @@ func (in *XrayInbound) AddUser(email string, user *contracts.User) (uint32, erro
 		return 0, fmt.Errorf("failed to get bind port: %w", err)
 	}
 
-	in.addedUsers[email] = struct{}{}
+	in.markAddedUser(email)
 	return bindPort, nil
 }
 
@@ -1277,7 +1322,7 @@ func (in *XrayInbound) AddUser(email string, user *contracts.User) (uint32, erro
 // This is idempotent - calling multiple times has no additional effect.
 func (in *XrayInbound) RemoveUser(email string) error {
 	// Always clean tracking, even if userMgr is nil
-	delete(in.addedUsers, email)
+	in.unmarkAddedUser(email)
 
 	if in.userMgr == nil {
 		return nil

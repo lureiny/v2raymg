@@ -19,7 +19,6 @@ const (
 
 	Update = "api/update"
 
-	RotatePort        = "api/rotatePort"
 	RotateInboundPort = "api/rotateInboundPort"
 	RotateAllPorts    = "api/rotateAllPorts"
 

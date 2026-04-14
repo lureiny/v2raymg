@@ -74,7 +74,6 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 | PUT | `/api/user/:name/bandwidth` | Admin | 设置用户带宽限制 |
 | PUT | `/api/user/:name/client-limit` | Admin | 设置用户连接数限制 |
 | PUT | `/api/profile/password` | User | 修改密码 |
-| POST | `/api/rotatePort` | User | 用户端口轮换 |
 | POST | `/api/rotateInboundPort` | User | 指定 inbound 端口轮换 |
 | POST | `/api/rotateAllPorts` | User | 全部端口轮换 |
 | POST | `/api/copyUserBetweenNodes` | Admin | 节点间复制用户 |
@@ -407,63 +406,104 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 
 ---
 
-#### POST /api/rotatePort - 端口轮换
-
-**Request:**
-```json
-{
-  "username": "用户名"
-}
-```
-- X-Token 时 `username` 必填
-- JWT admin 可选（默认自己）
-- JWT 普通用户只能换自己的
-
-**Response (200):**
-```json
-{"code": 0, "msg": "ok"}
-```
-
----
-
 #### POST /api/rotateInboundPort - 指定 Inbound 端口轮换
 
+更换指定 container+inbound 的前置转发端口（make-before-break，无中断）。通过 RPC 调用目标节点执行。
+
 **Request:**
 ```json
 {
-  "username": "用户名",
-  "container": "xray|snell|hysteria",
+  "target": "目标节点名（可选，默认本机）",
+  "username": "用户名（可选）",
+  "container": "xray",
   "inbound": "inbound-tag",
   "port": 0
 }
 ```
-- `container` 和 `inbound` 必填
-- `port`: `0` = 随机分配，`>0` = 指定端口
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `target` | string | 否 | 目标节点名，空则默认本机 |
+| `username` | string | 视认证方式 | 见下方认证规则 |
+| `container` | string | **是** | 容器类型，如 `"xray"` |
+| `inbound` | string | **是** | inbound tag |
+| `port` | uint32 | 否 | `0` = 随机分配，`>0` = 指定端口 |
+
+**认证规则：**
+- **X-Token**：`username` 必填（break-glass admin，无用户上下文）
+- **admin JWT**：`username` 可选，不填默认操作自身
+- **普通用户 JWT**：只能操作自己的 inbound，指定他人 → `403`
 
 **Response (200):**
 ```json
 {"code": 0, "port": 12345, "msg": "ok"}
 ```
 
+**业务错误 (HTTP 200, code=300):**
+```json
+{"code": 300, "port": 0, "msg": "错误描述"}
+```
+用户不存在、inbound 不存在、forward rule 缺失等业务错误通过 `code=300` 返回，HTTP 状态码仍为 200。
+
+**Error:**
+- `400` "container and inbound are required"
+- `400` "username required for X-Token requests"
+- `403` "only admin can rotate another user's inbound port"
+- `502` "no available node"
+
 ---
 
 #### POST /api/rotateAllPorts - 全部端口轮换
 
+重置用户所有 inbound 的前置转发端口（逐条 make-before-break，无中断）。通过 RPC 调用目标节点执行。
+
 **Request:**
 ```json
 {
-  "username": "用户名"
+  "target": "目标节点名（可选，默认本机）",
+  "username": "用户名（可选）"
 }
 ```
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `target` | string | 否 | 目标节点名，空则默认本机 |
+| `username` | string | 视认证方式 | 见下方认证规则 |
+
+**认证规则：**
+- **X-Token**：`username` 必填
+- **admin JWT**：`username` 可选，不填默认操作自身
+- **普通用户 JWT**：只能操作自己的端口，指定他人 → `403`
 
 **Response (200):**
 ```json
 {
   "code": 0,
-  "ports": {"vless-tcp": 23456, "trojan-tls": 34567},
+  "ports": {"xray:vless-tcp": 23456, "xray:trojan-tls": 34567},
   "msg": "ok"
 }
 ```
+
+**部分成功 (HTTP 200, code=301):**
+```json
+{
+  "code": 301,
+  "ports": {"xray:vless-tcp": 23456},
+  "msg": "首个失败的错误描述"
+}
+```
+多个 inbound 中部分轮换成功、部分失败时返回 `code=301`，`ports` 包含已成功轮换的 inbound 映射，`msg` 包含首个失败的错误信息。
+
+**全部失败 (HTTP 200, code=300):**
+```json
+{"code": 300, "msg": "错误描述"}
+```
+所有 inbound 均轮换失败（如用户不存在、无 forward rule 等），`ports` 为空。
+
+**Error:**
+- `400` "username required for X-Token requests"
+- `403` "only admin can rotate another user's ports"
+- `502` "no available node"
 
 ---
 
@@ -526,17 +566,54 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
   "stream": "tcp",
   "domain": "example.com",
   "port": 443,
-  "is_xtls": false,
+  "security": "tls",
   "self_signed": false,
-  "container": "xray"
+  "container": "xray",
+  "reality_target": "www.example.com:443",
+  "reality_server_names": ["www.example.com"],
+  "reality_short_ids": ["0123456789abcdef"]
 }
 ```
+
+**字段说明:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `target` | string | 否 | 目标节点名，空则为本节点 |
+| `tag` | string | 否 | inbound 唯一标识，空则自动生成 |
+| `protocol` | string | 否 | 协议类型，默认 `vless` |
+| `stream` | string | 否 | 传输层，默认 `tcp` |
+| `domain` | string | 否 | TLS/XTLS 证书域名 |
+| `port` | int | 否 | 监听端口，0 则随机分配 |
+| `security` | string | 否 | 安全类型，默认 `tls`；支持 `tls` \| `xtls` \| `reality` |
+| `self_signed` | bool | 否 | 是否使用自签证书（仅 tls/xtls） |
+| `container` | string | 否 | 容器类型，默认 `xray` |
+| `reality_target` | string | 条件必填 | Reality 伪装目标，如 `www.example.com:443`（`security=reality` 时使用） |
+| `reality_server_names` | []string | 否 | Reality 允许的 SNI 列表，默认取 `reality_target` 的 host 部分 |
+| `reality_short_ids` | []string | 否 | Reality short ID 列表，默认 `["0123456789abcdef"]` |
+| `is_xtls` | bool | 否 | 已废弃，请使用 `security` 字段代替 |
 
 **Protocol 类型:** `vless` | `vmess` | `trojan` | `ss` / `shadowsocks`
 
 **Stream 类型:** `tcp` | `ws` | `quic` | `mkcp` | `grpc` | `http`
 
 **Container 类型:** `xray`（默认）| `snell`
+
+**VLESS+Reality 示例:**
+```json
+{
+  "tag": "vless-reality",
+  "protocol": "vless",
+  "stream": "tcp",
+  "security": "reality",
+  "reality_target": "www.example.com:443",
+  "reality_server_names": ["www.example.com"],
+  "reality_short_ids": ["0123456789abcdef"],
+  "container": "xray"
+}
+```
+> Reality 密钥对（private key / public key）由服务端自动生成，不需要在请求中传入。
+> 生成后的公钥可通过获取 inbound 配置接口查询。
 
 **Response (200):**
 ```json

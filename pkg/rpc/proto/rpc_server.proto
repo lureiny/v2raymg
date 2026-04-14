@@ -291,9 +291,13 @@ message FastAddInboundReq {
     BuilderType streamBuilderType = 3;
     int32 port = 4;
     string domain = 5;
-    bool isXtls = 6;
+    bool isXtls = 6;            // deprecated: use security field instead
     string tag = 7;
-    string container_type = 8; // "xray"(default) or "snell"
+    string container_type = 8;  // "xray"(default) or "snell"
+    string security = 9;        // "tls"/"xtls"/"reality"; overrides isXtls when non-empty
+    string reality_target = 10; // Reality target server, e.g. "www.example.com:443"
+    repeated string reality_server_names = 11; // allowed SNI list for Reality
+    repeated string reality_short_ids = 12;    // short ID list for Reality
 }
 
 message FastAddInboundRsp {
@@ -430,6 +434,8 @@ service EndNodeAccess {
     rpc DeleteUsers(UserOpReq) returns (UserOpRsp) {} // 支持tag级删除
     rpc UpdateUsers(UserOpReq) returns (UserOpRsp) {}
     rpc ResetUser(UserOpReq) returns (UserOpRsp) {}
+    rpc RotateInboundPort(RotateInboundPortReq) returns (RotateInboundPortRsp) {}
+    rpc RotateAllPorts(RotateAllPortsReq) returns (RotateAllPortsRsp) {}
     rpc GetSub(GetSubReq) returns (GetSubRsp) {}
     rpc GetBandWidthStats(GetBandwidthStatsReq) returns (GetBandwidthStatsRsp) {}
 
@@ -499,6 +505,31 @@ message UpsertClusterUsersReq {
 message UpsertClusterUsersRsp {
     int32 code = 1;
     string msg = 2;
+}
+
+// --- Port rotation ---
+
+message RotateInboundPortReq {
+    NodeAuthInfo node_auth_info = 1;
+    string username  = 2;
+    string container = 3;
+    string inbound   = 4;
+    uint32 port      = 5;  // 0 = auto-allocate, >0 = preferred port
+}
+message RotateInboundPortRsp {
+    int32  code = 1;
+    string msg  = 2;
+    uint32 port = 3;  // newly allocated port
+}
+
+message RotateAllPortsReq {
+    NodeAuthInfo node_auth_info = 1;
+    string username = 2;
+}
+message RotateAllPortsRsp {
+    int32  code = 1;
+    string msg  = 2;
+    map<string, uint32> ports = 3;  // "container:inboundTag" → new listen port
 }
 
 message GetClutersReq {

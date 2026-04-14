@@ -54,8 +54,32 @@ var (
 
 	isXtlsSuggest = prompt.Suggest{
 		Text:        "is_xtls",
-		Description: "is xtls",
+		Description: "is xtls (deprecated: use security field instead)",
 		Default:     false,
+	}
+
+	securitySuggest = prompt.Suggest{
+		Text:        "security",
+		Description: "security type: tls(default), xtls, reality",
+		Default:     "tls",
+	}
+
+	realityTargetSuggest = prompt.Suggest{
+		Text:        "reality_target",
+		Description: "reality target server, e.g. www.example.com:443 (required when security=reality)",
+		Default:     "",
+	}
+
+	realityServerNamesSuggest = prompt.Suggest{
+		Text:        "reality_server_names",
+		Description: "allowed SNI list for reality, comma-separated, e.g. www.example.com,example.com",
+		Default:     "",
+	}
+
+	realityShortIDsSuggest = prompt.Suggest{
+		Text:        "reality_short_ids",
+		Description: "short ID list for reality, comma-separated hex strings",
+		Default:     "",
 	}
 
 	containerSuggest = prompt.Suggest{

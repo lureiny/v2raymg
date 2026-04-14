@@ -207,7 +207,9 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 	}
 
 	security := "tls"
-	if fastAddInboundReq.GetIsXtls() {
+	if fastAddInboundReq.GetSecurity() != "" {
+		security = fastAddInboundReq.GetSecurity()
+	} else if fastAddInboundReq.GetIsXtls() {
 		security = "xtls"
 	}
 
@@ -222,6 +224,15 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 	// If no domain is provided and security requires TLS, use self-signed cert
 	if fastAddInboundReq.GetDomain() == "" && (security == "tls" || security == "xtls") {
 		params["self_signed"] = true
+	}
+	if fastAddInboundReq.GetRealityTarget() != "" {
+		params["reality_target"] = fastAddInboundReq.GetRealityTarget()
+	}
+	if len(fastAddInboundReq.GetRealityServerNames()) > 0 {
+		params["reality_server_names"] = fastAddInboundReq.GetRealityServerNames()
+	}
+	if len(fastAddInboundReq.GetRealityShortIds()) > 0 {
+		params["reality_short_ids"] = fastAddInboundReq.GetRealityShortIds()
 	}
 
 	if err := c.FastAddInbound(fastAddInboundReq.GetTag(), params); err != nil {

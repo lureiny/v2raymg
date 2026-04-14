@@ -926,72 +926,6 @@ func (m *UserManager) ResetAuthToken(username string) (string, error) {
 	return newToken, err
 }
 
-// RotateUserPort releases all existing forward ports for a user and allocates
-// new ones. Used when the user's current port is blocked/unreachable.
-// The user continues to exist in all inbound configurations; only the forward
-// mapping (external port → inbound port) changes.
-func (m *UserManager) RotateUserPort(username string) error {
-	if username == "" {
-		return errors.New(errors.ErrInvalidUserSpec, "username is required")
-	}
-
-	// Step 1: snapshot existing rules and clear user port state (under lock)
-	m.mu.Lock()
-	user, exists := m.users[username]
-	if !exists {
-		m.mu.Unlock()
-		return errors.New(errors.ErrUserNotFound, fmt.Sprintf("user %s not found", username))
-	}
-	if user.IsExpired() {
-		m.mu.Unlock()
-		return errors.New(errors.ErrUserExpired, fmt.Sprintf("user %s has expired", username))
-	}
-
-	// Collect existing rules *before* removing them
-	var oldRules []*forward.ForwardRule
-	if m.forwardMgr != nil {
-		oldRules = m.forwardMgr.GetRulesByUser(username)
-	}
-
-	// Clear user port state so GetBindPort will allocate fresh ports
-	user.BindPorts = nil
-	user.PortMappings = nil
-	m.mu.Unlock()
-
-	if m.forwardMgr == nil {
-		return errors.New(errors.ErrInternal, "forward manager not available")
-	}
-
-	// Step 2: remove all existing forward rules (releases old ports)
-	if err := m.forwardMgr.RemoveRulesByUser(username); err != nil {
-		log.Warn("[RotateUserPort] failed to remove old forward rules", "user", username, "err", err)
-		// Continue anyway — old rules may already be dead
-	}
-
-	// Step 3: re-allocate a new forward port for each old rule
-	for _, rule := range oldRules {
-		// Parse target port from TargetAddr ("127.0.0.1:PORT")
-		var targetPort uint32
-		if _, err := fmt.Sscanf(rule.TargetAddr, "127.0.0.1:%d", &targetPort); err != nil || targetPort == 0 {
-			log.Warn("[RotateUserPort] could not parse target port, skipping rule", "user", username, "target", rule.TargetAddr)
-			continue
-		}
-
-		if _, err := m.GetBindPort(GetBindPortRequest{
-			Username:      username,
-			TargetPort:    targetPort,
-			ContainerType: rule.ContainerType,
-			InboundTag:    rule.InboundTag,
-		}); err != nil {
-			log.Error("[RotateUserPort] failed to allocate new port", "user", username, "targetPort", targetPort, "err", err)
-			return fmt.Errorf("rotate port failed for user %s: %w", username, err)
-		}
-	}
-
-	log.Info("[RotateUserPort] port rotation complete", "user", username, "rules", len(oldRules))
-	return nil
-}
-
 // RotateUserPortForInbound allocates a new forward port for a specific container+inbound
 // of a user, then releases the old port. If preferredPort > 0, tries that port first.
 // Returns the newly allocated listen port.
@@ -1147,6 +1081,9 @@ func (m *UserManager) RotateAllUserPorts(username string) (map[string]uint32, er
 	var firstErr error
 	for _, rule := range rules {
 		newPort, err := m.RotateUserPortForInbound(username, rule.ContainerType, rule.InboundTag, 0)
+		// Key format: "container:inboundTag" — inboundTag is only unique within a
+		// container, so the container prefix is required to avoid collisions.
+		key := string(rule.ContainerType) + ":" + rule.InboundTag
 		if err != nil {
 			log.Error("[RotateAllUserPorts] failed to rotate inbound", "user", username, "inbound", rule.InboundTag, "err", err)
 			if firstErr == nil {
@@ -1154,7 +1091,7 @@ func (m *UserManager) RotateAllUserPorts(username string) (map[string]uint32, er
 			}
 			continue
 		}
-		result[rule.InboundTag] = newPort
+		result[key] = newPort
 	}
 
 	log.Info("[RotateAllUserPorts] rotation complete", "user", username, "total", len(rules), "success", len(result))
