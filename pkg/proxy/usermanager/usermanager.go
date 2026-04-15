@@ -47,6 +47,27 @@ func (m *UserManager) generateUniqueAuthTokenLocked() string {
 	}
 }
 
+// setAuthTokenLocked validates and sets a user's AuthToken. If token is empty,
+// a unique UUID is auto-generated. If non-empty, it must be a valid UUID v4 and
+// must not collide with any other user's token.
+// Caller must hold m.mu.
+func (m *UserManager) setAuthTokenLocked(user *contracts.User, token string) error {
+	if token == "" {
+		user.AuthToken = m.generateUniqueAuthTokenLocked()
+		return nil
+	}
+	if !isValidUUIDv4(token) {
+		return fmt.Errorf("token must be a valid UUID v4")
+	}
+	for _, u := range m.users {
+		if u.Username != user.Username && u.AuthToken == token {
+			return fmt.Errorf("token already in use by another user")
+		}
+	}
+	user.AuthToken = token
+	return nil
+}
+
 // UserEventType represents the type of user event.
 type UserEventType string
 
@@ -163,7 +184,7 @@ func NewUserManagerWithStore(fm forward.ForwardManager, storeMgr *store.StoreMan
 	for _, u := range m.users {
 		if !isValidUUIDv4(u.AuthToken) {
 			oldLen := len(u.AuthToken)
-			if _, err := m.ResetAuthToken(u.Username); err != nil {
+			if _, err := m.ResetAuthToken(u.Username, ""); err != nil {
 				log.Warn("[migration] failed to reset auth_token", "user", u.Username, "err", err)
 				continue
 			}
@@ -446,9 +467,9 @@ func (m *UserManager) AddUser(req AddUserRequest) error {
 	}
 
 	user := &contracts.User{
-		Username:  req.Username,
-		AuthToken: m.generateUniqueAuthTokenLocked(),
+		Username: req.Username,
 	}
+	_ = m.setAuthTokenLocked(user, "") // empty → auto-generate unique token
 
 	if req.TTL > 0 {
 		user.ExpiryTime = time.Now().Add(req.TTL)
@@ -916,14 +937,16 @@ type ReleaseBindPortRequest struct {
 // forward rules, it will physically delete the user (finalize).
 
 // ResetAuthToken regenerates the user's auth token with a new UUID.
-func (m *UserManager) ResetAuthToken(username string) (string, error) {
-	var newToken string
+func (m *UserManager) ResetAuthToken(username string, newToken string) (string, error) {
+	var token string
 	err := m.mutateUser(username, UserEventUpdate, func(user *contracts.User) error {
-		newToken = m.generateUniqueAuthTokenLocked()
-		user.AuthToken = newToken
+		if err := m.setAuthTokenLocked(user, newToken); err != nil {
+			return err
+		}
+		token = user.AuthToken
 		return nil
 	})
-	return newToken, err
+	return token, err
 }
 
 // RotateUserPortForInbound allocates a new forward port for a specific container+inbound
@@ -1425,9 +1448,10 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 
 	// Case 2: incoming is an active user.
 	if !exists {
-		// New user from remote. Ensure auth token is UUID.
-		if !isValidUUIDv4(incoming.AuthToken) {
-			incoming.AuthToken = m.generateUniqueAuthTokenLocked()
+		// New user from remote. Ensure auth token is valid and unique.
+		if err := m.setAuthTokenLocked(incoming, incoming.AuthToken); err != nil {
+			// Invalid or conflicting token — auto-generate a new one.
+			_ = m.setAuthTokenLocked(incoming, "")
 			m.stampVersion(incoming)
 		}
 		m.users[incoming.Username] = incoming
@@ -1445,11 +1469,10 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 	}
 
 	// Existing user, incoming is newer — update fields.
-	// Ensure auth token is UUID; if remote sends a legacy plaintext password, regenerate.
-	if !isValidUUIDv4(incoming.AuthToken) {
-		incoming.AuthToken = m.generateUniqueAuthTokenLocked()
+	// Ensure auth token is valid and unique; if invalid or conflicting, regenerate.
+	if err := m.setAuthTokenLocked(existing, incoming.AuthToken); err != nil {
+		_ = m.setAuthTokenLocked(existing, "")
 	}
-	existing.AuthToken = incoming.AuthToken
 	existing.ExpiryTime = incoming.ExpiryTime
 	existing.Role = incoming.Role
 	existing.TargetGroup = incoming.TargetGroup

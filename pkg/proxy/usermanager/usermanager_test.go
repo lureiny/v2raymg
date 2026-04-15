@@ -1465,7 +1465,7 @@ func TestResetAuthToken(t *testing.T) {
 	oldToken := alice.AuthToken
 
 	// Reset token
-	newToken, err := um.ResetAuthToken("alice")
+	newToken, err := um.ResetAuthToken("alice", "")
 	if err != nil {
 		t.Fatalf("ResetAuthToken: %v", err)
 	}
@@ -1497,8 +1497,301 @@ func TestResetAuthToken(t *testing.T) {
 func TestResetAuthToken_NonexistentUser(t *testing.T) {
 	um := NewUserManager(newMockForwardManager(), "test-node")
 
-	_, err := um.ResetAuthToken("nonexistent")
+	_, err := um.ResetAuthToken("nonexistent", "")
 	if err == nil {
 		t.Error("expected error for nonexistent user")
+	}
+}
+
+func TestResetAuthToken_WithSpecificToken(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+
+	if err := um.AddUser(AddUserRequest{Username: "bob", Password: "pass"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+
+	specificToken := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	newToken, err := um.ResetAuthToken("bob", specificToken)
+	if err != nil {
+		t.Fatalf("ResetAuthToken with specific token: %v", err)
+	}
+	if newToken != specificToken {
+		t.Errorf("expected token=%s, got %s", specificToken, newToken)
+	}
+
+	bob, _ := um.GetUser("bob")
+	if bob.AuthToken != specificToken {
+		t.Errorf("expected AuthToken=%s, got %s", specificToken, bob.AuthToken)
+	}
+
+	found := um.FindUserByToken(specificToken)
+	if found == nil || found.Username != "bob" {
+		t.Error("expected specific token to find bob")
+	}
+}
+
+func TestResetAuthToken_InvalidUUID(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+
+	if err := um.AddUser(AddUserRequest{Username: "carol", Password: "pass"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	carol, _ := um.GetUser("carol")
+	oldToken := carol.AuthToken
+
+	_, err := um.ResetAuthToken("carol", "not-a-valid-uuid")
+	if err == nil {
+		t.Fatal("expected error for invalid UUID")
+	}
+
+	// Token should be unchanged after failed reset.
+	carol, _ = um.GetUser("carol")
+	if carol.AuthToken != oldToken {
+		t.Errorf("expected token unchanged, got %s (was %s)", carol.AuthToken, oldToken)
+	}
+}
+
+func TestResetAuthToken_TokenConflict(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+
+	if err := um.AddUser(AddUserRequest{Username: "dave", Password: "pass"}); err != nil {
+		t.Fatalf("AddUser dave: %v", err)
+	}
+	if err := um.AddUser(AddUserRequest{Username: "eve", Password: "pass"}); err != nil {
+		t.Fatalf("AddUser eve: %v", err)
+	}
+
+	dave, _ := um.GetUser("dave")
+	daveToken := dave.AuthToken
+
+	// Try to set eve's token to dave's token — should fail.
+	_, err := um.ResetAuthToken("eve", daveToken)
+	if err == nil {
+		t.Fatal("expected error when setting token that conflicts with another user")
+	}
+
+	// Eve's token should be unchanged.
+	eve, _ := um.GetUser("eve")
+	if eve.AuthToken == daveToken {
+		t.Error("eve's token should not have been changed to dave's token")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// setAuthTokenLocked — direct unit tests
+// ---------------------------------------------------------------------------
+
+func TestSetAuthTokenLocked_EmptyAutoGenerates(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+	if err := um.AddUser(AddUserRequest{Username: "u1", Password: "p"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	u1, _ := um.GetUser("u1")
+	if u1.AuthToken == "" {
+		t.Fatal("AddUser should auto-generate a token via setAuthTokenLocked")
+	}
+	if !isValidUUIDv4(u1.AuthToken) {
+		t.Errorf("auto-generated token should be valid UUID v4, got %s", u1.AuthToken)
+	}
+}
+
+func TestSetAuthTokenLocked_AllUsersGetUniqueTokens(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+	names := []string{"a", "b", "c", "d", "e"}
+	for _, n := range names {
+		if err := um.AddUser(AddUserRequest{Username: n, Password: "p"}); err != nil {
+			t.Fatalf("AddUser(%s): %v", n, err)
+		}
+	}
+	seen := map[string]string{} // token -> username
+	for _, n := range names {
+		u, _ := um.GetUser(n)
+		if prev, dup := seen[u.AuthToken]; dup {
+			t.Errorf("token collision: %s and %s share token %s", prev, n, u.AuthToken)
+		}
+		seen[u.AuthToken] = n
+	}
+}
+
+func TestSetAuthTokenLocked_RejectInvalidUUID(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+	if err := um.AddUser(AddUserRequest{Username: "u1", Password: "p"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	oldToken, _ := um.GetUser("u1")
+
+	// Invalid UUID should be rejected.
+	_, err := um.ResetAuthToken("u1", "not-a-uuid")
+	if err == nil {
+		t.Fatal("expected error for invalid UUID")
+	}
+
+	// Token should be unchanged.
+	u1, _ := um.GetUser("u1")
+	if u1.AuthToken != oldToken.AuthToken {
+		t.Error("token should not change on invalid UUID")
+	}
+}
+
+func TestSetAuthTokenLocked_RejectConflict(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+	if err := um.AddUser(AddUserRequest{Username: "u1", Password: "p"}); err != nil {
+		t.Fatalf("AddUser u1: %v", err)
+	}
+	if err := um.AddUser(AddUserRequest{Username: "u2", Password: "p"}); err != nil {
+		t.Fatalf("AddUser u2: %v", err)
+	}
+
+	u1, _ := um.GetUser("u1")
+
+	// Setting u2's token to u1's token should fail.
+	_, err := um.ResetAuthToken("u2", u1.AuthToken)
+	if err == nil {
+		t.Fatal("expected error for token conflict")
+	}
+}
+
+func TestSetAuthTokenLocked_SameTokenOnSameUser(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+	if err := um.AddUser(AddUserRequest{Username: "u1", Password: "p"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+
+	u1, _ := um.GetUser("u1")
+	// Re-setting a user's own token should succeed (no self-conflict).
+	_, err := um.ResetAuthToken("u1", u1.AuthToken)
+	if err != nil {
+		t.Fatalf("expected no error when re-setting own token, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SyncUpsertUser — token uniqueness paths
+// ---------------------------------------------------------------------------
+
+func TestSyncUpsertUser_NewUserValidToken(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+
+	incoming := &contracts.User{
+		Username:    "remote-user",
+		AuthToken:   "11111111-1111-4111-8111-111111111111",
+		UpdatedAtUs: 100,
+		OriginNode:  "node-b",
+	}
+	applied, err := um.SyncUpsertUser(incoming)
+	if err != nil {
+		t.Fatalf("SyncUpsertUser: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected record to be applied")
+	}
+
+	u, err := um.GetUser("remote-user")
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if u.AuthToken != "11111111-1111-4111-8111-111111111111" {
+		t.Errorf("expected token preserved, got %s", u.AuthToken)
+	}
+}
+
+func TestSyncUpsertUser_NewUserInvalidTokenRegenerated(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+
+	incoming := &contracts.User{
+		Username:    "remote-user",
+		AuthToken:   "legacy-plaintext-password",
+		UpdatedAtUs: 100,
+		OriginNode:  "node-b",
+	}
+	applied, err := um.SyncUpsertUser(incoming)
+	if err != nil {
+		t.Fatalf("SyncUpsertUser: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected record to be applied")
+	}
+
+	u, _ := um.GetUser("remote-user")
+	if u.AuthToken == "legacy-plaintext-password" {
+		t.Error("invalid token should have been regenerated")
+	}
+	if !isValidUUIDv4(u.AuthToken) {
+		t.Errorf("regenerated token should be valid UUID v4, got %s", u.AuthToken)
+	}
+}
+
+func TestSyncUpsertUser_NewUserConflictingTokenRegenerated(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+
+	// Create a local user first.
+	if err := um.AddUser(AddUserRequest{Username: "local", Password: "p"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	local, _ := um.GetUser("local")
+
+	// Incoming remote user has the same token as the local user.
+	incoming := &contracts.User{
+		Username:    "remote",
+		AuthToken:   local.AuthToken,
+		UpdatedAtUs: 100,
+		OriginNode:  "node-b",
+	}
+	applied, err := um.SyncUpsertUser(incoming)
+	if err != nil {
+		t.Fatalf("SyncUpsertUser: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected record to be applied")
+	}
+
+	remote, _ := um.GetUser("remote")
+	if remote.AuthToken == local.AuthToken {
+		t.Error("conflicting token should have been regenerated")
+	}
+	if !isValidUUIDv4(remote.AuthToken) {
+		t.Errorf("regenerated token should be valid UUID v4, got %s", remote.AuthToken)
+	}
+}
+
+func TestSyncUpsertUser_UpdateConflictingTokenRegenerated(t *testing.T) {
+	um := NewUserManager(newMockForwardManager(), "test-node")
+
+	// Create two local users.
+	if err := um.AddUser(AddUserRequest{Username: "u1", Password: "p"}); err != nil {
+		t.Fatalf("AddUser u1: %v", err)
+	}
+	if err := um.AddUser(AddUserRequest{Username: "u2", Password: "p"}); err != nil {
+		t.Fatalf("AddUser u2: %v", err)
+	}
+	u1, _ := um.GetUser("u1")
+	u2, _ := um.GetUser("u2")
+	u2OldToken := u2.AuthToken
+
+	// Sync u2 with u1's token from a "newer" remote version — should regenerate.
+	incoming := &contracts.User{
+		Username:    "u2",
+		AuthToken:   u1.AuthToken,
+		UpdatedAtUs: u2.UpdatedAtUs + 1000,
+		OriginNode:  "node-b",
+	}
+	applied, err := um.SyncUpsertUser(incoming)
+	if err != nil {
+		t.Fatalf("SyncUpsertUser: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected record to be applied")
+	}
+
+	u2After, _ := um.GetUser("u2")
+	if u2After.AuthToken == u1.AuthToken {
+		t.Error("conflicting token should have been regenerated")
+	}
+	if u2After.AuthToken == u2OldToken {
+		// It's OK if it happens to be different from old; just must not be u1's.
+		// This check is a no-op assertion but documents intent.
+	}
+	if !isValidUUIDv4(u2After.AuthToken) {
+		t.Errorf("regenerated token should be valid UUID v4, got %s", u2After.AuthToken)
 	}
 }

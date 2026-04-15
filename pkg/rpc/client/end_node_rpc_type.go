@@ -33,4 +33,5 @@ const (
 	DeleteCertReqType
 	RotateInboundPortReqType
 	RotateAllPortsReqType
+	ResetAuthTokenReqType
 )

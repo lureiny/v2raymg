@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/lureiny/v2raymg/pkg/http/auth"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/rpc/client"
@@ -269,22 +270,38 @@ func (handler *UserResetAuthTokenHandler) handlerFunc(c *gin.Context) {
 	}
 	username, _ := usernameVal.(string)
 
-	type tokenResetter interface {
-		ResetAuthToken(username string) (string, error)
+	var req struct {
+		Target string `json:"target"`
 	}
-	ul := handler.getHttpServer().userLister
-	resetter, ok := ul.(tokenResetter)
-	if !ok {
-		c.JSON(500, gin.H{"code": 500, "msg": "server does not support token reset"})
+	// Body is optional — GET-style usage without body is still valid.
+	_ = c.ShouldBindJSON(&req)
+
+	newToken := uuid.NewString()
+
+	s := handler.getHttpServer()
+	target := resolveTarget(req.Target, s.Name)
+	nodes := s.GetTargetNodes(target)
+	if len(nodes) == 0 {
+		c.JSON(200, gin.H{"code": 300, "msg": "no available node"})
 		return
 	}
-	newToken, err := resetter.ResetAuthToken(username)
-	if err != nil {
-		log.Error("ResetAuthToken failed", "user", username, "err", err)
-		c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+	rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
+	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
+		c.Request.Context(),
+		client.ResetAuthTokenReqType,
+		&proto.ResetAuthTokenReq{Username: username, NewToken: newToken},
+		s.GetClusterToken(),
+	)
+	if len(failedList) != 0 && len(succList) == 0 {
+		log.Errorf("[ResetAuthToken] failed|User=%s|Err=%s", username, joinFailedList(failedList))
+		c.JSON(200, gin.H{"code": 300, "msg": joinFailedList(failedList)})
 		return
 	}
-	c.JSON(200, gin.H{"code": 0, "msg": "ok", "auth_token": newToken})
+	msg := "ok"
+	if len(failedList) != 0 {
+		msg = joinFailedList(failedList)
+	}
+	c.JSON(200, gin.H{"code": 0, "msg": msg, "auth_token": newToken})
 }
 
 func (handler *UserResetAuthTokenHandler) getHandlers() []gin.HandlerFunc {
@@ -295,7 +312,9 @@ func (handler *UserResetAuthTokenHandler) getRelativePath() string { return "/us
 
 func (handler *UserResetAuthTokenHandler) help() string {
 	return `POST /api/user/reset-token
-	重置当前用户的auth token`
+	重置当前用户的auth token
+	Body (optional): {"target":"node1"}
+	  target: 目标节点名，空则默认本机`
 }
 
 // UserListHandler GET /user — 获取用户信息

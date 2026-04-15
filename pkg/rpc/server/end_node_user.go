@@ -203,12 +203,30 @@ func (s *EndNodeServer) UpdateUsers(ctx context.Context, updateUsersReq *proto.U
 	return updateUsersRsp, nil
 }
 
+func (s *EndNodeServer) ResetAuthToken(ctx context.Context, req *proto.ResetAuthTokenReq) (*proto.ResetAuthTokenRsp, error) {
+	rsp := &proto.ResetAuthTokenRsp{Code: 0}
+	if req.GetUsername() == "" {
+		rsp.Code = 300
+		rsp.Msg = "username is required"
+		return rsp, nil
+	}
+	newToken, err := s.userMgr.ResetAuthToken(req.GetUsername(), req.GetNewToken())
+	if err != nil {
+		log.Error("ResetAuthToken failed", "user", req.GetUsername(), "err", err)
+		rsp.Code = 300
+		rsp.Msg = err.Error()
+		return rsp, nil
+	}
+	rsp.AuthToken = newToken
+	return rsp, nil
+}
+
 func (s *EndNodeServer) ResetUser(ctx context.Context, resetUserReq *proto.UserOpReq) (*proto.UserOpRsp, error) {
 	rsp := &proto.UserOpRsp{Code: 0}
 	for _, u := range resetUserReq.GetUsers() {
 		username := u.GetName()
 		// Reset auth token.
-		if _, err := s.userMgr.ResetAuthToken(username); err != nil {
+		if _, err := s.userMgr.ResetAuthToken(username, ""); err != nil {
 			errMsg := fmt.Sprintf("reset auth token for user %s: %v", username, err)
 			log.Error("ResetUser failed", "user", username, "err", errMsg)
 			rsp.Code = 300

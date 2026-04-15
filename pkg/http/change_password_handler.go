@@ -22,6 +22,7 @@ func (handler *ChangePasswordHandler) handlerFunc(c *gin.Context) {
 	username, _ := usernameVal.(string)
 
 	var req struct {
+		Target      string `json:"target"`
 		OldPassword string `json:"old_password"`
 		NewPassword string `json:"new_password"`
 	}
@@ -44,7 +45,7 @@ func (handler *ChangePasswordHandler) handlerFunc(c *gin.Context) {
 	}
 
 	s := handler.getHttpServer()
-	target := s.Name
+	target := resolveTarget(req.Target, s.Name)
 	nodes := s.GetTargetNodes(target)
 	if len(nodes) == 0 {
 		c.JSON(200, gin.H{"code": 300, "msg": "no available node"})
@@ -52,15 +53,19 @@ func (handler *ChangePasswordHandler) handlerFunc(c *gin.Context) {
 	}
 	rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
 	userPoint := &proto.User{Name: username, Passwd: req.NewPassword}
-	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.UpdateUsersReqType, &proto.UserOpReq{Users: []*proto.User{userPoint}}, s.GetClusterToken())
-	if len(failedList) != 0 {
+	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.UpdateUsersReqType, &proto.UserOpReq{Users: []*proto.User{userPoint}}, s.GetClusterToken())
+	if len(failedList) != 0 && len(succList) == 0 {
 		log.Errorf("[ChangePassword] update failed|User=%s|Err=%s", username, joinFailedList(failedList))
 		c.JSON(200, gin.H{"code": 300, "msg": joinFailedList(failedList)})
 		return
 	}
 
+	msg := "ok"
+	if len(failedList) != 0 {
+		msg = joinFailedList(failedList)
+	}
 	log.Info("[ChangePassword] password updated", "username", username)
-	c.JSON(200, gin.H{"code": 0, "msg": "ok"})
+	c.JSON(200, gin.H{"code": 0, "msg": msg})
 }
 
 func (handler *ChangePasswordHandler) getHandlers() []gin.HandlerFunc {
@@ -73,6 +78,7 @@ func (handler *ChangePasswordHandler) help() string {
 	return `/api/profile/password
 	PUT /api/profile/password
 	Header: Authorization: Bearer <jwt-token>
-	Body: {"old_password":"<current>","new_password":"<new>"}
+	Body: {"target":"node1","old_password":"<current>","new_password":"<new>"}
+	  target: 目标节点名，空则默认本机
 	Changes the authenticated user's own password. JWT required.`
 }

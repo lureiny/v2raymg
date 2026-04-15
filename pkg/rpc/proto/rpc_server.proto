@@ -434,6 +434,7 @@ service EndNodeAccess {
     rpc DeleteUsers(UserOpReq) returns (UserOpRsp) {} // 支持tag级删除
     rpc UpdateUsers(UserOpReq) returns (UserOpRsp) {}
     rpc ResetUser(UserOpReq) returns (UserOpRsp) {}
+    rpc ResetAuthToken(ResetAuthTokenReq) returns (ResetAuthTokenRsp) {}
     rpc RotateInboundPort(RotateInboundPortReq) returns (RotateInboundPortRsp) {}
     rpc RotateAllPorts(RotateAllPortsReq) returns (RotateAllPortsRsp) {}
     rpc GetSub(GetSubReq) returns (GetSubRsp) {}
@@ -530,6 +531,18 @@ message RotateAllPortsRsp {
     int32  code = 1;
     string msg  = 2;
     map<string, uint32> ports = 3;  // "container:inboundTag" → new listen port
+}
+
+message ResetAuthTokenReq {
+    NodeAuthInfo node_auth_info = 1;
+    string username = 2;
+    string new_token = 3; // if non-empty, must be valid UUID v4; if empty, server auto-generates
+}
+
+message ResetAuthTokenRsp {
+    int32  code = 1;
+    string msg  = 2;
+    string auth_token = 3;
 }
 
 message GetClutersReq {

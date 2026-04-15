@@ -78,6 +78,8 @@ func init() {
 	registerReqToEndNodeFunc(RotateInboundPortReqType, ReqRotateInboundPort)
 	// rotate all ports
 	registerReqToEndNodeFunc(RotateAllPortsReqType, ReqRotateAllPorts)
+	// reset auth token
+	registerReqToEndNodeFunc(ResetAuthTokenReqType, ReqResetAuthToken)
 }
 
 func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
@@ -639,6 +641,19 @@ func ReqRotateAllPorts(ctx context.Context, reqData []byte, endNodeAccessClient 
 	}
 	req.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.RotateAllPorts(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func ReqResetAuthToken(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.ResetAuthTokenReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req to ResetAuthTokenReq > %v", err)
+	}
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.ResetAuthToken(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
 	if err != nil {
 		return nil, err
 	}
