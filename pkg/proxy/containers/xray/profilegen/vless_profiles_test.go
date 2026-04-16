@@ -75,20 +75,69 @@ func TestGenerateVLessInboundSpec_WithGRPC(t *testing.T) {
 	assert.Equal(t, "grpc", grpcService)
 }
 
-func TestGenerateVLessInboundSpec_WithHTTP(t *testing.T) {
+func TestGenerateVLessInboundSpec_WithHTTPUpgrade(t *testing.T) {
 	spec, err := GenerateVLessInboundSpec(GenerateVLessParams{
-		Host:      "example.com",
-		Transport: "http",
+		Host:            "example.com",
+		Transport:       "httpupgrade",
+		HTTPUpgradePath: "/upgrade",
+		HTTPUpgradeHost: "cdn.example.com",
 	})
 	require.NoError(t, err)
 
 	transport, ok := spec.Extensions["transport"].(string)
 	require.True(t, ok)
-	assert.Equal(t, "http", transport)
+	assert.Equal(t, "httpupgrade", transport)
 
-	httpPath, ok := spec.Extensions["http_path"].(string)
+	path, ok := spec.Extensions["httpupgrade_path"].(string)
 	require.True(t, ok)
-	assert.Equal(t, "/", httpPath)
+	assert.Equal(t, "/upgrade", path)
+
+	host, ok := spec.Extensions["httpupgrade_host"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "cdn.example.com", host)
+}
+
+func TestGenerateVLessInboundSpec_HTTPUpgradeDefaults(t *testing.T) {
+	spec, err := GenerateVLessInboundSpec(GenerateVLessParams{
+		Host:      "example.com",
+		Transport: "httpupgrade",
+	})
+	require.NoError(t, err)
+
+	path, ok := spec.Extensions["httpupgrade_path"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "/", path)
+
+	host, ok := spec.Extensions["httpupgrade_host"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "example.com", host)
+}
+
+func TestGenerateVLessInboundSpec_H2TransportRejected(t *testing.T) {
+	_, err := GenerateVLessInboundSpec(GenerateVLessParams{
+		Host:      "example.com",
+		Transport: "h2",
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid transport")
+}
+
+func TestGenerateVLessInboundSpec_H3TransportRejected(t *testing.T) {
+	_, err := GenerateVLessInboundSpec(GenerateVLessParams{
+		Host:      "example.com",
+		Transport: "h3",
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid transport")
+}
+
+func TestGenerateVLessInboundSpec_HTTPTransportRejected(t *testing.T) {
+	_, err := GenerateVLessInboundSpec(GenerateVLessParams{
+		Host:      "example.com",
+		Transport: "http",
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid transport")
 }
 
 func TestGenerateVLessInboundSpec_WithReality(t *testing.T) {
@@ -188,16 +237,17 @@ func TestGenerateVLessInboundSpec_WithXHTTP(t *testing.T) {
 }
 
 func TestGenerateVLessInboundSpec_WithSplitHTTP(t *testing.T) {
+	// "splithttp" is normalized to "xhttp" on input.
 	spec, err := GenerateVLessInboundSpec(GenerateVLessParams{
-		Host:       "example.com",
-		Transport:  "splithttp",
-		XHTTPMode:  "auto",
+		Host:      "example.com",
+		Transport: "splithttp",
+		XHTTPMode: "auto",
 	})
 	require.NoError(t, err)
 
 	transport, ok := spec.Extensions["transport"].(string)
 	require.True(t, ok)
-	assert.Equal(t, "splithttp", transport)
+	assert.Equal(t, "xhttp", transport)
 }
 
 func TestGenerateVLessInboundSpec_WithCustomUUID(t *testing.T) {
@@ -214,13 +264,36 @@ func TestGenerateVLessInboundSpec_WithCustomUUID(t *testing.T) {
 	assert.Equal(t, customUUID, uuid)
 }
 
-func TestGenerateVLessInboundSpec_WithCustomFlow(t *testing.T) {
+func TestGenerateVLessInboundSpec_XTLSMapsToTLS(t *testing.T) {
+	// Legacy "xtls" security should be mapped to "tls" + flow=xtls-rprx-vision
 	spec, err := GenerateVLessInboundSpec(GenerateVLessParams{
-		Host:    "example.com",
+		Host:     "example.com",
 		Security: "xtls",
-		Flow:    "xtls-rprx-vision",
 	})
 	require.NoError(t, err)
+
+	security, ok := spec.Extensions["security"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "tls", security, "xtls should be mapped to tls")
+
+	users := spec.Extensions["users"].([]map[string]any)
+	flow, ok := users[0]["flow"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "xtls-rprx-vision", flow, "flow should be auto-set")
+}
+
+func TestGenerateVLessInboundSpec_XTLSWithExplicitFlow(t *testing.T) {
+	// When xtls is provided with an explicit flow, the explicit flow should be kept
+	spec, err := GenerateVLessInboundSpec(GenerateVLessParams{
+		Host:     "example.com",
+		Security: "xtls",
+		Flow:     "xtls-rprx-vision",
+	})
+	require.NoError(t, err)
+
+	security, ok := spec.Extensions["security"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "tls", security)
 
 	users := spec.Extensions["users"].([]map[string]any)
 	flow, ok := users[0]["flow"].(string)
@@ -306,8 +379,9 @@ func TestGenerateVLessInboundSpec_XHTTP_Reality_NoFlow(t *testing.T) {
 	assert.Nil(t, flow)
 }
 
-// Test splithttp + reality: flow should be empty
+// Test splithttp + reality: normalized to xhttp, flow should be empty
 func TestGenerateVLessInboundSpec_SplitHTTP_Reality_NoFlow(t *testing.T) {
+	// "splithttp" is normalized to "xhttp"; flow rules for xhttp apply.
 	spec, err := GenerateVLessInboundSpec(GenerateVLessParams{
 		Host:      "example.com",
 		Transport: "splithttp",
@@ -317,32 +391,12 @@ func TestGenerateVLessInboundSpec_SplitHTTP_Reality_NoFlow(t *testing.T) {
 
 	transport, ok := spec.Extensions["transport"].(string)
 	require.True(t, ok)
-	assert.Equal(t, "splithttp", transport)
+	assert.Equal(t, "xhttp", transport)
 
-	// Flow should NOT be set for splithttp + reality
+	// Flow should NOT be set for xhttp + reality
 	users := spec.Extensions["users"].([]map[string]any)
 	flow, ok := users[0]["flow"]
-	assert.False(t, ok, "flow should not be set for splithttp + reality")
-	assert.Nil(t, flow)
-}
-
-// Test h3 + reality: flow should be empty
-func TestGenerateVLessInboundSpec_H3_Reality_NoFlow(t *testing.T) {
-	spec, err := GenerateVLessInboundSpec(GenerateVLessParams{
-		Host:      "example.com",
-		Transport: "h3",
-		Security:  "reality",
-	})
-	require.NoError(t, err)
-
-	transport, ok := spec.Extensions["transport"].(string)
-	require.True(t, ok)
-	assert.Equal(t, "h3", transport)
-
-	// Flow should NOT be set for h3 + reality
-	users := spec.Extensions["users"].([]map[string]any)
-	flow, ok := users[0]["flow"]
-	assert.False(t, ok, "flow should not be set for h3 + reality")
+	assert.False(t, ok, "flow should not be set for xhttp + reality")
 	assert.Nil(t, flow)
 }
 
@@ -366,8 +420,8 @@ func TestGenerateVLessInboundSpec_TCP_Reality_WithFlow(t *testing.T) {
 	assert.Equal(t, "xtls-rprx-vision", flow)
 }
 
-// Test xtls + xhttp: flow SHOULD be set (xtls-rprx-vision)
-func TestGenerateVLessInboundSpec_XHTTP_XTLS_WithFlow(t *testing.T) {
+// Test xtls + xhttp: xtls maps to tls, flow auto-set
+func TestGenerateVLessInboundSpec_XHTTP_XTLS_MapsToTLS(t *testing.T) {
 	spec, err := GenerateVLessInboundSpec(GenerateVLessParams{
 		Host:      "example.com",
 		Transport: "xhttp",
@@ -379,7 +433,10 @@ func TestGenerateVLessInboundSpec_XHTTP_XTLS_WithFlow(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "xhttp", transport)
 
-	// Flow SHOULD be set for xhttp + xtls (not reality)
+	security, ok := spec.Extensions["security"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "tls", security, "xtls should be mapped to tls")
+
 	users := spec.Extensions["users"].([]map[string]any)
 	flow, ok := users[0]["flow"].(string)
 	require.True(t, ok)
@@ -420,4 +477,93 @@ func TestGenerateVLessInboundSpec_WithCertReality_NoCertInExtensions(t *testing.
 	assert.False(t, hasCertFile, "cert_file should not be set for reality")
 	_, hasKeyFile := spec.Extensions["key_file"]
 	assert.False(t, hasKeyFile, "key_file should not be set for reality")
+}
+
+func TestGenerateVLessInboundSpec_WithSniffing(t *testing.T) {
+	spec, err := GenerateVLessInboundSpec(GenerateVLessParams{
+		Host:                 "example.com",
+		SniffingEnabled:      true,
+		SniffingDestOverride: []string{"http", "tls", "quic"},
+		SniffingRouteOnly:    true,
+	})
+	require.NoError(t, err)
+
+	enabled, ok := spec.Extensions["sniffing_enabled"].(bool)
+	require.True(t, ok)
+	assert.True(t, enabled)
+
+	destOverride, ok := spec.Extensions["sniffing_dest_override"].([]string)
+	require.True(t, ok)
+	assert.Equal(t, []string{"http", "tls", "quic"}, destOverride)
+
+	routeOnly, ok := spec.Extensions["sniffing_route_only"].(bool)
+	require.True(t, ok)
+	assert.True(t, routeOnly)
+}
+
+func TestGenerateVLessInboundSpec_SniffingDisabledByDefault(t *testing.T) {
+	spec, err := GenerateVLessInboundSpec(GenerateVLessParams{
+		Host: "example.com",
+	})
+	require.NoError(t, err)
+
+	_, hasSniffing := spec.Extensions["sniffing_enabled"]
+	assert.False(t, hasSniffing, "sniffing should not be set when disabled")
+}
+
+func TestGenerateVLessInboundSpec_WithTLSAdvanced(t *testing.T) {
+	spec, err := GenerateVLessInboundSpec(GenerateVLessParams{
+		Host:                "example.com",
+		Security:            "tls",
+		CertFile:            "/etc/certs/fullchain.pem",
+		KeyFile:             "/etc/certs/privkey.pem",
+		TLSRejectUnknownSNI: true,
+		TLSMinVersion:       "1.3",
+		ALPN:                []string{"h2", "http/1.1"},
+		OCSPStapling:        3600,
+	})
+	require.NoError(t, err)
+
+	rejectSNI, ok := spec.Extensions["tls_reject_unknown_sni"].(bool)
+	require.True(t, ok)
+	assert.True(t, rejectSNI)
+
+	minVer, ok := spec.Extensions["tls_min_version"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "1.3", minVer)
+
+	alpn, ok := spec.Extensions["alpn"].([]string)
+	require.True(t, ok)
+	assert.Equal(t, []string{"h2", "http/1.1"}, alpn)
+
+	ocsp, ok := spec.Extensions["ocsp_stapling"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 3600, ocsp)
+}
+
+func TestGenerateVLessInboundSpec_XTLSSecurityRejectedAsInvalid(t *testing.T) {
+	// "xtls" is not rejected - it's silently mapped to "tls".
+	// This test verifies the mapping works, not that it's rejected.
+	spec, err := GenerateVLessInboundSpec(GenerateVLessParams{
+		Host:     "example.com",
+		Security: "xtls",
+	})
+	require.NoError(t, err)
+
+	security, ok := spec.Extensions["security"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "tls", security)
+}
+
+func TestGenerateVLessInboundSpec_GRPC_Reality_NoFlow(t *testing.T) {
+	spec, err := GenerateVLessInboundSpec(GenerateVLessParams{
+		Host:      "example.com",
+		Transport: "grpc",
+		Security:  "reality",
+	})
+	require.NoError(t, err)
+
+	users := spec.Extensions["users"].([]map[string]any)
+	_, hasFlow := users[0]["flow"]
+	assert.False(t, hasFlow, "flow should not be set for grpc + reality")
 }

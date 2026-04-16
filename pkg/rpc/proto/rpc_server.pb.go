@@ -2709,16 +2709,18 @@ type FastAddInboundReq struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	NodeAuthInfo       *NodeAuthInfo          `protobuf:"bytes,1,opt,name=node_auth_info,json=nodeAuthInfo,proto3" json:"node_auth_info,omitempty"`
 	InboundBuilderType BuilderType            `protobuf:"varint,2,opt,name=inboundBuilderType,proto3,enum=proto.BuilderType" json:"inboundBuilderType,omitempty"`
-	StreamBuilderType  BuilderType            `protobuf:"varint,3,opt,name=streamBuilderType,proto3,enum=proto.BuilderType" json:"streamBuilderType,omitempty"`
+	StreamBuilderType  BuilderType            `protobuf:"varint,3,opt,name=streamBuilderType,proto3,enum=proto.BuilderType" json:"streamBuilderType,omitempty"` // deprecated: use transport string field instead
 	Port               int32                  `protobuf:"varint,4,opt,name=port,proto3" json:"port,omitempty"`
 	Domain             string                 `protobuf:"bytes,5,opt,name=domain,proto3" json:"domain,omitempty"`
 	IsXtls             bool                   `protobuf:"varint,6,opt,name=isXtls,proto3" json:"isXtls,omitempty"` // deprecated: use security field instead
 	Tag                string                 `protobuf:"bytes,7,opt,name=tag,proto3" json:"tag,omitempty"`
-	ContainerType      string                 `protobuf:"bytes,8,opt,name=container_type,json=containerType,proto3" json:"container_type,omitempty"`                   // "xray"(default) or "snell"
-	Security           string                 `protobuf:"bytes,9,opt,name=security,proto3" json:"security,omitempty"`                                                  // "tls"/"xtls"/"reality"; overrides isXtls when non-empty
-	RealityTarget      string                 `protobuf:"bytes,10,opt,name=reality_target,json=realityTarget,proto3" json:"reality_target,omitempty"`                  // Reality target server, e.g. "www.example.com:443"
-	RealityServerNames []string               `protobuf:"bytes,11,rep,name=reality_server_names,json=realityServerNames,proto3" json:"reality_server_names,omitempty"` // allowed SNI list for Reality
-	RealityShortIds    []string               `protobuf:"bytes,12,rep,name=reality_short_ids,json=realityShortIds,proto3" json:"reality_short_ids,omitempty"`          // short ID list for Reality
+	ContainerType      string                 `protobuf:"bytes,8,opt,name=container_type,json=containerType,proto3" json:"container_type,omitempty"`                                                                      // "xray"(default) or "snell"
+	Security           string                 `protobuf:"bytes,9,opt,name=security,proto3" json:"security,omitempty"`                                                                                                     // "tls"/"xtls"/"reality"; overrides isXtls when non-empty
+	RealityTarget      string                 `protobuf:"bytes,10,opt,name=reality_target,json=realityTarget,proto3" json:"reality_target,omitempty"`                                                                     // Reality target server, e.g. "www.example.com:443"
+	RealityServerNames []string               `protobuf:"bytes,11,rep,name=reality_server_names,json=realityServerNames,proto3" json:"reality_server_names,omitempty"`                                                    // allowed SNI list for Reality
+	RealityShortIds    []string               `protobuf:"bytes,12,rep,name=reality_short_ids,json=realityShortIds,proto3" json:"reality_short_ids,omitempty"`                                                             // short ID list for Reality
+	Transport          string                 `protobuf:"bytes,13,opt,name=transport,proto3" json:"transport,omitempty"`                                                                                                  // transport type string: "tcp","ws","grpc","httpupgrade","xhttp","splithttp"
+	ExtraParams        map[string]string      `protobuf:"bytes,14,rep,name=extra_params,json=extraParams,proto3" json:"extra_params,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // additional params: ws_path, grpc_service_name, httpupgrade_path, xhttp_path, xhttp_mode, alpn, sniffing_enabled, etc.
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -2833,6 +2835,20 @@ func (x *FastAddInboundReq) GetRealityServerNames() []string {
 func (x *FastAddInboundReq) GetRealityShortIds() []string {
 	if x != nil {
 		return x.RealityShortIds
+	}
+	return nil
+}
+
+func (x *FastAddInboundReq) GetTransport() string {
+	if x != nil {
+		return x.Transport
+	}
+	return ""
+}
+
+func (x *FastAddInboundReq) GetExtraParams() map[string]string {
+	if x != nil {
+		return x.ExtraParams
 	}
 	return nil
 }
@@ -5152,7 +5168,7 @@ const file_pkg_rpc_proto_rpc_server_proto_rawDesc = "" +
 	"\x06domain\x18\x02 \x01(\tR\x06domain\"8\n" +
 	"\x10ObtainNewCertRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
-	"\x03msg\x18\x02 \x01(\tR\x03msg\"\xf2\x03\n" +
+	"\x03msg\x18\x02 \x01(\tR\x03msg\"\x9e\x05\n" +
 	"\x11FastAddInboundReq\x129\n" +
 	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x12B\n" +
 	"\x12inboundBuilderType\x18\x02 \x01(\x0e2\x12.proto.BuilderTypeR\x12inboundBuilderType\x12@\n" +
@@ -5166,7 +5182,12 @@ const file_pkg_rpc_proto_rpc_server_proto_rawDesc = "" +
 	"\x0ereality_target\x18\n" +
 	" \x01(\tR\rrealityTarget\x120\n" +
 	"\x14reality_server_names\x18\v \x03(\tR\x12realityServerNames\x12*\n" +
-	"\x11reality_short_ids\x18\f \x03(\tR\x0frealityShortIds\"9\n" +
+	"\x11reality_short_ids\x18\f \x03(\tR\x0frealityShortIds\x12\x1c\n" +
+	"\ttransport\x18\r \x01(\tR\ttransport\x12L\n" +
+	"\fextra_params\x18\x0e \x03(\v2).proto.FastAddInboundReq.ExtraParamsEntryR\vextraParams\x1a>\n" +
+	"\x10ExtraParamsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"9\n" +
 	"\x11FastAddInboundRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
 	"\x03msg\x18\x02 \x01(\tR\x03msg\"\x9e\x01\n" +
@@ -5404,7 +5425,7 @@ func file_pkg_rpc_proto_rpc_server_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_rpc_proto_rpc_server_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pkg_rpc_proto_rpc_server_proto_msgTypes = make([]protoimpl.MessageInfo, 83)
+var file_pkg_rpc_proto_rpc_server_proto_msgTypes = make([]protoimpl.MessageInfo, 84)
 var file_pkg_rpc_proto_rpc_server_proto_goTypes = []any{
 	(BuilderType)(0),               // 0: proto.BuilderType
 	(*User)(nil),                   // 1: proto.User
@@ -5488,8 +5509,9 @@ var file_pkg_rpc_proto_rpc_server_proto_goTypes = []any{
 	(*GetNodesRsp)(nil),            // 79: proto.GetNodesRsp
 	nil,                            // 80: proto.HeartBeatRsp.NodesMapEntry
 	nil,                            // 81: proto.Nodes.NodesEntry
-	nil,                            // 82: proto.RotateAllPortsRsp.PortsEntry
-	nil,                            // 83: proto.GetNodesRsp.NodesMapEntry
+	nil,                            // 82: proto.FastAddInboundReq.ExtraParamsEntry
+	nil,                            // 83: proto.RotateAllPortsRsp.PortsEntry
+	nil,                            // 84: proto.GetNodesRsp.NodesMapEntry
 }
 var file_pkg_rpc_proto_rpc_server_proto_depIdxs = []int32{
 	15, // 0: proto.NodeAuthInfo.node:type_name -> proto.Node
@@ -5525,117 +5547,118 @@ var file_pkg_rpc_proto_rpc_server_proto_depIdxs = []int32{
 	2,  // 30: proto.FastAddInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
 	0,  // 31: proto.FastAddInboundReq.inboundBuilderType:type_name -> proto.BuilderType
 	0,  // 32: proto.FastAddInboundReq.streamBuilderType:type_name -> proto.BuilderType
-	2,  // 33: proto.TransferCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 34: proto.GetCertsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	47, // 35: proto.GetCertsRsp.certs:type_name -> proto.Cert
-	2,  // 36: proto.DeleteCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	53, // 37: proto.PingMetric.results:type_name -> proto.PingResult
-	2,  // 38: proto.GetPingMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	52, // 39: proto.GetPingMetricRsp.metric:type_name -> proto.PingMetric
-	2,  // 40: proto.SetPingCheckReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 41: proto.GetNodeMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	58, // 42: proto.GetNodeMetricRsp.node_metrics:type_name -> proto.NodeMetrics
-	2,  // 43: proto.GetStatusReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	61, // 44: proto.GetStatusRsp.status:type_name -> proto.NodeStatus
-	2,  // 45: proto.GetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 46: proto.SetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 47: proto.UpsertClusterUsersReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	13, // 48: proto.UpsertClusterUsersReq.users:type_name -> proto.ClusterUserSync
-	2,  // 49: proto.RotateInboundPortReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 50: proto.RotateAllPortsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	82, // 51: proto.RotateAllPortsRsp.ports:type_name -> proto.RotateAllPortsRsp.PortsEntry
-	2,  // 52: proto.ResetAuthTokenReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	83, // 53: proto.GetNodesRsp.nodesMap:type_name -> proto.GetNodesRsp.NodesMapEntry
-	15, // 54: proto.HeartBeatRsp.NodesMapEntry.value:type_name -> proto.Node
-	17, // 55: proto.Nodes.NodesEntry.value:type_name -> proto.Nodes
-	15, // 56: proto.GetNodesRsp.NodesMapEntry.value:type_name -> proto.Node
-	3,  // 57: proto.EndNodeAccess.GetUsers:input_type -> proto.GetUsersReq
-	6,  // 58: proto.EndNodeAccess.GetProfile:input_type -> proto.GetProfileReq
-	8,  // 59: proto.EndNodeAccess.AddUsers:input_type -> proto.UserOpReq
-	8,  // 60: proto.EndNodeAccess.DeleteUsers:input_type -> proto.UserOpReq
-	8,  // 61: proto.EndNodeAccess.UpdateUsers:input_type -> proto.UserOpReq
-	8,  // 62: proto.EndNodeAccess.ResetUser:input_type -> proto.UserOpReq
-	74, // 63: proto.EndNodeAccess.ResetAuthToken:input_type -> proto.ResetAuthTokenReq
-	70, // 64: proto.EndNodeAccess.RotateInboundPort:input_type -> proto.RotateInboundPortReq
-	72, // 65: proto.EndNodeAccess.RotateAllPorts:input_type -> proto.RotateAllPortsReq
-	10, // 66: proto.EndNodeAccess.GetSub:input_type -> proto.GetSubReq
-	20, // 67: proto.EndNodeAccess.GetBandWidthStats:input_type -> proto.GetBandwidthStatsReq
-	14, // 68: proto.EndNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
-	18, // 69: proto.EndNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
-	39, // 70: proto.EndNodeAccess.SetGatewayModel:input_type -> proto.SetGatewayModelReq
-	56, // 71: proto.EndNodeAccess.SetPingCheck:input_type -> proto.SetPingCheckReq
-	23, // 72: proto.EndNodeAccess.AddInbound:input_type -> proto.InboundOpReq
-	25, // 73: proto.EndNodeAccess.TransferInbound:input_type -> proto.TransferInboundReq
-	26, // 74: proto.EndNodeAccess.CopyInbound:input_type -> proto.CopyInboundReq
-	27, // 75: proto.EndNodeAccess.CopyUser:input_type -> proto.CopyUserReq
-	28, // 76: proto.EndNodeAccess.GetInbound:input_type -> proto.GetInboundReq
-	31, // 77: proto.EndNodeAccess.ListInbound:input_type -> proto.ListInboundReq
-	33, // 78: proto.EndNodeAccess.DeleteInboundByName:input_type -> proto.DeleteInboundByNameReq
-	34, // 79: proto.EndNodeAccess.UpdateProxy:input_type -> proto.UpdateProxyReq
-	36, // 80: proto.EndNodeAccess.AddAdaptiveConfig:input_type -> proto.AdaptiveOpReq
-	36, // 81: proto.EndNodeAccess.DeleteAdaptiveConfig:input_type -> proto.AdaptiveOpReq
-	37, // 82: proto.EndNodeAccess.Adaptive:input_type -> proto.AdaptiveReq
-	43, // 83: proto.EndNodeAccess.FastAddInbound:input_type -> proto.FastAddInboundReq
-	41, // 84: proto.EndNodeAccess.ObtainNewCert:input_type -> proto.ObtainNewCertReq
-	45, // 85: proto.EndNodeAccess.TransferCert:input_type -> proto.TransferCertReq
-	48, // 86: proto.EndNodeAccess.GetCerts:input_type -> proto.GetCertsReq
-	50, // 87: proto.EndNodeAccess.DeleteCert:input_type -> proto.DeleteCertReq
-	54, // 88: proto.EndNodeAccess.GetPingMetric:input_type -> proto.GetPingMetricReq
-	59, // 89: proto.EndNodeAccess.GetNodeMetric:input_type -> proto.GetNodeMetricReq
-	64, // 90: proto.EndNodeAccess.GetNodeGroups:input_type -> proto.GetNodeGroupsReq
-	66, // 91: proto.EndNodeAccess.SetNodeGroups:input_type -> proto.SetNodeGroupsReq
-	68, // 92: proto.EndNodeAccess.UpsertClusterUsers:input_type -> proto.UpsertClusterUsersReq
-	62, // 93: proto.EndNodeAccess.GetStatus:input_type -> proto.GetStatusReq
-	76, // 94: proto.CenterNodeAdmin.GetCluters:input_type -> proto.GetClutersReq
-	78, // 95: proto.CenterNodeAdmin.GetNodes:input_type -> proto.GetNodesReq
-	14, // 96: proto.CenterNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
-	18, // 97: proto.CenterNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
-	4,  // 98: proto.EndNodeAccess.GetUsers:output_type -> proto.GetUsersRsp
-	7,  // 99: proto.EndNodeAccess.GetProfile:output_type -> proto.GetProfileRsp
-	9,  // 100: proto.EndNodeAccess.AddUsers:output_type -> proto.UserOpRsp
-	9,  // 101: proto.EndNodeAccess.DeleteUsers:output_type -> proto.UserOpRsp
-	9,  // 102: proto.EndNodeAccess.UpdateUsers:output_type -> proto.UserOpRsp
-	9,  // 103: proto.EndNodeAccess.ResetUser:output_type -> proto.UserOpRsp
-	75, // 104: proto.EndNodeAccess.ResetAuthToken:output_type -> proto.ResetAuthTokenRsp
-	71, // 105: proto.EndNodeAccess.RotateInboundPort:output_type -> proto.RotateInboundPortRsp
-	73, // 106: proto.EndNodeAccess.RotateAllPorts:output_type -> proto.RotateAllPortsRsp
-	11, // 107: proto.EndNodeAccess.GetSub:output_type -> proto.GetSubRsp
-	22, // 108: proto.EndNodeAccess.GetBandWidthStats:output_type -> proto.GetBandwidthStatsRsp
-	16, // 109: proto.EndNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
-	19, // 110: proto.EndNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
-	40, // 111: proto.EndNodeAccess.SetGatewayModel:output_type -> proto.SetGatewayModelRsp
-	57, // 112: proto.EndNodeAccess.SetPingCheck:output_type -> proto.SetPingCheckRsp
-	24, // 113: proto.EndNodeAccess.AddInbound:output_type -> proto.InboundOpRsp
-	24, // 114: proto.EndNodeAccess.TransferInbound:output_type -> proto.InboundOpRsp
-	24, // 115: proto.EndNodeAccess.CopyInbound:output_type -> proto.InboundOpRsp
-	24, // 116: proto.EndNodeAccess.CopyUser:output_type -> proto.InboundOpRsp
-	29, // 117: proto.EndNodeAccess.GetInbound:output_type -> proto.GetInboundRsp
-	32, // 118: proto.EndNodeAccess.ListInbound:output_type -> proto.ListInboundRsp
-	24, // 119: proto.EndNodeAccess.DeleteInboundByName:output_type -> proto.InboundOpRsp
-	35, // 120: proto.EndNodeAccess.UpdateProxy:output_type -> proto.UpdateProxyRsp
-	38, // 121: proto.EndNodeAccess.AddAdaptiveConfig:output_type -> proto.AdaptiveRsp
-	38, // 122: proto.EndNodeAccess.DeleteAdaptiveConfig:output_type -> proto.AdaptiveRsp
-	38, // 123: proto.EndNodeAccess.Adaptive:output_type -> proto.AdaptiveRsp
-	44, // 124: proto.EndNodeAccess.FastAddInbound:output_type -> proto.FastAddInboundRsp
-	42, // 125: proto.EndNodeAccess.ObtainNewCert:output_type -> proto.ObtainNewCertRsp
-	46, // 126: proto.EndNodeAccess.TransferCert:output_type -> proto.TransferCertRsp
-	49, // 127: proto.EndNodeAccess.GetCerts:output_type -> proto.GetCertsRsp
-	51, // 128: proto.EndNodeAccess.DeleteCert:output_type -> proto.DeleteCertRsp
-	55, // 129: proto.EndNodeAccess.GetPingMetric:output_type -> proto.GetPingMetricRsp
-	60, // 130: proto.EndNodeAccess.GetNodeMetric:output_type -> proto.GetNodeMetricRsp
-	65, // 131: proto.EndNodeAccess.GetNodeGroups:output_type -> proto.GetNodeGroupsRsp
-	67, // 132: proto.EndNodeAccess.SetNodeGroups:output_type -> proto.SetNodeGroupsRsp
-	69, // 133: proto.EndNodeAccess.UpsertClusterUsers:output_type -> proto.UpsertClusterUsersRsp
-	63, // 134: proto.EndNodeAccess.GetStatus:output_type -> proto.GetStatusRsp
-	77, // 135: proto.CenterNodeAdmin.GetCluters:output_type -> proto.GetClutersRsp
-	79, // 136: proto.CenterNodeAdmin.GetNodes:output_type -> proto.GetNodesRsp
-	16, // 137: proto.CenterNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
-	19, // 138: proto.CenterNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
-	98, // [98:139] is the sub-list for method output_type
-	57, // [57:98] is the sub-list for method input_type
-	57, // [57:57] is the sub-list for extension type_name
-	57, // [57:57] is the sub-list for extension extendee
-	0,  // [0:57] is the sub-list for field type_name
+	82, // 33: proto.FastAddInboundReq.extra_params:type_name -> proto.FastAddInboundReq.ExtraParamsEntry
+	2,  // 34: proto.TransferCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 35: proto.GetCertsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	47, // 36: proto.GetCertsRsp.certs:type_name -> proto.Cert
+	2,  // 37: proto.DeleteCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	53, // 38: proto.PingMetric.results:type_name -> proto.PingResult
+	2,  // 39: proto.GetPingMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	52, // 40: proto.GetPingMetricRsp.metric:type_name -> proto.PingMetric
+	2,  // 41: proto.SetPingCheckReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 42: proto.GetNodeMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	58, // 43: proto.GetNodeMetricRsp.node_metrics:type_name -> proto.NodeMetrics
+	2,  // 44: proto.GetStatusReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	61, // 45: proto.GetStatusRsp.status:type_name -> proto.NodeStatus
+	2,  // 46: proto.GetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 47: proto.SetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 48: proto.UpsertClusterUsersReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	13, // 49: proto.UpsertClusterUsersReq.users:type_name -> proto.ClusterUserSync
+	2,  // 50: proto.RotateInboundPortReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 51: proto.RotateAllPortsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	83, // 52: proto.RotateAllPortsRsp.ports:type_name -> proto.RotateAllPortsRsp.PortsEntry
+	2,  // 53: proto.ResetAuthTokenReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	84, // 54: proto.GetNodesRsp.nodesMap:type_name -> proto.GetNodesRsp.NodesMapEntry
+	15, // 55: proto.HeartBeatRsp.NodesMapEntry.value:type_name -> proto.Node
+	17, // 56: proto.Nodes.NodesEntry.value:type_name -> proto.Nodes
+	15, // 57: proto.GetNodesRsp.NodesMapEntry.value:type_name -> proto.Node
+	3,  // 58: proto.EndNodeAccess.GetUsers:input_type -> proto.GetUsersReq
+	6,  // 59: proto.EndNodeAccess.GetProfile:input_type -> proto.GetProfileReq
+	8,  // 60: proto.EndNodeAccess.AddUsers:input_type -> proto.UserOpReq
+	8,  // 61: proto.EndNodeAccess.DeleteUsers:input_type -> proto.UserOpReq
+	8,  // 62: proto.EndNodeAccess.UpdateUsers:input_type -> proto.UserOpReq
+	8,  // 63: proto.EndNodeAccess.ResetUser:input_type -> proto.UserOpReq
+	74, // 64: proto.EndNodeAccess.ResetAuthToken:input_type -> proto.ResetAuthTokenReq
+	70, // 65: proto.EndNodeAccess.RotateInboundPort:input_type -> proto.RotateInboundPortReq
+	72, // 66: proto.EndNodeAccess.RotateAllPorts:input_type -> proto.RotateAllPortsReq
+	10, // 67: proto.EndNodeAccess.GetSub:input_type -> proto.GetSubReq
+	20, // 68: proto.EndNodeAccess.GetBandWidthStats:input_type -> proto.GetBandwidthStatsReq
+	14, // 69: proto.EndNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
+	18, // 70: proto.EndNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
+	39, // 71: proto.EndNodeAccess.SetGatewayModel:input_type -> proto.SetGatewayModelReq
+	56, // 72: proto.EndNodeAccess.SetPingCheck:input_type -> proto.SetPingCheckReq
+	23, // 73: proto.EndNodeAccess.AddInbound:input_type -> proto.InboundOpReq
+	25, // 74: proto.EndNodeAccess.TransferInbound:input_type -> proto.TransferInboundReq
+	26, // 75: proto.EndNodeAccess.CopyInbound:input_type -> proto.CopyInboundReq
+	27, // 76: proto.EndNodeAccess.CopyUser:input_type -> proto.CopyUserReq
+	28, // 77: proto.EndNodeAccess.GetInbound:input_type -> proto.GetInboundReq
+	31, // 78: proto.EndNodeAccess.ListInbound:input_type -> proto.ListInboundReq
+	33, // 79: proto.EndNodeAccess.DeleteInboundByName:input_type -> proto.DeleteInboundByNameReq
+	34, // 80: proto.EndNodeAccess.UpdateProxy:input_type -> proto.UpdateProxyReq
+	36, // 81: proto.EndNodeAccess.AddAdaptiveConfig:input_type -> proto.AdaptiveOpReq
+	36, // 82: proto.EndNodeAccess.DeleteAdaptiveConfig:input_type -> proto.AdaptiveOpReq
+	37, // 83: proto.EndNodeAccess.Adaptive:input_type -> proto.AdaptiveReq
+	43, // 84: proto.EndNodeAccess.FastAddInbound:input_type -> proto.FastAddInboundReq
+	41, // 85: proto.EndNodeAccess.ObtainNewCert:input_type -> proto.ObtainNewCertReq
+	45, // 86: proto.EndNodeAccess.TransferCert:input_type -> proto.TransferCertReq
+	48, // 87: proto.EndNodeAccess.GetCerts:input_type -> proto.GetCertsReq
+	50, // 88: proto.EndNodeAccess.DeleteCert:input_type -> proto.DeleteCertReq
+	54, // 89: proto.EndNodeAccess.GetPingMetric:input_type -> proto.GetPingMetricReq
+	59, // 90: proto.EndNodeAccess.GetNodeMetric:input_type -> proto.GetNodeMetricReq
+	64, // 91: proto.EndNodeAccess.GetNodeGroups:input_type -> proto.GetNodeGroupsReq
+	66, // 92: proto.EndNodeAccess.SetNodeGroups:input_type -> proto.SetNodeGroupsReq
+	68, // 93: proto.EndNodeAccess.UpsertClusterUsers:input_type -> proto.UpsertClusterUsersReq
+	62, // 94: proto.EndNodeAccess.GetStatus:input_type -> proto.GetStatusReq
+	76, // 95: proto.CenterNodeAdmin.GetCluters:input_type -> proto.GetClutersReq
+	78, // 96: proto.CenterNodeAdmin.GetNodes:input_type -> proto.GetNodesReq
+	14, // 97: proto.CenterNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
+	18, // 98: proto.CenterNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
+	4,  // 99: proto.EndNodeAccess.GetUsers:output_type -> proto.GetUsersRsp
+	7,  // 100: proto.EndNodeAccess.GetProfile:output_type -> proto.GetProfileRsp
+	9,  // 101: proto.EndNodeAccess.AddUsers:output_type -> proto.UserOpRsp
+	9,  // 102: proto.EndNodeAccess.DeleteUsers:output_type -> proto.UserOpRsp
+	9,  // 103: proto.EndNodeAccess.UpdateUsers:output_type -> proto.UserOpRsp
+	9,  // 104: proto.EndNodeAccess.ResetUser:output_type -> proto.UserOpRsp
+	75, // 105: proto.EndNodeAccess.ResetAuthToken:output_type -> proto.ResetAuthTokenRsp
+	71, // 106: proto.EndNodeAccess.RotateInboundPort:output_type -> proto.RotateInboundPortRsp
+	73, // 107: proto.EndNodeAccess.RotateAllPorts:output_type -> proto.RotateAllPortsRsp
+	11, // 108: proto.EndNodeAccess.GetSub:output_type -> proto.GetSubRsp
+	22, // 109: proto.EndNodeAccess.GetBandWidthStats:output_type -> proto.GetBandwidthStatsRsp
+	16, // 110: proto.EndNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
+	19, // 111: proto.EndNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
+	40, // 112: proto.EndNodeAccess.SetGatewayModel:output_type -> proto.SetGatewayModelRsp
+	57, // 113: proto.EndNodeAccess.SetPingCheck:output_type -> proto.SetPingCheckRsp
+	24, // 114: proto.EndNodeAccess.AddInbound:output_type -> proto.InboundOpRsp
+	24, // 115: proto.EndNodeAccess.TransferInbound:output_type -> proto.InboundOpRsp
+	24, // 116: proto.EndNodeAccess.CopyInbound:output_type -> proto.InboundOpRsp
+	24, // 117: proto.EndNodeAccess.CopyUser:output_type -> proto.InboundOpRsp
+	29, // 118: proto.EndNodeAccess.GetInbound:output_type -> proto.GetInboundRsp
+	32, // 119: proto.EndNodeAccess.ListInbound:output_type -> proto.ListInboundRsp
+	24, // 120: proto.EndNodeAccess.DeleteInboundByName:output_type -> proto.InboundOpRsp
+	35, // 121: proto.EndNodeAccess.UpdateProxy:output_type -> proto.UpdateProxyRsp
+	38, // 122: proto.EndNodeAccess.AddAdaptiveConfig:output_type -> proto.AdaptiveRsp
+	38, // 123: proto.EndNodeAccess.DeleteAdaptiveConfig:output_type -> proto.AdaptiveRsp
+	38, // 124: proto.EndNodeAccess.Adaptive:output_type -> proto.AdaptiveRsp
+	44, // 125: proto.EndNodeAccess.FastAddInbound:output_type -> proto.FastAddInboundRsp
+	42, // 126: proto.EndNodeAccess.ObtainNewCert:output_type -> proto.ObtainNewCertRsp
+	46, // 127: proto.EndNodeAccess.TransferCert:output_type -> proto.TransferCertRsp
+	49, // 128: proto.EndNodeAccess.GetCerts:output_type -> proto.GetCertsRsp
+	51, // 129: proto.EndNodeAccess.DeleteCert:output_type -> proto.DeleteCertRsp
+	55, // 130: proto.EndNodeAccess.GetPingMetric:output_type -> proto.GetPingMetricRsp
+	60, // 131: proto.EndNodeAccess.GetNodeMetric:output_type -> proto.GetNodeMetricRsp
+	65, // 132: proto.EndNodeAccess.GetNodeGroups:output_type -> proto.GetNodeGroupsRsp
+	67, // 133: proto.EndNodeAccess.SetNodeGroups:output_type -> proto.SetNodeGroupsRsp
+	69, // 134: proto.EndNodeAccess.UpsertClusterUsers:output_type -> proto.UpsertClusterUsersRsp
+	63, // 135: proto.EndNodeAccess.GetStatus:output_type -> proto.GetStatusRsp
+	77, // 136: proto.CenterNodeAdmin.GetCluters:output_type -> proto.GetClutersRsp
+	79, // 137: proto.CenterNodeAdmin.GetNodes:output_type -> proto.GetNodesRsp
+	16, // 138: proto.CenterNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
+	19, // 139: proto.CenterNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
+	99, // [99:140] is the sub-list for method output_type
+	58, // [58:99] is the sub-list for method input_type
+	58, // [58:58] is the sub-list for extension type_name
+	58, // [58:58] is the sub-list for extension extendee
+	0,  // [0:58] is the sub-list for field type_name
 }
 
 func init() { file_pkg_rpc_proto_rpc_server_proto_init() }
@@ -5649,7 +5672,7 @@ func file_pkg_rpc_proto_rpc_server_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_rpc_proto_rpc_server_proto_rawDesc), len(file_pkg_rpc_proto_rpc_server_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   83,
+			NumMessages:   84,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

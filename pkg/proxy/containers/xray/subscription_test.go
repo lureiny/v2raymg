@@ -255,12 +255,12 @@ func TestGenerateVLESSURI(t *testing.T) {
 					"flow":                 "xtls-rprx-vision", // This should be ignored
 				},
 			},
-			// Flow should NOT be in URI for xhttp transport
-			want: "vless://uuid-xhttp-reality@reality.example.com:443?type=xhttp&security=reality&sni=www.microsoft.com&pbk=ABC123xyz...&serverNames=www.microsoft.com&sid=0123456789abcdef#xhttp-reality-node",
+			// Flow should NOT be in URI for xhttp transport; path and mode should be present
+			want: "vless://uuid-xhttp-reality@reality.example.com:443?type=xhttp&security=reality&path=/xhttp&mode=auto&sni=www.microsoft.com&pbk=ABC123xyz...&serverNames=www.microsoft.com&sid=0123456789abcdef#xhttp-reality-node",
 		},
-		// splithttp + reality + flow: flow should NOT be in URI
+		// xhttp + reality + flow (via splithttp alias): flow should NOT be in URI
 		{
-			name: "SplitHTTP + Reality (flow should be excluded)",
+			name: "XHTTP + Reality via splithttp alias (flow should be excluded)",
 			spec: contracts.SubscriptionSpec{
 				Protocol: contracts.ProtocolVLess,
 				Host:     "reality.example.com",
@@ -268,7 +268,7 @@ func TestGenerateVLESSURI(t *testing.T) {
 				Password: "uuid-splithttp-reality",
 				NodeName: "splithttp-reality-node",
 				Extensions: map[string]any{
-					"transport":            "splithttp",
+					"transport":            "xhttp",
 					"security":             "reality",
 					"server_name":          "www.microsoft.com",
 					"xhttp_mode":           "auto",
@@ -279,8 +279,8 @@ func TestGenerateVLESSURI(t *testing.T) {
 					"flow":                 "xtls-rprx-vision", // This should be ignored
 				},
 			},
-			// Flow should NOT be in URI for splithttp transport
-			want: "vless://uuid-splithttp-reality@reality.example.com:443?type=splithttp&security=reality&sni=www.microsoft.com&pbk=ABC123xyz...&serverNames=www.microsoft.com&sid=0123456789abcdef#splithttp-reality-node",
+			// Flow should NOT be in URI for xhttp transport; path and mode should be present
+			want: "vless://uuid-splithttp-reality@reality.example.com:443?type=xhttp&security=reality&path=/splithttp&mode=auto&sni=www.microsoft.com&pbk=ABC123xyz...&serverNames=www.microsoft.com&sid=0123456789abcdef#splithttp-reality-node",
 		},
 		// h3 + reality + flow: flow should NOT be in URI
 		{
@@ -578,12 +578,12 @@ func TestGenerateTrojanURI(t *testing.T) {
 					"flow":               "xtls-rprx-vision", // This should be ignored
 				},
 			},
-			// Flow should NOT be in URI for xhttp transport
-			want: "trojan://trojan-xhttp-reality@reality.example.com:443?type=xhttp&security=reality&sni=www.microsoft.com&pbk=ABC123xyz...#trojan-xhttp-reality",
+			// Flow should NOT be in URI for xhttp transport; path and mode should be present
+			want: "trojan://trojan-xhttp-reality@reality.example.com:443?type=xhttp&security=reality&path=/xhttp&mode=auto&sni=www.microsoft.com&pbk=ABC123xyz...#trojan-xhttp-reality",
 		},
-		// splithttp + reality + flow: flow should NOT be in URI
+		// xhttp + reality + flow (via splithttp alias): flow should NOT be in URI
 		{
-			name: "SplitHTTP + Reality (flow should be excluded)",
+			name: "XHTTP + Reality via splithttp alias (flow should be excluded)",
 			spec: contracts.SubscriptionSpec{
 				Protocol: contracts.ProtocolTrojan,
 				Host:     "reality.example.com",
@@ -591,7 +591,7 @@ func TestGenerateTrojanURI(t *testing.T) {
 				Password: "trojan-splithttp-reality",
 				NodeName: "trojan-splithttp-reality",
 				Extensions: map[string]any{
-					"transport":          "splithttp",
+					"transport":          "xhttp",
 					"security":           "reality",
 					"server_name":        "www.microsoft.com",
 					"xhttp_mode":         "auto",
@@ -600,8 +600,8 @@ func TestGenerateTrojanURI(t *testing.T) {
 					"flow":               "xtls-rprx-vision", // This should be ignored
 				},
 			},
-			// Flow should NOT be in URI for splithttp transport
-			want: "trojan://trojan-splithttp-reality@reality.example.com:443?type=splithttp&security=reality&sni=www.microsoft.com&pbk=ABC123xyz...#trojan-splithttp-reality",
+			// Flow should NOT be in URI for xhttp transport; path and mode should be present
+			want: "trojan://trojan-splithttp-reality@reality.example.com:443?type=xhttp&security=reality&path=/splithttp&mode=auto&sni=www.microsoft.com&pbk=ABC123xyz...#trojan-splithttp-reality",
 		},
 		// TCP + xtls + flow: flow SHOULD be in URI
 		{

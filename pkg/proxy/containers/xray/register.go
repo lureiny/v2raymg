@@ -3,6 +3,8 @@ package xray
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
@@ -40,9 +42,19 @@ func (c *ExecutorConfig) Decode(cfg map[string]any) error {
 
 	// 用配置文件值覆盖
 	if v, ok := cfg["binary_path"].(string); ok && v != "" {
+		if strings.HasPrefix(v, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				v = home + v[1:]
+			}
+		}
 		c.BinaryPath = v
 	}
 	if v, ok := cfg["config_file"].(string); ok && v != "" {
+		if strings.HasPrefix(v, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				v = home + v[1:]
+			}
+		}
 		c.ConfigFilePath = v
 	}
 	if v, ok := cfg["grpc_port"].(float64); ok {

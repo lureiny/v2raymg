@@ -336,8 +336,8 @@ func TestExtractNativeExtra_RealityShortId(t *testing.T) {
 	}
 	extra := extractNativeExtra(raw, contracts.TransportTCP, contracts.SecurityReality)
 
-	if sid, ok := extra["reality_short_ids"].(string); !ok || sid != "0123456789abcdef" {
-		t.Errorf("expected shortId '0123456789abcdef', got %v", extra["reality_short_ids"])
+	if sids, ok := extra["reality_short_ids"].([]string); !ok || len(sids) != 1 || sids[0] != "0123456789abcdef" {
+		t.Errorf("expected shortIds []string{\"0123456789abcdef\"}, got %v", extra["reality_short_ids"])
 	}
 	if pbk, ok := extra["reality_public_key"].(string); !ok || pbk == "" {
 		t.Errorf("expected derived public key, got %v", extra["reality_public_key"])

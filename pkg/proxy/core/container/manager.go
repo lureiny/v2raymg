@@ -84,6 +84,13 @@ func (m *ContainerMgr) LoadFromConfig(cfg ContainerMgrConfig) error {
 	return nil
 }
 
+// SetForTest injects a container instance for testing purposes.
+func (m *ContainerMgr) SetForTest(kind contracts.ContainerType, c Container) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.instances[kind] = c
+}
+
 // Get returns the container instance for the given type.
 // Returns nil, false if the type is not loaded.
 func (m *ContainerMgr) Get(kind contracts.ContainerType) (Container, bool) {

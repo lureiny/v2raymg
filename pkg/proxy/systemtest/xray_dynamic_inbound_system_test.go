@@ -3,7 +3,6 @@
 package systemtest
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,8 +16,6 @@ import (
 
 	"github.com/lureiny/v2raymg/pkg/proxy/containers/xray"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
-	"github.com/lureiny/v2raymg/pkg/proxy/core/inbound"
-	"golang.org/x/net/proxy"
 )
 
 // TestXrayDynamicSocks5Inbound tests:
@@ -67,24 +64,17 @@ func TestXrayDynamicSocks5Inbound(t *testing.T) {
 	}
 
 	// Step 3: Dynamically add a socks5 inbound via gRPC
-	// Create a socks5 inbound with no auth (simplest possible config)
-	socksInbound := &xray.XrayInbound{
-		tag:        "dynamic-socks",
-		protocol:   contracts.ProtocolSocks,
-		port:       uint32(socksPort),
-		listenAddr: "127.0.0.1",
-		security:   contracts.SecurityNone,
-		transport:  contracts.TransportTCP,
+	adapter := xray.NewAdapter()
+	spec := contracts.InboundSpec{
+		Tag: "dynamic-socks", Port: uint32(socksPort), Protocol: contracts.ProtocolSOCKS5,
+		Extensions: map[string]any{"listen_addr": "127.0.0.1"},
 	}
-
-	// Generate native xray config for socks5
-	nativeJSON, err := socksInbound.ToNative()
+	nativeInbound, err := adapter.ToProvider(spec)
 	if err != nil {
 		t.Fatalf("generate native config: %v", err)
 	}
 
-	// Add inbound via gRPC
-	if err := exec.AddInboundNative(nativeJSON); err != nil {
+	if err := exec.AddInboundNative(nativeInbound.JSON); err != nil {
 		t.Fatalf("add inbound via gRPC: %v", err)
 	}
 	defer func() {
@@ -211,23 +201,19 @@ func TestXrayDynamicInbound_MultipleInbounds(t *testing.T) {
 	}
 
 	// Add multiple socks5 inbounds
+	adapter := xray.NewAdapter()
 	for i, port := range ports {
 		tag := fmt.Sprintf("socks-%d", i)
-		in := &xray.XrayInbound{
-			tag:        tag,
-			protocol:   contracts.ProtocolSocks,
-			port:       uint32(port),
-			listenAddr: "127.0.0.1",
-			security:   contracts.SecurityNone,
-			transport:  contracts.TransportTCP,
+		spec := contracts.InboundSpec{
+			Tag: tag, Port: uint32(port), Protocol: contracts.ProtocolSOCKS5,
+			Extensions: map[string]any{"listen_addr": "127.0.0.1"},
 		}
-
-		nativeJSON, err := in.ToNative()
+		nativeInbound, err := adapter.ToProvider(spec)
 		if err != nil {
 			t.Fatalf("generate native config for %s: %v", tag, err)
 		}
 
-		if err := exec.AddInboundNative(nativeJSON); err != nil {
+		if err := exec.AddInboundNative(nativeInbound.JSON); err != nil {
 			t.Fatalf("add inbound %s: %v", tag, err)
 		}
 		defer exec.RemoveInboundNative(tag)
@@ -287,21 +273,17 @@ func TestXrayDynamicInbound_RemoveInbound(t *testing.T) {
 	}
 
 	// Add a socks5 inbound
-	in := &xray.XrayInbound{
-		tag:        "to-remove",
-		protocol:   contracts.ProtocolSocks,
-		port:       uint32(socksPort),
-		listenAddr: "127.0.0.1",
-		security:   contracts.SecurityNone,
-		transport:  contracts.TransportTCP,
+	adapter := xray.NewAdapter()
+	spec := contracts.InboundSpec{
+		Tag: "to-remove", Port: uint32(socksPort), Protocol: contracts.ProtocolSOCKS5,
+		Extensions: map[string]any{"listen_addr": "127.0.0.1"},
 	}
-
-	nativeJSON, err := in.ToNative()
+	nativeInbound, err := adapter.ToProvider(spec)
 	if err != nil {
 		t.Fatalf("generate native config: %v", err)
 	}
 
-	if err := exec.AddInboundNative(nativeJSON); err != nil {
+	if err := exec.AddInboundNative(nativeInbound.JSON); err != nil {
 		t.Fatalf("add inbound: %v", err)
 	}
 
@@ -360,26 +342,20 @@ func TestXrayInboundConfig_GenericAPI(t *testing.T) {
 		t.Fatalf("xray API not ready: %v", err)
 	}
 
-	// Use the generic inbound.Config to create an inbound
-	cfg := inbound.NewConfig("generic-socks", contracts.ProtocolSocks, uint32(socksPort))
-	cfg.ListenAddr = "127.0.0.1"
-
-	// Create a XrayInbound from the generic config
-	xrayIn := &xray.XrayInbound{
-		tag:        cfg.Tag,
-		protocol:   cfg.Protocol,
-		port:       cfg.Port,
-		listenAddr: cfg.ListenAddr,
-		security:   contracts.SecurityNone,
-		transport:  contracts.TransportTCP,
-		config:     cfg,
+	// Use Adapter to create native config, then add via gRPC
+	adapter := xray.NewAdapter()
+	spec := contracts.InboundSpec{
+		Tag: "generic-socks", Port: uint32(socksPort), Protocol: contracts.ProtocolSOCKS5,
+		Extensions: map[string]any{"listen_addr": "127.0.0.1"},
 	}
-
-	// Add via the generic API (not gRPC)
-	if err := exec.AddInboundConfig(xrayIn); err != nil {
-		t.Fatalf("add inbound via generic API: %v", err)
+	nativeInbound, err := adapter.ToProvider(spec)
+	if err != nil {
+		t.Fatalf("generate native config: %v", err)
 	}
-	defer exec.RemoveInboundConfig("generic-socks")
+	if err := exec.AddInboundNative(nativeInbound.JSON); err != nil {
+		t.Fatalf("add inbound: %v", err)
+	}
+	defer exec.RemoveInboundNative("generic-socks")
 
 	// Verify the inbound is in the list
 	inbounds := exec.ListInboundConfigs()
@@ -395,30 +371,32 @@ func TestXrayInboundConfig_GenericAPI(t *testing.T) {
 	}
 }
 
-// writeMinimalXrayConfig writes a minimal xray config with just API enabled.
+// writeMinimalXrayConfig writes a minimal xray config with API + freedom outbound.
 func writeMinimalXrayConfig(path string, apiPort int) error {
 	cfg := map[string]any{
-		"log":      map[string]any{"loglevel": "warning"},
-		"stats":    map[string]any{},
-		"policy":   map[string]any{},
-		"inbounds": []map[string]any{},
+		"log":    map[string]any{"loglevel": "warning"},
+		"stats":  map[string]any{},
+		"policy": map[string]any{},
+		"api": map[string]any{
+			"tag":      "api",
+			"services": []string{"HandlerService", "LoggerService", "StatsService"},
+		},
+		"inbounds": []map[string]any{
+			{
+				"tag": "api-in", "listen": "127.0.0.1", "port": apiPort,
+				"protocol": "dokodemo-door",
+				"settings": map[string]any{"address": "127.0.0.1"},
+			},
+		},
 		"outbounds": []map[string]any{
 			{"protocol": "freedom", "tag": "direct"},
 		},
-	}
-
-	// Add API inbound
-	cfg["api"] = map[string]any{
-		"tag":      "api",
-		"services": []string{"HandlerService", "LoggerService", "StatsService"},
-		"port":     fmt.Sprintf("%d", apiPort),
-		"listen":   "127.0.0.1",
-		"protocol": "dokodemo-door",
-		"settings": map[string]any{
-			"address": "127.0.0.1",
+		"routing": map[string]any{
+			"rules": []map[string]any{
+				{"inboundTag": []string{"api-in"}, "outboundTag": "api"},
+			},
 		},
 	}
-
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -491,21 +469,17 @@ func TestXraySocks5ToLocalhost(t *testing.T) {
 	}
 
 	// Add socks5 inbound
-	in := &xray.XrayInbound{
-		tag:        "local-socks",
-		protocol:   contracts.ProtocolSocks,
-		port:       uint32(socksPort),
-		listenAddr: "127.0.0.1",
-		security:   contracts.SecurityNone,
-		transport:  contracts.TransportTCP,
+	adapter := xray.NewAdapter()
+	spec := contracts.InboundSpec{
+		Tag: "local-socks", Port: uint32(socksPort), Protocol: contracts.ProtocolSOCKS5,
+		Extensions: map[string]any{"listen_addr": "127.0.0.1"},
 	}
-
-	nativeJSON, err := in.ToNative()
+	nativeInbound, err := adapter.ToProvider(spec)
 	if err != nil {
 		t.Fatalf("generate native config: %v", err)
 	}
 
-	if err := exec.AddInboundNative(nativeJSON); err != nil {
+	if err := exec.AddInboundNative(nativeInbound.JSON); err != nil {
 		t.Fatalf("add inbound: %v", err)
 	}
 	defer exec.RemoveInboundNative("local-socks")

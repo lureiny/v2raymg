@@ -19,12 +19,14 @@ type GenerateVLessParams struct {
 	Host string
 
 	// Transport is the transport layer protocol.
-	// Valid values: "tcp", "ws", "grpc", "http", "h2", "h3", "xhttp", "splithttp".
+	// Valid values: "tcp", "ws", "grpc", "httpupgrade", "xhttp".
 	// Defaults to "tcp".
+	// Note: "splithttp" is an alias for "xhttp" inside xray-core; use "xhttp" here.
 	Transport string
 
 	// Security is the security type.
-	// Valid values: "tls", "xtls", "reality".
+	// Valid values: "tls", "reality".
+	// Legacy "xtls" is accepted and auto-mapped to "tls" + flow="xtls-rprx-vision".
 	// Defaults to "tls".
 	Security string
 
@@ -42,7 +44,7 @@ type GenerateVLessParams struct {
 	UUID string
 
 	// Flow is the VLESS flow (e.g., "xtls-rprx-vision").
-	// Automatically set for xtls/reality scenarios if not specified.
+	// Automatically set for reality scenarios if not specified.
 	Flow string
 
 	// WSPath is the WebSocket path. Only used when Transport is "ws".
@@ -53,39 +55,50 @@ type GenerateVLessParams struct {
 	// Defaults to "grpc".
 	GRPCServiceName string
 
-	// HTTPPath is the HTTP/2 path. Only used when Transport is "http" or "h2".
+	// HTTPUpgradePath is the HTTPUpgrade path. Only used when Transport is "httpupgrade".
 	// Defaults to "/".
-	HTTPPath string
+	HTTPUpgradePath string
 
-	// HTTPHost is the HTTP/2 host. Only used when Transport is "http" or "h2".
-	// If empty, defaults to Host.
-	HTTPHost []string
+	// HTTPUpgradeHost is the HTTPUpgrade host header. Only used when Transport is "httpupgrade".
+	// Defaults to Host.
+	HTTPUpgradeHost string
 
-	// XHTTPMode is the XHTTP mode. Only used when Transport is "xhttp" or "splithttp".
-	// Valid values: "auto", "zero", "one", "two".
+	// XHTTPMode is the XHTTP mode. Only used when Transport is "xhttp".
+	// Valid values: "auto", "packet-up", "stream-one", "stream-up".
 	XHTTPMode string
 
-	// XHTTPPath is the XHTTP path. Only used when Transport is "xhttp" or "splithttp".
+	// XHTTPPath is the XHTTP path. Only used when Transport is "xhttp".
 	XHTTPPath string
 
-	// XHTTPHost is the XHTTP host. Only used when Transport is "xhttp" or "splithttp".
+	// XHTTPHost is the XHTTP host. Only used when Transport is "xhttp".
 	XHTTPHost []string
 
 	// Reality settings
 	RealityServerNames []string
-	RealityShortIDs   []string
-	RealityTarget     string
+	RealityShortIDs    []string
+	RealityTarget      string
 	RealityPublicKey   string
-	RealityPrivateKey string
-	RealityShortID    string
+	RealityPrivateKey  string
+	RealityShortID     string
 
 	// CertFile is the path to the TLS certificate file (.crt/.pem).
-	// Required when security=tls/xtls. Ignored for security=reality.
+	// Required when security=tls. Ignored for security=reality.
 	CertFile string
 
 	// KeyFile is the path to the TLS private key file (.key/.pem).
-	// Required when security=tls/xtls. Ignored for security=reality.
+	// Required when security=tls. Ignored for security=reality.
 	KeyFile string
+
+	// Sniffing settings
+	SniffingEnabled      bool
+	SniffingDestOverride []string
+	SniffingRouteOnly    bool
+
+	// TLS advanced settings
+	TLSRejectUnknownSNI bool
+	TLSMinVersion       string
+	ALPN                []string
+	OCSPStapling        int
 }
 
 // Validate checks required parameters.
@@ -94,22 +107,31 @@ func (p *GenerateVLessParams) Validate() error {
 		return fmt.Errorf("host is required")
 	}
 
-	// Normalize transport aliases
-	p.Transport = normalizeTransport(p.Transport)
+	// Normalize: splithttp is an internal xray alias for xhttp; always use xhttp.
+	if p.Transport == "splithttp" {
+		p.Transport = "xhttp"
+	}
 
 	// Validate transport
 	validTransports := map[string]bool{
-		"tcp":        true,
-		"ws":         true,
-		"grpc":       true,
-		"http":       true,
-		"h2":         true,
-		"h3":         true,
-		"xhttp":      true,
-		"splithttp":  true,
+		"tcp":         true,
+		"ws":          true,
+		"grpc":        true,
+		"httpupgrade": true,
+		"xhttp":       true,
 	}
 	if p.Transport != "" && !validTransports[p.Transport] {
 		return fmt.Errorf("invalid transport: %s", p.Transport)
+	}
+
+	// Handle legacy "xtls" → "tls" + flow mapping before normalization.
+	// Xray-core has removed the xtls security type; the correct approach is
+	// security=tls with flow=xtls-rprx-vision.
+	if p.Security == "xtls" {
+		if p.Flow == "" {
+			p.Flow = "xtls-rprx-vision"
+		}
+		p.Security = "tls"
 	}
 
 	// Normalize security aliases
@@ -117,10 +139,9 @@ func (p *GenerateVLessParams) Validate() error {
 
 	// Validate security
 	validSecurities := map[string]bool{
-		"tls":    true,
-		"xtls":   true,
+		"tls":     true,
 		"reality": true,
-		"":       true,
+		"":        true,
 	}
 	if p.Security != "" && !validSecurities[p.Security] {
 		return fmt.Errorf("invalid security: %s", p.Security)
@@ -143,20 +164,6 @@ func (p *GenerateVLessParams) Validate() error {
 	return nil
 }
 
-// normalizeTransport normalizes transport aliases to internal representation.
-func normalizeTransport(t string) string {
-	switch t {
-	case "h2", "h3":
-		// HTTP family - normalize to appropriate value
-		return t
-	case "xhttp", "splithttp":
-		// XHTTP family - keep as-is for adapter handling
-		return t
-	default:
-		return t
-	}
-}
-
 // normalizeSecurity normalizes security aliases.
 func normalizeSecurity(s string) string {
 	switch s {
@@ -169,8 +176,6 @@ func normalizeSecurity(s string) string {
 
 // applyDefaults applies default values to unspecified parameters.
 func (p *GenerateVLessParams) applyDefaults() {
-	// Normalize transport
-	p.Transport = normalizeTransport(p.Transport)
 	if p.Transport == "" {
 		p.Transport = "tcp"
 	}
@@ -196,14 +201,14 @@ func (p *GenerateVLessParams) applyDefaults() {
 		if p.GRPCServiceName == "" {
 			p.GRPCServiceName = "grpc"
 		}
-	case "http", "h2":
-		if p.HTTPPath == "" {
-			p.HTTPPath = "/"
+	case "httpupgrade":
+		if p.HTTPUpgradePath == "" {
+			p.HTTPUpgradePath = "/"
 		}
-		if len(p.HTTPHost) == 0 {
-			p.HTTPHost = []string{p.Host}
+		if p.HTTPUpgradeHost == "" {
+			p.HTTPUpgradeHost = p.Host
 		}
-	case "xhttp", "splithttp":
+	case "xhttp":
 		if p.XHTTPMode == "" {
 			p.XHTTPMode = "auto"
 		}
@@ -215,13 +220,12 @@ func (p *GenerateVLessParams) applyDefaults() {
 		}
 	}
 
-	// Auto-set flow for xtls/reality
-	// BUT: for grpc/xhttp/splithttp/h3 + reality, flow must be empty (no xtls-rprx-vision)
-	// Per Xray-examples: VLESS + gRPC + REALITY should NOT have flow
-	if p.Flow == "" && (p.Security == "xtls" || p.Security == "reality") {
-		isGRPCOrXHTTP := p.Transport == "grpc" || p.Transport == "xhttp" || p.Transport == "splithttp" || p.Transport == "h3"
-		// For reality + grpc/xhttp/splithttp/h3, flow should be empty
-		if !(p.Security == "reality" && isGRPCOrXHTTP) {
+	// Auto-set flow for reality (only TCP/WS need flow; gRPC/xhttp must be empty)
+	// Note: "xtls" security is already mapped to "tls" + flow in Validate(),
+	// so we only handle reality here.
+	if p.Flow == "" && p.Security == "reality" {
+		needsEmptyFlow := p.Transport == "grpc" || p.Transport == "xhttp"
+		if !needsEmptyFlow {
 			p.Flow = "xtls-rprx-vision"
 		}
 	}
@@ -234,9 +238,8 @@ func (p *GenerateVLessParams) applyDefaults() {
 		if p.RealityTarget == "" {
 			p.RealityTarget = p.Host + ":443"
 		}
-		if len(p.RealityShortIDs) == 0 {
-			p.RealityShortIDs = []string{"0123456789abcdef"}
-		}
+		// Do NOT fill a default shortId here — leave RealityShortIDs empty so the
+		// adapter layer (buildStreamSettings) generates a cryptographically random one.
 		// Validate: both or neither - reality_private_key and reality_public_key must be provided together
 		hasPrivate := p.RealityPrivateKey != ""
 		hasPublic := p.RealityPublicKey != ""
@@ -245,7 +248,7 @@ func (p *GenerateVLessParams) applyDefaults() {
 			p.RealityPrivateKey = ""
 		} else if !hasPrivate && !hasPublic {
 			// Auto-generate key pair if not provided
-			privateKey, publicKey, err := generateRandomKeyPair()
+			privateKey, publicKey, err := GenerateRealityKeyPairWithPublic()
 			if err != nil {
 				p.RealityPrivateKey = ""
 				p.RealityPublicKey = ""
@@ -264,9 +267,10 @@ func generateRandomBase64Key() string {
 	return base64.RawURLEncoding.EncodeToString(key)
 }
 
-// generateRandomKeyPair generates a random X25519 key pair encoded in base64.
-// Returns (privateKey, publicKey) as base64-encoded strings.
-func generateRandomKeyPair() (string, string, error) {
+// GenerateRealityKeyPairWithPublic generates a random X25519 key pair for Reality.
+// Returns (privateKey, publicKey) as base64url-encoded strings (no padding).
+// This is the canonical implementation shared by both profilegen and the xray adapter.
+func GenerateRealityKeyPairWithPublic() (string, string, error) {
 	// Generate a random 32-byte scalar for X25519
 	privateKey := [32]byte{}
 	if _, err := rand.Read(privateKey[:]); err != nil {
@@ -340,8 +344,14 @@ func GenerateVLessInboundSpec(p GenerateVLessParams) (contracts.InboundSpec, err
 		"security":  p.Security,
 	}
 
-	// Add server_name for TLS/XTLS/REALITY
-	if p.Security == "tls" || p.Security == "xtls" || p.Security == "reality" {
+	// Add flow to extensions so subscription URI can include it.
+	// (defaultUser also carries flow for the native xray config.)
+	if p.Flow != "" {
+		extensions["flow"] = p.Flow
+	}
+
+	// Add server_name for TLS/REALITY
+	if p.Security == "tls" || p.Security == "reality" {
 		extensions["server_name"] = p.Host
 	}
 
@@ -355,14 +365,14 @@ func GenerateVLessInboundSpec(p GenerateVLessParams) (contracts.InboundSpec, err
 		if p.GRPCServiceName != "" {
 			extensions["grpc_service_name"] = p.GRPCServiceName
 		}
-	case "http", "h2":
-		if p.HTTPPath != "" {
-			extensions["http_path"] = p.HTTPPath
+	case "httpupgrade":
+		if p.HTTPUpgradePath != "" {
+			extensions["httpupgrade_path"] = p.HTTPUpgradePath
 		}
-		if len(p.HTTPHost) > 0 {
-			extensions["http_host"] = p.HTTPHost
+		if p.HTTPUpgradeHost != "" {
+			extensions["httpupgrade_host"] = p.HTTPUpgradeHost
 		}
-	case "xhttp", "splithttp":
+	case "xhttp":
 		if p.XHTTPMode != "" {
 			extensions["xhttp_mode"] = p.XHTTPMode
 		}
@@ -383,6 +393,33 @@ func GenerateVLessInboundSpec(p GenerateVLessParams) (contracts.InboundSpec, err
 	if p.Security != "reality" && p.CertFile != "" && p.KeyFile != "" {
 		extensions["cert_file"] = p.CertFile
 		extensions["key_file"] = p.KeyFile
+	}
+
+	// Add TLS advanced settings
+	if p.Security == "tls" {
+		if p.TLSRejectUnknownSNI {
+			extensions["tls_reject_unknown_sni"] = true
+		}
+		if p.TLSMinVersion != "" {
+			extensions["tls_min_version"] = p.TLSMinVersion
+		}
+		if len(p.ALPN) > 0 {
+			extensions["alpn"] = p.ALPN
+		}
+		if p.OCSPStapling > 0 {
+			extensions["ocsp_stapling"] = p.OCSPStapling
+		}
+	}
+
+	// Add sniffing settings
+	if p.SniffingEnabled {
+		extensions["sniffing_enabled"] = true
+		if len(p.SniffingDestOverride) > 0 {
+			extensions["sniffing_dest_override"] = p.SniffingDestOverride
+		}
+		if p.SniffingRouteOnly {
+			extensions["sniffing_route_only"] = true
+		}
 	}
 
 	// Add Reality settings

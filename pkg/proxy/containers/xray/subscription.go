@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/url"
 	"strings"
 
@@ -195,12 +196,18 @@ func buildSubscriptionExtensions(in *XrayInbound, user contracts.UserSpec) map[s
 		copyKeys := []string{
 			"ws_path", "ws_host",
 			"grpc_service_name", "grpc_mode",
+			"httpupgrade_path", "httpupgrade_host",
+			"xhttp_path", "xhttp_host", "xhttp_mode",
 			"server_name", "alpn", "utls_fingerprint",
 			"mkcp_header_type", "mkcp_seed",
 			"quic_security", "quic_key", "quic_header_type",
 			"http_path", "http_host",
 			"method", "ss_plugin", "ss_plugin_opts",
 			"flow",
+			// Reality-specific fields for subscription URI
+			"reality_public_key", "reality_short_ids", "reality_server_names",
+			// Cert source for SNI logic
+			"cert_source",
 		}
 		for _, key := range copyKeys {
 			if v, ok := in.extra[key]; ok {
@@ -236,14 +243,14 @@ func generateURI(spec contracts.SubscriptionSpec) (string, error) {
 func generateVLESSURI(spec contracts.SubscriptionSpec) (string, error) {
 	params := buildShareLinkParams(spec)
 
-	// Add flow if specified, BUT NOT for grpc/xhttp/splithttp/h3 transports
-	// grpc/xhttp/splithttp/h3 + reality must have empty flow in URI
+	// Add flow if specified, BUT NOT for grpc/xhttp/h3 transports
+	// grpc/xhttp/h3 + reality must have empty flow in URI
 	// Per Xray-examples: VLESS + gRPC + REALITY should NOT have flow
 	transport := extString(spec.Extensions, "transport")
 	security := extString(spec.Extensions, "security")
 	if flow := extString(spec.Extensions, "flow"); flow != "" {
-		isGRPCOrXHTTP := transport == "grpc" || transport == "xhttp" || transport == "splithttp" || transport == "h3"
-		// For grpc/xhttp/splithttp/h3 + reality, don't output flow
+		isGRPCOrXHTTP := transport == "grpc" || transport == "xhttp" || transport == "h3"
+		// For grpc/xhttp/h3 + reality, don't output flow
 		if !(security == "reality" && isGRPCOrXHTTP) {
 			params = append(params, "flow="+url.QueryEscape(flow))
 		}
@@ -337,9 +344,18 @@ func generateVMessURI(spec contracts.SubscriptionSpec) (string, error) {
 	case "grpc":
 		cfg["path"] = extString(spec.Extensions, "grpc_service_name")
 	case "http":
+		// Legacy: stored inbounds may still have transport="http"
 		cfg["net"] = "h2"
 		cfg["host"] = extString(spec.Extensions, "http_host")
 		cfg["path"] = extString(spec.Extensions, "http_path")
+	case "httpupgrade":
+		cfg["net"] = "httpupgrade"
+		cfg["path"] = extString(spec.Extensions, "httpupgrade_path")
+		cfg["host"] = extString(spec.Extensions, "httpupgrade_host")
+	case "xhttp":
+		cfg["net"] = transport
+		cfg["path"] = extString(spec.Extensions, "xhttp_path")
+		cfg["host"] = extStringOrJoinSlice(spec.Extensions, "xhttp_host")
 	case "mkcp":
 		cfg["net"] = "kcp"
 		cfg["type"] = extString(spec.Extensions, "mkcp_header_type")
@@ -363,10 +379,10 @@ func generateVMessURI(spec contracts.SubscriptionSpec) (string, error) {
 func generateTrojanURI(spec contracts.SubscriptionSpec) (string, error) {
 	params := buildShareLinkParams(spec)
 
-	// Add flow if specified, BUT NOT for xhttp/splithttp/h3 transports
+	// Add flow if specified, BUT NOT for xhttp/h3 transports
 	transport := extString(spec.Extensions, "transport")
 	if flow := extString(spec.Extensions, "flow"); flow != "" {
-		isXHTTPFamily := transport == "xhttp" || transport == "splithttp" || transport == "h3"
+		isXHTTPFamily := transport == "xhttp" || transport == "h3"
 		if !isXHTTPFamily {
 			params = append(params, "flow="+flow)
 		}
@@ -482,12 +498,22 @@ func buildShareLinkParams(spec contracts.SubscriptionSpec) []string {
 		if m := extString(spec.Extensions, "grpc_mode"); m != "" {
 			params = append(params, "mode="+m)
 		}
-	case "http":
-		if h := extString(spec.Extensions, "http_host"); h != "" {
+	case "httpupgrade":
+		if p := extString(spec.Extensions, "httpupgrade_path"); p != "" {
+			params = append(params, "path="+p)
+		}
+		if h := extString(spec.Extensions, "httpupgrade_host"); h != "" {
 			params = append(params, "host="+h)
 		}
-		if p := extString(spec.Extensions, "http_path"); p != "" {
+	case "xhttp":
+		if p := extString(spec.Extensions, "xhttp_path"); p != "" {
 			params = append(params, "path="+p)
+		}
+		if h := extStringOrJoinSlice(spec.Extensions, "xhttp_host"); h != "" {
+			params = append(params, "host="+h)
+		}
+		if m := extString(spec.Extensions, "xhttp_mode"); m != "" {
+			params = append(params, "mode="+m)
 		}
 	case "mkcp":
 		if ht := extString(spec.Extensions, "mkcp_header_type"); ht != "" {
@@ -509,9 +535,16 @@ func buildShareLinkParams(spec contracts.SubscriptionSpec) []string {
 		}
 	}
 
-	// TLS/XTLS/Reality params
+	// TLS/Reality params (include legacy "xtls" for backward compat with stored data)
 	if security == "tls" || security == "xtls" || security == "reality" {
 		sni := extString(spec.Extensions, "server_name")
+		// For Reality, prefer a random pick from reality_server_names so clients
+		// use any of the valid camouflage domains, not always the first one.
+		if security == "reality" {
+			if names := extStringSlice(spec.Extensions, "reality_server_names"); len(names) > 0 {
+				sni = names[rand.Intn(len(names))]
+			}
+		}
 		// Always output SNI when set: Reality needs it for camouflage domain,
 		// and explicit SNI avoids ambiguity for CDN/IP host scenarios.
 		if sni != "" {
@@ -592,7 +625,7 @@ func extStringOrJoinSlice(m map[string]any, key string) string {
 func vmessTransportName(transport string) string {
 	switch transport {
 	case "http":
-		return "h2"
+		return "h2" // legacy compat
 	case "mkcp":
 		return "kcp"
 	default:

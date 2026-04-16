@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/crypto/curve25519"
 
+	"github.com/lureiny/v2raymg/pkg/proxy/containers/xray/profilegen"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 )
 
@@ -201,11 +202,15 @@ func (a *Adapter) ToProvider(spec contracts.InboundSpec) (NativeInbound, error) 
 	if sniffingEnabled {
 		sniffing := map[string]interface{}{
 			"enabled":      true,
-			"destOverride": []string{"http", "tls"}, // default value
+			"destOverride": []string{"http", "tls", "quic"},
 		}
 		// Allow custom destOverride from extensions
 		if destOverride, ok := extensions["sniffing_dest_override"].([]string); ok {
 			sniffing["destOverride"] = destOverride
+		}
+		// Support routeOnly
+		if routeOnly, ok := extensions["sniffing_route_only"].(bool); ok && routeOnly {
+			sniffing["routeOnly"] = true
 		}
 		// Support metadataOnly
 		if metadataOnly, ok := extensions["sniffing_metadata_only"].(bool); ok {
@@ -367,17 +372,24 @@ func (a *Adapter) buildStreamSettings(extensions map[string]any) (map[string]int
 		}
 		return false
 	}
+	getInt := func(key string) int {
+		if v, ok := extensions[key]; ok {
+			switch n := v.(type) {
+			case int:
+				return n
+			case int64:
+				return int(n)
+			case float64:
+				return int(n)
+			}
+		}
+		return 0
+	}
 
 	transport := getString("transport")
 	security := getString("security")
 
-	// Normalize http transport naming for Xray:
-	// - input "http" (friendly) maps to Xray network "h2"
-	// - input "h2" stays "h2"
 	network := transport
-	if transport == "http" {
-		network = "h2"
-	}
 
 	// If no transport and no security, no stream settings needed
 	if network == "" && security == "" {
@@ -421,23 +433,24 @@ func (a *Adapter) buildStreamSettings(extensions map[string]any) (map[string]int
 		}
 	}
 
-	// Add HTTP/2 settings (Xray network "h2")
-	if network == "h2" || transport == "http" {
-		httpSettings := map[string]interface{}{}
-		if p := getString("http_path"); p != "" {
-			httpSettings["path"] = p
+	// Add HTTPUpgrade settings
+	if transport == "httpupgrade" {
+		httpupgradeSettings := map[string]interface{}{}
+		if p := getString("httpupgrade_path"); p != "" {
+			httpupgradeSettings["path"] = p
 		}
-		if h := getStringSliceFromExt("http_host"); len(h) > 0 {
-			httpSettings["host"] = h
+		if h := getString("httpupgrade_host"); h != "" {
+			httpupgradeSettings["host"] = h
 		}
-		if len(httpSettings) > 0 {
-			stream["httpSettings"] = httpSettings
+		if len(httpupgradeSettings) > 0 {
+			stream["httpupgradeSettings"] = httpupgradeSettings
 		}
 	}
 
-	// Add SplitHTTP settings
-	// Note: xhttp is an alias for splithttp in xray, use splithttpSettings key
-	if transport == "xhttp" || transport == "splithttp" {
+	// Add XHTTP settings.
+	// xray's native config key is "splithttpSettings" regardless of whether the user
+	// configured "xhttp" or "splithttp"; by this point both have been normalized to "xhttp".
+	if transport == "xhttp" {
 		splithttpSettings := map[string]interface{}{}
 		// Mode: auto, zero, one, two
 		if mode := getString("xhttp_mode"); mode != "" {
@@ -455,7 +468,7 @@ func (a *Adapter) buildStreamSettings(extensions map[string]any) (map[string]int
 	}
 
 	// Add TLS settings
-	if security == "tls" || security == "xtls" {
+	if security == "tls" {
 		tlsSettings := map[string]interface{}{}
 		serverName := getString("server_name")
 		if serverName != "" {
@@ -467,39 +480,42 @@ func (a *Adapter) buildStreamSettings(extensions map[string]any) (map[string]int
 		}
 
 		// Add uTLS fingerprint support
-		// Common fingerprints: "chrome", "firefox", "safari", "ios", "android", "edge", "randomized"
 		fingerprint := getString("utls_fingerprint")
 		if fingerprint != "" {
 			tlsSettings["fingerprint"] = fingerprint
 		}
 
-		// Read certificate from extensions (cert_file/key_file paths or cert_pem/key_pEM content)
+		// TLS advanced options
+		if getBool("tls_reject_unknown_sni") {
+			tlsSettings["rejectUnknownSni"] = true
+		}
+		if minVer := getString("tls_min_version"); minVer != "" {
+			tlsSettings["minVersion"] = minVer
+		}
+
+		// Read certificate from extensions
 		certFile := getString("cert_file")
 		keyFile := getString("key_file")
 		certPEM := getString("cert_pem")
 		keyPEM := getString("key_pem")
 
+		certEntry := map[string]interface{}{}
 		if certFile != "" && keyFile != "" {
-			// Use certificate file paths
-			tlsSettings["certificates"] = []map[string]interface{}{
-				{
-					"certificateFile": certFile,
-					"keyFile":         keyFile,
-				},
-			}
+			certEntry["certificateFile"] = certFile
+			certEntry["keyFile"] = keyFile
 		} else if certPEM != "" && keyPEM != "" {
-			// Use certificate content directly (inline)
-			tlsSettings["certificates"] = []map[string]interface{}{
-				{
-					"certificate": certPEM,
-					"key":         keyPEM,
-				},
-			}
+			certEntry["certificate"] = certPEM
+			certEntry["key"] = keyPEM
+		}
+		if ocsp := getInt("ocsp_stapling"); ocsp > 0 {
+			certEntry["ocspStapling"] = ocsp
+		}
+		if len(certEntry) > 0 {
+			tlsSettings["certificates"] = []map[string]interface{}{certEntry}
 		}
 
 		// Allow insecure for self-signed certs (usually needed for demo/testing)
-		allowInsecure := getBool("tls_allow_insecure")
-		if allowInsecure {
+		if getBool("tls_allow_insecure") {
 			tlsSettings["allowInsecure"] = true
 		}
 
@@ -679,58 +695,18 @@ func LoadOrGenerateCert(certFile, keyFile, commonName string) (certPEM, keyPEM s
 	return GenerateSelfSignedCert(commonName)
 }
 
-// GenerateRealityKeyPair generates a proper X25519 key pair for Reality.
-// Returns the private key as a base64-encoded string (xray expects this format).
-// This uses the standard curve25519 scalar multiplication to generate a valid key.
-//
-// The generated key format matches what xray's "xray x25519" command produces:
-// - Private key: 32 bytes, base64 encoded
-// - Public key: 32 bytes, base64 encoded (returned as second value)
+// GenerateRealityKeyPair generates an X25519 private key for Reality.
+// Returns the private key as a base64url-encoded string (no padding).
 func GenerateRealityKeyPair() (string, error) {
-	// Generate a random 32-byte scalar for X25519
-	// This is the same method xray uses internally
-	privateKey := [32]byte{}
-	if _, err := rand.Read(privateKey[:]); err != nil {
-		return "", fmt.Errorf("failed to generate random scalar: %w", err)
-	}
-
-	// Apply the standard X25519 clamping (per RFC 7748):
-	// - Clear bits 0, 1, 2 of the first byte (byte[0] &= 248 = 11111000)
-	// - Clear bit 7 of the last byte (byte[31] &= 127 = 01111111)
-	// - Set bit 6 of the last byte (byte[31] |= 64 = 01000000)
-	privateKey[0] &= 248
-	privateKey[31] &= 127
-	privateKey[31] |= 64
-
-	// Convert to base64 string (xray expects base64 format for Reality private key)
-	privateKeyB64 := base64.RawURLEncoding.EncodeToString(privateKey[:])
-	return privateKeyB64, nil
+	pk, _, err := profilegen.GenerateRealityKeyPairWithPublic()
+	return pk, err
 }
 
-// GenerateRealityKeyPairWithPublic generates a proper X25519 key pair for Reality,
-// returning both the private key and public key as base64-encoded strings.
-// Uses base64.RawURLEncoding (URL-safe, no padding) to match xray's expected format.
-func GenerateRealityKeyPairWithPublic() (privateKeyB64, publicKeyB64 string, err error) {
-	// Generate a random 32-byte scalar for X25519
-	privateKey := [32]byte{}
-	if _, err = rand.Read(privateKey[:]); err != nil {
-		return "", "", fmt.Errorf("failed to generate random scalar: %w", err)
-	}
-
-	// Apply X25519 clamping
-	privateKey[0] &= 248
-	privateKey[31] &= 127
-	privateKey[31] |= 64
-
-	// Generate public key from private key using curve25519
-	var publicKey [32]byte
-	curve25519.ScalarBaseMult(&publicKey, &privateKey)
-
-	// Use RawURLEncoding (URL-safe, no padding) to match xray's expected format
-	privateKeyB64 = base64.RawURLEncoding.EncodeToString(privateKey[:])
-	publicKeyB64 = base64.RawURLEncoding.EncodeToString(publicKey[:])
-
-	return privateKeyB64, publicKeyB64, nil
+// GenerateRealityKeyPairWithPublic generates an X25519 key pair for Reality.
+// Returns (privateKey, publicKey) as base64url-encoded strings (no padding).
+// Delegates to profilegen.GenerateRealityKeyPairWithPublic — single implementation.
+func GenerateRealityKeyPairWithPublic() (string, string, error) {
+	return profilegen.GenerateRealityKeyPairWithPublic()
 }
 
 // DeriveRealityPublicKey derives the X25519 public key from a base64-encoded private key.

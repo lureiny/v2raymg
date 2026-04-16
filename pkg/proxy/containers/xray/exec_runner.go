@@ -631,6 +631,11 @@ func (e *Executor) AddInboundNative(nativeInboundJSON []byte) error {
 	security := contracts.SecurityNone
 	if ss, ok := raw["streamSettings"].(map[string]interface{}); ok {
 		if n, ok := ss["network"].(string); ok {
+			// xray-core uses "splithttp" as the network name internally;
+			// normalize to "xhttp" so our layer always uses a single canonical value.
+			if n == "splithttp" {
+				n = "xhttp"
+			}
 			transport = contracts.Transport(n)
 		}
 		if s, ok := ss["security"].(string); ok {
@@ -760,6 +765,29 @@ func extractNativeExtra(raw map[string]interface{}, transport contracts.Transpor
 		}
 	}
 
+	// HTTPUpgrade settings
+	if huSettings, ok := ss["httpupgradeSettings"].(map[string]interface{}); ok {
+		if path, ok := huSettings["path"].(string); ok {
+			extra["httpupgrade_path"] = path
+		}
+		if host, ok := huSettings["host"].(string); ok {
+			extra["httpupgrade_host"] = host
+		}
+	}
+
+	// SplitHTTP / XHTTP settings
+	if shSettings, ok := ss["splithttpSettings"].(map[string]interface{}); ok {
+		if path, ok := shSettings["path"].(string); ok {
+			extra["xhttp_path"] = path
+		}
+		if host, ok := shSettings["host"].(string); ok {
+			extra["xhttp_host"] = []string{host}
+		}
+		if mode, ok := shSettings["mode"].(string); ok {
+			extra["xhttp_mode"] = mode
+		}
+	}
+
 	// TLS settings
 	if tlsSettings, ok := ss["tlsSettings"].(map[string]interface{}); ok {
 		if sn, ok := tlsSettings["serverName"].(string); ok {
@@ -773,14 +801,26 @@ func extractNativeExtra(raw map[string]interface{}, transport contracts.Transpor
 	// Reality settings
 	if realitySettings, ok := ss["realitySettings"].(map[string]interface{}); ok {
 		if serverNames, ok := realitySettings["serverNames"].([]interface{}); ok && len(serverNames) > 0 {
-			if sn, ok := serverNames[0].(string); ok {
-				extra["server_name"] = sn
-				extra["reality_server_names"] = sn
+			names := make([]string, 0, len(serverNames))
+			for _, n := range serverNames {
+				if s, ok := n.(string); ok {
+					names = append(names, s)
+				}
+			}
+			if len(names) > 0 {
+				extra["server_name"] = names[0] // keep for backward compat
+				extra["reality_server_names"] = names
 			}
 		}
 		if shortIds, ok := realitySettings["shortIds"].([]interface{}); ok && len(shortIds) > 0 {
-			if sid, ok := shortIds[0].(string); ok {
-				extra["reality_short_ids"] = sid
+			sids := make([]string, 0, len(shortIds))
+			for _, s := range shortIds {
+				if sid, ok := s.(string); ok {
+					sids = append(sids, sid)
+				}
+			}
+			if len(sids) > 0 {
+				extra["reality_short_ids"] = sids
 			}
 		}
 		// Save private key for persistence (internal use only, not for subscription)
@@ -1494,10 +1534,11 @@ func (in *XrayInbound) buildSubscriptionExtensions(user contracts.UserSpec) map[
 		copyKeys := []string{
 			"ws_path", "ws_host",
 			"grpc_service_name", "grpc_mode",
+			"httpupgrade_path", "httpupgrade_host",
 			"server_name", "alpn", "utls_fingerprint",
 			"mkcp_header_type", "mkcp_seed",
 			"quic_security", "quic_key", "quic_header_type",
-			"http_path", "http_host",
+			"xhttp_mode", "xhttp_path", "xhttp_host",
 			"method", "ss_plugin", "ss_plugin_opts",
 			"flow",
 			// Reality-specific fields for subscription URI
@@ -1648,24 +1689,28 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 		security = contracts.SecurityNone
 	}
 	if s, ok := params["security"].(string); ok && s != "" {
+		// Legacy xtls → tls (xray-core removed xtls security type)
+		if s == "xtls" {
+			s = "tls"
+		}
 		security = contracts.Security(s)
 		if !security.IsValid() {
 			return errs.Newf(errs.ErrFastAddInboundFailed, "invalid security: %s", s)
 		}
 	}
 
-	// Bug 4: SOCKS5 and HTTP do not support TLS/XTLS/Reality
+	// Bug 4: SOCKS5 and HTTP do not support TLS/Reality
 	if (protocol == contracts.ProtocolSOCKS5 || protocol == contracts.ProtocolHTTP) &&
 		security != contracts.SecurityNone {
 		return errs.Newf(errs.ErrFastAddInboundFailed,
 			"protocol %s does not support security=%s; only security=none is allowed", protocol, security)
 	}
 
-	// Step 1: Cert resolution (only for TLS/XTLS)
+	// Step 1: Cert resolution (only for TLS)
 	var certFile, keyFile, certDomain string
 	certSource := "none"
 	var certShouldCleanup bool
-	if security == contracts.SecurityTLS || security == contracts.SecurityXTLS {
+	if security == contracts.SecurityTLS {
 		var certErr error
 		certFile, keyFile, certSource, certDomain, certShouldCleanup, certErr = e.resolveFastAddCert(params)
 		if certErr != nil {
@@ -1721,6 +1766,11 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 				Flow:               fastGetString(params, "flow", ""),
 				WSPath:             fastGetString(params, "ws_path", ""),
 				GRPCServiceName:    fastGetString(params, "grpc_service_name", ""),
+				HTTPUpgradePath:    fastGetString(params, "httpupgrade_path", ""),
+				HTTPUpgradeHost:    fastGetString(params, "httpupgrade_host", ""),
+				XHTTPMode:          fastGetString(params, "xhttp_mode", ""),
+				XHTTPPath:          fastGetString(params, "xhttp_path", ""),
+				XHTTPHost:          fastGetStringSlice(params, "xhttp_host"),
 				RealityPrivateKey:  fastGetString(params, "reality_private_key", ""),
 				RealityPublicKey:   fastGetString(params, "reality_public_key", ""),
 				RealityTarget:      fastGetString(params, "reality_target", ""),
@@ -1728,6 +1778,15 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 				RealityShortIDs:    fastGetStringSlice(params, "reality_short_ids"),
 				CertFile:           certFile,
 				KeyFile:            keyFile,
+				// Sniffing
+				SniffingEnabled:      fastGetBool(params, "sniffing_enabled"),
+				SniffingDestOverride: fastGetStringSlice(params, "sniffing_dest_override"),
+				SniffingRouteOnly:    fastGetBool(params, "sniffing_route_only"),
+				// TLS advanced
+				TLSRejectUnknownSNI: fastGetBool(params, "tls_reject_unknown_sni"),
+				TLSMinVersion:       fastGetString(params, "tls_min_version", ""),
+				ALPN:                fastGetStringSlice(params, "alpn"),
+				OCSPStapling:        int(fastGetUint32(params, "ocsp_stapling", 0)),
 			}
 			genSpec, genErr := profilegen.GenerateVLessInboundSpec(p)
 			if genErr != nil {
@@ -2091,6 +2150,14 @@ func fastGetStringSlice(params map[string]any, key string) []string {
 		return result
 	}
 	return nil
+}
+
+// fastGetBool extracts a bool value from params.
+func fastGetBool(params map[string]any, key string) bool {
+	if v, ok := params[key].(bool); ok {
+		return v
+	}
+	return false
 }
 
 // fastGetStringFromMap extracts a string from a map[string]any with a default.

@@ -563,7 +563,7 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
   "target": "节点名",
   "tag": "inbound-tag",
   "protocol": "vless",
-  "stream": "tcp",
+  "transport": "tcp",
   "domain": "example.com",
   "port": 443,
   "security": "tls",
@@ -571,49 +571,112 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
   "container": "xray",
   "reality_target": "www.example.com:443",
   "reality_server_names": ["www.example.com"],
-  "reality_short_ids": ["0123456789abcdef"]
+  "reality_short_ids": ["0123456789abcdef"],
+  "ws_path": "/ws",
+  "grpc_service_name": "grpc",
+  "httpupgrade_path": "/",
+  "xhttp_path": "/xhttp",
+  "xhttp_mode": "auto",
+  "alpn": "h2,http/1.1",
+  "sniffing_enabled": true,
+  "extra_params": {
+    "tls_min_version": "1.3",
+    "tls_reject_unknown_sni": "true"
+  }
 }
 ```
 
-**字段说明:**
+**基本字段:**
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `target` | string | 否 | 目标节点名，空则为本节点 |
 | `tag` | string | 否 | inbound 唯一标识，空则自动生成 |
 | `protocol` | string | 否 | 协议类型，默认 `vless` |
-| `stream` | string | 否 | 传输层，默认 `tcp` |
-| `domain` | string | 否 | TLS/XTLS 证书域名 |
+| `transport` | string | 否 | 传输层协议，默认 `tcp`（也可用 `stream` 字段，向后兼容） |
+| `domain` | string | 否 | TLS 证书域名；为空时自动使用自签证书 |
 | `port` | int | 否 | 监听端口，0 则随机分配 |
-| `security` | string | 否 | 安全类型，默认 `tls`；支持 `tls` \| `xtls` \| `reality` |
-| `self_signed` | bool | 否 | 是否使用自签证书（仅 tls/xtls） |
+| `security` | string | 否 | 安全类型，默认 `tls`；支持 `tls` \| `reality` |
+| `self_signed` | bool | 否 | 是否使用自签证书（仅 TLS） |
 | `container` | string | 否 | 容器类型，默认 `xray` |
-| `reality_target` | string | 条件必填 | Reality 伪装目标，如 `www.example.com:443`（`security=reality` 时使用） |
-| `reality_server_names` | []string | 否 | Reality 允许的 SNI 列表，默认取 `reality_target` 的 host 部分 |
-| `reality_short_ids` | []string | 否 | Reality short ID 列表，默认 `["0123456789abcdef"]` |
-| `is_xtls` | bool | 否 | 已废弃，请使用 `security` 字段代替 |
 
-**Protocol 类型:** `vless` | `vmess` | `trojan` | `ss` / `shadowsocks`
+**Reality 字段:**
 
-**Stream 类型:** `tcp` | `ws` | `quic` | `mkcp` | `grpc` | `http`
+| 字段 | 类型 | 条件 | 说明 |
+|------|------|------|------|
+| `reality_target` | string | security=reality | 伪装目标，如 `www.example.com:443` |
+| `reality_server_names` | []string | 否 | 允许的 SNI 列表，默认取域名 |
+| `reality_short_ids` | []string | 否 | short ID 列表，默认自动生成 |
 
-**Container 类型:** `xray`（默认）| `snell`
+> Reality 密钥对由服务端自动生成，公钥可通过获取 inbound 配置接口查询。
 
-**VLESS+Reality 示例:**
+**传输层便捷字段（按需填写）:**
+
+| 字段 | 类型 | 对应传输 | 说明 |
+|------|------|----------|------|
+| `ws_path` | string | ws | WebSocket 路径，默认 `/ws` |
+| `grpc_service_name` | string | grpc | gRPC 服务名，默认 `grpc` |
+| `httpupgrade_path` | string | httpupgrade | HTTPUpgrade 路径，默认 `/` |
+| `xhttp_path` | string | xhttp/splithttp | XHTTP 路径，默认 `/` |
+| `xhttp_mode` | string | xhttp/splithttp | XHTTP 模式：`auto`/`packet-up`/`stream-one`/`stream-up` |
+| `alpn` | string | tls | ALPN 协商列表，逗号分隔，如 `h2,http/1.1` |
+| `sniffing_enabled` | bool | 全部 | 启用流量嗅探 |
+
+**extra_params（高级参数透传）:**
+
+通过 `extra_params` map 可传递任意参数到 Executor，无需修改 API 定义：
+
+| key | 类型 | 说明 |
+|-----|------|------|
+| `tls_min_version` | string | TLS 最低版本，如 `1.3` |
+| `tls_reject_unknown_sni` | "true"/"false" | 拒绝未知 SNI |
+| `ocsp_stapling` | string(int) | OCSP 装订间隔秒数 |
+| `sniffing_dest_override` | string | 嗅探目标覆盖，逗号分隔，如 `http,tls,quic` |
+| `sniffing_route_only` | "true"/"false" | 仅路由不替换目标 |
+| `uuid` | string | VLESS/VMess UUID（默认自动生成） |
+| `flow` | string | VLESS flow，如 `xtls-rprx-vision` |
+| `method` | string | Shadowsocks 加密方式 |
+| `password` | string | Trojan/Shadowsocks 密码 |
+
+**Protocol:** `vless` | `vmess` | `trojan` | `ss` / `shadowsocks`
+
+**Transport:** `tcp` | `ws` | `grpc` | `httpupgrade` | `xhttp` | `splithttp`
+
+**支持的协议组合:**
+
+| 协议 | 传输 | 安全 |
+|------|------|------|
+| VLESS | tcp, ws, grpc, httpupgrade, xhttp, splithttp | tls, reality |
+| VMess | tcp, ws | tls |
+| Trojan | tcp | tls |
+| Shadowsocks | tcp | none |
+
+**示例 - VLESS+XHTTP+Reality:**
 ```json
 {
-  "tag": "vless-reality",
+  "tag": "vless-xhttp-reality",
   "protocol": "vless",
-  "stream": "tcp",
+  "transport": "xhttp",
   "security": "reality",
   "reality_target": "www.example.com:443",
   "reality_server_names": ["www.example.com"],
-  "reality_short_ids": ["0123456789abcdef"],
-  "container": "xray"
+  "xhttp_path": "/xhttp",
+  "sniffing_enabled": true
 }
 ```
-> Reality 密钥对（private key / public key）由服务端自动生成，不需要在请求中传入。
-> 生成后的公钥可通过获取 inbound 配置接口查询。
+
+**示例 - VLESS+HTTPUpgrade+TLS（自签）:**
+```json
+{
+  "tag": "vless-httpupgrade",
+  "protocol": "vless",
+  "transport": "httpupgrade",
+  "security": "tls",
+  "self_signed": true,
+  "httpupgrade_path": "/upgrade",
+  "alpn": "http/1.1"
+}
+```
 
 **Response (200):**
 ```json

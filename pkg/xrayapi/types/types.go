@@ -28,6 +28,7 @@ import (
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet/websocket"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet/tcp"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet/grpc"
+	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet/httpupgrade"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -625,6 +626,12 @@ func buildStreamConfigProto(streamSettings map[string]interface{}) (*internet.St
 			if fingerprint, ok := tlsSettings["fingerprint"].(string); ok {
 				tlsConfig.Fingerprint = fingerprint
 			}
+			if rejectUnknownSni, ok := tlsSettings["rejectUnknownSni"].(bool); ok {
+				tlsConfig.RejectUnknownSni = rejectUnknownSni
+			}
+			if minVersion, ok := tlsSettings["minVersion"].(string); ok {
+				tlsConfig.MinVersion = minVersion
+			}
 
 			// Handle certificates - support both path (certificateFile/keyFile) and content (certificate/key)
 			if certificates, ok := tlsSettings["certificates"].([]interface{}); ok {
@@ -662,6 +669,13 @@ func buildStreamConfigProto(streamSettings map[string]interface{}) (*internet.St
 									cert.Key = data
 								}
 							}
+						}
+
+						// Handle ocspStapling (uint64 in protobuf)
+						if ocsp, ok := certMap["ocspStapling"].(float64); ok && ocsp > 0 {
+							cert.OcspStapling = uint64(ocsp)
+						} else if ocsp, ok := certMap["ocspStapling"].(int); ok && ocsp > 0 {
+							cert.OcspStapling = uint64(ocsp)
 						}
 
 						tlsConfig.Certificate = append(tlsConfig.Certificate, cert)
@@ -881,6 +895,36 @@ func buildStreamConfigProto(streamSettings map[string]interface{}) (*internet.St
 			streamConfig.TransportSettings = append(streamConfig.TransportSettings, &internet.TransportConfig{
 				ProtocolName: "tcp",
 				Settings:     tcpMsg,
+			})
+		}
+	case "httpupgrade":
+		if huSettings, ok := streamSettings["httpupgradeSettings"].(map[string]interface{}); ok {
+			huConfig := &httpupgrade.Config{}
+			if path, ok := huSettings["path"].(string); ok {
+				huConfig.Path = path
+			}
+			if host, ok := huSettings["host"].(string); ok {
+				huConfig.Host = host
+			}
+			if headers, ok := huSettings["headers"].(map[string]interface{}); ok {
+				huConfig.Header = make(map[string]string)
+				for k, v := range headers {
+					if s, ok := v.(string); ok {
+						huConfig.Header[k] = s
+					}
+				}
+			}
+			if acceptPP, ok := huSettings["acceptProxyProtocol"].(bool); ok {
+				huConfig.AcceptProxyProtocol = acceptPP
+			}
+
+			huMsg, err := NewTypedMessage("xray.transport.internet.httpupgrade.Config", huConfig)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create HTTPUpgrade TypedMessage: %w", err)
+			}
+			streamConfig.TransportSettings = append(streamConfig.TransportSettings, &internet.TransportConfig{
+				ProtocolName: "httpupgrade",
+				Settings:     huMsg,
 			})
 		}
 	case "splithttp":

@@ -43,23 +43,32 @@ func (p Protocol) String() string { return string(p) }
 type Transport string
 
 const (
-	TransportTCP  Transport = "tcp"
-	TransportWS   Transport = "ws"
-	TransportGRPC Transport = "grpc"
-	TransportMKCP Transport = "mkcp"
-	TransportQUIC Transport = "quic"
-	TransportHTTP Transport = "http"
+	TransportTCP         Transport = "tcp"
+	TransportWS          Transport = "ws"
+	TransportGRPC        Transport = "grpc"
+	TransportHTTPUpgrade Transport = "httpupgrade"
+	TransportXHTTP       Transport = "xhttp"
+	TransportSplitHTTP   Transport = "splithttp"
+	TransportMKCP        Transport = "mkcp"  // legacy, not supported in FastAdd
+	TransportQUIC        Transport = "quic"  // legacy, not supported in FastAdd
+	TransportHTTP        Transport = "http"  // legacy, removed from xray-core
 )
 
 // AllTransports returns all supported transports.
 func AllTransports() []Transport {
-	return []Transport{TransportTCP, TransportWS, TransportGRPC, TransportMKCP, TransportQUIC, TransportHTTP}
+	return []Transport{
+		TransportTCP, TransportWS, TransportGRPC,
+		TransportHTTPUpgrade, TransportXHTTP, TransportSplitHTTP,
+		TransportMKCP, TransportQUIC, TransportHTTP,
+	}
 }
 
 // IsValid checks whether the transport is a known value.
 func (t Transport) IsValid() bool {
 	switch t {
-	case TransportTCP, TransportWS, TransportGRPC, TransportMKCP, TransportQUIC, TransportHTTP:
+	case TransportTCP, TransportWS, TransportGRPC,
+		TransportHTTPUpgrade, TransportXHTTP, TransportSplitHTTP,
+		TransportMKCP, TransportQUIC, TransportHTTP:
 		return true
 	}
 	return false
@@ -73,19 +82,18 @@ type Security string
 const (
 	SecurityNone    Security = "none"
 	SecurityTLS     Security = "tls"
-	SecurityXTLS    Security = "xtls"
 	SecurityReality Security = "reality"
 )
 
 // AllSecurityModes returns all supported security modes.
 func AllSecurityModes() []Security {
-	return []Security{SecurityNone, SecurityTLS, SecurityXTLS, SecurityReality}
+	return []Security{SecurityNone, SecurityTLS, SecurityReality}
 }
 
 // IsValid checks whether the security mode is a known value.
 func (s Security) IsValid() bool {
 	switch s {
-	case SecurityNone, SecurityTLS, SecurityXTLS, SecurityReality:
+	case SecurityNone, SecurityTLS, SecurityReality:
 		return true
 	}
 	return false

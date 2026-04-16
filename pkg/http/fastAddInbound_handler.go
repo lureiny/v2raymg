@@ -39,31 +39,33 @@ func getBuilderType(key string) proto.BuilderType {
 	}
 }
 
-func checkBuilder(protocol, stream string) error {
-	if builderType := getBuilderType(protocol); builderType == proto.BuilderType_UnknowBuilderType {
-		return fmt.Errorf("unsopport protocol: %s", protocol)
-	}
-	if builderType := getBuilderType(stream); builderType == proto.BuilderType_UnknowBuilderType {
-		return fmt.Errorf("unsopport stream type: %s", stream)
-	}
-	return nil
-}
-
 func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 	var req struct {
-		Target             string   `json:"target"`
-		Tag                string   `json:"tag"`
-		Protocol           string   `json:"protocol"`
-		Stream             string   `json:"stream"`
-		Domain             string   `json:"domain"`
-		IsXtls             bool     `json:"is_xtls"`   // deprecated: use security field instead
-		Port               int32    `json:"port"`
-		SelfSigned         bool     `json:"self_signed"`
-		Container          string   `json:"container"` // "xray"(default) or "snell"
-		Security           string   `json:"security"`                // "tls"/"xtls"/"reality"
-		RealityTarget      string   `json:"reality_target"`          // e.g. "www.example.com:443"
-		RealityServerNames []string `json:"reality_server_names"`
-		RealityShortIDs    []string `json:"reality_short_ids"`
+		Target             string            `json:"target"`
+		Tag                string            `json:"tag"`
+		Protocol           string            `json:"protocol"`
+		Stream             string            `json:"stream"`     // legacy: "tcp","ws","grpc","http"
+		Transport          string            `json:"transport"`  // preferred: "tcp","ws","grpc","httpupgrade","xhttp","splithttp"
+		Domain             string            `json:"domain"`
+		IsXtls             bool              `json:"is_xtls"`    // deprecated: use security field
+		Port               int32             `json:"port"`
+		SelfSigned         bool              `json:"self_signed"`
+		Container          string            `json:"container"`
+		Security           string            `json:"security"`
+		RealityTarget      string            `json:"reality_target"`
+		RealityServerNames []string          `json:"reality_server_names"`
+		RealityShortIDs    []string          `json:"reality_short_ids"`
+		ExtraParams        map[string]string `json:"extra_params"` // transport/security/sniffing params
+		// Convenience fields that map into extra_params
+		WSPath          string `json:"ws_path,omitempty"`
+		GRPCServiceName string `json:"grpc_service_name,omitempty"`
+		HTTPUpgradePath string `json:"httpupgrade_path,omitempty"`
+		HTTPUpgradeHost string `json:"httpupgrade_host,omitempty"`
+		XHTTPPath       string `json:"xhttp_path,omitempty"`
+		XHTTPMode       string `json:"xhttp_mode,omitempty"`
+		XHTTPHost       string `json:"xhttp_host,omitempty"`
+		ALPN            string `json:"alpn,omitempty"`            // comma-separated, e.g. "h2,http/1.1"
+		SniffingEnabled bool   `json:"sniffing_enabled,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
@@ -73,12 +75,34 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 	if req.Protocol == "" {
 		req.Protocol = "vless"
 	}
-	if req.Stream == "" {
-		req.Stream = "tcp"
+	// Resolve transport: prefer "transport" field, fall back to "stream"
+	transport := req.Transport
+	if transport == "" {
+		transport = req.Stream
+	}
+	if transport == "" {
+		transport = "tcp"
 	}
 
-	if err := checkBuilder(req.Protocol, req.Stream); err != nil {
-		jsonErr(c, 400, err.Error())
+	// Validate protocol
+	validProtocols := map[string]bool{
+		"vless": true, "vmess": true, "trojan": true, "ss": true, "shadowsocks": true,
+	}
+	if !validProtocols[strings.ToLower(req.Protocol)] {
+		jsonErr(c, 400, fmt.Sprintf("unsupported protocol: %s", req.Protocol))
+		return
+	}
+	// Validate transport
+	validTransports := map[string]bool{
+		"tcp": true, "ws": true, "grpc": true, "httpupgrade": true,
+		"xhttp": true, "splithttp": true,
+	}
+	if !validTransports[transport] {
+		if transport == "http" || transport == "h2" || transport == "h3" {
+			jsonErr(c, 400, fmt.Sprintf("transport %q is no longer supported by xray-core; use xhttp or splithttp instead", transport))
+		} else {
+			jsonErr(c, 400, fmt.Sprintf("unsupported transport: %s", transport))
+		}
 		return
 	}
 
@@ -88,10 +112,43 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		return
 	}
 
+	// Build extra_params: merge explicit fields + caller-provided map
+	extra := make(map[string]string)
+	if req.ExtraParams != nil {
+		for k, v := range req.ExtraParams {
+			extra[k] = v
+		}
+	}
+	// Map convenience fields into extra_params (don't overwrite explicit ones)
+	convFields := map[string]string{
+		"ws_path": req.WSPath, "grpc_service_name": req.GRPCServiceName,
+		"httpupgrade_path": req.HTTPUpgradePath, "httpupgrade_host": req.HTTPUpgradeHost,
+		"xhttp_path": req.XHTTPPath, "xhttp_mode": req.XHTTPMode, "xhttp_host": req.XHTTPHost,
+		"alpn": req.ALPN,
+	}
+	for k, v := range convFields {
+		if v != "" {
+			if _, exists := extra[k]; !exists {
+				extra[k] = v
+			}
+		}
+	}
+	if req.SniffingEnabled {
+		if _, exists := extra["sniffing_enabled"]; !exists {
+			extra["sniffing_enabled"] = "true"
+		}
+	}
+	if req.SelfSigned {
+		if _, exists := extra["self_signed"]; !exists {
+			extra["self_signed"] = "true"
+		}
+	}
+
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
 	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.FastAddInboundType, &proto.FastAddInboundReq{
 		InboundBuilderType: getBuilderType(req.Protocol),
-		StreamBuilderType:  getBuilderType(req.Stream),
+		StreamBuilderType:  getBuilderType(transport), // legacy field for backward compat
+		Transport:          transport,                  // new string field
 		Port:               req.Port,
 		Domain:             req.Domain,
 		IsXtls:             req.IsXtls,
@@ -101,6 +158,7 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		RealityTarget:      req.RealityTarget,
 		RealityServerNames: req.RealityServerNames,
 		RealityShortIds:    req.RealityShortIDs,
+		ExtraParams:        extra,
 	}, handler.getHttpServer().GetClusterToken())
 	if len(failedList) != 0 {
 		errMsg := joinFailedList(failedList)
@@ -120,13 +178,12 @@ func (handler *FastAddInboundHandler) getRelativePath() string { return "/inboun
 func (handler *FastAddInboundHandler) help() string {
 	return `POST /api/inbound/fast
 	快速添加指定配置的inbound
-	body: {"target": "", "tag": "", "protocol": "vless", "stream": "tcp", "domain": "", "security": "tls", "port": 0, "container": "xray", "reality_target": "", "reality_server_names": [], "reality_short_ids": []}
-	protocol: 协议类型, 支持vless, vmess, trojan
-	stream: 传输层协议, 支持tcp, ws, quic, mkcp, grpc, http
-	security: 安全类型, 支持tls(默认), xtls, reality
-	domain: 证书的域名 (tls/xtls 时使用)
-	reality_target: Reality 伪装目标, 如 "www.example.com:443" (security=reality 时使用)
-	reality_server_names: 允许的 SNI 列表 (security=reality 时使用)
-	reality_short_ids: short ID 列表 (security=reality 时使用)
-	container: container类型, 支持xray(默认), snell（snell不支持FastAddInbound）`
+	body: {"target":"", "tag":"", "protocol":"vless", "transport":"tcp", "domain":"", "security":"tls", "port":0, ...}
+	protocol: vless, vmess, trojan, shadowsocks
+	transport: tcp, ws, grpc, httpupgrade, xhttp, splithttp (也可用 stream 字段, 向后兼容)
+	security: tls(默认), reality
+	domain: 证书域名 (tls 时使用); 为空则自签
+	reality_target, reality_server_names, reality_short_ids: Reality 参数
+	convenience fields: ws_path, grpc_service_name, httpupgrade_path, xhttp_path, xhttp_mode, alpn, sniffing_enabled
+	extra_params: map[string]string, 透传任意参数到 Executor (如 tls_min_version, tls_reject_unknown_sni, flow, uuid 等)`
 }

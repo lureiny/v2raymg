@@ -288,7 +288,7 @@ message ObtainNewCertRsp {
 message FastAddInboundReq {
     NodeAuthInfo node_auth_info = 1;
     BuilderType inboundBuilderType = 2;
-    BuilderType streamBuilderType = 3;
+    BuilderType streamBuilderType = 3;   // deprecated: use transport string field instead
     int32 port = 4;
     string domain = 5;
     bool isXtls = 6;            // deprecated: use security field instead
@@ -298,6 +298,8 @@ message FastAddInboundReq {
     string reality_target = 10; // Reality target server, e.g. "www.example.com:443"
     repeated string reality_server_names = 11; // allowed SNI list for Reality
     repeated string reality_short_ids = 12;    // short ID list for Reality
+    string transport = 13;      // transport type string: "tcp","ws","grpc","httpupgrade","xhttp","splithttp"
+    map<string, string> extra_params = 14; // additional params: ws_path, grpc_service_name, httpupgrade_path, xhttp_path, xhttp_mode, alpn, sniffing_enabled, etc.
 }
 
 message FastAddInboundRsp {

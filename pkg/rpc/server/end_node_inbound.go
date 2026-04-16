@@ -4,6 +4,7 @@ import (
 	context "context"
 	"encoding/base64"
 	"fmt"
+	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
@@ -161,14 +162,6 @@ func (s *EndNodeServer) SetGatewayModel(ctx context.Context, setGatewayModelReq 
 func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *proto.FastAddInboundReq) (*proto.FastAddInboundRsp, error) {
 	fastAddInboundRsp := &proto.FastAddInboundRsp{Code: 0}
 
-	if cert := s.certManager.GetCertInfo(fastAddInboundReq.GetDomain()); cert == nil {
-		if err := s.certManager.ObtainNewCert(fastAddInboundReq.GetDomain()); err != nil {
-			fastAddInboundRsp.Code = 1022
-			fastAddInboundRsp.Msg = fmt.Sprintf("obtain new cert of domain[%s] fail > %v", fastAddInboundReq.GetDomain(), err)
-			return fastAddInboundRsp, nil
-		}
-	}
-
 	c, err := s.getContainerByType(fastAddInboundReq.GetContainerType())
 	if err != nil {
 		fastAddInboundRsp.Code = 1020
@@ -192,18 +185,25 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		return fastAddInboundRsp, nil
 	}
 
-	var transport string
-	switch fastAddInboundReq.GetStreamBuilderType() {
-	case proto.BuilderType_TCPBuilderType:
-		transport = "tcp"
-	case proto.BuilderType_WSBuilderType:
-		transport = "ws"
-	case proto.BuilderType_GrpcBuilderType:
-		transport = "grpc"
-	case proto.BuilderType_HttpBuilderType:
-		transport = "h2"
-	default:
-		transport = "tcp"
+	// Resolve transport: prefer new string field, fall back to legacy enum
+	transport := fastAddInboundReq.GetTransport()
+	if transport == "" {
+		switch fastAddInboundReq.GetStreamBuilderType() {
+		case proto.BuilderType_TCPBuilderType:
+			transport = "tcp"
+		case proto.BuilderType_WSBuilderType:
+			transport = "ws"
+		case proto.BuilderType_GrpcBuilderType:
+			transport = "grpc"
+		case proto.BuilderType_HttpBuilderType:
+			// h2/http transport has been removed from xray-core.
+			// Use "xhttp" or "splithttp" instead.
+			fastAddInboundRsp.Code = 1020
+			fastAddInboundRsp.Msg = "http/h2 transport is no longer supported; use xhttp or splithttp instead"
+			return fastAddInboundRsp, nil
+		default:
+			transport = "tcp"
+		}
 	}
 
 	security := "tls"
@@ -213,10 +213,23 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		security = "xtls"
 	}
 
+	// Cert acquisition: only when domain is provided AND security actually needs a cert (tls/xtls).
+	// Reality, none, and other security types don't use domain certs.
+	domain := fastAddInboundReq.GetDomain()
+	if domain != "" && (security == "tls" || security == "xtls") {
+		if cert := s.certManager.GetCertInfo(domain); cert == nil {
+			if err := s.certManager.ObtainNewCert(domain); err != nil {
+				fastAddInboundRsp.Code = 1022
+				fastAddInboundRsp.Msg = fmt.Sprintf("obtain new cert of domain[%s] fail > %v", domain, err)
+				return fastAddInboundRsp, nil
+			}
+		}
+	}
+
 	params := map[string]any{
 		"protocol":  protocol,
 		"port":      fastAddInboundReq.GetPort(),
-		"domain":    fastAddInboundReq.GetDomain(),
+		"domain":    domain,
 		"security":  security,
 		"transport": transport,
 		"tag":       fastAddInboundReq.GetTag(),
@@ -233,6 +246,29 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 	}
 	if len(fastAddInboundReq.GetRealityShortIds()) > 0 {
 		params["reality_short_ids"] = fastAddInboundReq.GetRealityShortIds()
+	}
+
+	// Merge extra_params: pass through all transport/security/sniffing params to Executor.
+	// String values are passed as-is; special keys are converted to appropriate types.
+	for k, v := range fastAddInboundReq.GetExtraParams() {
+		switch k {
+		case "sniffing_enabled", "sniffing_route_only", "tls_reject_unknown_sni", "self_signed":
+			params[k] = v == "true"
+		case "ocsp_stapling":
+			var n int
+			fmt.Sscanf(v, "%d", &n)
+			params[k] = n
+		case "reality_server_names", "sniffing_dest_override", "alpn", "xhttp_host":
+			params[k] = strings.Split(v, ",")
+		case "reality_short_ids":
+			if _, exists := params["reality_short_ids"]; !exists {
+				params[k] = strings.Split(v, ",")
+			}
+		default:
+			// String params: ws_path, grpc_service_name, httpupgrade_path, httpupgrade_host,
+			// xhttp_path, xhttp_mode, tls_min_version, flow, uuid, method, password, etc.
+			params[k] = v
+		}
 	}
 
 	if err := c.FastAddInbound(fastAddInboundReq.GetTag(), params); err != nil {
