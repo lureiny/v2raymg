@@ -28,6 +28,7 @@ func splitAndFilter(s string) []string {
 	parts := strings.Split(s, ",")
 	result := parts[:0]
 	for _, p := range parts {
+		p = strings.ToLower(strings.TrimSpace(p))
 		if p != "" {
 			result = append(result, p)
 		}

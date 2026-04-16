@@ -3,6 +3,7 @@ package subscription
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
@@ -71,11 +72,11 @@ func (m *Manager) GetSubscription(req contracts.SubscriptionRequest) ([]contract
 func filterSpecsByProtocol(specs []contracts.SubscriptionSpec, excludeProtocols []string) []contracts.SubscriptionSpec {
 	excludeSet := make(map[string]struct{}, len(excludeProtocols))
 	for _, p := range excludeProtocols {
-		excludeSet[p] = struct{}{}
+		excludeSet[strings.ToLower(p)] = struct{}{}
 	}
 	result := specs[:0]
 	for _, s := range specs {
-		if _, excluded := excludeSet[string(s.Protocol)]; !excluded {
+		if _, excluded := excludeSet[strings.ToLower(string(s.Protocol))]; !excluded {
 			result = append(result, s)
 		}
 	}
