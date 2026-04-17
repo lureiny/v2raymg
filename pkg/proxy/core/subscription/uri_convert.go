@@ -1,13 +1,13 @@
 package subscription
 
 import (
-	"encoding/base64"
+	"errors"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription/codec"
 )
 
 // ConvertURIs converts a list of raw proxy URIs to the subscription format that matches
@@ -38,8 +38,9 @@ func ConvertURIsWithOptions(userAgent string, uris []string, opts *ConvertOption
 		return "", nil
 	}
 
-	// 检查是否支持 ConvertWithOptions
-	if cc, ok := c.(interface{ ConvertWithOptions([]contracts.SubscriptionSpec, *ConvertOptions) (string, error) }); ok && opts != nil {
+	if cc, ok := c.(interface {
+		ConvertWithOptions([]contracts.SubscriptionSpec, *ConvertOptions) (string, error)
+	}); ok && opts != nil {
 		return cc.ConvertWithOptions(specs, opts)
 	}
 
@@ -51,7 +52,6 @@ func ConvertURIsWithOptions(userAgent string, uris []string, opts *ConvertOption
 func BuildConvertOptions(proxyGroups, ruleProviders, rules []string, pgURL, rpURL, rURL string) *ConvertOptions {
 	opts := &ConvertOptions{}
 
-	// 解析 proxy_group 参数
 	for _, pg := range proxyGroups {
 		config, err := ParseProxyGroupParam(pg)
 		if err != nil {
@@ -61,7 +61,6 @@ func BuildConvertOptions(proxyGroups, ruleProviders, rules []string, pgURL, rpUR
 		opts.ProxyGroups = append(opts.ProxyGroups, *config)
 	}
 
-	// 从 URL 获取 proxy-groups
 	if pgURL != "" {
 		configs, err := FetchProxyGroupsFromURL(pgURL)
 		if err != nil {
@@ -71,7 +70,6 @@ func BuildConvertOptions(proxyGroups, ruleProviders, rules []string, pgURL, rpUR
 		}
 	}
 
-	// 解析 rule_provider 参数
 	for _, rp := range ruleProviders {
 		config, err := ParseRuleProviderParam(rp)
 		if err != nil {
@@ -81,7 +79,6 @@ func BuildConvertOptions(proxyGroups, ruleProviders, rules []string, pgURL, rpUR
 		opts.RuleProviders = append(opts.RuleProviders, *config)
 	}
 
-	// 从 URL 获取 rule-providers
 	if rpURL != "" {
 		configs, err := FetchRuleProvidersFromURL(rpURL)
 		if err != nil {
@@ -91,7 +88,6 @@ func BuildConvertOptions(proxyGroups, ruleProviders, rules []string, pgURL, rpUR
 		}
 	}
 
-	// 解析 rule 参数
 	for _, r := range rules {
 		config, err := ParseRuleParam(r)
 		if err != nil {
@@ -101,7 +97,6 @@ func BuildConvertOptions(proxyGroups, ruleProviders, rules []string, pgURL, rpUR
 		opts.Rules = append(opts.Rules, *config)
 	}
 
-	// 从 URL 获取 rules
 	if rURL != "" {
 		configs, err := FetchRulesFromURL(rURL)
 		if err != nil {
@@ -119,7 +114,6 @@ func DetectFormat(userAgent string) ClientFormat {
 	return detectFormat(userAgent)
 }
 
-// detectFormat selects a ClientFormat based on User-Agent string.
 func detectFormat(userAgent string) ClientFormat {
 	ua := strings.ToLower(userAgent)
 	switch {
@@ -134,165 +128,314 @@ func detectFormat(userAgent string) ClientFormat {
 	}
 }
 
-// urisToSpecs converts plain URI strings into SubscriptionSpec objects.
-// For protocols that converters handle via structured fields (Host, Port, Password, etc.),
-// the URI is parsed into those fields. For unknown URIs, only the URI field is set.
+// urisToSpecs decodes each URI via the codec package and projects the typed Node
+// into a SubscriptionSpec with Extensions populated for the converter layer.
+// Unrecognized or malformed URIs pass through as {URI: raw} with no extensions.
+//
+// A warn log is emitted when a URI with a known scheme fails to decode
+// (e.g. truncated base64, missing required field). Unknown schemes are
+// silently treated as raw pass-through, since they may represent
+// non-protocol input the caller wants to preserve verbatim.
 func urisToSpecs(uris []string) []contracts.SubscriptionSpec {
 	specs := make([]contracts.SubscriptionSpec, 0, len(uris))
 	for _, uri := range uris {
 		if uri == "" {
 			continue
 		}
-		if spec, ok := parseProxyURI(uri); ok {
-			specs = append(specs, spec)
-		} else {
+		node, err := codec.Decode(uri)
+		if err != nil {
+			if !errors.Is(err, codec.ErrUnsupportedScheme) {
+				log.Warn("subscription: codec.Decode failed, falling back to raw URI spec",
+					"uri", redactURI(uri), "err", err)
+			}
 			specs = append(specs, contracts.SubscriptionSpec{URI: uri})
+			continue
 		}
+		specs = append(specs, nodeToSpec(node, uri))
 	}
 	return specs
 }
 
-// parseProxyURI detects the scheme and delegates to the appropriate parser.
-func parseProxyURI(raw string) (contracts.SubscriptionSpec, bool) {
-	switch {
-	case strings.HasPrefix(raw, "trojan://"):
-		return parseStandardURI(raw, contracts.ProtocolTrojan)
-	case strings.HasPrefix(raw, "hysteria2://") || strings.HasPrefix(raw, "hy2://"):
-		return parseStandardURI(raw, contracts.ProtocolHysteria2)
-	case strings.HasPrefix(raw, "vless://"):
-		return parseStandardURI(raw, contracts.ProtocolVLess)
-	case strings.HasPrefix(raw, "ss://"):
-		return parseShadowsocksURI(raw)
-	case strings.HasPrefix(raw, "vmess://"):
-		return parseVMessURI(raw)
-	case strings.HasPrefix(raw, "snell://"):
-		return parseStandardURI(raw, contracts.ProtocolSnell)
+// redactURI returns a log-safe form of uri with any credentials stripped.
+// VMess URIs carry credentials inside a base64-encoded JSON body, so we
+// preserve only the scheme; other schemes keep scheme/host/port/fragment
+// but drop the userinfo portion.
+func redactURI(uri string) string {
+	if strings.HasPrefix(uri, "vmess://") {
+		return "vmess://[redacted]"
+	}
+	u, err := url.Parse(uri)
+	if err != nil {
+		if idx := strings.Index(uri, "://"); idx > 0 {
+			return uri[:idx+3] + "[unparseable]"
+		}
+		return "[unparseable]"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	return u.String()
+}
+
+// nodeToSpec converts a typed codec.Node into a SubscriptionSpec.
+// Extensions use the keys the converter layer expects.
+func nodeToSpec(node codec.Node, raw string) contracts.SubscriptionSpec {
+	switch n := node.(type) {
+	case *codec.VLessNode:
+		return vlessNodeToSpec(n, raw)
+	case *codec.VMessNode:
+		return vmessNodeToSpec(n, raw)
+	case *codec.TrojanNode:
+		return trojanNodeToSpec(n, raw)
+	case *codec.ShadowsocksNode:
+		return ssNodeToSpec(n, raw)
+	case *codec.Hysteria2Node:
+		return hysteria2NodeToSpec(n, raw)
+	case *codec.SnellNode:
+		return snellNodeToSpec(n, raw)
 	default:
-		return contracts.SubscriptionSpec{}, false
+		return contracts.SubscriptionSpec{URI: raw}
 	}
 }
 
-// parseStandardURI parses URIs with format: scheme://password@host:port?params#fragment
-// Works for trojan, hysteria2, vless, snell.
-func parseStandardURI(raw string, protocol contracts.Protocol) (contracts.SubscriptionSpec, bool) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return contracts.SubscriptionSpec{}, false
+func vlessNodeToSpec(n *codec.VLessNode, raw string) contracts.SubscriptionSpec {
+	ext := map[string]any{}
+	if n.SNI != "" {
+		ext["server_name"] = n.SNI
 	}
-	port, _ := strconv.ParseUint(u.Port(), 10, 32)
-	password := ""
-	if u.User != nil {
-		password = u.User.Username()
+	if n.Security != "" {
+		ext["security"] = n.Security
 	}
-	nodeName := u.Fragment
-
-	// Parse query params into Extensions
-	ext := make(map[string]string)
-	for k, v := range u.Query() {
-		if len(v) > 0 {
-			ext[k] = v[0]
-		}
+	if n.Transport != "" {
+		ext["transport"] = n.Transport
 	}
-	// Map standard query params to extension keys used by converters
-	extensions := make(map[string]any)
-	if sni, ok := ext["sni"]; ok {
-		extensions["server_name"] = sni
+	if n.Flow != "" {
+		ext["flow"] = n.Flow
 	}
-	if tp, ok := ext["type"]; ok {
-		extensions["transport"] = tp
+	if n.Fingerprint != "" {
+		ext["utls_fingerprint"] = n.Fingerprint
 	}
-	if path, ok := ext["path"]; ok {
-		extensions["ws_path"] = path
+	if n.RealityPublicKey != "" {
+		ext["reality_public_key"] = n.RealityPublicKey
 	}
-	if host, ok := ext["host"]; ok {
-		extensions["ws_host"] = host
+	if n.RealityShortID != "" {
+		ext["reality_short_ids"] = n.RealityShortID
 	}
-
+	if n.SkipCertVerify {
+		ext["skip_cert_verify"] = true
+	}
+	if n.WSPath != "" {
+		ext["ws_path"] = n.WSPath
+	}
+	if n.WSHost != "" {
+		ext["ws_host"] = n.WSHost
+	}
+	if n.GRPCServiceName != "" {
+		ext["grpc_service_name"] = n.GRPCServiceName
+	}
+	if n.XHTTPPath != "" {
+		ext["xhttp_path"] = n.XHTTPPath
+	}
+	if n.XHTTPHost != "" {
+		ext["xhttp_host"] = n.XHTTPHost
+	}
+	if n.XHTTPMode != "" {
+		ext["xhttp_mode"] = n.XHTTPMode
+	}
 	return contracts.SubscriptionSpec{
 		URI:        raw,
-		Protocol:   protocol,
-		Host:       u.Hostname(),
-		Port:       uint32(port),
-		Password:   password,
-		NodeName:   nodeName,
-		Extensions: extensions,
-	}, true
-}
-
-// parseVMessURI parses vmess:// URIs (base64-encoded JSON body).
-func parseVMessURI(raw string) (contracts.SubscriptionSpec, bool) {
-	// vmess://base64(json) — just keep the URI, CommonConverter handles it
-	return contracts.SubscriptionSpec{
-		URI:      raw,
-		Protocol: contracts.ProtocolVMess,
-	}, true
-}
-
-// parseShadowsocksURI parses ss:// URIs per SIP002/SIP022 spec.
-// Formats:
-//   - Stream/AEAD: ss://base64url(method:password)@host:port[#fragment]
-//   - AEAD-2022:   ss://method:password@host:port[#fragment] (percent-encoded)
-func parseShadowsocksURI(raw string) (contracts.SubscriptionSpec, bool) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return contracts.SubscriptionSpec{}, false
+		Protocol:   contracts.ProtocolVLess,
+		Host:       n.Host,
+		Port:       n.Port,
+		Password:   n.UUID,
+		NodeName:   n.NodeName,
+		Extensions: ext,
 	}
+}
 
-	port, _ := strconv.ParseUint(u.Port(), 10, 32)
+func vmessNodeToSpec(n *codec.VMessNode, raw string) contracts.SubscriptionSpec {
+	ext := map[string]any{}
+	if n.Security != "" {
+		ext["security"] = n.Security
+	}
+	if n.SNI != "" {
+		ext["server_name"] = n.SNI
+	}
+	if n.Fingerprint != "" {
+		ext["utls_fingerprint"] = n.Fingerprint
+	}
+	if n.AlterId != 0 {
+		ext["alter_id"] = n.AlterId
+	}
+	if n.Transport != "" {
+		ext["transport"] = n.Transport
+	}
+	if n.WSPath != "" {
+		ext["ws_path"] = n.WSPath
+	}
+	if n.WSHost != "" {
+		ext["ws_host"] = n.WSHost
+	}
+	if n.H2Path != "" {
+		ext["http_path"] = n.H2Path
+	}
+	if n.H2Host != "" {
+		ext["http_host"] = n.H2Host
+	}
+	if n.GRPCServiceName != "" {
+		ext["grpc_service_name"] = n.GRPCServiceName
+	}
+	if n.XHTTPPath != "" {
+		ext["xhttp_path"] = n.XHTTPPath
+	}
+	if n.XHTTPHost != "" {
+		ext["xhttp_host"] = n.XHTTPHost
+	}
+	return contracts.SubscriptionSpec{
+		URI:        raw,
+		Protocol:   contracts.ProtocolVMess,
+		Host:       n.Host,
+		Port:       n.Port,
+		Password:   n.UUID,
+		NodeName:   n.NodeName,
+		Extensions: ext,
+	}
+}
 
-	// Parse userinfo to extract method and password
-	method := ""
-	password := ""
-	if u.User != nil {
-		username := u.User.Username()
-		if strings.HasPrefix(username, "2022-") {
-			// AEAD-2022 (SIP022): userinfo is "method:password" (percent-encoded)
-			method = username
-			password, _ = u.User.Password() // already decoded by url.Parse
-		} else {
-			// Stream / AEAD: entire userinfo is base64url(method:password)
-			// url.Parse treats the base64 string as Username (no real colon)
-			userinfo := u.User.String()
-			decoded, decErr := base64.RawURLEncoding.DecodeString(userinfo)
-			if decErr != nil {
-				decoded, decErr = base64.StdEncoding.DecodeString(userinfo)
-			}
-			if decErr == nil {
-				parts := strings.SplitN(string(decoded), ":", 2)
-				if len(parts) == 2 {
-					method = parts[0]
-					password = parts[1]
-				}
-			}
+func trojanNodeToSpec(n *codec.TrojanNode, raw string) contracts.SubscriptionSpec {
+	ext := map[string]any{}
+	if n.SNI != "" {
+		ext["server_name"] = n.SNI
+	}
+	if n.Security != "" {
+		ext["security"] = n.Security
+	}
+	if n.Transport != "" {
+		ext["transport"] = n.Transport
+	}
+	if n.Flow != "" {
+		ext["flow"] = n.Flow
+	}
+	if n.Fingerprint != "" {
+		ext["utls_fingerprint"] = n.Fingerprint
+	}
+	if n.RealityPublicKey != "" {
+		ext["reality_public_key"] = n.RealityPublicKey
+	}
+	if n.RealityShortID != "" {
+		ext["reality_short_ids"] = n.RealityShortID
+	}
+	if n.SkipCertVerify {
+		ext["skip_cert_verify"] = true
+	}
+	if n.WSPath != "" {
+		ext["ws_path"] = n.WSPath
+	}
+	if n.WSHost != "" {
+		ext["ws_host"] = n.WSHost
+	}
+	if n.GRPCServiceName != "" {
+		ext["grpc_service_name"] = n.GRPCServiceName
+	}
+	return contracts.SubscriptionSpec{
+		URI:        raw,
+		Protocol:   contracts.ProtocolTrojan,
+		Host:       n.Host,
+		Port:       n.Port,
+		Password:   n.Password,
+		NodeName:   n.NodeName,
+		Extensions: ext,
+	}
+}
+
+func ssNodeToSpec(n *codec.ShadowsocksNode, raw string) contracts.SubscriptionSpec {
+	ext := map[string]any{}
+	if n.Method != "" {
+		ext["method"] = n.Method
+	}
+	if n.Plugin != "" {
+		ext["plugin"] = n.Plugin
+		// Surface plugin opts under stable keys the converters read. SIP003 plugins
+		// use either obfs/obfs-host (obfs-local, simple-obfs) or mode/host
+		// (v2ray-plugin, gost-plugin) — try both so converters see a single schema.
+		if v, ok := n.PluginOpts["mode"]; ok && v != "" {
+			ext["plugin_mode"] = v
+		} else if v, ok := n.PluginOpts["obfs"]; ok && v != "" {
+			ext["plugin_mode"] = v
+		}
+		if v, ok := n.PluginOpts["host"]; ok && v != "" {
+			ext["plugin_host"] = v
+		} else if v, ok := n.PluginOpts["obfs-host"]; ok && v != "" {
+			ext["plugin_host"] = v
+		}
+		if v, ok := n.PluginOpts["path"]; ok && v != "" {
+			ext["plugin_path"] = v
+		}
+		if _, ok := n.PluginOpts["tls"]; ok {
+			ext["plugin_tls"] = true
 		}
 	}
-
-	// Node name from URL fragment
-	nodeName := ""
-	if u.Fragment != "" {
-		nodeName = u.Fragment // url.Parse already decodes percent-encoding
-	}
-
-	// Build extensions for converters
-	extensions := make(map[string]any)
-	if method != "" {
-		extensions["method"] = method
-	}
-
 	return contracts.SubscriptionSpec{
 		URI:        raw,
 		Protocol:   contracts.ProtocolShadowsocks,
-		Host:       u.Hostname(),
-		Port:       uint32(port),
-		Password:   password,
-		NodeName:   nodeName,
-		Extensions: extensions,
-	}, true
+		Host:       n.Host,
+		Port:       n.Port,
+		Password:   n.Password,
+		NodeName:   n.NodeName,
+		Extensions: ext,
+	}
 }
 
-// parseSnellURI parses a snell:// URI into a SubscriptionSpec.
-// Format: snell://psk@host:port?version=5
-// Returns (spec, true) on success, or (empty spec, false) on parse failure.
-func parseSnellURI(raw string) (contracts.SubscriptionSpec, bool) {
-	return parseStandardURI(raw, contracts.ProtocolSnell)
+func hysteria2NodeToSpec(n *codec.Hysteria2Node, raw string) contracts.SubscriptionSpec {
+	ext := map[string]any{}
+	if n.SNI != "" {
+		ext["server_name"] = n.SNI
+	}
+	if n.SkipCertVerify {
+		ext["skip_cert_verify"] = true
+	}
+	if n.Obfs != "" {
+		ext["obfs"] = n.Obfs
+	}
+	if n.ObfsPassword != "" {
+		ext["obfs_password"] = n.ObfsPassword
+	}
+	if len(n.ALPN) > 0 {
+		ext["alpn"] = n.ALPN
+	}
+	return contracts.SubscriptionSpec{
+		URI:        raw,
+		Protocol:   contracts.ProtocolHysteria2,
+		Host:       n.Host,
+		Port:       n.Port,
+		Password:   n.Password,
+		NodeName:   n.NodeName,
+		Extensions: ext,
+	}
+}
+
+func snellNodeToSpec(n *codec.SnellNode, raw string) contracts.SubscriptionSpec {
+	ext := map[string]any{}
+	if n.Version != 0 {
+		ext["version"] = n.Version
+	}
+	// Snell obfs is "tls"/"http" (transport obfuscation), semantically distinct
+	// from Hysteria2's salamander-style obfs. Only ClashConverter.convertSnell
+	// returns nil today (Snell is Surge-only), and Surge's snell line format
+	// does not yet accept obfs; both are projected so a future Surge/Clash-Meta
+	// Snell converter can consume them without touching this layer.
+	if n.Obfs != "" {
+		ext["obfs"] = n.Obfs
+	}
+	if n.ObfsHost != "" {
+		ext["obfs_host"] = n.ObfsHost
+	}
+	return contracts.SubscriptionSpec{
+		URI:        raw,
+		Protocol:   contracts.ProtocolSnell,
+		Host:       n.Host,
+		Port:       n.Port,
+		Password:   n.PSK,
+		NodeName:   n.NodeName,
+		Extensions: ext,
+	}
 }

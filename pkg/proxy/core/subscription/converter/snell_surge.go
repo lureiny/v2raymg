@@ -8,19 +8,20 @@ import (
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 )
 
-// convertSnell 转换 Snell 为 Surge 格式。
-// 格式: name = snell, host, port, psk=password, version=5
-// TODO: 当 obfs 支持实现后，在此添加 obfs=http 参数
-// 格式：ProxyName = snell, host, port, psk=xxx, version=5, obfs=http
 func (c *SurgeConverter) convertSnell(spec contracts.SubscriptionSpec) string {
-	name := c.nodeName(spec, "SNELL")
+	version := extInt(spec.Extensions, "version")
+	if version == 0 {
+		version = 5
+	}
 	parts := []string{
-		fmt.Sprintf("%s = snell", name),
+		fmt.Sprintf("%s = snell", c.nodeName(spec, "SNELL")),
 		spec.Host,
 		strconv.FormatUint(uint64(spec.Port), 10),
 		fmt.Sprintf("psk=%s", spec.Password),
-		"version=5",
+		fmt.Sprintf("version=%d", version),
 	}
-
+	// TODO(snell-obfs): once Surge snell supports obfs=http/tls on the line
+	// format, emit spec.Extensions["obfs"] / ["obfs_host"] here. snellNodeToSpec
+	// in pkg/proxy/core/subscription/uri_convert.go already projects both.
 	return strings.Join(parts, ", ")
 }

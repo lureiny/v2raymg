@@ -679,7 +679,7 @@ func TestConvertWithOptions_InvalidRulePolicy(t *testing.T) {
 	}
 }
 
-func TestConvertWithOptions_VLessSkipped(t *testing.T) {
+func TestConvertWithOptions_VLessIncluded(t *testing.T) {
 	specs := []contracts.SubscriptionSpec{
 		{
 			Protocol:   contracts.ProtocolVLess,
@@ -688,6 +688,11 @@ func TestConvertWithOptions_VLessSkipped(t *testing.T) {
 			Password:   "uuid-test",
 			NodeName:   "VLessNode",
 			InboundTag: "vless-test",
+			Extensions: map[string]any{
+				"security":  "tls",
+				"transport": "ws",
+				"ws_path":   "/path",
+			},
 		},
 	}
 
@@ -703,9 +708,12 @@ func TestConvertWithOptions_VLessSkipped(t *testing.T) {
 		t.Fatalf("ConvertWithOptions error: %v", err)
 	}
 
-	// VLess should be skipped - proxies list empty
-	if strings.Contains(result, "VLessNode") {
-		t.Error("VLess node should be skipped")
+	// VLESS node should now be included (Mihomo supports VLESS)
+	if !strings.Contains(result, "VLessNode") {
+		t.Error("VLESS node should be included in Mihomo output")
+	}
+	if !strings.Contains(result, "vless") {
+		t.Error("expected type: vless in output")
 	}
 }
 

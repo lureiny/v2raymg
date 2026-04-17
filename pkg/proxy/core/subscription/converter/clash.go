@@ -29,26 +29,19 @@ const (
 	clashProxyGroupsKey = "proxy-groups"
 )
 
-// ClashConverter 实现 Clash 订阅格式转换器。
-// 输出格式：完整的 Clash YAML 配置，包含 proxies + proxy-groups + rules。
-// 当外部模板服务不可用时，退化为仅包含 proxies 列表的精简格式。
+// ClashConverter emits a full Clash (mihomo) YAML including proxies,
+// proxy-groups and rules. When the external template service is unreachable,
+// it falls back to a proxies-only output.
 type ClashConverter struct{}
 
-// Format 返回 FormatClash。
 func (c *ClashConverter) Format() subscription.ClientFormat {
 	return subscription.FormatClash
 }
 
-// Convert 将 SubscriptionSpec 列表转换为 Clash YAML 格式。
-// 优先使用外部模板服务生成完整配置；模板不可用时退化为 proxies-only 格式。
-// 支持协议：vmess, trojan, shadowsocks（vless 跳过，Clash 不支持）
 func (c *ClashConverter) Convert(specs []contracts.SubscriptionSpec) (string, error) {
 	return c.ConvertWithOptions(specs, nil)
 }
 
-// --- 参数解析函数 ---
-
-// 类型别名，从 subscription 包导入
 type (
 	ProxyGroupConfig   = subscription.ProxyGroupConfig
 	RuleProviderConfig = subscription.RuleProviderConfig
@@ -56,39 +49,30 @@ type (
 	ConvertOptions     = subscription.ConvertOptions
 )
 
-// ParseProxyGroupParam 调用 subscription.ParseProxyGroupParam
 func ParseProxyGroupParam(param string) (*ProxyGroupConfig, error) {
 	return subscription.ParseProxyGroupParam(param)
 }
 
-// ParseRuleProviderParam 调用 subscription.ParseRuleProviderParam
 func ParseRuleProviderParam(param string) (*RuleProviderConfig, error) {
 	return subscription.ParseRuleProviderParam(param)
 }
 
-// ParseRuleParam 调用 subscription.ParseRuleParam
 func ParseRuleParam(param string) (*RuleConfig, error) {
 	return subscription.ParseRuleParam(param)
 }
 
-// FetchProxyGroupsFromURL 调用 subscription.FetchProxyGroupsFromURL
 func FetchProxyGroupsFromURL(url string) ([]ProxyGroupConfig, error) {
 	return subscription.FetchProxyGroupsFromURL(url)
 }
 
-// FetchRuleProvidersFromURL 调用 subscription.FetchRuleProvidersFromURL
 func FetchRuleProvidersFromURL(url string) ([]RuleProviderConfig, error) {
 	return subscription.FetchRuleProvidersFromURL(url)
 }
 
-// FetchRulesFromURL 调用 subscription.FetchRulesFromURL
 func FetchRulesFromURL(url string) ([]RuleConfig, error) {
 	return subscription.FetchRulesFromURL(url)
 }
 
-// --- 节点匹配和 Policy 验证函数 ---
-
-// builtinPolicies 内置策略集合
 var builtinPolicies = map[string]bool{
 	"DIRECT":     true,
 	"REJECT":     true,
@@ -96,8 +80,9 @@ var builtinPolicies = map[string]bool{
 	"COMPATIBLE": true,
 }
 
-// MatchProxies 根据 proxies 配置匹配实际节点
-// proxies 配置可能是: "all", "DIRECT", "REJECT", "group-name", "regex"
+// MatchProxies resolves a Clash proxies spec entry into actual node names.
+// An entry may be: "all" (all nodes), a builtin policy (DIRECT/REJECT/...),
+// a defined group name, or a regex matched against node names.
 func MatchProxies(configProxies []string, nodeNames []string, definedGroups map[string]bool) []string {
 	var result []string
 	for _, p := range configProxies {
@@ -109,7 +94,6 @@ func MatchProxies(configProxies []string, nodeNames []string, definedGroups map[
 		case definedGroups[p]:
 			result = append(result, p)
 		default:
-			// 正则匹配节点名
 			for _, name := range nodeNames {
 				if matched, _ := regexp.MatchString(p, name); matched {
 					result = append(result, name)
@@ -120,7 +104,6 @@ func MatchProxies(configProxies []string, nodeNames []string, definedGroups map[
 	return result
 }
 
-// ValidatePolicy 检查 policy 是否有效
 func ValidatePolicy(policy string, definedGroups map[string]bool) error {
 	if builtinPolicies[policy] {
 		return nil
@@ -133,17 +116,12 @@ func ValidatePolicy(policy string, definedGroups map[string]bool) error {
 
 // --- ConvertWithOptions 方法 ---
 
-// ConvertWithOptions 将 SubscriptionSpec 列表转换为 Clash YAML 格式，支持自定义配置。
-// 生成顺序：
-//  1. 生成 proxies 列表
-//  2. 解析 proxy_groups（参数 + URL）
-//  3. 生成 proxy-groups，处理节点填充和覆盖逻辑
-//  4. 构建有效 policy 集合（proxy-group 名称 + 内置策略）
-//  5. 解析 rule_providers（参数 + URL）
-//  6. 解析 rules（参数 + URL），验证 policy 有效性
-//  7. 组装最终 YAML
+// ConvertWithOptions emits a full Clash YAML. Flow:
+//  1. build proxies
+//  2. fetch external template (fail fast; no silent fallback)
+//  3. inject proxies + reconcile template-defined Auto/Manual groups
+//  4. if opts has custom groups/rules, patch the template; else return as-is
 func (c *ClashConverter) ConvertWithOptions(specs []contracts.SubscriptionSpec, opts *ConvertOptions) (string, error) {
-	// 1. 生成 proxies 列表
 	var proxies []*ClashProxy
 	for _, spec := range specs {
 		proxy := c.convertSpec(spec)
@@ -159,7 +137,8 @@ func (c *ClashConverter) ConvertWithOptions(specs []contracts.SubscriptionSpec, 
 
 	hasCustomOptions := opts != nil && (len(opts.ProxyGroups) > 0 || len(opts.RuleProviders) > 0 || len(opts.Rules) > 0)
 
-	// 当前 Clash 输出必须走模板，避免网络/模板异常时静默 fallback 到另一套配置语义。
+	// Always go through the external template to avoid silently falling back to
+	// a different config semantics on network/template error.
 	nodeMap, err := fetchClashTemplate()
 	if err != nil {
 		return "", fmt.Errorf("fetch clash template failed: %w", err)
@@ -179,15 +158,14 @@ func (c *ClashConverter) ConvertWithOptions(specs []contracts.SubscriptionSpec, 
 	return string(data), nil
 }
 
-// convertSpec 转换单个 SubscriptionSpec 为 ClashProxy。
-// 返回 nil 表示协议不支持或节点配置不兼容 Clash。
+// convertSpec returns nil if the protocol is unsupported by Clash/mihomo or
+// the node's transport/security combination is not expressible.
 func (c *ClashConverter) convertSpec(spec contracts.SubscriptionSpec) *ClashProxy {
 	switch spec.Protocol {
 	case contracts.ProtocolVLess:
-		// Clash 不支持 VLESS
-		return nil
+		return c.convertVLess(spec)
 	case contracts.ProtocolSnell:
-		// Clash 不支持 Snell（仅 Surge 支持）
+		// Snell is Surge-only.
 		return nil
 	case contracts.ProtocolVMess:
 		return c.convertVMess(spec)
@@ -202,8 +180,9 @@ func (c *ClashConverter) convertSpec(spec contracts.SubscriptionSpec) *ClashProx
 	}
 }
 
-// convertVMess 转换 VMess 为 Clash 格式。
 func (c *ClashConverter) convertVMess(spec contracts.SubscriptionSpec) *ClashProxy {
+	ext := spec.Extensions
+	alterId := extInt(ext, "alter_id")
 	proxy := &ClashProxy{
 		Name:    c.nodeName(spec, "VMESS"),
 		Type:    "vmess",
@@ -211,16 +190,17 @@ func (c *ClashConverter) convertVMess(spec contracts.SubscriptionSpec) *ClashPro
 		Port:    int(spec.Port),
 		UUID:    spec.Password,
 		Cipher:  "auto",
-		AlterId: ptrInt(0),
+		AlterId: ptrInt(alterId),
 		UDP:     true,
 	}
-
-	ext := spec.Extensions
 
 	// TLS
 	security := extString(ext, "security")
 	if security == "tls" {
 		proxy.TLS = true
+	}
+	if skipVerify, _ := ext["skip_cert_verify"].(bool); skipVerify {
+		proxy.SkipCertVerify = true
 	}
 
 	// SNI / Servername
@@ -233,14 +213,7 @@ func (c *ClashConverter) convertVMess(spec contracts.SubscriptionSpec) *ClashPro
 	switch transport {
 	case "ws":
 		proxy.Network = "ws"
-		wsOpts := &WSOpts{}
-		if path := extString(ext, "ws_path"); path != "" {
-			wsOpts.Path = path
-		}
-		if host := extString(ext, "ws_host"); host != "" {
-			wsOpts.Headers = &WSHeaders{Host: host}
-		}
-		proxy.WSOpts = wsOpts
+		proxy.WSOpts = buildWSOpts(ext)
 	case "grpc":
 		proxy.Network = "grpc"
 		if serviceName := extString(ext, "grpc_service_name"); serviceName != "" {
@@ -248,28 +221,51 @@ func (c *ClashConverter) convertVMess(spec contracts.SubscriptionSpec) *ClashPro
 		}
 	case "h2", "http":
 		proxy.Network = "h2"
-		h2Opts := &H2Opts{}
-		if host := extString(ext, "http_host"); host != "" {
-			h2Opts.Host = []string{host}
+		path := extString(ext, "http_path")
+		host := extString(ext, "http_host")
+		if path != "" || host != "" {
+			opts := &H2Opts{Path: path}
+			if host != "" {
+				opts.Host = []string{host}
+			}
+			proxy.H2Opts = opts
 		}
-		if path := extString(ext, "http_path"); path != "" {
-			h2Opts.Path = path
-		}
-		proxy.H2Opts = h2Opts
+	case "httpupgrade", "xhttp":
+		// Mihomo VMess 不支持 httpupgrade / xhttp transport
+		return nil
+	case "mkcp", "kcp", "quic":
+		// Mihomo VMess 不支持 kcp / quic transport
+		return nil
+	}
+
+	// client-fingerprint
+	if fp := extString(ext, "utls_fingerprint"); fp != "" {
+		proxy.ClientFingerprint = fp
 	}
 
 	return proxy
 }
 
-// convertTrojan 转换 Trojan 为 Clash 格式。
-// 跳过 security=xtls 和 security=none 的节点（Clash 不支持）。
+// buildWSOpts returns nil when neither path nor host is set, so the YAML output
+// drops the `ws-opts` key entirely instead of emitting an empty map.
+func buildWSOpts(ext map[string]any) *WSOpts {
+	path := extString(ext, "ws_path")
+	host := extString(ext, "ws_host")
+	if path == "" && host == "" {
+		return nil
+	}
+	opts := &WSOpts{Path: path}
+	if host != "" {
+		opts.Headers = &WSHeaders{Host: host}
+	}
+	return opts
+}
+
+// convertTrojan: security=xtls maps to regular TLS + flow in mihomo (xray legacy compat).
+// security=none is codec-normalized to "" before reaching us (trojan wire level requires TLS).
 func (c *ClashConverter) convertTrojan(spec contracts.SubscriptionSpec) *ClashProxy {
 	ext := spec.Extensions
 	security := extString(ext, "security")
-	// Clash 不支持 XTLS，也不支持无加密
-	if security == "xtls" || security == "none" {
-		return nil
-	}
 
 	proxy := &ClashProxy{
 		Name:     c.nodeName(spec, "TROJAN"),
@@ -281,9 +277,25 @@ func (c *ClashConverter) convertTrojan(spec contracts.SubscriptionSpec) *ClashPr
 		TLS:      true,
 	}
 
-	// SNI
+	if security == "reality" {
+		proxy.RealityOpts = buildRealityOpts(ext)
+	}
+
+	// SNI（tls / xtls / reality 均适用）
 	if sni := extString(ext, "server_name"); sni != "" {
 		proxy.SNI = sni
+	}
+
+	// flow（xtls-rprx-vision 等，mihomo trojan 直接支持）
+	if flow := extString(ext, "flow"); flow != "" {
+		proxy.Flow = flow
+	}
+
+	if fp := extString(ext, "utls_fingerprint"); fp != "" {
+		proxy.ClientFingerprint = fp
+	}
+	if skipVerify, _ := ext["skip_cert_verify"].(bool); skipVerify {
+		proxy.SkipCertVerify = true
 	}
 
 	// Transport
@@ -291,25 +303,108 @@ func (c *ClashConverter) convertTrojan(spec contracts.SubscriptionSpec) *ClashPr
 	switch transport {
 	case "ws":
 		proxy.Network = "ws"
-		wsOpts := &WSOpts{}
-		if path := extString(ext, "ws_path"); path != "" {
-			wsOpts.Path = path
-		}
-		if host := extString(ext, "ws_host"); host != "" {
-			wsOpts.Headers = &WSHeaders{Host: host}
-		}
-		proxy.WSOpts = wsOpts
+		proxy.WSOpts = buildWSOpts(ext)
 	case "grpc":
 		proxy.Network = "grpc"
 		if serviceName := extString(ext, "grpc_service_name"); serviceName != "" {
 			proxy.GrpcOpts = &GrpcOpts{GrpcServiceName: serviceName}
 		}
+	case "httpupgrade", "xhttp":
+		// Mihomo Trojan 不支持 httpupgrade / xhttp transport
+		return nil
 	}
 
 	return proxy
 }
 
-// convertShadowsocks 转换 Shadowsocks 为 Clash 格式。
+// buildRealityOpts returns nil when public-key is missing; reality-opts without
+// a public key would be rejected by mihomo.
+func buildRealityOpts(ext map[string]any) *RealityOpts {
+	pubKey := extString(ext, "reality_public_key")
+	if pubKey == "" {
+		return nil
+	}
+	shortID := ""
+	if s := extStringOrJoinSlice(ext, "reality_short_ids"); s != "" {
+		shortID = strings.SplitN(s, ",", 2)[0]
+	}
+	return &RealityOpts{PublicKey: pubKey, ShortID: shortID}
+}
+
+// convertVLess skips xtls security and httpupgrade transport (not supported by mihomo VLESS).
+func (c *ClashConverter) convertVLess(spec contracts.SubscriptionSpec) *ClashProxy {
+	ext := spec.Extensions
+	security := extString(ext, "security")
+
+	// Mihomo VLESS 不支持 XTLS
+	if security == "xtls" {
+		return nil
+	}
+
+	proxy := &ClashProxy{
+		Name:   c.nodeName(spec, "VLESS"),
+		Type:   "vless",
+		Server: spec.Host,
+		Port:   int(spec.Port),
+		UUID:   spec.Password,
+		UDP:    true,
+	}
+
+	// Security
+	switch security {
+	case "tls":
+		proxy.TLS = true
+		if sni := extString(ext, "server_name"); sni != "" {
+			proxy.Servername = sni
+		}
+	case "reality":
+		proxy.TLS = true // Mihomo 要求 reality 节点设置 tls=true
+		if sni := extString(ext, "server_name"); sni != "" {
+			proxy.Servername = sni
+		}
+		proxy.RealityOpts = buildRealityOpts(ext)
+	}
+
+	// Flow（如 xtls-rprx-vision）
+	if flow := extString(ext, "flow"); flow != "" {
+		proxy.Flow = flow
+	}
+
+	// client-fingerprint
+	if fp := extString(ext, "utls_fingerprint"); fp != "" {
+		proxy.ClientFingerprint = fp
+	}
+	if skipVerify, _ := ext["skip_cert_verify"].(bool); skipVerify {
+		proxy.SkipCertVerify = true
+	}
+
+	// Transport
+	transport := extString(ext, "transport")
+	switch transport {
+	case "ws":
+		proxy.Network = "ws"
+		proxy.WSOpts = buildWSOpts(ext)
+	case "grpc":
+		proxy.Network = "grpc"
+		if serviceName := extString(ext, "grpc_service_name"); serviceName != "" {
+			proxy.GrpcOpts = &GrpcOpts{GrpcServiceName: serviceName}
+		}
+	case "xhttp", "splithttp":
+		proxy.Network = "xhttp"
+		path := extString(ext, "xhttp_path")
+		host := extStringOrJoinSlice(ext, "xhttp_host")
+		mode := extString(ext, "xhttp_mode")
+		if path != "" || host != "" || mode != "" {
+			proxy.XHTTPOpts = &XHTTPOpts{Path: path, Host: host, Mode: mode}
+		}
+	case "httpupgrade":
+		// Mihomo VLESS 不支持 httpupgrade transport
+		return nil
+	}
+
+	return proxy
+}
+
 func (c *ClashConverter) convertShadowsocks(spec contracts.SubscriptionSpec) *ClashProxy {
 	method := extString(spec.Extensions, "method")
 	if method == "" {
@@ -337,8 +432,6 @@ func (c *ClashConverter) convertShadowsocks(spec contracts.SubscriptionSpec) *Cl
 	return proxy
 }
 
-// convertHysteria2 转换 Hysteria2 为 Clash Meta 格式。
-// 格式: type=hysteria2, server, port, password, sni, skip-cert-verify
 func (c *ClashConverter) convertHysteria2(spec contracts.SubscriptionSpec) *ClashProxy {
 	proxy := &ClashProxy{
 		Name:     c.nodeName(spec, "HYSTERIA2"),
@@ -348,14 +441,24 @@ func (c *ClashConverter) convertHysteria2(spec contracts.SubscriptionSpec) *Clas
 		Password: spec.Password,
 		UDP:      true,
 	}
-	// self-signed cert (insecure=1 in URI) → skip-cert-verify
-	if strings.Contains(spec.URI, "insecure=1") {
+	ext := spec.Extensions
+	if sni := extString(ext, "server_name"); sni != "" {
+		proxy.SNI = sni
+	}
+	// skip-cert-verify: parsed extension bool, with legacy URI insecure=1 fallback
+	// for specs constructed without going through codec.Decode.
+	if skipVerify, _ := ext["skip_cert_verify"].(bool); skipVerify || strings.Contains(spec.URI, "insecure=1") {
 		proxy.SkipCertVerify = true
+	}
+	if obfs := extString(ext, "obfs"); obfs != "" {
+		proxy.Obfs = obfs
+	}
+	if pwd := extString(ext, "obfs_password"); pwd != "" {
+		proxy.ObfsPassword = pwd
 	}
 	return proxy
 }
 
-// nodeName 生成节点名称。
 func (c *ClashConverter) nodeName(spec contracts.SubscriptionSpec, protoPrefix string) string {
 	if spec.NodeName != "" {
 		return fmt.Sprintf("🌿 %s_%s", protoPrefix, spec.NodeName)
@@ -461,8 +564,8 @@ func ensureTemplateGroups(nodeMap NodeMap, proxies []*ClashProxy) {
 			foundManual = true
 		}
 
-		// 保持现有逻辑：空占位组或 Auto/Manual 空组时填充节点
-		if len(pg.Proxies) == 0 || pg.Name == "" || ((pg.Name == "Auto" || pg.Name == "Manual") && len(pg.Proxies) == 0) {
+		// 空 proxy-group 填充节点：Manual 附加 DIRECT 兜底，其余(含 Auto)只填节点名。
+		if len(pg.Proxies) == 0 {
 			if pg.Name == "Manual" {
 				pg.Proxies = append(append([]string{}, names...), "DIRECT")
 			} else {
@@ -505,26 +608,32 @@ func ensureTemplateGroups(nodeMap NodeMap, proxies []*ClashProxy) {
 
 // ClashProxy 表示 Clash 配置中的一个代理节点。
 type ClashProxy struct {
-	Name           string      `yaml:"name"`
-	Type           string      `yaml:"type"`
-	Server         string      `yaml:"server"`
-	Port           int         `yaml:"port"`
-	Password       string      `yaml:"password,omitempty"`
-	UUID           string      `yaml:"uuid,omitempty"`
-	AlterId        *int        `yaml:"alterId,omitempty"`
-	Cipher         string      `yaml:"cipher,omitempty"`
-	Plugin         string      `yaml:"plugin,omitempty"`
-	PluginOpts     *PluginOpts `yaml:"plugin-opts,omitempty"`
-	UDP            bool        `yaml:"udp,omitempty"`
-	TLS            bool        `yaml:"tls,omitempty"`
-	SkipCertVerify bool        `yaml:"skip-cert-verify,omitempty"`
-	Servername     string      `yaml:"servername,omitempty"`
-	SNI            string      `yaml:"sni,omitempty"`
-	Network        string      `yaml:"network,omitempty"`
-	WSOpts         *WSOpts     `yaml:"ws-opts,omitempty"`
-	H2Opts         *H2Opts     `yaml:"h2-opts,omitempty"`
-	HttpOpts       *HttpOpts   `yaml:"http-opts,omitempty"`
-	GrpcOpts       *GrpcOpts   `yaml:"grpc-opts,omitempty"`
+	Name              string       `yaml:"name"`
+	Type              string       `yaml:"type"`
+	Server            string       `yaml:"server"`
+	Port              int          `yaml:"port"`
+	Password          string       `yaml:"password,omitempty"`
+	UUID              string       `yaml:"uuid,omitempty"`
+	AlterId           *int         `yaml:"alterId,omitempty"`
+	Cipher            string       `yaml:"cipher,omitempty"`
+	Plugin            string       `yaml:"plugin,omitempty"`
+	PluginOpts        *PluginOpts  `yaml:"plugin-opts,omitempty"`
+	UDP               bool         `yaml:"udp,omitempty"`
+	TLS               bool         `yaml:"tls,omitempty"`
+	SkipCertVerify    bool         `yaml:"skip-cert-verify,omitempty"`
+	Servername        string       `yaml:"servername,omitempty"`
+	SNI               string       `yaml:"sni,omitempty"`
+	Flow              string       `yaml:"flow,omitempty"`
+	ClientFingerprint string       `yaml:"client-fingerprint,omitempty"`
+	Network           string       `yaml:"network,omitempty"`
+	RealityOpts       *RealityOpts `yaml:"reality-opts,omitempty"`
+	WSOpts            *WSOpts      `yaml:"ws-opts,omitempty"`
+	H2Opts            *H2Opts      `yaml:"h2-opts,omitempty"`
+	HttpOpts          *HttpOpts    `yaml:"http-opts,omitempty"`
+	GrpcOpts          *GrpcOpts    `yaml:"grpc-opts,omitempty"`
+	XHTTPOpts         *XHTTPOpts   `yaml:"xhttp-opts,omitempty"`
+	Obfs              string       `yaml:"obfs,omitempty"`          // Hysteria2: salamander
+	ObfsPassword      string       `yaml:"obfs-password,omitempty"` // Hysteria2
 }
 
 // PluginOpts obfs/v2ray-plugin 选项。
@@ -563,6 +672,19 @@ type HttpOpts struct {
 // GrpcOpts gRPC 选项。
 type GrpcOpts struct {
 	GrpcServiceName string `yaml:"grpc-service-name"`
+}
+
+// RealityOpts Reality 选项（Mihomo VLESS/Trojan）。
+type RealityOpts struct {
+	PublicKey string `yaml:"public-key"`
+	ShortID   string `yaml:"short-id"`
+}
+
+// XHTTPOpts xhttp（SplitHTTP）选项（Mihomo VLESS）。
+type XHTTPOpts struct {
+	Path string `yaml:"path,omitempty"`
+	Host string `yaml:"host,omitempty"`
+	Mode string `yaml:"mode,omitempty"`
 }
 
 // ProxyGroup 表示 Clash proxy-group 节点。

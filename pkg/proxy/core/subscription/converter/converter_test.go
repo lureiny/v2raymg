@@ -186,9 +186,108 @@ func TestSurgeConverter_Format(t *testing.T) {
 	}
 }
 
+func TestSurgeConverter_VMess_GRPCSkipped(t *testing.T) {
+	c := &converter.SurgeConverter{}
+	specs := []contracts.SubscriptionSpec{
+		{
+			Protocol:   contracts.ProtocolVMess,
+			Host:       "10.0.0.1",
+			Port:       443,
+			Password:   "uuid",
+			InboundTag: "vmess1",
+			Extensions: map[string]any{"transport": "grpc"},
+		},
+	}
+	result, err := c.Convert(specs)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if result != "" {
+		t.Errorf("expected empty for VMess+grpc (unsupported in Surge), got %q", result)
+	}
+}
+
+func TestSurgeConverter_Trojan_GRPCSkipped(t *testing.T) {
+	c := &converter.SurgeConverter{}
+	specs := []contracts.SubscriptionSpec{
+		{
+			Protocol:   contracts.ProtocolTrojan,
+			Host:       "10.0.0.2",
+			Port:       443,
+			Password:   "pass",
+			InboundTag: "trojan1",
+			Extensions: map[string]any{"transport": "grpc"},
+		},
+	}
+	result, err := c.Convert(specs)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if result != "" {
+		t.Errorf("expected empty for Trojan+grpc (unsupported in Surge), got %q", result)
+	}
+}
+
+func TestSurgeConverter_Hysteria2_SkipCertVerify(t *testing.T) {
+	c := &converter.SurgeConverter{}
+	specs := []contracts.SubscriptionSpec{
+		{
+			Protocol:   contracts.ProtocolHysteria2,
+			Host:       "10.0.0.3",
+			Port:       443,
+			Password:   "token",
+			InboundTag: "hy2",
+			URI:        "hysteria2://token@10.0.0.3:443/?insecure=1#node",
+		},
+	}
+	result, err := c.Convert(specs)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if !strings.Contains(result, "skip-cert-verify=true") {
+		t.Errorf("expected skip-cert-verify=true for insecure=1, got %q", result)
+	}
+}
+
+// The ext-driven path must work without URI fallback. Guards against a return
+// to the old strings.Contains(spec.URI, "insecure=1") shortcut that silently
+// dropped all other Hy2 fields when the spec was built without raw URI.
+func TestSurgeConverter_Hysteria2_FromExtensions(t *testing.T) {
+	c := &converter.SurgeConverter{}
+	specs := []contracts.SubscriptionSpec{
+		{
+			Protocol:   contracts.ProtocolHysteria2,
+			Host:       "10.0.0.3",
+			Port:       443,
+			Password:   "token",
+			InboundTag: "hy2",
+			Extensions: map[string]any{
+				"server_name":      "example.com",
+				"skip_cert_verify": true,
+				"obfs":             "salamander",
+				"obfs_password":    "shh",
+			},
+		},
+	}
+	result, err := c.Convert(specs)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	for _, want := range []string{
+		"sni=example.com",
+		"skip-cert-verify=true",
+		"obfs=salamander",
+		"obfs-password=shh",
+	} {
+		if !strings.Contains(result, want) {
+			t.Errorf("expected %q in output, got %q", want, result)
+		}
+	}
+}
+
 // --- ClashConverter tests ---
 
-func TestClashConverter_VLessSkipped(t *testing.T) {
+func TestClashConverter_VLessIncluded(t *testing.T) {
 	c := &converter.ClashConverter{}
 	specs := []contracts.SubscriptionSpec{
 		{
@@ -197,16 +296,19 @@ func TestClashConverter_VLessSkipped(t *testing.T) {
 			Port:       443,
 			Password:   "uuid-placeholder",
 			InboundTag: "vless1",
+			Extensions: map[string]any{
+				"security":  "tls",
+				"transport": "ws",
+			},
 		},
 	}
-	// ClashConverter.Convert will try to fetch templates (which will fail) and fall back
 	result, err := c.Convert(specs)
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
-	// VLESS is skipped → proxies list empty → fallback yaml with empty proxies
-	if strings.Contains(result, "vless") {
-		t.Error("VLESS should be skipped in Clash")
+	// Mihomo supports VLESS — node should appear in output
+	if !strings.Contains(result, "vless") {
+		t.Error("VLESS should be included in Mihomo output")
 	}
 }
 
