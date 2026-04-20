@@ -51,6 +51,12 @@ func (s *EndNodeServer) getContainerByType(containerType string) (container.Cont
 		return s.getXrayContainer()
 	case "snell":
 		return s.getSnellContainer()
+	case "hysteria", "hysteria2":
+		c, ok := s.containerMgr.Get(contracts.ContainerHysteria)
+		if !ok {
+			return nil, fmt.Errorf("hysteria container not found")
+		}
+		return c, nil
 	default:
 		return nil, fmt.Errorf("unsupported container type: %s", containerType)
 	}

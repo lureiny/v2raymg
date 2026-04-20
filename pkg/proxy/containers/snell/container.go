@@ -36,14 +36,16 @@ type SnellContainer struct {
 	// storeMgr provides unified access to persistence stores.
 	storeMgr *store.StoreManager
 
-	// mu guards addedUsers against concurrent access between the user-event
-	// handler goroutine (handleUserEvent) and the reconcile-loop goroutine
-	// (reconcileUsers). Held only around map reads/writes — never while
-	// calling userMgr.GetBindPort / ReleaseBindPort, which do their own
-	// locking and can be slow.
+	// mu guards addedUsers and inboundEnabled against concurrent access between
+	// the user-event handler goroutine (handleUserEvent) and the reconcile-loop
+	// goroutine (reconcileUsers). Held only around map/field reads/writes —
+	// never while calling userMgr.GetBindPort / ReleaseBindPort.
 	mu sync.Mutex
 	// addedUsers tracks users that have been successfully wired up.
 	addedUsers map[string]struct{}
+	// inboundEnabled controls whether per-user forward rules are active.
+	// FastAddInbound sets it true; RemoveInboundConfig sets it false.
+	inboundEnabled bool
 
 	// Reconcile loop for periodic user sync
 	reconcileStopCh chan struct{}
@@ -86,9 +88,10 @@ func (h *snellHooks) GetRunFunc() (func() error, func() error) {
 // NewSnellContainer creates a new SnellContainer from the given config.
 func NewSnellContainer(cfg SnellConfig, opts ...SnellOption) (*SnellContainer, error) {
 	sc := &SnellContainer{
-		cfg:        cfg,
-		psk:        cfg.PSK,
-		addedUsers: make(map[string]struct{}),
+		cfg:            cfg,
+		psk:            cfg.PSK,
+		addedUsers:     make(map[string]struct{}),
+		inboundEnabled: true,
 	}
 	for _, opt := range opts {
 		opt(sc)
@@ -100,7 +103,8 @@ func NewSnellContainer(cfg SnellConfig, opts ...SnellOption) (*SnellContainer, e
 		contracts.ProtocolSnell,
 		uint32(cfg.Port),
 	)
-	sc.inbound.(*inbound.DefaultInbound).SetListenAddr(cfg.Listen)
+	// snell binds loopback only; forward layer handles external access.
+	sc.inbound.(*inbound.DefaultInbound).SetListenAddr("127.0.0.1")
 
 	// Subscribe to user events via pub/sub channel
 	if sc.userMgr != nil {
@@ -145,7 +149,7 @@ func (sc *SnellContainer) Init(config any) error {
 		contracts.ProtocolSnell,
 		uint32(cfg.Port),
 	)
-	sc.inbound.(*inbound.DefaultInbound).SetListenAddr(cfg.Listen)
+	sc.inbound.(*inbound.DefaultInbound).SetListenAddr("127.0.0.1")
 
 	return nil
 }
@@ -244,8 +248,8 @@ func (sc *SnellContainer) Update(_ context.Context, req container.UpdateRequest)
 
 // generateConfigFile writes the snell-server INI config to cfg.ConfigFilePath.
 func (sc *SnellContainer) generateConfigFile() error {
-	content := fmt.Sprintf("[snell-server]\nlisten = %s:%d\npsk = %s\nipv6 = false\n",
-		sc.cfg.Listen, sc.cfg.Port, sc.psk)
+	content := fmt.Sprintf("[snell-server]\nlisten = 127.0.0.1:%d\npsk = %s\nipv6 = false\n",
+		sc.cfg.Port, sc.psk)
 
 	if err := os.MkdirAll(filepath.Dir(sc.cfg.ConfigFilePath), 0755); err != nil {
 		return fmt.Errorf("snell: create config dir: %w", err)
@@ -256,31 +260,91 @@ func (sc *SnellContainer) generateConfigFile() error {
 	return nil
 }
 
-// RemoveInboundConfig returns an error — snell has a single fixed inbound.
+// RemoveInboundConfig disables the default inbound: tears down all per-user
+// forward rules and persists the disabled state. The snell process keeps running.
 func (sc *SnellContainer) RemoveInboundConfig(tag string) error {
-	if tag == defaultInboundTag {
-		return fmt.Errorf("snell: cannot remove default snell inbound")
+	if tag != defaultInboundTag {
+		return fmt.Errorf("snell: inbound %q not found", tag)
 	}
-	return fmt.Errorf("snell: inbound %q not found", tag)
+	sc.mu.Lock()
+	sc.inboundEnabled = false
+	sc.mu.Unlock()
+	sc.releaseAllForwardRules()
+	if err := sc.saveInboundConfig(); err != nil {
+		slog.Warn("snell: save inbound config on disable failed", "err", err)
+	}
+	return nil
 }
 
-// GetInboundConfig returns the default inbound if the tag matches.
+// releaseAllForwardRules tears down all per-user forward rules and clears addedUsers.
+func (sc *SnellContainer) releaseAllForwardRules() {
+	if sc.userMgr == nil {
+		return
+	}
+	sc.mu.Lock()
+	users := make([]string, 0, len(sc.addedUsers))
+	for u := range sc.addedUsers {
+		users = append(users, u)
+	}
+	sc.mu.Unlock()
+
+	for _, username := range users {
+		port, ok := sc.userMgr.GetUserPortByDstForCleanup(username, uint32(sc.cfg.Port))
+		if !ok {
+			continue
+		}
+		if err := sc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
+			Username: username,
+			BindPort: port,
+		}); err != nil {
+			slog.Error("snell: release port on disable failed", "user", username, "err", err)
+		}
+	}
+	sc.mu.Lock()
+	sc.addedUsers = make(map[string]struct{})
+	sc.mu.Unlock()
+}
+
+// GetInboundConfig returns the default inbound if the tag matches and the inbound is enabled.
 func (sc *SnellContainer) GetInboundConfig(tag string) (inbound.Inbound, error) {
-	if tag == defaultInboundTag {
-		return sc.inbound, nil
+	if tag != defaultInboundTag {
+		return nil, fmt.Errorf("snell: inbound %q not found", tag)
 	}
-	return nil, fmt.Errorf("snell: inbound %q not found", tag)
+	sc.mu.Lock()
+	enabled := sc.inboundEnabled
+	sc.mu.Unlock()
+	if !enabled {
+		return nil, fmt.Errorf("snell: inbound %q is disabled", tag)
+	}
+	return sc.inbound, nil
 }
 
-// ListInboundConfigs returns the single default inbound.
+// ListInboundConfigs returns the single default inbound, or empty if disabled.
 func (sc *SnellContainer) ListInboundConfigs() []inbound.Inbound {
+	sc.mu.Lock()
+	enabled := sc.inboundEnabled
+	sc.mu.Unlock()
+	if !enabled {
+		return nil
+	}
 	return []inbound.Inbound{sc.inbound}
 }
 
-// FastAddInbound is not supported for snell — snell uses a single fixed inbound.
-// Users get their own forward port automatically via AddUser.
-func (sc *SnellContainer) FastAddInbound(_ string, _ map[string]any) error {
-	return fmt.Errorf("snell: FastAddInbound not supported; snell uses a single fixed inbound, add users via AddUser instead")
+// FastAddInbound enables the default inbound: sets inboundEnabled true, persists
+// the state, and reconciles forward rules for all current users.
+// tag must equal defaultInboundTag; params are ignored.
+func (sc *SnellContainer) FastAddInbound(tag string, _ map[string]any) error {
+	if tag != defaultInboundTag {
+		return fmt.Errorf("snell: only the default inbound %q is supported", defaultInboundTag)
+	}
+	sc.mu.Lock()
+	sc.inboundEnabled = true
+	sc.mu.Unlock()
+	if err := sc.saveInboundConfig(); err != nil {
+		slog.Warn("snell: save inbound config on enable failed", "err", err)
+	}
+	sc.reconcileUsers()
+	return nil
 }
 
 // UserEventChannel returns the container's channel for receiving user events.
@@ -323,9 +387,10 @@ func (sc *SnellContainer) handleUserEvent(event usermanager.UserEvent) {
 	switch event.Type {
 	case usermanager.UserEventAdd:
 		sc.mu.Lock()
+		enabled := sc.inboundEnabled
 		_, exists := sc.addedUsers[event.Username]
 		sc.mu.Unlock()
-		if exists {
+		if !enabled || exists {
 			return
 		}
 		_, err := sc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
@@ -377,9 +442,10 @@ func (sc *SnellContainer) handleUserEvent(event usermanager.UserEvent) {
 		} else if event.User != nil {
 			// User became visible (e.g. group changed back) — ensure forwarding rule exists.
 			sc.mu.Lock()
+			enabled := sc.inboundEnabled
 			_, exists := sc.addedUsers[event.Username]
 			sc.mu.Unlock()
-			if exists {
+			if !enabled || exists {
 				return
 			}
 			_, err := sc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
@@ -410,8 +476,9 @@ func (sc *SnellContainer) saveInboundConfig() error {
 		"tag":      defaultInboundTag,
 		"protocol": string(contracts.ProtocolSnell),
 		"port":     sc.cfg.Port,
-		"listen":   sc.cfg.Listen,
+		"listen":   "127.0.0.1",
 		"psk":      sc.psk,
+		"enabled":  sc.inboundEnabled,
 	}
 	nativeJSON, err := json.Marshal(data)
 	if err != nil {
@@ -452,25 +519,26 @@ func (sc *SnellContainer) restoreInboundConfig() error {
 			return nil
 		}
 
-		// Restore port, listen, and psk from stored config
+		// Restore port and psk from stored config (listen is always 127.0.0.1).
 		if port, ok := data["port"].(float64); ok {
 			sc.cfg.Port = int(port)
-		}
-		if listen, ok := data["listen"].(string); ok {
-			sc.cfg.Listen = listen
 		}
 		if psk, ok := data["psk"].(string); ok && psk != "" {
 			sc.cfg.PSK = psk
 			sc.psk = psk
 		}
+		// Restore enabled state; true is the default when the key is absent (old records).
+		if enabled, ok := data["enabled"].(bool); ok {
+			sc.inboundEnabled = enabled
+		}
 
-		// Re-create inbound with restored config
+		// Re-create inbound with restored config; listen is always loopback.
 		sc.inbound = inbound.NewDefaultInbound(
 			defaultInboundTag,
 			contracts.ProtocolSnell,
 			uint32(sc.cfg.Port),
 		)
-		sc.inbound.(*inbound.DefaultInbound).SetListenAddr(sc.cfg.Listen)
+		sc.inbound.(*inbound.DefaultInbound).SetListenAddr("127.0.0.1")
 		return nil
 	}
 
@@ -478,7 +546,14 @@ func (sc *SnellContainer) restoreInboundConfig() error {
 }
 
 // GetUserSubscriptions returns a subscription spec with the snell PSK.
+// Returns nil when the inbound is disabled.
 func (sc *SnellContainer) GetUserSubscriptions(req contracts.SubscriptionRequest) ([]contracts.SubscriptionSpec, error) {
+	sc.mu.Lock()
+	enabled := sc.inboundEnabled
+	sc.mu.Unlock()
+	if !enabled {
+		return nil, nil
+	}
 	port, ok := sc.userMgr.GetUserPortByDst(req.User.Username, uint32(sc.cfg.Port))
 	if !ok {
 		return nil, nil
@@ -556,27 +631,32 @@ func (sc *SnellContainer) reconcileUsers() {
 		}
 	}
 
-	// Add users that are visible but not yet tracked.
-	for _, user := range users {
-		sc.mu.Lock()
-		_, exists := sc.addedUsers[user.Username]
-		sc.mu.Unlock()
-		if exists {
-			continue
+	// Add users that are visible but not yet tracked (only when inbound is enabled).
+	sc.mu.Lock()
+	enabled := sc.inboundEnabled
+	sc.mu.Unlock()
+	if enabled {
+		for _, user := range users {
+			sc.mu.Lock()
+			_, exists := sc.addedUsers[user.Username]
+			sc.mu.Unlock()
+			if exists {
+				continue
+			}
+			if _, err := sc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
+				Username:      user.Username,
+				ContainerType: contracts.ContainerSnell,
+				InboundTag:    defaultInboundTag,
+				TargetPort:    uint32(sc.cfg.Port),
+				Protocol:      contracts.ProtocolSnell,
+			}); err != nil {
+				slog.Warn("snell: reconcile forward rule failed", "user", user.Username, "err", err)
+				continue
+			}
+			sc.mu.Lock()
+			sc.addedUsers[user.Username] = struct{}{}
+			sc.mu.Unlock()
 		}
-		if _, err := sc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
-			Username:      user.Username,
-			ContainerType: contracts.ContainerSnell,
-			InboundTag:    defaultInboundTag,
-			TargetPort:    uint32(sc.cfg.Port),
-			Protocol:      contracts.ProtocolSnell,
-		}); err != nil {
-			slog.Warn("snell: reconcile forward rule failed", "user", user.Username, "err", err)
-			continue
-		}
-		sc.mu.Lock()
-		sc.addedUsers[user.Username] = struct{}{}
-		sc.mu.Unlock()
 	}
 }
 
