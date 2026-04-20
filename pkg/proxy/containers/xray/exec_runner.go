@@ -1737,6 +1737,7 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 				ListenAddr: fastGetString(params, "listen", "0.0.0.0"),
 				WSPath:     fastGetString(params, "ws_path", ""),
 				HTTPPath:   fastGetString(params, "http_path", ""),
+				HTTPHost:   fastGetStringSlice(params, "http_host"),
 				CertFile:   certFile,
 				KeyFile:    keyFile,
 			}

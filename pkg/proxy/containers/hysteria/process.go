@@ -116,7 +116,10 @@ func (hc *HysteriaContainer) stopProcess() error {
 // generateConfigFile writes the hysteria2 server YAML config to cfg.ConfigFilePath.
 func (hc *HysteriaContainer) generateConfigFile(certFile, keyFile string) error {
 	cfg := hysteriaServerConfig{
-		Listen: fmt.Sprintf(":%d", hc.cfg.Port),
+		// Bind loopback only: hysteria is reached via UDP forward rules
+		// allocated per-user by UserManager.GetBindPort(Network="udp"); binding
+		// a public interface here would let clients bypass the forward layer.
+		Listen: fmt.Sprintf("127.0.0.1:%d", hc.cfg.Port),
 		TLS: hysteriaTLS{
 			Cert: certFile,
 			Key:  keyFile,

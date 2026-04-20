@@ -63,6 +63,38 @@ type ForwardRule struct {
 	// ClientDrainSec is the drain timeout after one direction ends.
 	// Default: 2 seconds. Only used when MaxClients > 0.
 	ClientDrainSec int `json:"client_drain_sec"`
+
+	// Network selects the transport: "tcp" (default, used when empty) or "udp".
+	// TCP rules use a connection-oriented relay; UDP rules demultiplex by
+	// client source address.
+	Network string `json:"network,omitempty"`
+
+	// UDPSessionIdleSec is the idle timeout for a UDP per-client session.
+	// Ignored for TCP. 0 falls back to the UDPRelay default (60 seconds).
+	UDPSessionIdleSec int `json:"udp_session_idle_sec,omitempty"`
+}
+
+// NetworkKind represents the transport selected by a ForwardRule.
+type NetworkKind string
+
+const (
+	// NetworkTCP is the default transport.
+	NetworkTCP NetworkKind = "tcp"
+	// NetworkUDP is the UDP transport.
+	NetworkUDP NetworkKind = "udp"
+)
+
+// ResolvedNetwork returns the transport for this rule, mapping the empty
+// string to TCP for backward compatibility.
+func (r *ForwardRule) ResolvedNetwork() NetworkKind {
+	switch r.Network {
+	case "", string(NetworkTCP):
+		return NetworkTCP
+	case string(NetworkUDP):
+		return NetworkUDP
+	default:
+		return NetworkKind(r.Network)
+	}
 }
 
 // Validate performs basic validation on a ForwardRule.
@@ -75,6 +107,15 @@ func (r *ForwardRule) Validate() error {
 	}
 	if r.ListenPort != 0 && (r.ListenPort < 100 || r.ListenPort > 65535) {
 		return fmt.Errorf("forward rule: listen_port %d out of range [100, 65535]", r.ListenPort)
+	}
+	switch r.Network {
+	case "", string(NetworkTCP), string(NetworkUDP):
+		// ok
+	default:
+		return fmt.Errorf("forward rule: unsupported network %q (want \"tcp\" or \"udp\")", r.Network)
+	}
+	if r.UDPSessionIdleSec < 0 {
+		return fmt.Errorf("forward rule: udp_session_idle_sec must be >= 0")
 	}
 	return nil
 }

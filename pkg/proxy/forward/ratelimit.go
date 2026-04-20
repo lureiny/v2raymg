@@ -1,6 +1,7 @@
 package forward
 
 import (
+	"context"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -225,12 +226,91 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 	return totalWritten, nil
 }
 
+// WaitN blocks until n tokens are available, consuming them from the same
+// underlying bucket used by LimitReader/LimitWriter.
+// Returns nil immediately when unlimited. Returns ctx.Err() if ctx fires.
+// Unlike waitForTokens, this method always acquires the full n tokens
+// (blocking as long as needed), so callers MUST pass a bounded context
+// when they cannot afford to wait (e.g. UDP packet pacing uses ~10ms).
+func (l *TokenBucketLimiter) WaitN(ctx context.Context, n int) error {
+	if n <= 0 {
+		return nil
+	}
+	if l.IsUnlimited() {
+		return nil
+	}
+	remaining := n
+	for remaining > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		got, wait := l.reserveTokens(remaining)
+		if got > 0 {
+			remaining -= got
+			if remaining == 0 {
+				return nil
+			}
+		}
+		if wait <= 0 {
+			continue
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil
+}
+
+// reserveTokens atomically refills based on elapsed time, takes up to n tokens
+// (up to maxChunk), and returns (consumed, waitHint). When consumed == 0, the
+// caller should wait for waitHint before retrying.
+func (l *TokenBucketLimiter) reserveTokens(n int) (int, time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.rate <= 0 {
+		// Became unlimited between outer check and lock acquisition.
+		return n, 0
+	}
+
+	now := time.Now()
+	elapsed := now.Sub(l.last).Seconds()
+	l.last = now
+	l.tokens += elapsed * l.rate
+	if l.tokens > l.burst {
+		l.tokens = l.burst
+	}
+
+	allowed := int(l.tokens)
+	if allowed <= 0 {
+		wait := time.Duration(float64(time.Second) / l.rate)
+		if wait <= 0 {
+			wait = time.Millisecond
+		}
+		return 0, wait
+	}
+
+	if l.maxChunk > 0 && allowed > int(l.maxChunk) {
+		allowed = int(l.maxChunk)
+	}
+	if allowed > n {
+		allowed = n
+	}
+	l.tokens -= float64(allowed)
+	return allowed, 0
+}
+
 // NoopLimiter is a limiter that does nothing (passthrough).
 // It is used as a sentinel value to indicate no rate limiting.
 type NoopLimiter struct{}
 
 func (NoopLimiter) LimitReader(r io.Reader) io.Reader { return r }
 func (NoopLimiter) LimitWriter(w io.Writer) io.Writer { return w }
+func (NoopLimiter) WaitN(_ context.Context, _ int) error { return nil }
 
 // Verify interface compliance at compile time.
 var _ Limiter = (*TokenBucketLimiter)(nil)

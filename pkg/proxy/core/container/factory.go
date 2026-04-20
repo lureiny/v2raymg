@@ -29,6 +29,11 @@ type BuildOptions struct {
 
 	// HTTPPort is the v2raymg HTTP server port, used for auth callbacks.
 	HTTPPort int
+
+	// ProxyHost is the node's public hostname/IP (NodeConfig.ProxyHost).
+	// Containers that need a default TLS domain (e.g., Hysteria when its
+	// own config omits both `host` and `domain`) fall back to this.
+	ProxyHost string
 }
 
 // Factory creates Container instances for a specific container type.

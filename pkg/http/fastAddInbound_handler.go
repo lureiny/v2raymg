@@ -57,15 +57,17 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		RealityShortIDs    []string          `json:"reality_short_ids"`
 		ExtraParams        map[string]string `json:"extra_params"` // transport/security/sniffing params
 		// Convenience fields that map into extra_params
-		WSPath          string `json:"ws_path,omitempty"`
-		GRPCServiceName string `json:"grpc_service_name,omitempty"`
-		HTTPUpgradePath string `json:"httpupgrade_path,omitempty"`
-		HTTPUpgradeHost string `json:"httpupgrade_host,omitempty"`
-		XHTTPPath       string `json:"xhttp_path,omitempty"`
-		XHTTPMode       string `json:"xhttp_mode,omitempty"`
-		XHTTPHost       string `json:"xhttp_host,omitempty"`
-		ALPN            string `json:"alpn,omitempty"`            // comma-separated, e.g. "h2,http/1.1"
-		SniffingEnabled bool   `json:"sniffing_enabled,omitempty"`
+		WSPath          string   `json:"ws_path,omitempty"`
+		GRPCServiceName string   `json:"grpc_service_name,omitempty"`
+		HTTPPath string `json:"http_path,omitempty"`
+		HTTPHost string `json:"http_host,omitempty"` // comma-separated, e.g. "host1.com,host2.com"
+		HTTPUpgradePath string   `json:"httpupgrade_path,omitempty"`
+		HTTPUpgradeHost string   `json:"httpupgrade_host,omitempty"`
+		XHTTPPath       string   `json:"xhttp_path,omitempty"`
+		XHTTPMode       string   `json:"xhttp_mode,omitempty"`
+		XHTTPHost       string   `json:"xhttp_host,omitempty"`
+		ALPN            string   `json:"alpn,omitempty"` // comma-separated, e.g. "h2,http/1.1"
+		SniffingEnabled bool     `json:"sniffing_enabled,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
@@ -92,14 +94,18 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		jsonErr(c, 400, fmt.Sprintf("unsupported protocol: %s", req.Protocol))
 		return
 	}
+	// Normalize transport alias: http -> h2
+	if transport == "http" {
+		transport = "h2"
+	}
 	// Validate transport
 	validTransports := map[string]bool{
 		"tcp": true, "ws": true, "grpc": true, "httpupgrade": true,
-		"xhttp": true, "splithttp": true,
+		"xhttp": true, "splithttp": true, "h2": true,
 	}
 	if !validTransports[transport] {
-		if transport == "http" || transport == "h2" || transport == "h3" {
-			jsonErr(c, 400, fmt.Sprintf("transport %q is no longer supported by xray-core; use xhttp or splithttp instead", transport))
+		if transport == "h3" {
+			jsonErr(c, 400, fmt.Sprintf("transport %q is not supported; use xhttp or splithttp instead", transport))
 		} else {
 			jsonErr(c, 400, fmt.Sprintf("unsupported transport: %s", transport))
 		}
@@ -122,6 +128,7 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 	// Map convenience fields into extra_params (don't overwrite explicit ones)
 	convFields := map[string]string{
 		"ws_path": req.WSPath, "grpc_service_name": req.GRPCServiceName,
+		"http_path": req.HTTPPath, "http_host": req.HTTPHost,
 		"httpupgrade_path": req.HTTPUpgradePath, "httpupgrade_host": req.HTTPUpgradeHost,
 		"xhttp_path": req.XHTTPPath, "xhttp_mode": req.XHTTPMode, "xhttp_host": req.XHTTPHost,
 		"alpn": req.ALPN,
@@ -180,10 +187,10 @@ func (handler *FastAddInboundHandler) help() string {
 	快速添加指定配置的inbound
 	body: {"target":"", "tag":"", "protocol":"vless", "transport":"tcp", "domain":"", "security":"tls", "port":0, ...}
 	protocol: vless, vmess, trojan, shadowsocks
-	transport: tcp, ws, grpc, httpupgrade, xhttp, splithttp (也可用 stream 字段, 向后兼容)
+	transport: tcp, ws, h2(http), grpc, httpupgrade, xhttp, splithttp (也可用 stream 字段, 向后兼容)
 	security: tls(默认), reality
 	domain: 证书域名 (tls 时使用); 为空则自签
 	reality_target, reality_server_names, reality_short_ids: Reality 参数
-	convenience fields: ws_path, grpc_service_name, httpupgrade_path, xhttp_path, xhttp_mode, alpn, sniffing_enabled
+	convenience fields: ws_path, grpc_service_name, http_path, http_host(逗号分隔), httpupgrade_path, xhttp_path, xhttp_mode, alpn, sniffing_enabled
 	extra_params: map[string]string, 透传任意参数到 Executor (如 tls_min_version, tls_reject_unknown_sni, flow, uuid 等)`
 }

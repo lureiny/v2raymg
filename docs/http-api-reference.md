@@ -574,9 +574,13 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
   "reality_short_ids": ["0123456789abcdef"],
   "ws_path": "/ws",
   "grpc_service_name": "grpc",
+  "http_path": "/",
+  "http_host": "example.com",
   "httpupgrade_path": "/",
+  "httpupgrade_host": "example.com",
   "xhttp_path": "/xhttp",
   "xhttp_mode": "auto",
+  "xhttp_host": "example.com",
   "alpn": "h2,http/1.1",
   "sniffing_enabled": true,
   "extra_params": {
@@ -616,9 +620,13 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 |------|------|----------|------|
 | `ws_path` | string | ws | WebSocket 路径，默认 `/ws` |
 | `grpc_service_name` | string | grpc | gRPC 服务名，默认 `grpc` |
+| `http_path` | string | h2 | HTTP/2 路径，默认 `/` |
+| `http_host` | string | h2 | HTTP/2 host，逗号分隔，默认取 `domain` |
 | `httpupgrade_path` | string | httpupgrade | HTTPUpgrade 路径，默认 `/` |
+| `httpupgrade_host` | string | httpupgrade | HTTPUpgrade Host 头，默认取 `domain` |
 | `xhttp_path` | string | xhttp/splithttp | XHTTP 路径，默认 `/` |
 | `xhttp_mode` | string | xhttp/splithttp | XHTTP 模式：`auto`/`packet-up`/`stream-one`/`stream-up` |
+| `xhttp_host` | string | xhttp/splithttp | XHTTP host，逗号分隔 |
 | `alpn` | string | tls | ALPN 协商列表，逗号分隔，如 `h2,http/1.1` |
 | `sniffing_enabled` | bool | 全部 | 启用流量嗅探 |
 
@@ -640,16 +648,16 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 
 **Protocol:** `vless` | `vmess` | `trojan` | `ss` / `shadowsocks`
 
-**Transport:** `tcp` | `ws` | `grpc` | `httpupgrade` | `xhttp` | `splithttp`
+**Transport:** `tcp` | `ws` | `h2`（`http` 自动 normalize 为 `h2`）| `grpc` | `httpupgrade` | `xhttp` | `splithttp`
 
 **支持的协议组合:**
 
 | 协议 | 传输 | 安全 |
 |------|------|------|
 | VLESS | tcp, ws, grpc, httpupgrade, xhttp, splithttp | tls, reality |
-| VMess | tcp, ws | tls |
-| Trojan | tcp | tls |
-| Shadowsocks | tcp | none |
+| VMess | tcp, ws, h2 | tls |
+| Trojan | tcp, grpc | tls |
+| Shadowsocks | tcp, ws, grpc | none, tls, reality |
 
 **示例 - VLESS+XHTTP+Reality:**
 ```json
@@ -675,6 +683,19 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
   "self_signed": true,
   "httpupgrade_path": "/upgrade",
   "alpn": "http/1.1"
+}
+```
+
+**示例 - VMess+h2+TLS:**
+```json
+{
+  "tag": "vmess-h2",
+  "protocol": "vmess",
+  "transport": "h2",
+  "security": "tls",
+  "domain": "example.com",
+  "http_path": "/api",
+  "http_host": "example.com"
 }
 ```
 

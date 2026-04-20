@@ -36,6 +36,14 @@ type HysteriaContainer struct {
 	storeMgr         *store.StoreManager
 	certReader       CertReader
 	certMgr          certIssuer        // triggers cert issuance if not found
+	// mu guards addedUsers against concurrent access between the user-event
+	// handler goroutine (handleUserEvent) and the reconcile-loop goroutine
+	// (reconcileUsers). Held only around map reads/writes — never while
+	// calling userMgr.GetBindPort / ReleaseBindPort, which do their own
+	// locking and can be slow.
+	mu               sync.Mutex
+	// addedUsers tracks users for whom a forward UDP rule has been allocated.
+	addedUsers       map[string]struct{}
 	reconcileStopCh  chan struct{}
 	reconcileWg      sync.WaitGroup
 	certWaitStopCh   chan struct{}
@@ -56,8 +64,9 @@ func (h *hysteriaHooks) GetRunFunc() (func() error, func() error) {
 			slog.Warn("hysteria: save inbound config failed", "err", err)
 		}
 
-		// Start user event handler
+		// Start user event handler and periodic reconcile loop
 		h.c.startUserEventHandler()
+		h.c.startReconcileLoop()
 
 		// Initialize cert wait stop channel
 		h.c.certWaitStopCh = make(chan struct{})
@@ -121,7 +130,8 @@ func WithHTTPPort(port int) HysteriaOption {
 // NewHysteriaContainer creates a new HysteriaContainer from the given config.
 func NewHysteriaContainer(cfg HysteriaConfig, opts ...HysteriaOption) (*HysteriaContainer, error) {
 	hc := &HysteriaContainer{
-		cfg: cfg,
+		cfg:        cfg,
+		addedUsers: make(map[string]struct{}),
 	}
 	for _, opt := range opts {
 		opt(hc)
@@ -133,7 +143,10 @@ func NewHysteriaContainer(cfg HysteriaConfig, opts ...HysteriaOption) (*Hysteria
 		contracts.ProtocolHysteria2,
 		uint32(cfg.Port),
 	)
-	hc.inbound.(*inbound.DefaultInbound).SetListenAddr(cfg.Listen)
+	// The hysteria process binds loopback only (see process.go's generateConfigFile);
+	// reflect that in the inbound metadata so upstream consumers don't get misled by
+	// cfg.Listen, which is now just a persisted configuration hint.
+	hc.inbound.(*inbound.DefaultInbound).SetListenAddr("127.0.0.1")
 
 	// Subscribe to user events via pub/sub channel
 	if hc.userMgr != nil {
@@ -246,7 +259,8 @@ func (hc *HysteriaContainer) Init(config any) error {
 		contracts.ProtocolHysteria2,
 		uint32(cfg.Port),
 	)
-	hc.inbound.(*inbound.DefaultInbound).SetListenAddr(cfg.Listen)
+	// Actual listen is always 127.0.0.1 (see process.go); keep inbound metadata aligned.
+	hc.inbound.(*inbound.DefaultInbound).SetListenAddr("127.0.0.1")
 
 	return nil
 }
@@ -337,12 +351,25 @@ func (hc *HysteriaContainer) Update(_ context.Context, req container.UpdateReque
 	}, nil
 }
 
-// RemoveInboundConfig returns an error — hysteria has a single fixed inbound.
+// RemoveInboundConfig clears the persisted inbound record for the given tag.
+//
+// hysteria has a single fixed inbound (defaultInboundTag), so "removing"
+// it means erasing the store record so restoreInboundConfig on the next
+// restart does not recover stale Port/Listen/Domain values. The running
+// hysteria process, reconcile loop, and per-user forward rules are NOT
+// touched by this call — they follow the container Stop/Start lifecycle.
+// After calling this, the caller should restart v2raymg for a clean slate.
 func (hc *HysteriaContainer) RemoveInboundConfig(tag string) error {
-	if tag == defaultInboundTag {
-		return fmt.Errorf("hysteria: cannot remove default hysteria inbound")
+	if tag != defaultInboundTag {
+		return fmt.Errorf("hysteria: inbound %q not found", tag)
 	}
-	return fmt.Errorf("hysteria: inbound %q not found", tag)
+	if hc.storeMgr == nil {
+		return nil
+	}
+	if err := hc.storeMgr.InboundStore().Delete(defaultInboundTag); err != nil {
+		return fmt.Errorf("hysteria: delete inbound record: %w", err)
+	}
+	return nil
 }
 
 // GetInboundConfig returns the default inbound if the tag matches.
@@ -393,13 +420,99 @@ func (hc *HysteriaContainer) startUserEventHandler() {
 }
 
 // handleUserEvent processes a single user event.
-// For hysteria, user add/remove are no-ops (no forward port needed).
+//
+// Per-user UDP forward model (mirrors snell's TCP flow, see
+// pkg/proxy/containers/snell/container.go:handleUserEvent):
+//   - UserEventAdd: allocate a public UDP port via GetBindPort that relays
+//     into hysteria's loopback cfg.Port.
+//   - UserEventRemove: tear down the forward rule and release the port.
+//   - UserEventUpdate: re-evaluate visibility (group changes etc.) and
+//     add/remove the rule accordingly.
 func (hc *HysteriaContainer) handleUserEvent(event usermanager.UserEvent) {
+	if hc.userMgr == nil {
+		return
+	}
 	switch event.Type {
 	case usermanager.UserEventAdd:
-		// No-op: hysteria users share the same port, no forward rule needed
+		hc.mu.Lock()
+		_, exists := hc.addedUsers[event.Username]
+		hc.mu.Unlock()
+		if exists {
+			return
+		}
+		// GetBindPort is idempotent, so a concurrent Add winning the race
+		// after both threads saw !exists is still correct.
+		_, err := hc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
+			Username:      event.Username,
+			ContainerType: contracts.ContainerHysteria,
+			InboundTag:    defaultInboundTag,
+			TargetPort:    uint32(hc.cfg.Port),
+			Protocol:      contracts.ProtocolHysteria2,
+			Network:       "udp",
+		})
+		if err != nil {
+			slog.Error("hysteria: allocate port failed", "user", event.Username, "err", err)
+			return
+		}
+		hc.mu.Lock()
+		hc.addedUsers[event.Username] = struct{}{}
+		hc.mu.Unlock()
+
 	case usermanager.UserEventRemove:
-		// No-op: hysteria users share the same port, no forward rule needed
+		hc.mu.Lock()
+		delete(hc.addedUsers, event.Username)
+		hc.mu.Unlock()
+		port, ok := hc.userMgr.GetUserPortByDstForCleanup(event.Username, uint32(hc.cfg.Port))
+		if !ok {
+			return
+		}
+		if err := hc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
+			Username: event.Username,
+			BindPort: port,
+		}); err != nil {
+			slog.Error("hysteria: release port failed", "user", event.Username, "err", err)
+		}
+
+	case usermanager.UserEventUpdate:
+		// Re-evaluate visibility after group or other changes.
+		if event.User != nil && !hc.userMgr.IsUserVisible(event.User) {
+			// User no longer belongs to this node — tear down forwarding rule.
+			hc.mu.Lock()
+			delete(hc.addedUsers, event.Username)
+			hc.mu.Unlock()
+			port, ok := hc.userMgr.GetUserPortByDstForCleanup(event.Username, uint32(hc.cfg.Port))
+			if ok {
+				if err := hc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
+					Username: event.Username,
+					BindPort: port,
+				}); err != nil {
+					slog.Error("hysteria: release port on group change failed", "user", event.Username, "err", err)
+				}
+			}
+		} else if event.User != nil {
+			// User became visible (e.g. group changed back) — ensure forwarding rule exists.
+			hc.mu.Lock()
+			_, exists := hc.addedUsers[event.Username]
+			hc.mu.Unlock()
+			if exists {
+				return
+			}
+			_, err := hc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
+				Username:      event.Username,
+				ContainerType: contracts.ContainerHysteria,
+				InboundTag:    defaultInboundTag,
+				TargetPort:    uint32(hc.cfg.Port),
+				Protocol:      contracts.ProtocolHysteria2,
+				Network:       "udp",
+			})
+			if err != nil {
+				slog.Error("hysteria: allocate port on group change failed", "user", event.Username, "err", err)
+				return
+			}
+			hc.mu.Lock()
+			hc.addedUsers[event.Username] = struct{}{}
+			hc.mu.Unlock()
+		}
 	}
 }
 
@@ -473,13 +586,14 @@ func (hc *HysteriaContainer) restoreInboundConfig() error {
 			}
 		}
 
-		// Re-create inbound with restored config
+		// Re-create inbound with restored config.
+		// Actual listen is always 127.0.0.1 (see process.go); keep inbound metadata aligned.
 		hc.inbound = inbound.NewDefaultInbound(
 			defaultInboundTag,
 			contracts.ProtocolHysteria2,
 			uint32(hc.cfg.Port),
 		)
-		hc.inbound.(*inbound.DefaultInbound).SetListenAddr(hc.cfg.Listen)
+		hc.inbound.(*inbound.DefaultInbound).SetListenAddr("127.0.0.1")
 		return nil
 	}
 
@@ -487,7 +601,20 @@ func (hc *HysteriaContainer) restoreInboundConfig() error {
 }
 
 // GetUserSubscriptions returns subscription specs for the given user.
+//
+// The port exposed to the client is the per-user public UDP port allocated
+// by the forward layer (NOT hc.cfg.Port, which is now a loopback internal
+// port hysteria listens on). If the user has no forward rule yet, we return
+// nil, nil so the caller skips this container for this user.
 func (hc *HysteriaContainer) GetUserSubscriptions(req contracts.SubscriptionRequest) ([]contracts.SubscriptionSpec, error) {
+	if hc.userMgr == nil {
+		return nil, nil
+	}
+	port, ok := hc.userMgr.GetUserPortByDst(req.User.Username, uint32(hc.cfg.Port))
+	if !ok {
+		return nil, nil
+	}
+
 	nodeName := req.NodeName
 	if nodeName == "" {
 		nodeName = "hysteria2"
@@ -506,12 +633,12 @@ func (hc *HysteriaContainer) GetUserSubscriptions(req contracts.SubscriptionRequ
 		params = "/"
 	}
 	uri := fmt.Sprintf("hysteria2://%s@%s:%d%s#%s",
-		req.User.AuthToken, req.Host, hc.cfg.Port, params, nodeName)
+		req.User.AuthToken, req.Host, port, params, nodeName)
 
 	spec := contracts.SubscriptionSpec{
 		Protocol:   contracts.ProtocolHysteria2,
 		Host:       req.Host,
-		Port:       uint32(hc.cfg.Port),
+		Port:       port,
 		Password:   req.User.AuthToken,
 		NodeName:   nodeName,
 		InboundTag: defaultInboundTag,
@@ -521,19 +648,110 @@ func (hc *HysteriaContainer) GetUserSubscriptions(req contracts.SubscriptionRequ
 	return []contracts.SubscriptionSpec{spec}, nil
 }
 
-// Restore is a no-op for hysteria (no forward rules to rebuild).
+// Restore rebuilds forward rules for all existing users after restart.
 func (hc *HysteriaContainer) Restore(ctx context.Context) error {
+	hc.reconcileUsers()
 	return nil
 }
 
-// reconcileUsers is a no-op for hysteria (no forward rules needed).
+// reconcileUsers syncs all users from UserManager to ensure forward rules exist.
+// This is called by Restore and periodically by the reconcile loop.
+// GetBindPort is idempotent: if the relay already exists it returns the port;
+// if PortMappings has a stale record (relay dead after restart) it recreates the relay.
+//
+// Concurrency: may run concurrently with handleUserEvent (event handler
+// goroutine). All hc.addedUsers reads/writes happen under hc.mu; userMgr
+// calls (GetBindPort / ReleaseBindPort / ListUsers /
+// GetUserPortByDstForCleanup) are invoked without the lock held.
 func (hc *HysteriaContainer) reconcileUsers() {
-	// No-op
+	if hc.userMgr == nil {
+		return
+	}
+
+	users := hc.userMgr.ListUsers()
+
+	// Build a set of visible usernames for fast lookup.
+	visibleSet := make(map[string]struct{}, len(users))
+	for _, u := range users {
+		visibleSet[u.Username] = struct{}{}
+	}
+
+	// Snapshot tracked usernames under the lock so the range below doesn't
+	// race with concurrent handleUserEvent writes.
+	hc.mu.Lock()
+	tracked := make([]string, 0, len(hc.addedUsers))
+	for username := range hc.addedUsers {
+		tracked = append(tracked, username)
+	}
+	hc.mu.Unlock()
+
+	// Remove users that are tracked but no longer visible (e.g. group changed).
+	for _, username := range tracked {
+		if _, visible := visibleSet[username]; visible {
+			continue
+		}
+		hc.mu.Lock()
+		delete(hc.addedUsers, username)
+		hc.mu.Unlock()
+		port, ok := hc.userMgr.GetUserPortByDstForCleanup(username, uint32(hc.cfg.Port))
+		if ok {
+			if err := hc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
+				Username: username,
+				BindPort: port,
+			}); err != nil {
+				slog.Warn("hysteria: reconcile release port failed", "user", username, "err", err)
+			}
+		}
+	}
+
+	// Add users that are visible but not yet tracked.
+	for _, user := range users {
+		hc.mu.Lock()
+		_, exists := hc.addedUsers[user.Username]
+		hc.mu.Unlock()
+		if exists {
+			continue
+		}
+		if _, err := hc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
+			Username:      user.Username,
+			ContainerType: contracts.ContainerHysteria,
+			InboundTag:    defaultInboundTag,
+			TargetPort:    uint32(hc.cfg.Port),
+			Protocol:      contracts.ProtocolHysteria2,
+			Network:       "udp",
+		}); err != nil {
+			slog.Warn("hysteria: reconcile forward rule failed", "user", user.Username, "err", err)
+			continue
+		}
+		hc.mu.Lock()
+		hc.addedUsers[user.Username] = struct{}{}
+		hc.mu.Unlock()
+	}
 }
 
 // startReconcileLoop starts the periodic user reconciliation goroutine.
 func (hc *HysteriaContainer) startReconcileLoop() {
-	// No-op for hysteria
+	if hc.userMgr == nil {
+		return
+	}
+
+	hc.reconcileStopCh = make(chan struct{})
+	hc.reconcileWg.Add(1)
+
+	go func() {
+		defer hc.reconcileWg.Done()
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				hc.reconcileUsers()
+			case <-hc.reconcileStopCh:
+				return
+			}
+		}
+	}()
 }
 
 // stopReconcileLoop stops the periodic user reconciliation goroutine gracefully.

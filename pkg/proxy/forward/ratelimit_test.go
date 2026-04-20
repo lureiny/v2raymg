@@ -2,8 +2,10 @@ package forward
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -471,5 +473,98 @@ func TestTokenBucketLimiter_MaxChunkMinimum(t *testing.T) {
 	// maxChunk should be at least 16KB = 16384 bytes
 	if allowed < 16384 {
 		t.Errorf("expected maxChunk >= 16384, got %d", allowed)
+	}
+}
+
+// TestTokenBucketLimiter_WaitNUnlimited verifies WaitN is a passthrough when
+// the limiter is unlimited.
+func TestTokenBucketLimiter_WaitNUnlimited(t *testing.T) {
+	l := NewTokenBucketLimiter(0, 0)
+	start := time.Now()
+	if err := l.WaitN(context.Background(), 1024*1024); err != nil {
+		t.Fatalf("WaitN: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+		t.Errorf("unlimited WaitN took %v, expected near-instant", elapsed)
+	}
+}
+
+// TestTokenBucketLimiter_WaitNRespectsContext checks that WaitN returns
+// ctx.Err() instead of blocking indefinitely when tokens are insufficient.
+func TestTokenBucketLimiter_WaitNRespectsContext(t *testing.T) {
+	// rate=1KB/s with burst=64KB; request 10MB so we'd wait ~10s untokened.
+	l := NewTokenBucketLimiter(1024, 1024)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := l.WaitN(ctx, 10*1024*1024)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected ctx deadline error, got nil")
+	}
+	if elapsed > 300*time.Millisecond {
+		t.Errorf("WaitN did not honor context: elapsed=%v", elapsed)
+	}
+}
+
+// TestTokenBucketLimiter_WaitNSharesBucket is the HARD CONSTRAINT test for UDP:
+// WaitN and LimitReader must consume tokens from the same bucket so that a
+// single user bandwidth budget covers both TCP and UDP traffic.
+func TestTokenBucketLimiter_WaitNSharesBucket(t *testing.T) {
+	// 4 KB/s rate, burst ~64KB (min). Drain ~16KB via WaitN, then LimitReader
+	// should observe the reduced token pool (cannot return burst-sized reads).
+	rate := int64(4 * 1024)
+	l := NewTokenBucketLimiter(rate, rate)
+	// Wait for the full burst to accumulate.
+	time.Sleep(10 * time.Millisecond)
+
+	// Drain 32KB through WaitN.
+	if err := l.WaitN(context.Background(), 32*1024); err != nil {
+		t.Fatalf("WaitN: %v", err)
+	}
+
+	// Now a LimitReader should be rate-limited — a single Read of 64KB should
+	// not return 64KB in the first shot because WaitN emptied half the bucket.
+	src := bytes.NewReader(make([]byte, 64*1024))
+	lr := l.LimitReader(src)
+	buf := make([]byte, 64*1024)
+	n, _ := lr.Read(buf)
+	if n >= 64*1024 {
+		t.Errorf("LimitReader returned %d bytes — WaitN did not consume from shared bucket", n)
+	}
+}
+
+// TestTokenBucketLimiter_WaitNConcurrent verifies concurrent WaitN callers
+// collectively respect the bucket rate.
+func TestTokenBucketLimiter_WaitNConcurrent(t *testing.T) {
+	rate := int64(64 * 1024) // 64KB/s
+	l := NewTokenBucketLimiter(rate, rate)
+	// Burst fills quickly; let it sit at max.
+	time.Sleep(20 * time.Millisecond)
+
+	start := time.Now()
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Each goroutine asks for 32KB — total 128KB.
+			_ = l.WaitN(context.Background(), 32*1024)
+		}()
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+
+	// 128KB at 64KB/s minus burst(~16KB) ≈ ~(128-16)/64 s = ~1.75s worst case.
+	// We only assert a rough lower-bound: must take > 500ms (definitely limited).
+	if elapsed < 500*time.Millisecond {
+		t.Errorf("concurrent WaitN finished too fast (%v), limiter may not be shared", elapsed)
+	}
+}
+
+// TestNoopLimiter_WaitN verifies the passthrough Noop limiter.
+func TestNoopLimiter_WaitN(t *testing.T) {
+	if err := (NoopLimiter{}).WaitN(context.Background(), 1024); err != nil {
+		t.Errorf("NoopLimiter.WaitN returned %v", err)
 	}
 }

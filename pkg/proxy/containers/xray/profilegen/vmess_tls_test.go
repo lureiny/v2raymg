@@ -148,6 +148,80 @@ func TestGenerateVMessTLSInboundSpec_InvalidTransport(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid transport")
 }
 
+func TestGenerateVMessTLSInboundSpec_WithHTTP(t *testing.T) {
+	spec, err := GenerateVMessTLSInboundSpec(GenerateVMessTLSParams{
+		Host:      "example.com",
+		Transport: "http",
+	})
+	require.NoError(t, err)
+
+	transport, ok := spec.Extensions["transport"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "h2", transport, "http should be normalized to h2 internally")
+
+	httpPath, ok := spec.Extensions["http_path"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "/", httpPath)
+
+	httpHost, ok := spec.Extensions["http_host"].([]string)
+	require.True(t, ok)
+	assert.Equal(t, []string{"example.com"}, httpHost)
+
+	security, ok := spec.Extensions["security"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "tls", security)
+}
+
+func TestGenerateVMessTLSInboundSpec_WithCustomHTTPPath(t *testing.T) {
+	spec, err := GenerateVMessTLSInboundSpec(GenerateVMessTLSParams{
+		Host:      "example.com",
+		Transport: "http",
+		HTTPPath:  "/custom/http/path",
+		HTTPHost:  []string{"host1.example.com", "host2.example.com"},
+	})
+	require.NoError(t, err)
+
+	transport, ok := spec.Extensions["transport"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "h2", transport)
+
+	httpPath, ok := spec.Extensions["http_path"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "/custom/http/path", httpPath)
+
+	httpHost, ok := spec.Extensions["http_host"].([]string)
+	require.True(t, ok)
+	assert.Equal(t, []string{"host1.example.com", "host2.example.com"}, httpHost)
+}
+
+func TestGenerateVMessTLSInboundSpec_WithH2Alias(t *testing.T) {
+	spec, err := GenerateVMessTLSInboundSpec(GenerateVMessTLSParams{
+		Host:      "example.com",
+		Transport: "h2",
+	})
+	require.NoError(t, err)
+
+	transport, ok := spec.Extensions["transport"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "h2", transport)
+}
+
+func TestGenerateVMessTLSInboundSpec_HTTPHostDefaultsToHost(t *testing.T) {
+	spec, err := GenerateVMessTLSInboundSpec(GenerateVMessTLSParams{
+		Host:      "example.com",
+		Transport: "http",
+	})
+	require.NoError(t, err)
+
+	transport, ok := spec.Extensions["transport"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "h2", transport)
+
+	httpHost, ok := spec.Extensions["http_host"].([]string)
+	require.True(t, ok)
+	assert.Equal(t, []string{"example.com"}, httpHost)
+}
+
 func TestGenerateVMessTLSInboundSpec_InvalidPort(t *testing.T) {
 	_, err := GenerateVMessTLSInboundSpec(GenerateVMessTLSParams{
 		Host: "example.com",
@@ -267,84 +341,3 @@ func TestGenerateVMessTLSInboundSpec_UserExtensions(t *testing.T) {
 	assert.Equal(t, uint32(0), alterID)
 }
 
-func TestGenerateVMessTLSInboundSpec_WithHTTP(t *testing.T) {
-	spec, err := GenerateVMessTLSInboundSpec(GenerateVMessTLSParams{
-		Host:      "example.com",
-		Transport: "http",
-	})
-	require.NoError(t, err)
-
-	// Validate transport is normalized to h2
-	transport, ok := spec.Extensions["transport"].(string)
-	require.True(t, ok)
-	assert.Equal(t, "h2", transport, "http should be normalized to h2 internally")
-
-	// Validate HTTP path default
-	httpPath, ok := spec.Extensions["http_path"].(string)
-	require.True(t, ok)
-	assert.Equal(t, "/", httpPath)
-
-	// Validate HTTP host defaults to Host
-	httpHost, ok := spec.Extensions["http_host"].([]string)
-	require.True(t, ok)
-	assert.Equal(t, []string{"example.com"}, httpHost)
-
-	// TLS must still be set
-	security, ok := spec.Extensions["security"].(string)
-	require.True(t, ok)
-	assert.Equal(t, "tls", security)
-}
-
-func TestGenerateVMessTLSInboundSpec_WithCustomHTTPPath(t *testing.T) {
-	spec, err := GenerateVMessTLSInboundSpec(GenerateVMessTLSParams{
-		Host:       "example.com",
-		Transport:  "http",
-		HTTPPath:    "/custom/http/path",
-		HTTPHost:   []string{"host1.example.com", "host2.example.com"},
-	})
-	require.NoError(t, err)
-
-	// Validate transport is normalized to h2
-	transport, ok := spec.Extensions["transport"].(string)
-	require.True(t, ok)
-	assert.Equal(t, "h2", transport)
-
-	httpPath, ok := spec.Extensions["http_path"].(string)
-	require.True(t, ok)
-	assert.Equal(t, "/custom/http/path", httpPath)
-
-	httpHost, ok := spec.Extensions["http_host"].([]string)
-	require.True(t, ok)
-	assert.Equal(t, []string{"host1.example.com", "host2.example.com"}, httpHost)
-}
-
-func TestGenerateVMessTLSInboundSpec_WithH2Alias(t *testing.T) {
-	// h2 should be normalized to http
-	spec, err := GenerateVMessTLSInboundSpec(GenerateVMessTLSParams{
-		Host:      "example.com",
-		Transport: "h2",
-	})
-	require.NoError(t, err)
-
-	transport, ok := spec.Extensions["transport"].(string)
-	require.True(t, ok)
-	assert.Equal(t, "h2", transport, "h2 stays as h2")
-}
-
-func TestGenerateVMessTLSInboundSpec_HTTPHostDefaultsToHost(t *testing.T) {
-	// When HTTPHost is empty but transport is http, should default to Host
-	spec, err := GenerateVMessTLSInboundSpec(GenerateVMessTLSParams{
-		Host:      "example.com",
-		Transport: "http",
-	})
-	require.NoError(t, err)
-
-	// Validate transport is normalized to h2
-	transport, ok := spec.Extensions["transport"].(string)
-	require.True(t, ok)
-	assert.Equal(t, "h2", transport)
-
-	httpHost, ok := spec.Extensions["http_host"].([]string)
-	require.True(t, ok)
-	assert.Equal(t, []string{"example.com"}, httpHost)
-}

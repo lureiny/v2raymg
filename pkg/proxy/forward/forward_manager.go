@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lureiny/v2raymg/pkg/log"
 )
@@ -60,7 +61,7 @@ func NewForwardManager(opts ...ForwardManagerOption) (*DefaultForwardManager, er
 // managedRule is an active forwarding rule with its relay and traffic counter.
 type managedRule struct {
 	rule              ForwardRule
-	relay             *Relay
+	relay             Relay
 	counter           *TrafficCounter
 	userBandwidthLim *userBandwidthLimiter // shared per-user limiter, nil if no user limit set
 	clientLimiter    ClientLimiter         // remote IP based client limiter, nil if no client limit set
@@ -249,21 +250,37 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 	}
 	// If effectiveMaxClients <= 0, clientLimiter stays nil (no limit)
 
-	// Create and start relay
-	relay := NewRelay(RelayConfig{
-		ListenAddr:    fullListenAddr,
-		TargetAddr:    rule.TargetAddr,
-		Counter:       counter,
-		LimiterUp:     limiterUp,
-		LimiterDown:   limiterDown,
-		MaxConns:      rule.MaxConnections,
-		ClientLimiter: clientLimiter,
-	})
+	// Create and start relay, dispatched by network kind.
+	var relay Relay
+	switch rule.ResolvedNetwork() {
+	case NetworkUDP:
+		idle := time.Duration(rule.UDPSessionIdleSec) * time.Second
+		relay = NewUDPRelay(UDPRelayConfig{
+			ListenAddr:         fullListenAddr,
+			TargetAddr:         rule.TargetAddr,
+			Counter:            counter,
+			LimiterUp:          limiterUp,
+			LimiterDown:        limiterDown,
+			MaxSessions:        rule.MaxConnections,
+			ClientLimiter:      clientLimiter,
+			SessionIdleTimeout: idle,
+		})
+	default:
+		relay = NewTCPRelay(TCPRelayConfig{
+			ListenAddr:    fullListenAddr,
+			TargetAddr:    rule.TargetAddr,
+			Counter:       counter,
+			LimiterUp:     limiterUp,
+			LimiterDown:   limiterDown,
+			MaxConns:      rule.MaxConnections,
+			ClientLimiter: clientLimiter,
+		})
+	}
 
 	if err := relay.Start(); err != nil {
 		m.allocator.Release(port)
 		m.traffic.Remove(key)
-		log.Debug("[ForwardManager] relay start failed", "key", key, "listen", fullListenAddr, "target", rule.TargetAddr, "err", err)
+		log.Debug("[ForwardManager] relay start failed", "key", key, "listen", fullListenAddr, "target", rule.TargetAddr, "network", rule.ResolvedNetwork(), "err", err)
 		return nil, fmt.Errorf("forward_manager: relay start: %w", err)
 	}
 

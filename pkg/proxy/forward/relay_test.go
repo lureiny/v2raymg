@@ -39,7 +39,7 @@ func TestRelay_BasicForward(t *testing.T) {
 	defer stopEcho()
 
 	counter := NewTrafficCounter()
-	relay := NewRelay(RelayConfig{
+	relay := NewTCPRelay(TCPRelayConfig{
 		ListenAddr: "127.0.0.1:0",
 		TargetAddr: echoAddr,
 		Counter:    counter,
@@ -94,7 +94,7 @@ func TestRelay_MultipleConnections(t *testing.T) {
 	defer stopEcho()
 
 	counter := NewTrafficCounter()
-	relay := NewRelay(RelayConfig{
+	relay := NewTCPRelay(TCPRelayConfig{
 		ListenAddr: "127.0.0.1:0",
 		TargetAddr: echoAddr,
 		Counter:    counter,
@@ -137,7 +137,7 @@ func TestRelay_MaxConnections(t *testing.T) {
 	echoAddr, stopEcho := startEchoServer(t)
 	defer stopEcho()
 
-	relay := NewRelay(RelayConfig{
+	relay := NewTCPRelay(TCPRelayConfig{
 		ListenAddr: "127.0.0.1:0",
 		TargetAddr: echoAddr,
 		MaxConns:   2,
@@ -177,7 +177,7 @@ func TestRelay_Stop(t *testing.T) {
 	echoAddr, stopEcho := startEchoServer(t)
 	defer stopEcho()
 
-	relay := NewRelay(RelayConfig{
+	relay := NewTCPRelay(TCPRelayConfig{
 		ListenAddr: "127.0.0.1:0",
 		TargetAddr: echoAddr,
 	})
@@ -214,7 +214,7 @@ func TestRelay_TrafficCounting(t *testing.T) {
 	defer stopEcho()
 
 	counter := NewTrafficCounter()
-	relay := NewRelay(RelayConfig{
+	relay := NewTCPRelay(TCPRelayConfig{
 		ListenAddr: "127.0.0.1:0",
 		TargetAddr: echoAddr,
 		Counter:    counter,
@@ -257,7 +257,7 @@ func TestRelay_TrafficCounting(t *testing.T) {
 
 func TestRelay_TargetUnreachable(t *testing.T) {
 	// Use a port that nothing listens on
-	relay := NewRelay(RelayConfig{
+	relay := NewTCPRelay(TCPRelayConfig{
 		ListenAddr: "127.0.0.1:0",
 		TargetAddr: "127.0.0.1:1", // port 1 - unlikely to be listening
 	})
@@ -285,7 +285,7 @@ func TestRelay_ListenAddrActual(t *testing.T) {
 	echoAddr, stopEcho := startEchoServer(t)
 	defer stopEcho()
 
-	relay := NewRelay(RelayConfig{
+	relay := NewTCPRelay(TCPRelayConfig{
 		ListenAddr: "127.0.0.1:0",
 		TargetAddr: echoAddr,
 	})
@@ -309,7 +309,7 @@ func TestRelay_ClientLimiter_DenyWhenSlotFull(t *testing.T) {
 	// Create limiter with MaxClients = 1 (only 1 unique IP allowed)
 	limiter := NewTestClientLimiter(1)
 
-	relay := NewRelay(RelayConfig{
+	relay := NewTCPRelay(TCPRelayConfig{
 		ListenAddr:    "127.0.0.1:0",
 		TargetAddr:    echoAddr,
 		ClientLimiter: limiter,
@@ -343,8 +343,8 @@ func TestRelay_ClientLimiter_AggregateAcrossRelays(t *testing.T) {
 
 	// Create shared limiter with MaxClients = 1 (only 1 unique IP allowed across all relays)
 	shared := NewTestClientLimiter(1)
-	r1 := NewRelay(RelayConfig{ListenAddr: "127.0.0.1:0", TargetAddr: echoAddr, ClientLimiter: shared})
-	r2 := NewRelay(RelayConfig{ListenAddr: "127.0.0.1:0", TargetAddr: echoAddr, ClientLimiter: shared})
+	r1 := NewTCPRelay(TCPRelayConfig{ListenAddr: "127.0.0.1:0", TargetAddr: echoAddr, ClientLimiter: shared})
+	r2 := NewTCPRelay(TCPRelayConfig{ListenAddr: "127.0.0.1:0", TargetAddr: echoAddr, ClientLimiter: shared})
 	if err := r1.Start(); err != nil {
 		t.Fatalf("r1 start: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestRelay_HalfCloseRecovery(t *testing.T) {
 		conn.Close()
 	}()
 
-	relay := NewRelay(RelayConfig{
+	relay := NewTCPRelay(TCPRelayConfig{
 		ListenAddr: "127.0.0.1:0",
 		TargetAddr: ln.Addr().String(),
 	})
@@ -577,7 +577,7 @@ func TestRelay_WithClientLimiter(t *testing.T) {
 	userLimiter := NewTestClientLimiter(1)
 
 	// Create relay with client limiter
-	relay := NewRelay(RelayConfig{
+	relay := NewTCPRelay(TCPRelayConfig{
 		ListenAddr:    "127.0.0.1:0",
 		TargetAddr:    ln.Addr().String(),
 		ClientLimiter: userLimiter,

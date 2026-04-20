@@ -802,10 +802,13 @@ func (m *UserManager) UpdateUserPassword(req UpdateUserPasswordRequest) error {
 // GetBindPortRequest contains parameters for getting a bind port.
 type GetBindPortRequest struct {
 	Username      string
-	TargetPort    uint32           // The target port to forward to
+	TargetPort    uint32 // The target port to forward to
 	ContainerType contracts.ContainerType
 	InboundTag    string
 	Protocol      contracts.Protocol
+	// Network selects the forward transport. Empty string defaults to "tcp"
+	// for backward compatibility; "udp" selects a UDPRelay.
+	Network string
 }
 
 // GetBindPort returns a bound port for the user.
@@ -876,6 +879,7 @@ func (m *UserManager) GetBindPort(req GetBindPortRequest) (uint32, error) {
 		ContainerType:         req.ContainerType,
 		InboundTag:            req.InboundTag,
 		Protocol:              req.Protocol,
+		Network:               req.Network,
 		ListenPort:            preferredPort, // 0 = auto allocate, >0 = specific port
 		TargetAddr:            fmt.Sprintf("127.0.0.1:%d", req.TargetPort),
 		MaxClients:            user.MaxClients,
@@ -1665,7 +1669,11 @@ func (sc *statsCollector) Start() {
 	sc.running = true
 	sc.stopCh = make(chan struct{})
 
-	go sc.collectLoop()
+	// Capture stopCh under the lock and pass it to collectLoop so the
+	// goroutine never touches sc.stopCh directly. Stop's write to sc.stopCh
+	// then can't race with collectLoop's read.
+	stopCh := sc.stopCh
+	go sc.collectLoop(stopCh)
 }
 
 // Stop stops the periodic stats collection.
@@ -1684,8 +1692,10 @@ func (sc *statsCollector) Stop() {
 	}
 }
 
-// collectLoop is the main stats collection loop.
-func (sc *statsCollector) collectLoop() {
+// collectLoop is the main stats collection loop. stopCh is passed in by
+// Start (captured under sc.mu) so this goroutine never reads sc.stopCh —
+// that field is mutated by Stop concurrently.
+func (sc *statsCollector) collectLoop(stopCh <-chan struct{}) {
 	ticker := time.NewTicker(sc.interval)
 	defer ticker.Stop()
 
@@ -1696,7 +1706,7 @@ func (sc *statsCollector) collectLoop() {
 		select {
 		case <-ticker.C:
 			sc.collect()
-		case <-sc.stopCh:
+		case <-stopCh:
 			return
 		}
 	}

@@ -162,6 +162,7 @@ func runEndNode(cfg *appconfig.AppConfig) {
 		UserManager: userMgr,
 		CertManager: certMgr,
 		HTTPPort:    cfg.EndNode.HttpPort,
+		ProxyHost:   cfg.EndNode.ProxyHost,
 	})
 	if err := containerMgr.LoadFromConfig(cfg.Containers); err != nil {
 		log.Error("load container config failed", "err", err)

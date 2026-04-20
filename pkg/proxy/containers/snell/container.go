@@ -36,6 +36,12 @@ type SnellContainer struct {
 	// storeMgr provides unified access to persistence stores.
 	storeMgr *store.StoreManager
 
+	// mu guards addedUsers against concurrent access between the user-event
+	// handler goroutine (handleUserEvent) and the reconcile-loop goroutine
+	// (reconcileUsers). Held only around map reads/writes — never while
+	// calling userMgr.GetBindPort / ReleaseBindPort, which do their own
+	// locking and can be slow.
+	mu sync.Mutex
 	// addedUsers tracks users that have been successfully wired up.
 	addedUsers map[string]struct{}
 
@@ -307,10 +313,19 @@ func (sc *SnellContainer) startUserEventHandler() {
 }
 
 // handleUserEvent processes a single user event.
+//
+// Concurrency: addedUsers is guarded by sc.mu. The lock is held only around
+// map reads/writes so that userMgr.GetBindPort / ReleaseBindPort (which take
+// their own locks and may be slow) run without it. GetBindPort is idempotent,
+// so a TOCTOU race where two callers both see !exists and both invoke
+// GetBindPort is still correct.
 func (sc *SnellContainer) handleUserEvent(event usermanager.UserEvent) {
 	switch event.Type {
 	case usermanager.UserEventAdd:
-		if _, exists := sc.addedUsers[event.Username]; exists {
+		sc.mu.Lock()
+		_, exists := sc.addedUsers[event.Username]
+		sc.mu.Unlock()
+		if exists {
 			return
 		}
 		_, err := sc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
@@ -324,10 +339,14 @@ func (sc *SnellContainer) handleUserEvent(event usermanager.UserEvent) {
 			slog.Error("snell: allocate port failed", "user", event.Username, "err", err)
 			return
 		}
+		sc.mu.Lock()
 		sc.addedUsers[event.Username] = struct{}{}
+		sc.mu.Unlock()
 
 	case usermanager.UserEventRemove:
+		sc.mu.Lock()
 		delete(sc.addedUsers, event.Username)
+		sc.mu.Unlock()
 		port, ok := sc.userMgr.GetUserPortByDstForCleanup(event.Username, uint32(sc.cfg.Port))
 		if !ok {
 			return
@@ -343,7 +362,9 @@ func (sc *SnellContainer) handleUserEvent(event usermanager.UserEvent) {
 		// Re-evaluate visibility after group or other changes.
 		if event.User != nil && !sc.userMgr.IsUserVisible(event.User) {
 			// User no longer belongs to this node — tear down forwarding rule.
+			sc.mu.Lock()
 			delete(sc.addedUsers, event.Username)
+			sc.mu.Unlock()
 			port, ok := sc.userMgr.GetUserPortByDstForCleanup(event.Username, uint32(sc.cfg.Port))
 			if ok {
 				if err := sc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
@@ -355,20 +376,26 @@ func (sc *SnellContainer) handleUserEvent(event usermanager.UserEvent) {
 			}
 		} else if event.User != nil {
 			// User became visible (e.g. group changed back) — ensure forwarding rule exists.
-			if _, exists := sc.addedUsers[event.Username]; !exists {
-				_, err := sc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
-					Username:      event.Username,
-					ContainerType: contracts.ContainerSnell,
-					InboundTag:    defaultInboundTag,
-					TargetPort:    uint32(sc.cfg.Port),
-					Protocol:      contracts.ProtocolSnell,
-				})
-				if err != nil {
-					slog.Error("snell: allocate port on group change failed", "user", event.Username, "err", err)
-					return
-				}
-				sc.addedUsers[event.Username] = struct{}{}
+			sc.mu.Lock()
+			_, exists := sc.addedUsers[event.Username]
+			sc.mu.Unlock()
+			if exists {
+				return
 			}
+			_, err := sc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
+				Username:      event.Username,
+				ContainerType: contracts.ContainerSnell,
+				InboundTag:    defaultInboundTag,
+				TargetPort:    uint32(sc.cfg.Port),
+				Protocol:      contracts.ProtocolSnell,
+			})
+			if err != nil {
+				slog.Error("snell: allocate port on group change failed", "user", event.Username, "err", err)
+				return
+			}
+			sc.mu.Lock()
+			sc.addedUsers[event.Username] = struct{}{}
+			sc.mu.Unlock()
 		}
 	}
 }
@@ -485,6 +512,9 @@ func (sc *SnellContainer) Restore(ctx context.Context) error {
 // This is called by Restore and periodically by the reconcile loop.
 // GetBindPort is idempotent: if the relay already exists it returns the port;
 // if PortMappings has a stale record (relay dead after restart) it recreates the relay.
+//
+// Concurrency: may run concurrently with handleUserEvent. All sc.addedUsers
+// reads/writes happen under sc.mu; userMgr calls run without the lock held.
 func (sc *SnellContainer) reconcileUsers() {
 	if sc.userMgr == nil {
 		return
@@ -498,25 +528,40 @@ func (sc *SnellContainer) reconcileUsers() {
 		visibleSet[u.Username] = struct{}{}
 	}
 
-	// Remove users that are tracked but no longer visible (e.g. group changed).
+	// Snapshot tracked usernames under the lock so the range below doesn't
+	// race with concurrent handleUserEvent writes.
+	sc.mu.Lock()
+	tracked := make([]string, 0, len(sc.addedUsers))
 	for username := range sc.addedUsers {
-		if _, visible := visibleSet[username]; !visible {
-			delete(sc.addedUsers, username)
-			port, ok := sc.userMgr.GetUserPortByDstForCleanup(username, uint32(sc.cfg.Port))
-			if ok {
-				if err := sc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
-					Username: username,
-					BindPort: port,
-				}); err != nil {
-					slog.Warn("snell: reconcile release port failed", "user", username, "err", err)
-				}
+		tracked = append(tracked, username)
+	}
+	sc.mu.Unlock()
+
+	// Remove users that are tracked but no longer visible (e.g. group changed).
+	for _, username := range tracked {
+		if _, visible := visibleSet[username]; visible {
+			continue
+		}
+		sc.mu.Lock()
+		delete(sc.addedUsers, username)
+		sc.mu.Unlock()
+		port, ok := sc.userMgr.GetUserPortByDstForCleanup(username, uint32(sc.cfg.Port))
+		if ok {
+			if err := sc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
+				Username: username,
+				BindPort: port,
+			}); err != nil {
+				slog.Warn("snell: reconcile release port failed", "user", username, "err", err)
 			}
 		}
 	}
 
 	// Add users that are visible but not yet tracked.
 	for _, user := range users {
-		if _, exists := sc.addedUsers[user.Username]; exists {
+		sc.mu.Lock()
+		_, exists := sc.addedUsers[user.Username]
+		sc.mu.Unlock()
+		if exists {
 			continue
 		}
 		if _, err := sc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
@@ -529,7 +574,9 @@ func (sc *SnellContainer) reconcileUsers() {
 			slog.Warn("snell: reconcile forward rule failed", "user", user.Username, "err", err)
 			continue
 		}
+		sc.mu.Lock()
 		sc.addedUsers[user.Username] = struct{}{}
+		sc.mu.Unlock()
 	}
 }
 

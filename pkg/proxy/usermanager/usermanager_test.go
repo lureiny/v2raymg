@@ -1795,3 +1795,58 @@ func TestSyncUpsertUser_UpdateConflictingTokenRegenerated(t *testing.T) {
 		t.Errorf("regenerated token should be valid UUID v4, got %s", u2After.AuthToken)
 	}
 }
+
+// TestGetBindPort_NetworkPassthrough verifies that GetBindPortRequest.Network
+// is propagated to the ForwardRule unchanged (empty → tcp default path,
+// "udp" → udp).
+func TestGetBindPort_NetworkPassthrough(t *testing.T) {
+	mockFM := newMockForwardManager()
+	um := NewUserManager(mockFM, "test-node")
+	if err := um.AddUser(AddUserRequest{Username: "netuser", Password: "pw"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+
+	// Default empty → stored as empty on the rule; ForwardRule.ResolvedNetwork()
+	// maps empty to tcp, so downstream dispatch works.
+	if _, err := um.GetBindPort(GetBindPortRequest{
+		Username:      "netuser",
+		TargetPort:    443,
+		ContainerType: contracts.ContainerXray,
+		InboundTag:    "tcp-in",
+	}); err != nil {
+		t.Fatalf("GetBindPort tcp: %v", err)
+	}
+	stored := mockFM.rules["netuser"]
+	if stored == nil {
+		t.Fatal("rule not recorded")
+	}
+	if stored.Network != "" {
+		t.Errorf("default Network = %q, want empty string", stored.Network)
+	}
+	if stored.ResolvedNetwork() != forward.NetworkTCP {
+		t.Errorf("ResolvedNetwork = %q, want tcp", stored.ResolvedNetwork())
+	}
+
+	// Second call for the same user with Network="udp" on a different inbound
+	// should propagate through to the mock FM.
+	if _, err := um.GetBindPort(GetBindPortRequest{
+		Username:      "netuser",
+		TargetPort:    5060,
+		ContainerType: contracts.ContainerXray,
+		InboundTag:    "udp-in",
+		Network:       "udp",
+	}); err != nil {
+		t.Fatalf("GetBindPort udp: %v", err)
+	}
+	// mockFM stores by username, so the last AddRule overwrote the first.
+	storedUDP := mockFM.rules["netuser"]
+	if storedUDP == nil {
+		t.Fatal("udp rule not recorded")
+	}
+	if storedUDP.Network != "udp" {
+		t.Errorf("Network = %q, want %q", storedUDP.Network, "udp")
+	}
+	if storedUDP.ResolvedNetwork() != forward.NetworkUDP {
+		t.Errorf("ResolvedNetwork = %q, want udp", storedUDP.ResolvedNetwork())
+	}
+}

@@ -196,11 +196,7 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		case proto.BuilderType_GrpcBuilderType:
 			transport = "grpc"
 		case proto.BuilderType_HttpBuilderType:
-			// h2/http transport has been removed from xray-core.
-			// Use "xhttp" or "splithttp" instead.
-			fastAddInboundRsp.Code = 1020
-			fastAddInboundRsp.Msg = "http/h2 transport is no longer supported; use xhttp or splithttp instead"
-			return fastAddInboundRsp, nil
+			transport = "h2"
 		default:
 			transport = "tcp"
 		}
@@ -258,7 +254,7 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 			var n int
 			fmt.Sscanf(v, "%d", &n)
 			params[k] = n
-		case "reality_server_names", "sniffing_dest_override", "alpn", "xhttp_host":
+		case "reality_server_names", "sniffing_dest_override", "alpn", "xhttp_host", "http_host":
 			params[k] = strings.Split(v, ",")
 		case "reality_short_ids":
 			if _, exists := params["reality_short_ids"]; !exists {

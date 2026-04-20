@@ -69,3 +69,41 @@ func TestForwardRule_RuleKey(t *testing.T) {
 		t.Errorf("RuleKey() = %q, want %q", got, expected)
 	}
 }
+
+func TestForwardRule_Validate_Network(t *testing.T) {
+	base := ForwardRule{Username: "u@t.com", TargetAddr: "127.0.0.1:443"}
+
+	for _, nw := range []string{"", "tcp", "udp"} {
+		r := base
+		r.Network = nw
+		if err := r.Validate(); err != nil {
+			t.Errorf("network=%q should be valid: %v", nw, err)
+		}
+	}
+
+	r := base
+	r.Network = "sctp"
+	if err := r.Validate(); err == nil {
+		t.Error("expected error for unsupported network")
+	}
+
+	r = base
+	r.UDPSessionIdleSec = -1
+	if err := r.Validate(); err == nil {
+		t.Error("expected error for negative UDPSessionIdleSec")
+	}
+}
+
+func TestForwardRule_ResolvedNetwork(t *testing.T) {
+	cases := map[string]NetworkKind{
+		"":    NetworkTCP,
+		"tcp": NetworkTCP,
+		"udp": NetworkUDP,
+	}
+	for in, want := range cases {
+		r := ForwardRule{Network: in}
+		if got := r.ResolvedNetwork(); got != want {
+			t.Errorf("ResolvedNetwork(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

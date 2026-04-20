@@ -608,3 +608,76 @@ func TestForwardManager_ClientLimitViaRule(t *testing.T) {
 		t.Fatalf("AddRule: %v", err)
 	}
 }
+
+// TestForwardManager_AddRule_UDPDispatch verifies that Network="udp" actually
+// instantiates a UDPRelay and that end-to-end datagram forwarding works.
+func TestForwardManager_AddRule_UDPDispatch(t *testing.T) {
+	echoAddr, stopEcho := startUDPEchoServer(t)
+	defer stopEcho()
+
+	m := newTestManager(t)
+	defer m.Close()
+
+	created, err := m.AddRule(ForwardRule{
+		Username:          "udp-user@test.com",
+		TargetAddr:        echoAddr,
+		Network:           "udp",
+		UDPSessionIdleSec: 5,
+	})
+	if err != nil {
+		t.Fatalf("AddRule udp: %v", err)
+	}
+
+	// The managed relay must be a UDPRelay, not a TCPRelay.
+	m.mu.RLock()
+	mr := m.rules[created.RuleKey()]
+	m.mu.RUnlock()
+	if mr == nil {
+		t.Fatal("managedRule missing")
+	}
+	if _, ok := mr.relay.(*UDPRelay); !ok {
+		t.Fatalf("expected *UDPRelay, got %T", mr.relay)
+	}
+
+	// Round-trip a datagram via the allocated port.
+	client := dialUDP(t, fmt.Sprintf("127.0.0.1:%d", created.ListenPort))
+	defer client.Close()
+	payload := []byte("udp-dispatch")
+	if _, err := client.Write(payload); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	resp := readOnce(t, client, time.Second)
+	if string(resp) != string(payload) {
+		t.Fatalf("echo = %q, want %q", resp, payload)
+	}
+
+	// RemoveRule should cleanly stop the UDPRelay and release the port.
+	if err := m.RemoveRule(created.RuleKey()); err != nil {
+		t.Fatalf("RemoveRule: %v", err)
+	}
+	if m.GetRule(created.RuleKey()) != nil {
+		t.Error("rule should be gone after RemoveRule")
+	}
+	// Port is freed — listen on it directly should succeed.
+	pc, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", created.ListenPort))
+	if err != nil {
+		t.Fatalf("port not released: %v", err)
+	}
+	pc.Close()
+}
+
+// TestForwardManager_AddRule_NetworkValidation verifies that invalid Network
+// values are rejected at Validate, not silently treated as TCP.
+func TestForwardManager_AddRule_NetworkValidation(t *testing.T) {
+	m := newTestManager(t)
+	defer m.Close()
+
+	_, err := m.AddRule(ForwardRule{
+		Username:   "u@t.com",
+		TargetAddr: "127.0.0.1:1234",
+		Network:    "sctp",
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported network")
+	}
+}
