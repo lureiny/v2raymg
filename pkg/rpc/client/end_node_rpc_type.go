@@ -34,4 +34,5 @@ const (
 	RotateInboundPortReqType
 	RotateAllPortsReqType
 	ResetAuthTokenReqType
+	GetContainersReqType
 )

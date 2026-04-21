@@ -41,6 +41,7 @@ func (s *HttpServer) registerRoutes() {
 	// X-Token holders are automatically treated as admin by AuthMiddleware.
 	adminGroup := r.Group("/api", auth.AuthMiddleware(s.token, s.jwtSecret), auth.AdminOnly())
 	s.registerOn(adminGroup, &NodeHandler{}, "GET")
+	s.registerOn(adminGroup, &ContainersHandler{}, "GET")
 	s.registerOn(adminGroup, &GetCertsHandler{}, "GET")
 	// User CRUD routes — always registered; UserManager is now the single user store.
 	s.registerOn(adminGroup, &UserAddHandler{}, "POST")

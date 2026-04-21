@@ -80,6 +80,8 @@ func init() {
 	registerReqToEndNodeFunc(RotateAllPortsReqType, ReqRotateAllPorts)
 	// reset auth token
 	registerReqToEndNodeFunc(ResetAuthTokenReqType, ReqResetAuthToken)
+	// containers
+	registerReqToEndNodeFunc(GetContainersReqType, ReqGetContainers)
 }
 
 func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
@@ -658,4 +660,20 @@ func ReqResetAuthToken(ctx context.Context, reqData []byte, endNodeAccessClient 
 		return nil, err
 	}
 	return rsp, nil
+}
+
+func ReqGetContainers(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.GetContainersReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req to GetContainersReq > %v", err)
+	}
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.GetContainers(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
+	}
+	return rsp.GetContainers(), nil
 }

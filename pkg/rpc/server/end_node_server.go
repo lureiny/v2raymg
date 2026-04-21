@@ -109,6 +109,7 @@ var methodRspMap = map[string]interface{}{
 	"SetNodeGroups":           &proto.SetNodeGroupsRsp{},
 	"UpsertClusterUsers":      &proto.UpsertClusterUsersRsp{},
 	"GetStatus":               &proto.GetStatusRsp{},
+	"GetContainers":           &proto.GetContainersRsp{},
 }
 
 func newEmptyRsp(fullMethod string) (interface{}, error) {

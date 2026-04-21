@@ -481,6 +481,9 @@ service EndNodeAccess {
 
     // status
     rpc GetStatus(GetStatusReq) returns (GetStatusRsp) {}
+
+    // container
+    rpc GetContainers(GetContainersReq) returns (GetContainersRsp) {}
 }
 
 message GetNodeGroupsReq {
@@ -545,6 +548,15 @@ message ResetAuthTokenRsp {
     int32  code = 1;
     string msg  = 2;
     string auth_token = 3;
+}
+
+message GetContainersReq {
+    NodeAuthInfo node_auth_info = 1;
+}
+message GetContainersRsp {
+    int32 code = 1;
+    string msg = 2;
+    repeated string containers = 3;
 }
 
 message GetClutersReq {

@@ -168,3 +168,14 @@ func (m *ContainerMgr) Types() []contracts.ContainerType {
 	}
 	return types
 }
+
+// TypeStrings returns the types of all currently loaded containers as plain strings.
+func (m *ContainerMgr) TypeStrings() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]string, 0, len(m.instances))
+	for k := range m.instances {
+		out = append(out, string(k))
+	}
+	return out
+}

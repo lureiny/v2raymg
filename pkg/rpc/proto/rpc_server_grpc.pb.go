@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v7.34.1
-// source: pkg/rpc/proto/rpc_server.proto
+// source: rpc_server.proto
 
 package proto
 
@@ -56,6 +56,7 @@ const (
 	EndNodeAccess_SetNodeGroups_FullMethodName        = "/proto.EndNodeAccess/SetNodeGroups"
 	EndNodeAccess_UpsertClusterUsers_FullMethodName   = "/proto.EndNodeAccess/UpsertClusterUsers"
 	EndNodeAccess_GetStatus_FullMethodName            = "/proto.EndNodeAccess/GetStatus"
+	EndNodeAccess_GetContainers_FullMethodName        = "/proto.EndNodeAccess/GetContainers"
 )
 
 // EndNodeAccessClient is the client API for EndNodeAccess service.
@@ -107,6 +108,8 @@ type EndNodeAccessClient interface {
 	UpsertClusterUsers(ctx context.Context, in *UpsertClusterUsersReq, opts ...grpc.CallOption) (*UpsertClusterUsersRsp, error)
 	// status
 	GetStatus(ctx context.Context, in *GetStatusReq, opts ...grpc.CallOption) (*GetStatusRsp, error)
+	// container
+	GetContainers(ctx context.Context, in *GetContainersReq, opts ...grpc.CallOption) (*GetContainersRsp, error)
 }
 
 type endNodeAccessClient struct {
@@ -487,6 +490,16 @@ func (c *endNodeAccessClient) GetStatus(ctx context.Context, in *GetStatusReq, o
 	return out, nil
 }
 
+func (c *endNodeAccessClient) GetContainers(ctx context.Context, in *GetContainersReq, opts ...grpc.CallOption) (*GetContainersRsp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetContainersRsp)
+	err := c.cc.Invoke(ctx, EndNodeAccess_GetContainers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EndNodeAccessServer is the server API for EndNodeAccess service.
 // All implementations must embed UnimplementedEndNodeAccessServer
 // for forward compatibility.
@@ -536,6 +549,8 @@ type EndNodeAccessServer interface {
 	UpsertClusterUsers(context.Context, *UpsertClusterUsersReq) (*UpsertClusterUsersRsp, error)
 	// status
 	GetStatus(context.Context, *GetStatusReq) (*GetStatusRsp, error)
+	// container
+	GetContainers(context.Context, *GetContainersReq) (*GetContainersRsp, error)
 	mustEmbedUnimplementedEndNodeAccessServer()
 }
 
@@ -656,6 +671,9 @@ func (UnimplementedEndNodeAccessServer) UpsertClusterUsers(context.Context, *Ups
 }
 func (UnimplementedEndNodeAccessServer) GetStatus(context.Context, *GetStatusReq) (*GetStatusRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetStatus not implemented")
+}
+func (UnimplementedEndNodeAccessServer) GetContainers(context.Context, *GetContainersReq) (*GetContainersRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetContainers not implemented")
 }
 func (UnimplementedEndNodeAccessServer) mustEmbedUnimplementedEndNodeAccessServer() {}
 func (UnimplementedEndNodeAccessServer) testEmbeddedByValue()                       {}
@@ -1344,6 +1362,24 @@ func _EndNodeAccess_GetStatus_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EndNodeAccess_GetContainers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetContainersReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).GetContainers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EndNodeAccess_GetContainers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).GetContainers(ctx, req.(*GetContainersReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EndNodeAccess_ServiceDesc is the grpc.ServiceDesc for EndNodeAccess service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1499,9 +1535,13 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "GetStatus",
 			Handler:    _EndNodeAccess_GetStatus_Handler,
 		},
+		{
+			MethodName: "GetContainers",
+			Handler:    _EndNodeAccess_GetContainers_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "pkg/rpc/proto/rpc_server.proto",
+	Metadata: "rpc_server.proto",
 }
 
 const (
@@ -1641,7 +1681,7 @@ var CenterNodeAdmin_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "pkg/rpc/proto/rpc_server.proto",
+	Metadata: "rpc_server.proto",
 }
 
 const (
@@ -1781,5 +1821,5 @@ var CenterNodeAccess_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "pkg/rpc/proto/rpc_server.proto",
+	Metadata: "rpc_server.proto",
 }

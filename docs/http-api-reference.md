@@ -1,6 +1,6 @@
 # v2raymg HTTP API Reference
 
-> 更新时间: 2026-04-03 (v3 - 统一 JSON 响应格式)
+> 更新时间: 2026-04-21 (v4 - 新增 GET /api/containers)
 > 基于 `pkg/http/init.go` 路由注册表及全部 Handler 源码生成
 
 ## 技术栈
@@ -90,6 +90,7 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 | DELETE | `/api/cert` | Admin | 删除证书 |
 | **节点 & 集群** |
 | GET | `/api/node` | Admin | 获取集群所有节点 |
+| GET | `/api/containers` | Admin | 获取节点已启用的 container 类型列表 |
 | GET | `/api/status` | User | 获取节点状态指标 |
 | PUT | `/api/gateway` | Admin | 启用/禁用 gateway 模式 |
 | PUT | `/api/pingCheck` | Admin | 启用/禁用 ping 检测 |
@@ -829,6 +830,27 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 
 ---
 
+#### GET /api/containers - 获取节点已启用的 Container 列表
+
+**Query:** `?target=节点名`
+
+返回指定节点（或全部节点）配置中已启用（`enabled: true`）的 container 类型。通过 gRPC 向目标节点查询，支持多节点并发。
+
+**Response (200):**
+```json
+{
+  "nodes": {
+    "node1": ["xray", "hysteria"],
+    "node2": ["xray"]
+  },
+  "failed": {
+    "node3": "connection timeout"
+  }
+}
+```
+
+---
+
 #### GET /api/status - 获取节点状态
 
 **Query:** `?target=节点名`
@@ -1059,7 +1081,7 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 | 密码修改 | `pkg/http/change_password_handler.go` |
 | Inbound | `pkg/http/bound_handler.go`, `inbound_list_handler.go`, `fastAddInbound_handler.go` |
 | 证书 | `pkg/http/cert_handler.go`, `get_certs_handler.go`, `tranfer_cert_handler.go`, `delete_cert_handler.go` |
-| 节点 | `pkg/http/node_handler.go`, `node_groups_handler.go` |
+| 节点 | `pkg/http/node_handler.go`, `node_groups_handler.go`, `node_containers_handler.go` |
 | 状态 | `pkg/http/status_handler.go` |
 | 订阅 | `pkg/http/sub_handler.go` |
 | RPC Client | `pkg/rpc/client/end_node_rpc.go` |

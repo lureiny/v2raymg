@@ -24,6 +24,7 @@ type ClusterNodes interface {
 	GetClusterToken() string
 }
 
+
 // CertReader provides read access to local certificate files.
 // It is a subset of the full CertManager interface, used only by TransferCertHandler.
 type CertReader interface {
