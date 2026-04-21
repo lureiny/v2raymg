@@ -132,6 +132,10 @@ func (m *mockForwardManager) Close() error {
 	return nil
 }
 
+func (m *mockForwardManager) DropUser(username string) bool {
+	return false
+}
+
 func TestNewUserManager(t *testing.T) {
 	um := NewUserManager(nil, "test-node")
 	if um == nil {
@@ -805,6 +809,9 @@ func (m *mockStatsForwardManager) GetUserClientLimitConfig(username string) (for
 }
 func (m *mockStatsForwardManager) Close() error {
 	return nil
+}
+func (m *mockStatsForwardManager) DropUser(username string) bool {
+	return false
 }
 
 func TestUserManager_StartTrafficStats(t *testing.T) {

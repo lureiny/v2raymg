@@ -70,6 +70,13 @@ type ForwardManager interface {
 	// Returns ok=false if no client limit is set.
 	GetUserClientLimitConfig(username string) (config ClientLimitConfig, ok bool)
 
+	// DropUser releases all per-user state (bandwidth limiter, client-limit
+	// limiter, stored client-limit config). Callers MUST have removed all of
+	// the user's rules first — otherwise active relays would be left holding
+	// dangling references to the dropped limiter objects. Returns true if any
+	// state was actually released.
+	DropUser(username string) bool
+
 	// Close stops all relays and releases all ports. After Close, the manager
 	// cannot be used.
 	Close() error

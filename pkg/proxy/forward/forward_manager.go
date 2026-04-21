@@ -217,38 +217,52 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 		}
 	}
 
-	// Get or create user-level client limiter (shared across all rules of the same user)
-	var clientLimiter ClientLimiter
+	// Get or create user-level client limiter (shared across all rules of the same user).
+	// The limiter is always created — even when effectiveMaxClients <= 0 — so that
+	// a later SetUserClientLimitConfig can update the limit in-place on this
+	// relay without requiring the rule to be re-added. See clientlimit.go for
+	// the passthrough semantics (MaxClients <= 0 = unlimited, no rejection).
+	//
+	// Apply the recycle/drain defaults when MaxClients > 0 so that callers that
+	// only pass a positive MaxClients inherit sane timings. For passthrough
+	// entries the zero values are fine — the limiter's own constructor and
+	// SetConfig paths backfill defaults anyway.
 	if effectiveMaxClients > 0 {
-		// Apply defaults if not specified
 		if recycleDelay <= 0 {
 			recycleDelay = 60
 		}
 		if drainSec <= 0 {
 			drainSec = 2
 		}
+	}
+	config := ClientLimitConfig{
+		MaxClients:              effectiveMaxClients,
+		RecycleDelaySec:        recycleDelay,
+		SingleDirectionDrainSec: drainSec,
+	}
+	// An explicit `rule.MaxClients < 0` signals "this rule wants passthrough"
+	// without claiming authority over the user-level policy. We still attach
+	// a passthrough limiter to the relay, but we must NOT stomp on any
+	// storedConfig an admin set earlier — otherwise simply adding a new rule
+	// with MaxClients=-1 would silently erase the per-user limit.
+	ruleOwnsUserPolicy := rule.MaxClients > 0
 
-		config := ClientLimitConfig{
-			MaxClients:              effectiveMaxClients,
-			RecycleDelaySec:        recycleDelay,
-			SingleDirectionDrainSec: drainSec,
-		}
-
-		// Check if user already has a client limiter
-		if existingLimiter, exists := m.userClientLimiters[rule.Username]; exists {
-			// Update config before reusing
+	var clientLimiter ClientLimiter
+	if existingLimiter, exists := m.userClientLimiters[rule.Username]; exists {
+		if ruleOwnsUserPolicy {
 			if limiter, ok := existingLimiter.(*remoteIPClientLimiter); ok {
 				limiter.SetConfig(config)
 			}
-			clientLimiter = existingLimiter
-		} else {
-			// Create new limiter and store config
-			clientLimiter = newRemoteIPClientLimiter(config)
-			m.userClientLimiters[rule.Username] = clientLimiter
+			m.userClientLimitConfigs[rule.Username] = config
+		}
+		clientLimiter = existingLimiter
+	} else {
+		clientLimiter = newRemoteIPClientLimiter(config)
+		m.userClientLimiters[rule.Username] = clientLimiter
+		if ruleOwnsUserPolicy {
 			m.userClientLimitConfigs[rule.Username] = config
 		}
 	}
-	// If effectiveMaxClients <= 0, clientLimiter stays nil (no limit)
 
 	// Create and start relay, dispatched by network kind.
 	var relay Relay
@@ -699,34 +713,68 @@ func (m *DefaultForwardManager) GetUserBandwidthLimit(username string, kind Band
 	return lim.DownloadRate(), true
 }
 
-// SetUserClientLimitConfig sets the client limit config for a user.
-// This updates the limiter configuration for all existing rules of the user.
-// If config.MaxClients <= 0, the limit is disabled (limiter removed).
+// SetUserClientLimitConfig sets the client limit config for a user and, if
+// the user already has a shared limiter attached to active rules, applies it
+// in-place. Passing MaxClients <= 0 puts that limiter into passthrough mode
+// without dropping the shared instance — the "stable reference" invariant —
+// so a later call with MaxClients > 0 re-enables the limit without requiring
+// rules to be re-added.
+//
+// When the user has no active rule yet, the limiter is NOT created here:
+// AddRule creates it on demand, seeded from the stored config. This keeps
+// the limiter object lifecycle tied to the presence of rules and avoids
+// leaking standalone limiters for users that were synced in from the
+// cluster but never had a local inbound.
 func (m *DefaultForwardManager) SetUserClientLimitConfig(username string, config ClientLimitConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// If maxClients <= 0, disable the limit
-	if config.MaxClients <= 0 {
-		// Remove stored config
-		delete(m.userClientLimitConfigs, username)
-		// Remove active limiter (dynamically disable)
-		delete(m.userClientLimiters, username)
-		return nil
-	}
-
-	// Store config for future rules
+	// Store the canonical config (used as the seed when AddRule later creates
+	// a relay for this user).
 	m.userClientLimitConfigs[username] = config
 
-	// If user already has a client limiter, update its config
 	if existingLimiter, exists := m.userClientLimiters[username]; exists {
 		if limiter, ok := existingLimiter.(*remoteIPClientLimiter); ok {
 			limiter.SetConfig(config)
 		}
 	}
-
-	// If no limiter exists, don't create one yet (lazy creation on AddRule)
 	return nil
+}
+
+// DropUser releases all user-level resources attached to the given username:
+// bandwidth limiter, client-limit limiter, and stored client-limit config.
+//
+// Usage contract: call this from a user-lifecycle terminator (RemoveUser /
+// cluster tombstone) so that per-user maps don't accumulate across user
+// churn. The typical flow is asynchronous — the rule teardown is kicked off
+// by emitting UserEventRemove, and DropUser runs immediately after without
+// waiting for container subscribers to finish. That is safe in practice:
+//   - Active relays keep a direct pointer to the limiter objects, so dropping
+//     them from the manager's maps does NOT cause use-after-free (GC holds
+//     the objects as long as relays reference them). The limiters simply
+//     become untracked, and Stop() tears them down shortly after.
+//   - New rules for the same user will build fresh limiter instances on the
+//     next AddRule. If a re-created user races rule teardown of the old
+//     lifetime, there is a narrow window where old relays still rate-limit
+//     against the old limiter and new relays use the new one (transient
+//     "2x quota"). Accepted as the cost of running DropUser and rule
+//     teardown in parallel rather than serialising them.
+//
+// Returns true if any state was released, false if no per-user state existed.
+// Safe to call on unknown usernames.
+func (m *DefaultForwardManager) DropUser(username string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	_, hadBW := m.userBandwidth[username]
+	_, hadCL := m.userClientLimiters[username]
+	_, hadCfg := m.userClientLimitConfigs[username]
+
+	delete(m.userBandwidth, username)
+	delete(m.userClientLimiters, username)
+	delete(m.userClientLimitConfigs, username)
+
+	return hadBW || hadCL || hadCfg
 }
 
 // GetUserClientLimitConfig returns the current client limit config for a user.

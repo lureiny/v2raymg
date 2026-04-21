@@ -79,10 +79,13 @@ type remoteIPClientLimiter struct {
 	drainEnd map[string]time.Time  // drain deadline for each remote IP (single-direction recovery)
 }
 
+// newRemoteIPClientLimiter creates a remoteIPClientLimiter.
+// MaxClients <= 0 means passthrough (unlimited): Acquire still tracks slots
+// so that a later SetConfig(MaxClients>0) can count in-flight sessions toward
+// the quota, but never rejects. This "stable reference" design mirrors
+// userBandwidthLimiter and lets callers update the policy in-place without
+// swapping the limiter attached to active relays.
 func newRemoteIPClientLimiter(config ClientLimitConfig) *remoteIPClientLimiter {
-	if config.MaxClients <= 0 {
-		config.MaxClients = 1
-	}
 	if config.RecycleDelaySec <= 0 {
 		config.RecycleDelaySec = 60
 	}
@@ -129,8 +132,10 @@ func (l *remoteIPClientLimiter) Acquire(remoteIP string) bool {
 		}
 	}
 
-	// Check if we've reached the client limit
-	if activeSlots >= l.config.MaxClients {
+	// Passthrough when MaxClients <= 0: always admit, but still allocate a
+	// slot below so that a subsequent SetConfig(MaxClients>0) can account for
+	// in-flight sessions.
+	if l.config.MaxClients > 0 && activeSlots >= l.config.MaxClients {
 		return false
 	}
 

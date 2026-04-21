@@ -202,6 +202,24 @@ func NewUserManagerWithStore(fm forward.ForwardManager, storeMgr *store.StoreMan
 		}
 	}
 
+	// Rehydrate the forward layer with per-user bandwidth and client-limit
+	// state loaded from the store. Without this, a process restart leaves the
+	// forward layer empty until an admin re-issues SetUserBandwidthLimit /
+	// SetUserClientLimit — meaning limits that were persisted to disk stop
+	// being enforced across restarts. Tombstones are skipped because they'll
+	// be torn down anyway; no lock is needed here because construction runs
+	// before any goroutine can observe m.
+	for _, u := range m.users {
+		if u.IsDeleting() {
+			continue
+		}
+		m.applyRuntimeSideEffects(
+			u.Username,
+			u.BandwidthUploadBps, u.BandwidthDownloadBps,
+			u.MaxClients, u.ClientRecycleDelaySec, u.ClientDrainSec,
+		)
+	}
+
 	return m, nil
 }
 
@@ -538,6 +556,15 @@ func (m *UserManager) RemoveUser(req RemoveUserRequest) error {
 	// RemoveUser is idempotent: not-found is not an error.
 	if errors.HasCode(err, errors.ErrUserNotFound) {
 		return nil
+	}
+	if err == nil && m.forwardMgr != nil {
+		// Release per-user state held by the forward layer (bandwidth limiter,
+		// client-limit limiter, stored client-limit config) so map entries
+		// don't accumulate with every user churn. Any active rules are torn
+		// down asynchronously by container subscribers reacting to
+		// UserEventRemove, so by the time DropUser's contract ("rules removed
+		// first") matters, relays are being stopped anyway.
+		m.forwardMgr.DropUser(req.Username)
 	}
 	return err
 }
@@ -1135,6 +1162,37 @@ func (m *UserManager) RotateAllUserPorts(username string) (map[string]uint32, er
 	return result, firstErr
 }
 
+// applyRuntimeSideEffects pushes a snapshot of the user's bandwidth and
+// client-limit policy into the forward layer so active relays adopt the new
+// values in-place. It is idempotent: forwardMgr.SetUserBandwidthLimit and
+// SetUserClientLimitConfig only move shared limiter state, so repeat calls
+// with unchanged values are no-ops.
+//
+// Both the HTTP/RPC path (SetUserBandwidthLimit / SetUserClientLimit) and the
+// cluster sync path (SyncUpsertUser) must go through this helper so that an
+// update delivered via either channel produces the same runtime effect.
+//
+// Values are taken by copy rather than through a *User to avoid a data race:
+// HTTP-path callers release m.mu between the mutateUser transaction and this
+// call, so reading fields off the user pointer while unlocked would race with
+// concurrent mutateUsers. Callers must snapshot fields while still holding
+// m.mu (RLock is enough) and pass them in.
+//
+// The forward layer has an independent mutex and does not call back into
+// UserManager, so it is safe for callers to still be holding m.mu.
+func (m *UserManager) applyRuntimeSideEffects(username string, uploadBps, downloadBps int64, maxClients, recycleDelaySec, drainSec int) {
+	if m.forwardMgr == nil || username == "" {
+		return
+	}
+	_ = m.forwardMgr.SetUserBandwidthLimit(username, forward.BandwidthUpload, uploadBps)
+	_ = m.forwardMgr.SetUserBandwidthLimit(username, forward.BandwidthDownload, downloadBps)
+	_ = m.forwardMgr.SetUserClientLimitConfig(username, forward.ClientLimitConfig{
+		MaxClients:              maxClients,
+		RecycleDelaySec:        recycleDelaySec,
+		SingleDirectionDrainSec: drainSec,
+	})
+}
+
 // SetUserBandwidthLimit sets the bandwidth limit for a user.
 // It updates the user's bandwidth configuration and syncs to ForwardManager.
 func (m *UserManager) SetUserBandwidthLimit(username string, kind forward.BandwidthLimitKind, bytesPerSec int64) error {
@@ -1160,10 +1218,19 @@ func (m *UserManager) SetUserBandwidthLimit(username string, kind forward.Bandwi
 		return err
 	}
 
-	// Sync to ForwardManager (outside mutateUser since it doesn't need stamp/persist)
-	if m.forwardMgr != nil {
-		_ = m.forwardMgr.SetUserBandwidthLimit(username, kind, bytesPerSec)
+	// Route forward-layer sync through the shared helper so HTTP and cluster
+	// paths produce identical runtime effects. Snapshot fields under RLock
+	// before calling — reading off the pointer while unlocked would race with
+	// a concurrent mutateUser.
+	m.mu.RLock()
+	var upBps, downBps int64
+	var mc, rd, dr int
+	if u, ok := m.users[username]; ok {
+		upBps, downBps = u.BandwidthUploadBps, u.BandwidthDownloadBps
+		mc, rd, dr = u.MaxClients, u.ClientRecycleDelaySec, u.ClientDrainSec
 	}
+	m.mu.RUnlock()
+	m.applyRuntimeSideEffects(username, upBps, downBps, mc, rd, dr)
 
 	return nil
 }
@@ -1207,14 +1274,19 @@ func (m *UserManager) SetUserClientLimit(username string, maxClients, recycleDel
 		return err
 	}
 
-	// Sync to ForwardManager (outside mutateUser since it doesn't need stamp/persist)
-	if m.forwardMgr != nil {
-		_ = m.forwardMgr.SetUserClientLimitConfig(username, forward.ClientLimitConfig{
-			MaxClients:              maxClients,
-			RecycleDelaySec:        recycleDelaySec,
-			SingleDirectionDrainSec: drainSec,
-		})
+	// Route forward-layer sync through the shared helper so HTTP and cluster
+	// paths produce identical runtime effects. Snapshot fields under RLock
+	// before calling — reading off the pointer while unlocked would race with
+	// a concurrent mutateUser.
+	m.mu.RLock()
+	var upBps, downBps int64
+	var mcSnap, rdSnap, drSnap int
+	if u, ok := m.users[username]; ok {
+		upBps, downBps = u.BandwidthUploadBps, u.BandwidthDownloadBps
+		mcSnap, rdSnap, drSnap = u.MaxClients, u.ClientRecycleDelaySec, u.ClientDrainSec
 	}
+	m.mu.RUnlock()
+	m.applyRuntimeSideEffects(username, upBps, downBps, mcSnap, rdSnap, drSnap)
 
 	return nil
 }
@@ -1448,6 +1520,12 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 					return false, fmt.Errorf("SyncUpsertUser: persist tombstone: %w", err)
 				}
 			}
+			// Match the HTTP RemoveUser path: release any per-user state the
+			// forward layer accumulated for this username (e.g. from an earlier
+			// applyRuntimeSideEffects during a non-tombstone sync).
+			if m.forwardMgr != nil {
+				m.forwardMgr.DropUser(incoming.Username)
+			}
 			return true, nil
 		}
 		// Local user exists and is not yet deleting — trigger local removal.
@@ -1464,6 +1542,9 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 			if err := m.store.Save(existing); err != nil {
 				return false, fmt.Errorf("SyncUpsertUser: persist tombstone: %w", err)
 			}
+		}
+		if m.forwardMgr != nil {
+			m.forwardMgr.DropUser(existing.Username)
 		}
 
 		// Emit remove event so containers clean up ports.
@@ -1489,6 +1570,14 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 				return false, fmt.Errorf("SyncUpsertUser: persist new user: %w", err)
 			}
 		}
+		// Match the HTTP path's runtime behaviour so fresh users propagated by
+		// cluster sync end up with their bandwidth/client-limit actually
+		// enforced by the forward layer on this node.
+		m.applyRuntimeSideEffects(
+			incoming.Username,
+			incoming.BandwidthUploadBps, incoming.BandwidthDownloadBps,
+			incoming.MaxClients, incoming.ClientRecycleDelaySec, incoming.ClientDrainSec,
+		)
 		m.emitEvent(UserEvent{
 			Type:     UserEventAdd,
 			Username: incoming.Username,
@@ -1527,6 +1616,19 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 			return false, fmt.Errorf("SyncUpsertUser: persist update: %w", err)
 		}
 	}
+	// Push bandwidth and client-limit fields down to the forward layer so this
+	// node observes the same runtime behaviour as a node that received the
+	// change through HTTP/RPC directly. Tombstone→active revival also flows
+	// through this branch: applyRuntimeSideEffects refills the per-user
+	// forward state that DropUser cleared on the earlier tombstone, and
+	// UserEventUpdate's "became visible" branch in the container handlers
+	// (snell/hysteria GetBindPort, xray syncUserToInbound) re-allocates ports
+	// because previous UserEventRemove cleared their addedUsers tracking.
+	m.applyRuntimeSideEffects(
+		existing.Username,
+		existing.BandwidthUploadBps, existing.BandwidthDownloadBps,
+		existing.MaxClients, existing.ClientRecycleDelaySec, existing.ClientDrainSec,
+	)
 	m.emitEvent(UserEvent{
 		Type:     UserEventUpdate,
 		Username: existing.Username,

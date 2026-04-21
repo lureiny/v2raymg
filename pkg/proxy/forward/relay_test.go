@@ -706,51 +706,126 @@ func TestClientLimiter_ConcurrentAcquireCancel(t *testing.T) {
 	}
 }
 
-// TestForwardManager_ClientLimitDisable tests that setting maxClients=0 disables the limit.
+// TestForwardManager_ClientLimitDisable covers the disable→re-enable cycle
+// against an *existing* user-level limiter: once AddRule attached a shared
+// remoteIPClientLimiter, subsequent SetUserClientLimitConfig calls must update
+// that same instance in place (including switching to passthrough when
+// MaxClients<=0), not replace or drop it — that is the stable-reference
+// invariant relays depend on.
 func TestForwardManager_ClientLimitDisable(t *testing.T) {
-	allocCfg := PortAllocatorConfig{
+	m, err := NewDefaultForwardManager(PortAllocatorConfig{
 		MinPort:   10000,
 		MaxPort:   10010,
 		UseRandom: false,
-	}
-	m, err := NewDefaultForwardManager(allocCfg)
+	})
 	if err != nil {
 		t.Fatalf("create manager: %v", err)
 	}
 	defer m.Close()
 
-	// Set client limit config with MaxClients=1
-	config := ClientLimitConfig{
-		MaxClients:              1,
-		RecycleDelaySec:        60,
-		SingleDirectionDrainSec: 2,
-	}
-	err = m.SetUserClientLimitConfig("user1", config)
-	if err != nil {
-		t.Fatalf("SetUserClientLimitConfig: %v", err)
+	// Attach a limiter via AddRule with an initial MaxClients=1 policy.
+	if _, err := m.AddRule(ForwardRule{
+		Username:               "user1",
+		ContainerType:          "xray",
+		InboundTag:             "in1",
+		TargetAddr:             "127.0.0.1:8080",
+		ListenPort:             10000,
+		MaxClients:             1,
+		ClientRecycleDelaySec:  60,
+		ClientDrainSec:         2,
+	}); err != nil {
+		t.Fatalf("AddRule: %v", err)
 	}
 
-	// Verify config is stored
+	limiter := m.userClientLimiters["user1"]
+	if limiter == nil {
+		t.Fatal("expected limiter to be attached after AddRule with MaxClients>0")
+	}
 	storedConfig, ok := m.GetUserClientLimitConfig("user1")
 	if !ok || storedConfig.MaxClients != 1 {
-		t.Fatalf("expected config MaxClients=1, got %v", storedConfig)
+		t.Fatalf("expected stored MaxClients=1, got ok=%v cfg=%v", ok, storedConfig)
 	}
 
-	// Now disable by setting MaxClients=0
-	disabledConfig := ClientLimitConfig{
+	// Disable by setting MaxClients=0. The config and limiter must remain so
+	// that the relay already referencing `limiter` immediately observes the
+	// passthrough policy without needing a re-AddRule.
+	if err := m.SetUserClientLimitConfig("user1", ClientLimitConfig{
 		MaxClients:              0,
 		RecycleDelaySec:        60,
 		SingleDirectionDrainSec: 2,
-	}
-	err = m.SetUserClientLimitConfig("user1", disabledConfig)
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("SetUserClientLimitConfig to disable: %v", err)
 	}
 
-	// Verify config is removed
-	_, ok = m.GetUserClientLimitConfig("user1")
-	if ok {
-		t.Fatal("expected config to be removed after setting MaxClients=0")
+	disabledConfig, ok := m.GetUserClientLimitConfig("user1")
+	if !ok {
+		t.Fatal("expected config to stay present in passthrough mode")
+	}
+	if disabledConfig.MaxClients != 0 {
+		t.Errorf("expected MaxClients=0 after disable, got %d", disabledConfig.MaxClients)
+	}
+	if m.userClientLimiters["user1"] != limiter {
+		t.Error("expected limiter instance to be preserved across enable -> disable (stable reference)")
+	}
+
+	impl := limiter.(*remoteIPClientLimiter)
+	if !impl.Acquire("10.0.0.1") {
+		t.Error("passthrough Acquire #1 should succeed")
+	}
+	impl.ConfirmAcquire("10.0.0.1")
+	if !impl.Acquire("10.0.0.2") {
+		t.Error("passthrough Acquire for a second IP should succeed in passthrough mode")
+	}
+	impl.ConfirmAcquire("10.0.0.2")
+
+	// Re-enabling with MaxClients=1 must use the same limiter instance; the
+	// pre-existing slots count toward the new quota, so a third IP is rejected.
+	if err := m.SetUserClientLimitConfig("user1", ClientLimitConfig{
+		MaxClients:              1,
+		RecycleDelaySec:        60,
+		SingleDirectionDrainSec: 2,
+	}); err != nil {
+		t.Fatalf("SetUserClientLimitConfig re-enable: %v", err)
+	}
+	if m.userClientLimiters["user1"] != limiter {
+		t.Error("expected same limiter instance after re-enable")
+	}
+	if impl.Acquire("10.0.0.3") {
+		t.Error("third IP should be rejected under MaxClients=1 (existing slots count toward quota)")
+	}
+}
+
+// TestForwardManager_SetUserClientLimitConfig_NoStandaloneLimiter guards the
+// new lazy-creation invariant: SetUserClientLimitConfig stores the config for
+// future rules but must NOT pre-create a standalone limiter when no rule is
+// attached. Pre-creating one would leak a *remoteIPClientLimiter for every
+// default-limit user synced in from the cluster that never has a local
+// inbound.
+func TestForwardManager_SetUserClientLimitConfig_NoStandaloneLimiter(t *testing.T) {
+	m, err := NewDefaultForwardManager(PortAllocatorConfig{
+		MinPort:   10000,
+		MaxPort:   10010,
+		UseRandom: false,
+	})
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	defer m.Close()
+
+	if err := m.SetUserClientLimitConfig("ghost-user", ClientLimitConfig{
+		MaxClients:              5,
+		RecycleDelaySec:        30,
+		SingleDirectionDrainSec: 1,
+	}); err != nil {
+		t.Fatalf("SetUserClientLimitConfig: %v", err)
+	}
+
+	if _, ok := m.userClientLimiters["ghost-user"]; ok {
+		t.Error("SetUserClientLimitConfig must not create a standalone limiter for a user with no rule")
+	}
+	// Config should still be stored so AddRule can later seed the limiter.
+	if cfg, ok := m.GetUserClientLimitConfig("ghost-user"); !ok || cfg.MaxClients != 5 {
+		t.Errorf("expected stored config to survive, got ok=%v cfg=%v", ok, cfg)
 	}
 }
 
@@ -852,4 +927,100 @@ func TestForwardManager_AddRuleWithDisable(t *testing.T) {
 	// Rule should be created successfully with no client limiter
 	_ = createdRule
 	// The key point is it shouldn't panic - the rule is created with no client limit
+}
+
+// TestForwardManager_SetUserClientLimit_AppliesToExistingRule guards the bug
+// where AddRule without a client limit left relay.clientLimiter=nil, so any
+// later SetUserClientLimitConfig only mutated stored config without ever
+// taking effect on the active relay. With the "stable reference" fix, AddRule
+// always attaches a shared limiter (passthrough when MaxClients<=0), and
+// SetUserClientLimitConfig mutates that same instance so already-running
+// relays observe the new policy immediately.
+func TestForwardManager_SetUserClientLimit_AppliesToExistingRule(t *testing.T) {
+	m, err := NewDefaultForwardManager(PortAllocatorConfig{
+		MinPort:   10000,
+		MaxPort:   10010,
+		UseRandom: false,
+	})
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	defer m.Close()
+
+	// AddRule WITHOUT any prior client-limit config — effectiveMaxClients = 0,
+	// so in the old code no limiter was ever created and relay.clientLimiter
+	// stayed nil.
+	if _, err := m.AddRule(ForwardRule{
+		Username:      "user1",
+		ContainerType: "xray",
+		InboundTag:    "in1",
+		TargetAddr:    "127.0.0.1:8080",
+		ListenPort:    10000,
+	}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+
+	// Fix assertion #1: a shared limiter MUST exist after AddRule.
+	limiter, ok := m.userClientLimiters["user1"]
+	if !ok || limiter == nil {
+		t.Fatal("expected AddRule to attach a user-level client limiter even when MaxClients=0")
+	}
+	// Fix assertion #2: the relay must reference the same limiter instance, so
+	// an in-place SetConfig visibly changes the relay's policy.
+	ruleKey := "xray:in1:user1"
+	mr, ok := m.rules[ruleKey]
+	if !ok {
+		t.Fatalf("rule %q not registered", ruleKey)
+	}
+	if mr.clientLimiter != limiter {
+		t.Fatal("expected relay.clientLimiter to be the same shared instance stored on the manager")
+	}
+
+	impl := limiter.(*remoteIPClientLimiter)
+
+	// Under passthrough any number of distinct IPs should be admitted.
+	for i := 0; i < 5; i++ {
+		ip := fmt.Sprintf("10.0.0.%d", i+1)
+		if !impl.Acquire(ip) {
+			t.Fatalf("passthrough Acquire(%s) rejected; limiter not in passthrough", ip)
+		}
+		impl.ConfirmAcquire(ip)
+	}
+
+	// Tighten the policy: MaxClients=2. Existing 5 sessions stay active;
+	// the in-place config change must start rejecting new IPs that would push
+	// the total over budget.
+	if err := m.SetUserClientLimitConfig("user1", ClientLimitConfig{
+		MaxClients:              2,
+		RecycleDelaySec:        60,
+		SingleDirectionDrainSec: 2,
+	}); err != nil {
+		t.Fatalf("SetUserClientLimitConfig: %v", err)
+	}
+	if m.userClientLimiters["user1"] != limiter {
+		t.Error("limiter instance must not be replaced by SetUserClientLimitConfig")
+	}
+	if mr.clientLimiter != limiter {
+		t.Error("relay.clientLimiter must still point at the shared instance (stable reference)")
+	}
+	// A brand-new IP should now be rejected — previous 5 slots are still counted.
+	if impl.Acquire("10.0.0.99") {
+		t.Error("expected 6th distinct IP to be rejected after SetUserClientLimitConfig(MaxClients=2)")
+	}
+
+	// Reverse direction: MaxClients=0 flips back to passthrough without
+	// dropping the limiter.
+	if err := m.SetUserClientLimitConfig("user1", ClientLimitConfig{
+		MaxClients:              0,
+		RecycleDelaySec:        60,
+		SingleDirectionDrainSec: 2,
+	}); err != nil {
+		t.Fatalf("SetUserClientLimitConfig(MaxClients=0): %v", err)
+	}
+	if m.userClientLimiters["user1"] != limiter {
+		t.Error("limiter instance must not be dropped when going to passthrough")
+	}
+	if !impl.Acquire("10.0.0.99") {
+		t.Error("passthrough should admit the previously-rejected IP")
+	}
 }

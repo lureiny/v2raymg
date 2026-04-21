@@ -262,6 +262,10 @@ func (m *mockForwardManagerForTest) Close() error {
 	return nil
 }
 
+func (m *mockForwardManagerForTest) DropUser(username string) bool {
+	return false
+}
+
 // mockUserManagerGetter is a mock implementation of usermanager.UserManagerGetter for testing.
 type mockUserManagerGetter struct {
 	um *usermanager.UserManager
