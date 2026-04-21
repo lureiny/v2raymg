@@ -228,6 +228,10 @@ func (handler *UserResetHandler) handlerFunc(c *gin.Context) {
 		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
+	if req.User == "" {
+		jsonErr(c, 400, "user is required")
+		return
+	}
 	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
 	userPoint := &proto.User{Name: req.User}
 	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
@@ -255,6 +259,53 @@ func (handler *UserResetHandler) getRelativePath() string { return "/user/reset"
 func (handler *UserResetHandler) help() string {
 	return `POST /api/user/reset
 	重置用户proxy密钥
+	body: {"target": "", "user": ""}`
+}
+
+// UserResetTrafficHandler POST /user/reset-traffic — 重置用户累计持久化流量统计
+type UserResetTrafficHandler struct{ HttpHandlerImp }
+
+func (handler *UserResetTrafficHandler) handlerFunc(c *gin.Context) {
+	var req struct {
+		Target string `json:"target"`
+		User   string `json:"user"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+	if req.User == "" {
+		jsonErr(c, 400, "user is required")
+		return
+	}
+	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
+	userPoint := &proto.User{Name: req.User}
+	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
+	if len(nodes) == 0 {
+		jsonErr(c, 502, "no available node")
+		return
+	}
+	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
+	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.ResetUserTrafficReqType, &proto.UserOpReq{Users: []*proto.User{userPoint}}, handler.getHttpServer().GetClusterToken())
+	if len(failedList) != 0 {
+		errMsg := joinFailedList(failedList)
+		log.Errorf("Err=%s|User=%s|Target=%s", errMsg, req.User, req.Target)
+		jsonErr(c, 500, errMsg)
+		return
+	}
+	jsonOK(c)
+}
+
+func (handler *UserResetTrafficHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{handler.handlerFunc}
+}
+
+func (handler *UserResetTrafficHandler) getRelativePath() string { return "/user/reset-traffic" }
+
+func (handler *UserResetTrafficHandler) help() string {
+	return `POST /api/user/reset-traffic
+	重置用户累计持久化流量统计 (TrafficTotalUplink/Downlink 清零)
+	节点自治: 每个目标节点各自清零本地累计值; target 为空默认作用本机。
 	body: {"target": "", "user": ""}`
 }
 

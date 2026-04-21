@@ -128,6 +128,14 @@ type UserManager struct {
 	// statsCollector handles periodic traffic stats collection
 	statsCollector *statsCollector
 
+	// lastSeenUserTotal is the per-user snapshot of statsCollector's Total values
+	// observed by the onCollect callback. Used to compute delta since the previous
+	// persist cycle so the DB TrafficTotalUplink/Downlink advances monotonically
+	// across process restarts. Lifted out of StartTrafficStats' closure so
+	// ResetUserTotalTraffic can clear a user's entry atomically with the reset.
+	// Protected by mu.
+	lastSeenUserTotal map[string][2]int64
+
 	// loginPasswordHasher, if set, is called to produce a login_password hash from
 	// a plaintext proxy password whenever a user is created or has their password changed.
 	// It is a function field to avoid a circular import on pkg/http/auth.
@@ -150,11 +158,12 @@ type UserManager struct {
 // localNodeName identifies this node for version stamping; use the node's config name.
 func NewUserManager(fm forward.ForwardManager, localNodeName string) *UserManager {
 	return &UserManager{
-		users:          make(map[string]*contracts.User),
-		forwardMgr:     fm,
-		localNodeName:  localNodeName,
-		eventCh:        make(chan UserEvent, 100), // Buffered channel
-		statsCollector: newStatsCollector(fm, time.Second),
+		users:             make(map[string]*contracts.User),
+		forwardMgr:        fm,
+		localNodeName:     localNodeName,
+		eventCh:           make(chan UserEvent, 100), // Buffered channel
+		statsCollector:    newStatsCollector(fm, time.Second),
+		lastSeenUserTotal: make(map[string][2]int64),
 	}
 }
 
@@ -163,12 +172,13 @@ func NewUserManager(fm forward.ForwardManager, localNodeName string) *UserManage
 // localNodeName identifies this node for version stamping; use the node's config name.
 func NewUserManagerWithStore(fm forward.ForwardManager, storeMgr *store.StoreManager, localNodeName string) (*UserManager, error) {
 	m := &UserManager{
-		users:          make(map[string]*contracts.User),
-		forwardMgr:     fm,
-		localNodeName:  localNodeName,
-		store:          storeMgr.UserStore(),
-		eventCh:        make(chan UserEvent, 100),
-		statsCollector: newStatsCollector(fm, time.Second),
+		users:             make(map[string]*contracts.User),
+		forwardMgr:        fm,
+		localNodeName:     localNodeName,
+		store:             storeMgr.UserStore(),
+		eventCh:           make(chan UserEvent, 100),
+		statsCollector:    newStatsCollector(fm, time.Second),
+		lastSeenUserTotal: make(map[string][2]int64),
 	}
 
 	loaded, err := storeMgr.UserStore().Load()
@@ -1364,6 +1374,21 @@ func (m *UserManager) AddUserForTest(username string, bindPorts []uint32) error 
 	return nil
 }
 
+// SetUserTrafficTotalForTest seeds the cumulative traffic counters for a user
+// under m.mu. Intended only for tests that need to assert reset behaviour
+// without racing the stats collector's onCollect callback.
+func (m *UserManager) SetUserTrafficTotalForTest(username string, up, down int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.users[username]
+	if !ok {
+		return fmt.Errorf("user not found: %s", username)
+	}
+	u.TrafficTotalUplink = up
+	u.TrafficTotalDownlink = down
+	return nil
+}
+
 // SetPortMappingForTest sets a port mapping for a user (for testing only).
 // dstPort is the inbound backend port, forwardPort is the user-facing port.
 func (m *UserManager) SetPortMappingForTest(username string, dstPort, forwardPort uint32) {
@@ -1796,13 +1821,18 @@ func (sc *statsCollector) collect() {
 	sc.stats.Global.Total.TotalUplink += globalDeltaUp
 	sc.stats.Global.Total.TotalDownlink += globalDeltaDown
 
-	// Notify caller to persist Total values
+	// Notify caller to persist Total values. The callback is invoked
+	// synchronously while sc.mu is held so that the snapshot cannot become
+	// stale relative to concurrent state mutations (e.g. ResetUserTotalTraffic
+	// which clears ByUser and the persisted totals under both sc.mu and m.mu).
+	// Lock order: sc.mu -> m.mu — the callback acquires m.mu internally, and
+	// ResetUserTotalTraffic acquires sc.mu then m.mu to match.
 	if sc.onCollect != nil && (globalDeltaUp > 0 || globalDeltaDown > 0) {
 		snapshot := make(map[string]UserTrafficStats, len(sc.stats.ByUser))
 		for k, v := range sc.stats.ByUser {
 			snapshot[k] = v
 		}
-		go sc.onCollect(snapshot)
+		sc.onCollect(snapshot)
 	}
 }
 
@@ -1909,6 +1939,52 @@ func (sc *statsCollector) resetUserTotal(username string) {
 	}
 }
 
+// drainForUserLocked aligns the delta baseline for the given user to the
+// forward layer's current counter snapshot and zeroes the user's aggregated
+// stats so that subsequent collect() cycles only account for traffic produced
+// after the drain. It is the precise drain primitive used by
+// ResetUserTotalTraffic.
+//
+// Caller MUST hold sc.mu. Pairing with the sc.mu -> m.mu lock order used by
+// collect()+onCollect, ResetUserTotalTraffic acquires sc.mu before m.mu and
+// calls this method inline — that way a reset is atomic with respect to any
+// in-flight collect/onCollect pair.
+//
+// Effect:
+//   - prevCounters[key] = forward current value for every record with the
+//     given username (so the next collect() computes delta=0 for the portion
+//     that had already accrued at drain time).
+//   - stats.ByUser[key].TotalUplink/Downlink/DeltaUplink/DeltaDownlink = 0
+//     for every entry whose Username matches.
+//
+// Caller must clear lastSeenUserTotal[username] separately (that map lives on
+// UserManager, not statsCollector).
+func (sc *statsCollector) drainForUserLocked(username string) {
+	if sc.forwardMgr != nil {
+		records := sc.forwardMgr.GetAllTrafficRecords(false)
+		for _, record := range records {
+			if record.Username != username {
+				continue
+			}
+			key := string(record.ContainerType) + ":" + record.InboundTag + ":" + record.Username
+			sc.prevCounters[key] = trafficCounter{
+				uplink:   record.UplinkBytes,
+				downlink: record.DownlinkBytes,
+			}
+		}
+	}
+
+	for key, v := range sc.stats.ByUser {
+		if v.Username == username {
+			v.TotalUplink = 0
+			v.TotalDownlink = 0
+			v.DeltaUplink = 0
+			v.DeltaDownlink = 0
+			sc.stats.ByUser[key] = v
+		}
+	}
+}
+
 // ============ UserManager Traffic Stats API ============
 
 // StartTrafficStats starts periodic traffic stats collection from forward layer.
@@ -1919,11 +1995,19 @@ func (m *UserManager) StartTrafficStats(interval time.Duration) {
 		m.statsCollector = newStatsCollector(m.forwardMgr, interval)
 	}
 	// Register callback to persist TotalUplink/TotalDownlink after each collect cycle.
-	// We track the last-seen statsCollector totals so we can compute the delta
-	// since the previous persist cycle and add it to the DB value. This avoids
-	// overwriting historical traffic when the process restarts (statsCollector
-	// totals start at zero on each run).
-	lastSeen := make(map[string][2]int64) // username -> [lastTotalUp, lastTotalDown]
+	// We track the last-seen statsCollector totals (in m.lastSeenUserTotal, initialised
+	// by the UserManager constructors) so we can compute the delta since the previous
+	// persist cycle and add it to the DB value. This avoids overwriting historical
+	// traffic when the process restarts (statsCollector totals start at zero on each run).
+	//
+	// TODO(perf): this callback runs synchronously under sc.mu (see collect())
+	// and issues store.Save per active user, which serialises every concurrent
+	// sc.mu reader (GetStats / ForceCollect / resetUserDelta / Prometheus
+	// scrape) against SQLite IO for the duration of the tick. Acceptable on
+	// minute-scale intervals but can cause p99 blips at 1s tick with many
+	// active users. Future optimisation: copy pending deltas under sc.mu,
+	// release, then persist under a dedicated persistMu that also mutex-locks
+	// against ResetUserTotalTraffic.
 	m.statsCollector.onCollect = func(byUser map[string]UserTrafficStats) {
 		// Aggregate per-username (sum across inbounds)
 		totals := make(map[string][2]int64) // username -> [totalUp, totalDown]
@@ -1937,10 +2021,10 @@ func (m *UserManager) StartTrafficStats(interval time.Duration) {
 		defer m.mu.Unlock()
 		for username, t := range totals {
 			if u, ok := m.users[username]; ok {
-				prev := lastSeen[username]
+				prev := m.lastSeenUserTotal[username]
 				deltaUp := t[0] - prev[0]
 				deltaDown := t[1] - prev[1]
-				lastSeen[username] = t
+				m.lastSeenUserTotal[username] = t
 				if deltaUp <= 0 && deltaDown <= 0 {
 					continue
 				}
@@ -2059,13 +2143,49 @@ func (m *UserManager) GetAllDeltaTraffic(reset bool) []UserTrafficStats {
 	return result
 }
 
-// ResetUserTotalTraffic resets the lifetime cumulative traffic counters for a user.
-// This does NOT affect the delta counters.
+// ResetUserTotalTraffic resets the lifetime cumulative traffic counters for a
+// user and persists the reset to storage. The reset is node-local: cluster
+// sync does not propagate TrafficTotalUplink/Downlink back from peers (see
+// protoClusterUserSyncToUser).
+//
+// Precision: the reset aligns statsCollector.prevCounters to the forward
+// layer's current snapshot and clears lastSeenUserTotal for the user, so
+// traffic that had accrued before the reset but had not yet been collected is
+// dropped rather than rolled into the next period.
+//
+// Concurrency: acquires sc.mu before m.mu to match the lock order used by
+// collect()+onCollect. That ordering makes the reset atomic with respect to
+// any in-flight collect/onCollect pair — the callback is synchronous under
+// sc.mu, so there is no stale snapshot that could double-count traffic back
+// onto the user after the reset.
 func (m *UserManager) ResetUserTotalTraffic(username string) error {
-	if m.statsCollector == nil {
-		return fmt.Errorf("stats collector not running")
+	sc := m.statsCollector
+	if sc != nil {
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
 	}
-	m.statsCollector.resetUserTotal(username)
-	// TODO: persist the reset to DB (update traffic_total_uplink/download to 0)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	u, ok := m.users[username]
+	if !ok {
+		return fmt.Errorf("user not found: %s", username)
+	}
+
+	u.TrafficTotalUplink = 0
+	u.TrafficTotalDownlink = 0
+
+	if sc != nil {
+		sc.drainForUserLocked(username)
+	}
+
+	delete(m.lastSeenUserTotal, username)
+
+	if m.store != nil {
+		if err := m.store.Save(u); err != nil {
+			return fmt.Errorf("persist reset for user %s: %w", username, err)
+		}
+	}
+
 	return nil
 }

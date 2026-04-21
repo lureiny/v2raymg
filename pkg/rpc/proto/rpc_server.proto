@@ -436,6 +436,7 @@ service EndNodeAccess {
     rpc DeleteUsers(UserOpReq) returns (UserOpRsp) {} // 支持tag级删除
     rpc UpdateUsers(UserOpReq) returns (UserOpRsp) {}
     rpc ResetUser(UserOpReq) returns (UserOpRsp) {}
+    rpc ResetUserTraffic(UserOpReq) returns (UserOpRsp) {}
     rpc ResetAuthToken(ResetAuthTokenReq) returns (ResetAuthTokenRsp) {}
     rpc RotateInboundPort(RotateInboundPortReq) returns (RotateInboundPortRsp) {}
     rpc RotateAllPorts(RotateAllPortsReq) returns (RotateAllPortsRsp) {}

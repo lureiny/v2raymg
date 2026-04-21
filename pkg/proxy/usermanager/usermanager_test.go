@@ -2,6 +2,7 @@ package usermanager
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -719,12 +720,32 @@ func TestGetUserPort_NonExistentUser(t *testing.T) {
 // ============ Traffic Stats Tests (Forward-Only) ============
 
 // mockStatsForwardManager is a mock forward manager for testing forward-only stats.
+// Reads and writes of records are serialised with mu so tests that mutate the
+// fixture concurrently with the statsCollector's collect() goroutine do not
+// trip the race detector.
 type mockStatsForwardManager struct {
+	mu      sync.RWMutex
 	records []forward.ForwardTrafficRecord
 }
 
 func (m *mockStatsForwardManager) GetAllTrafficRecords(reset bool) []forward.ForwardTrafficRecord {
-	return m.records
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.records == nil {
+		return nil
+	}
+	out := make([]forward.ForwardTrafficRecord, len(m.records))
+	copy(out, m.records)
+	return out
+}
+
+// setRecordTraffic atomically updates the counters on the i-th record.
+// Used by tests that simulate the forward layer producing additional traffic.
+func (m *mockStatsForwardManager) setRecordTraffic(i int, up, down int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.records[i].UplinkBytes = up
+	m.records[i].DownlinkBytes = down
 }
 
 func (m *mockStatsForwardManager) QueryTrafficStats(query forward.TrafficQuery) forward.TrafficQueryResult {

@@ -78,6 +78,7 @@ var methodRspMap = map[string]interface{}{
 	"DeleteUsers":          &proto.UserOpRsp{},
 	"UpdateUsers":          &proto.UserOpRsp{},
 	"ResetUser":            &proto.UserOpRsp{},
+	"ResetUserTraffic":     &proto.UserOpRsp{},
 	"ResetAuthToken":       &proto.ResetAuthTokenRsp{},
 	"RotateInboundPort":    &proto.RotateInboundPortRsp{},
 	"RotateAllPorts":       &proto.RotateAllPortsRsp{},

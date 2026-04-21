@@ -28,6 +28,8 @@ func init() {
 	registerReqToEndNodeFunc(UpdateUsersReqType, ReqUpdateUsers)
 	// reset user
 	registerReqToEndNodeFunc(ResetUserReqType, ReqResetUser)
+	// reset user traffic
+	registerReqToEndNodeFunc(ResetUserTrafficReqType, ReqResetUserTraffic)
 	// get sub
 	registerReqToEndNodeFunc(GetSubReqType, ReqGetSub)
 	// get bandwidth stats
@@ -180,6 +182,17 @@ func ReqResetUser(ctx context.Context, reqData []byte, endNodeAccessClient proto
 
 	resetUserReq.NodeAuthInfo = nodeAuthInfo
 	rsp, err := endNodeAccessClient.ResetUser(ctx, resetUserReq, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	return processUserOpRsp(rsp, err)
+}
+
+func ReqResetUserTraffic(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.UserOpReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req[%v] to reset user traffic req > %v", reqData, err)
+	}
+
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.ResetUserTraffic(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
 	return processUserOpRsp(rsp, err)
 }
 

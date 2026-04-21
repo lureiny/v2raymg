@@ -246,6 +246,37 @@ func (s *EndNodeServer) ResetUser(ctx context.Context, resetUserReq *proto.UserO
 	return rsp, nil
 }
 
+// ResetUserTraffic zeros the persisted cumulative traffic counters
+// (TrafficTotalUplink / TrafficTotalDownlink) for each user in the request.
+//
+// Batch semantics (matches ResetUser): the loop short-circuits on the first
+// failure. Any users already processed in the same request stay reset — there
+// is no rollback. Callers that need per-user success granularity should issue
+// one request per user.
+//
+// Node-local: cluster sync does not propagate traffic totals across nodes, so
+// callers that want a cluster-wide reset must fan out to each node.
+func (s *EndNodeServer) ResetUserTraffic(ctx context.Context, req *proto.UserOpReq) (*proto.UserOpRsp, error) {
+	rsp := &proto.UserOpRsp{Code: 0}
+	for _, u := range req.GetUsers() {
+		username := u.GetName()
+		if username == "" {
+			rsp.Code = 300
+			rsp.Msg = "username is required"
+			return rsp, nil
+		}
+		if err := s.userMgr.ResetUserTotalTraffic(username); err != nil {
+			errMsg := fmt.Sprintf("reset traffic for user %s: %v", username, err)
+			log.Error("ResetUserTraffic failed", "user", username, "err", errMsg)
+			rsp.Code = 300
+			rsp.Msg = errMsg
+			return rsp, nil
+		}
+		log.Info("ResetUserTraffic: cumulative counters cleared", "user", username)
+	}
+	return rsp, nil
+}
+
 func (s *EndNodeServer) GetSub(ctx context.Context, getSubReq *proto.GetSubReq) (*proto.GetSubRsp, error) {
 	getSubRsp := &proto.GetSubRsp{Code: 0}
 	excludeProtocols := getSubReq.GetExcludeProtocols()

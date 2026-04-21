@@ -25,6 +25,7 @@ const (
 	EndNodeAccess_DeleteUsers_FullMethodName          = "/proto.EndNodeAccess/DeleteUsers"
 	EndNodeAccess_UpdateUsers_FullMethodName          = "/proto.EndNodeAccess/UpdateUsers"
 	EndNodeAccess_ResetUser_FullMethodName            = "/proto.EndNodeAccess/ResetUser"
+	EndNodeAccess_ResetUserTraffic_FullMethodName     = "/proto.EndNodeAccess/ResetUserTraffic"
 	EndNodeAccess_ResetAuthToken_FullMethodName       = "/proto.EndNodeAccess/ResetAuthToken"
 	EndNodeAccess_RotateInboundPort_FullMethodName    = "/proto.EndNodeAccess/RotateInboundPort"
 	EndNodeAccess_RotateAllPorts_FullMethodName       = "/proto.EndNodeAccess/RotateAllPorts"
@@ -70,6 +71,7 @@ type EndNodeAccessClient interface {
 	DeleteUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	UpdateUsers(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	ResetUser(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
+	ResetUserTraffic(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error)
 	ResetAuthToken(ctx context.Context, in *ResetAuthTokenReq, opts ...grpc.CallOption) (*ResetAuthTokenRsp, error)
 	RotateInboundPort(ctx context.Context, in *RotateInboundPortReq, opts ...grpc.CallOption) (*RotateInboundPortRsp, error)
 	RotateAllPorts(ctx context.Context, in *RotateAllPortsReq, opts ...grpc.CallOption) (*RotateAllPortsRsp, error)
@@ -174,6 +176,16 @@ func (c *endNodeAccessClient) ResetUser(ctx context.Context, in *UserOpReq, opts
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UserOpRsp)
 	err := c.cc.Invoke(ctx, EndNodeAccess_ResetUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *endNodeAccessClient) ResetUserTraffic(ctx context.Context, in *UserOpReq, opts ...grpc.CallOption) (*UserOpRsp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UserOpRsp)
+	err := c.cc.Invoke(ctx, EndNodeAccess_ResetUserTraffic_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -511,6 +523,7 @@ type EndNodeAccessServer interface {
 	DeleteUsers(context.Context, *UserOpReq) (*UserOpRsp, error)
 	UpdateUsers(context.Context, *UserOpReq) (*UserOpRsp, error)
 	ResetUser(context.Context, *UserOpReq) (*UserOpRsp, error)
+	ResetUserTraffic(context.Context, *UserOpReq) (*UserOpRsp, error)
 	ResetAuthToken(context.Context, *ResetAuthTokenReq) (*ResetAuthTokenRsp, error)
 	RotateInboundPort(context.Context, *RotateInboundPortReq) (*RotateInboundPortRsp, error)
 	RotateAllPorts(context.Context, *RotateAllPortsReq) (*RotateAllPortsRsp, error)
@@ -578,6 +591,9 @@ func (UnimplementedEndNodeAccessServer) UpdateUsers(context.Context, *UserOpReq)
 }
 func (UnimplementedEndNodeAccessServer) ResetUser(context.Context, *UserOpReq) (*UserOpRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResetUser not implemented")
+}
+func (UnimplementedEndNodeAccessServer) ResetUserTraffic(context.Context, *UserOpReq) (*UserOpRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResetUserTraffic not implemented")
 }
 func (UnimplementedEndNodeAccessServer) ResetAuthToken(context.Context, *ResetAuthTokenReq) (*ResetAuthTokenRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResetAuthToken not implemented")
@@ -800,6 +816,24 @@ func _EndNodeAccess_ResetUser_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(EndNodeAccessServer).ResetUser(ctx, req.(*UserOpReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EndNodeAccess_ResetUserTraffic_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UserOpReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).ResetUserTraffic(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EndNodeAccess_ResetUserTraffic_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).ResetUserTraffic(ctx, req.(*UserOpReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1410,6 +1444,10 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResetUser",
 			Handler:    _EndNodeAccess_ResetUser_Handler,
+		},
+		{
+			MethodName: "ResetUserTraffic",
+			Handler:    _EndNodeAccess_ResetUserTraffic_Handler,
 		},
 		{
 			MethodName: "ResetAuthToken",

@@ -69,6 +69,7 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 | PUT | `/api/user` | Admin | 更新用户 |
 | DELETE | `/api/user` | Admin | 删除用户 |
 | POST | `/api/user/reset` | Admin | 重置用户代理密钥 |
+| POST | `/api/user/reset-traffic` | Admin | 重置用户累计持久化流量（节点自治） |
 | POST | `/api/user/reset-token` | User | 重置用户 auth token |
 | PUT | `/api/user/:name/role` | Admin | 设置用户角色 |
 | PUT | `/api/user/:name/bandwidth` | Admin | 设置用户带宽限制 |
@@ -297,6 +298,37 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 ```json
 {"code": 0, "msg": "ok"}
 ```
+
+---
+
+#### POST /api/user/reset-traffic - 重置用户累计流量
+
+清零指定用户在目标节点上的持久化累计流量计数器（`traffic_total_uplink` / `traffic_total_downlink`）。
+
+- **节点自治**：每个目标节点各自清零本地累计值；集群同步不会把流量字段从对端写回本地，所以调用方需要对每个目标节点分别下发（通过 `target`）才能实现全集群重置。
+- **精准 drain**：重置时会把 forward 层 counter 锚定进 statsCollector 的 prev 基准，下一轮采集从 0 开始，不会把重置前未采集的流量回灌到新周期。
+- 重置前的累计值没有保留快照；如需历史请在外部统计系统（Prometheus / 业务方）侧保留。
+
+**Request:**
+```json
+{
+  "target": "节点名",
+  "user": "用户名"
+}
+```
+
+字段：
+- `user`：必填，用户名；为空返回 `400`。
+- `target`：可选，语义见 [target 参数说明](#target-参数说明)。
+
+**Response (200):**
+```json
+{"code": 0, "msg": "ok"}
+```
+
+**错误码：**
+- `400`：`user` 为空或请求体无效。
+- `500`：任一目标节点执行失败（本次请求在首个失败处短路，之前已成功重置的节点**不会回滚**；需要逐节点重置以获得 per-node 粒度的成功/失败反馈）。
 
 ---
 
