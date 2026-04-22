@@ -35,9 +35,14 @@ func NewGitHubReleaseClient() *GitHubReleaseClient {
 	}
 }
 
-// FetchRelease fetches a release from GitHub.
+// FetchRelease fetches a release from GitHub by tag name.
+//
+// GitHub's REST API differentiates "latest" from tagged releases: the latest
+// release lives at /releases/latest, while any other tag must be looked up
+// via /releases/tags/<tag>. Without the /tags/ segment GitHub interprets the
+// path component as a numeric release ID and returns 404 for named tags.
 func (c *GitHubReleaseClient) FetchRelease(ctx context.Context, owner, repo, tag string) (*GitHubRelease, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/releases/%s", c.BaseURL, owner, repo, tag)
+	url := fmt.Sprintf("%s/repos/%s/%s/releases/tags/%s", c.BaseURL, owner, repo, tag)
 	if tag == "latest" {
 		url = fmt.Sprintf("%s/repos/%s/%s/releases/latest", c.BaseURL, owner, repo)
 	}

@@ -77,6 +77,26 @@ type ForwardManager interface {
 	// state was actually released.
 	DropUser(username string) bool
 
+	// AllocatePort reserves a port from the shared process-wide port pool
+	// WITHOUT creating a forwarding rule or starting a relay. The returned
+	// port is tracked in the same allocation table as AddRule, so no caller
+	// — whether they went through AddRule or AllocatePort — can be handed
+	// the same port twice.
+	//
+	// This is exclusively for callers that need the allocator's uniqueness
+	// guarantee for a port they will bind themselves (e.g. a proxy container
+	// that opens its own internal 127.0.0.1 listener per user). Traffic
+	// forwarding is a separate concern — if you want client→listener relay,
+	// use AddRule instead (or in addition, with GetBindPort on the user
+	// manager side). Pairs with ReleasePort.
+	AllocatePort() (uint32, error)
+
+	// ReleasePort returns a port previously obtained from AllocatePort to
+	// the shared pool. It does NOT stop a relay and does NOT touch any
+	// rule created via AddRule (those are released by RemoveRule). Safe on
+	// ports not currently allocated (idempotent).
+	ReleasePort(port uint32)
+
 	// Close stops all relays and releases all ports. After Close, the manager
 	// cannot be used.
 	Close() error

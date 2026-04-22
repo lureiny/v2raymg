@@ -804,6 +804,27 @@ func (m *DefaultForwardManager) GetUserClientLimitConfig(username string) (Clien
 	return ClientLimitConfig{}, false
 }
 
+// AllocatePort implements ForwardManager.
+//
+// This delegates to the underlying port allocator. It DOES NOT create a
+// relay, a ForwardRule, or any traffic-plane state — callers that need
+// traffic forwarding must still call AddRule separately.
+func (m *DefaultForwardManager) AllocatePort() (uint32, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return 0, fmt.Errorf("forward_manager: closed")
+	}
+	return m.allocator.Allocate()
+}
+
+// ReleasePort implements ForwardManager.
+//
+// Companion to AllocatePort. Idempotent; does not affect relays or rules.
+func (m *DefaultForwardManager) ReleasePort(port uint32) {
+	m.allocator.Release(port)
+}
+
 // Close stops all relays and releases all ports.
 func (m *DefaultForwardManager) Close() error {
 	m.mu.Lock()

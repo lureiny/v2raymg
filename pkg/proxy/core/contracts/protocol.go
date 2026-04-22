@@ -109,11 +109,12 @@ const (
 	ContainerV2ray    ContainerType = "v2ray"
 	ContainerHysteria ContainerType = "hysteria"
 	ContainerSnell    ContainerType = "snell"
+	ContainerMihomo   ContainerType = "mihomo"
 )
 
 func (c ContainerType) IsValid() bool {
 	switch c {
-	case ContainerXray, ContainerV2ray, ContainerHysteria, ContainerSnell:
+	case ContainerXray, ContainerV2ray, ContainerHysteria, ContainerSnell, ContainerMihomo:
 		return true
 	}
 	return false

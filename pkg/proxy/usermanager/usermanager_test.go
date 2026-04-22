@@ -128,6 +128,12 @@ func (m *mockForwardManager) GetUserClientLimitConfig(username string) (forward.
 	return forward.ClientLimitConfig{}, false
 }
 
+func (m *mockForwardManager) AllocatePort() (uint32, error) {
+	return 0, nil
+}
+
+func (m *mockForwardManager) ReleasePort(port uint32) {}
+
 func (m *mockForwardManager) Close() error {
 	return nil
 }
@@ -807,6 +813,10 @@ func (m *mockStatsForwardManager) SetUserClientLimitConfig(username string, conf
 func (m *mockStatsForwardManager) GetUserClientLimitConfig(username string) (forward.ClientLimitConfig, bool) {
 	return forward.ClientLimitConfig{}, false
 }
+func (m *mockStatsForwardManager) AllocatePort() (uint32, error) {
+	return 0, nil
+}
+func (m *mockStatsForwardManager) ReleasePort(port uint32) {}
 func (m *mockStatsForwardManager) Close() error {
 	return nil
 }

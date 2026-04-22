@@ -681,3 +681,88 @@ func TestForwardManager_AddRule_NetworkValidation(t *testing.T) {
 		t.Fatal("expected error for unsupported network")
 	}
 }
+
+// TestForwardManager_AllocatePort_Basic verifies that AllocatePort returns
+// distinct in-range ports and ReleasePort makes them reusable.
+func TestForwardManager_AllocatePort_Basic(t *testing.T) {
+	m := newTestManager(t)
+	defer m.Close()
+
+	p1, err := m.AllocatePort()
+	if err != nil {
+		t.Fatalf("AllocatePort: %v", err)
+	}
+	if p1 < 19000 || p1 > 19100 {
+		t.Errorf("port %d out of range [19000,19100]", p1)
+	}
+
+	p2, err := m.AllocatePort()
+	if err != nil {
+		t.Fatalf("AllocatePort (2nd): %v", err)
+	}
+	if p1 == p2 {
+		t.Errorf("AllocatePort returned the same port twice: %d", p1)
+	}
+
+	m.ReleasePort(p1)
+	// After release, p1 is eligible again; p2 must still be held.
+	p3, err := m.AllocatePort()
+	if err != nil {
+		t.Fatalf("AllocatePort after Release: %v", err)
+	}
+	if p3 == p2 {
+		t.Errorf("AllocatePort handed out still-allocated port %d", p2)
+	}
+}
+
+// TestForwardManager_AllocatePort_AfterClose verifies AllocatePort is
+// rejected once the manager is closed, matching AddRule's behaviour.
+func TestForwardManager_AllocatePort_AfterClose(t *testing.T) {
+	m := newTestManager(t)
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := m.AllocatePort(); err == nil {
+		t.Fatal("AllocatePort after Close should fail")
+	}
+}
+
+// TestForwardManager_AllocatePort_SharesPoolWithAddRule verifies that ports
+// obtained via AllocatePort cannot be reused by AddRule (ListenPort=P) until
+// released, proving both paths share the same allocation table — the core
+// guarantee the mihomo container relies on.
+func TestForwardManager_AllocatePort_SharesPoolWithAddRule(t *testing.T) {
+	echoAddr, stopEcho := startEchoServer(t)
+	defer stopEcho()
+
+	m := newTestManager(t)
+	defer m.Close()
+
+	p, err := m.AllocatePort()
+	if err != nil {
+		t.Fatalf("AllocatePort: %v", err)
+	}
+
+	_, err = m.AddRule(ForwardRule{
+		Username:   "u@t.com",
+		TargetAddr: echoAddr,
+		ListenPort: p,
+	})
+	if err == nil {
+		t.Errorf("AddRule(ListenPort=%d) should have failed while port is held via AllocatePort", p)
+	}
+
+	m.ReleasePort(p)
+
+	rule, err := m.AddRule(ForwardRule{
+		Username:   "u@t.com",
+		TargetAddr: echoAddr,
+		ListenPort: p,
+	})
+	if err != nil {
+		t.Fatalf("AddRule(ListenPort=%d) after ReleasePort: %v", p, err)
+	}
+	if rule.ListenPort != p {
+		t.Errorf("AddRule used wrong port: got %d, want %d", rule.ListenPort, p)
+	}
+}

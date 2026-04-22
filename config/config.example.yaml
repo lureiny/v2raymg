@@ -76,6 +76,16 @@ containers:
         psk: ""                             # auto-generated if empty or "auto"
         version: v5.0.1                     # snell version to auto-download
 
+    - type: mihomo
+      enabled: false
+      config:
+        binary_path: /usr/local/bin/mihomo
+        config_file_path: /etc/v2raymg/mihomo.yaml
+        data_dir: /var/lib/v2raymg/mihomo
+        external_controller: 127.0.0.1:9090 # mihomo REST API listen address (loopback only)
+        secret: ""                          # REST API bearer token; empty disables auth
+        version: Prerelease-Alpha           # mihomo release tag used for auto-download when binary is missing
+
 # End Node configuration (effective when node_type=end)
 end_node:
   name: node-1
