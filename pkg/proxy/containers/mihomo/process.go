@@ -10,7 +10,6 @@ import (
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/tools/process"
-	"gopkg.in/yaml.v3"
 )
 
 // mihomoInitialConfig is the minimal config.yaml written at startup.
@@ -133,23 +132,14 @@ func (c *MihomoContainer) stopProcess() error {
 	return nil
 }
 
+// generateConfigFile writes the initial on-disk config with empty listeners.
+// The authoritative listener set is pushed via REST by restoreAndPushInbounds
+// after the process is ready, so this file only has to be valid enough for
+// mihomo to boot.
 func (c *MihomoContainer) generateConfigFile() error {
-	cfg := mihomoInitialConfig{
-		MixedPort:          0,
-		AllowLan:           false,
-		ExternalController: c.cfg.ExternalController,
-		Secret:             c.cfg.Secret,
-		LogLevel:           "info",
-		Mode:               "global",
-		Proxies:            []any{},
-		ProxyGroups:        []any{},
-		Rules:              []string{"MATCH,DIRECT"},
-		Listeners:          []any{},
-	}
-
-	data, err := yaml.Marshal(&cfg)
+	data, err := BuildConfig(c.buildBaseConfig(), nil)
 	if err != nil {
-		return fmt.Errorf("mihomo: marshal config: %w", err)
+		return fmt.Errorf("mihomo: build initial config: %w", err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(c.cfg.ConfigFilePath), 0755); err != nil {

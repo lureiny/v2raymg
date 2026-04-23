@@ -40,11 +40,11 @@
 | 阶段 5 前置(ForwardManager 扩接口) | **DONE** 2026-04-22 | 原本在阶段 5 内部,因 mihomo 阶段 5 会立即用到而拆成独立 PR |
 | 阶段 2 | **DONE** 2026-04-22 | auto-download 基础能力从阶段 9 提前到此 |
 | Review 修复(阶段 1+2+前置) | **DONE** 2026-04-22 | |
-| 阶段 3 | TODO | |
-| 阶段 4 | TODO | |
-| 阶段 5 | TODO(接口已就位) | |
-| 阶段 6 | TODO | |
-| 阶段 7 | TODO | |
+| 阶段 3 | **DONE** 2026-04-22 | |
+| 阶段 4 | **DONE** 2026-04-22 | 含两轮 review + 修复 |
+| 阶段 5 | **DONE** 2026-04-22 | 包含周期 reconcile loop(原属阶段 6 的一半);剩余 Restore 入口 + Reload 语义留给阶段 6 |
+| 阶段 6 | **DONE** 2026-04-23 | |
+| 阶段 7 | **DONE** 2026-04-23 | |
 | 阶段 8 | TODO | |
 | 阶段 9 | TODO(MVP 已能 auto-download;此阶段补 SHA256 / Update 热替换 / OS-arch 检测 / latest 解析) | |
 | 阶段 10 | TODO | |
@@ -127,10 +127,171 @@
 
 验证同阶段 2(全绿)。
 
-### 阶段 3 开工前提示
+### 阶段 3(2026-04-22 完成)
 
-- `rest_client.go` 已有 `GetVersion` 的骨架,新增方法可照其结构(baseURL / secret / httpClient)扩展
-- mihomo `/configs` 的 PUT force 语义(本计划 R5)**未验证**,阶段 3 开工前需查 `hub/executor/executor.go` 的 `ApplyConfig`,记录到 memory `reference_mihomo_protocol_facts.md`
+**前置核实**(R5):
+
+- 查 mihomo Alpha `hub/executor/executor.go::ApplyConfig` + `listener/listener.go::PatchInboundListeners` + `hub/route/configs.go::configRouter` + `hub/route/errors.go::HTTPError`
+- 结论:`PUT /configs?force=false` 内部总调 `PatchInboundListeners(map, tunnel, true)`,按 name 做 diff,同 name + Config.Equal 的 listener **不重建**,既有连接不断;force 只影响 HTTP/SOCKS/Mixed 等 top-level singleton port listener,命名 listener 不受 force 影响
+- 错误 body schema 为 `{"message":"..."}`(HTTPError struct)
+- R5 关闭,设计文档与 stage 4/5 策略假设完全属实
+- 事实已记到 memory `reference_mihomo_protocol_facts.md`
+
+**交付**:
+
+- `pkg/proxy/containers/mihomo/rest_client.go`:抽 `do(ctx, method, url, op, body)` 私有辅助统一请求构造(Content-Type / Bearer / JSON marshal / 错误 body 解析);新增 `GetConfigs / PutConfigs / PatchConfigs / PostConfigsGeo`;新增 `parseErrorBody` 工具提取 `{"message":"..."}`;`GetVersion` 改走 `do`
+- `pkg/proxy/containers/mihomo/rest_client_test.go`:保留阶段 2 的 5 个 GetVersion 测试;新增 13 个针对新方法的测试(成功路径 / 错误 body 解析 JSON 与 raw text / force=true|false query / payload body JSON encoding / PatchConfigs fields 序列化 / PostConfigsGeo 无 body / unauthorized / context 取消 / 空 secret 不发 Authorization header)
+
+**实际变动**(相对阶段 3 计划原文):
+
+- 不新增 typed `RESTError` struct,沿用 `fmt.Errorf("mihomo rest: %s: HTTP %d: %s", op, status, message)` 惯例(与 hysteria/snell/xray 已有 HTTP 错误风格一致,且无 caller 需要 `errors.As`)
+- 错误 body 读取限制在 1024 字节(`maxErrorBodyBytes`),非 JSON 时 fallback 到 trimmed raw text(截 256 字节),防止恶意服务端 OOM
+- `PutConfigs_ContextCanceled` 测试的 server handler 用 `select { case <-r.Context().Done(): case <-time.After(500ms): }` 防止测试 hang —— PUT 带 body 时 `r.Context().Done()` 不如 GET 那样立即随 client 取消触发(GetVersion 走同样写法正常,此处加 fallback 保险);client 侧 ctx 50ms 取消仍是实际被验证的行为
+- 不写 integration test(阶段 2 已覆盖 `/version` 真实握手,阶段 3 新方法的真实触达在阶段 4 做完 inbound 增删后一并验证)
+
+**验证**:
+
+- `go build ./...` 通过
+- `go test ./pkg/proxy/containers/mihomo/... -race -count=1`:22 个测试全绿(含 5 GetVersion / 13 新方法 / 3 config / 1 factory)
+- `go test ./... -race -count=1`(全仓):通过
+
+### 阶段 5(2026-04-22 完成)
+
+**模型修正(开工前)**:原计划把 mihomo stage 5 的 user 集成参照 snell(单 inbound);用户指正应参照 xray(多 inbound),因为 mihomo 在"多 inbound × 多 user"这一骨架上与 xray 完全同构,真正的差异只在外部进程本身(动态接口 / 基础配置 / inbound 配置格式 / 下载地址)。切到 xray 模板后,`addedUsers` 挂 inbound 本身(而不是 container 的 nested map),container 层只做事件分发,锁粒度天然清晰。
+
+**交付**:
+
+- `pkg/proxy/containers/mihomo/inbound.go`:`MihomoInbound` 增 `userMgr` + `addedUsers` + `addedUsersMu`;`NewMihomoInbound` 初始化 addedUsers;新方法 `SetUserManager` / `hasAddedUser` / `listAddedUsers` / `markAddedUser` / `unmarkAddedUser` / `AddUser(email,user)→port` / `RemoveUser(email)` / `ReleaseAllUserPorts()`,全部照抄 `XrayInbound` 的模板(含 stale-tracking fast-path 和 `GetUserPortByDstForCleanup` 用法)
+- `pkg/proxy/containers/mihomo/container.go`:新字段 `userMgr` / `userEventCh` / `reconcileStopCh` / `reconcileWg`;新 Option `WithUserManager`(构造期 `go forwardUserEvents(um.Subscribe())`,避免早期事件丢);新方法 `forwardUserEvents` / `startUserEventHandler` / `handleUserEvent` / `syncUserToInbound` / `removeUserFromInbounds` / `snapshotInbounds` / `reconcileUsers` / `reconcileUsersForInbound` / `startReconcileLoop` / `stopReconcileLoop`;`FastAddInbound` 拆出 `addInboundLocked` 把"mutate+push"留在 inboundsMu 内、reconcileUsersForInbound 放锁外;`RemoveInboundConfig` 在 store delete 前补 `inb.ReleaseAllUserPorts`;`restoreAndPushInbounds` 对每个 restored inbound 调 `SetUserManager`;`UserEventChannel` 返回 `c.userEventCh`
+- `mihomoHooks.GetRunFunc`:run 顺序改为 `startUserEventHandler → startReconcileLoop → startProcess → restoreAndPushInbounds → reconcileUsers`;stop 顺序 `stopReconcileLoop → stopProcess`
+- `pkg/proxy/containers/mihomo/inbound_test.go`:新增 7 个 user 相关测试(AddUser 分配+跟踪 / idempotent / stale-tracking 恢复 / RemoveUser 拆除 / never-added no-op / ReleaseAllUserPorts 按 tag / noUserManager 边界)+ 复用型 helper `newTestUserManager`
+- `pkg/proxy/containers/mihomo/container_test.go`:新增 7 个事件/reconcile 测试(Add 事件 fan-out / Remove 事件 fan-out / Update 可见性翻转 / FastAddInbound 新建 inbound 时回填已有用户 / RemoveInboundConfig 按 tag 释放 / reconcileUsers 增补+清理 / reconcileUsers 覆盖 N×M)+ 复用型 helper `newTestContainerWithUserMgr`(多带一个 `forward.ForwardManager` 返回值给测试用来直查 rule 状态)
+
+**关键决策**:
+
+| # | 决策 | 选定 |
+|---|------|------|
+| E1 | reconcile loop 放 stage 5 还是 stage 6 | **stage 5**。函数本体和 loop 同 concern,xray 本来就是一起上的;stage 6 只剩 Restorable.Restore 入口 + Reload 语义(都轻) |
+| — | addedUsers 挂哪里 | **挂 inbound**,不挂 container。匹配 xray;锁粒度天然分片 |
+| — | reconcileInterval 做成 MihomoConfig 字段? | **不做**。hardcode `30*time.Second`,stage 6 如果需要再抽出 |
+| — | FastAddInbound reconcile 在 inboundsMu 内还是外 | **锁外**。参 xray;避免 GetBindPort 阻塞 List/Get/handleUserEvent 的 inboundsMu 读 |
+| — | RemoveInboundConfig ReleaseAllUserPorts 失败是否回滚 inbound 删除 | **不回滚**。log + 继续(inbound 已被 REST 拆掉,剩下的孤儿 forward rule 由 reconcile 扫) |
+| — | Stop 时是否释放 forward 规则 | **不释放**。与 xray/snell/hysteria 一致;restore 会在下次 Start 重建 |
+
+**小前提:ReleaseInboundPorts 的语义**:`UserManager.ReleaseInboundPorts(tag)` 只清 forward rules,**不清** `user.PortMappings`(intentional,见 usermanager.go 注释:ports 可能在其他 inbound 复用)。测试若要断言"释放后不可再查到端口映射",必须走 ForwardManager 的 `GetRule`,而不是 `UserManager.GetUserPortByDst` —— 后者仍会命中遗留的 PortMappings。相应测试 `TestMihomoInbound_ReleaseAllUserPorts_ReleasesByTag` 和 `TestRemoveInboundConfig_ReleasesAllUserPortsOnTag` 都按此写法。
+
+**实际变动**(相对重新设计的 stage 5 计划):
+
+- 没有引入 container 级 userStateMu/addedUsers nested map —— 照抄 xray 后,addedUsers 分散到各个 inbound 上,不需要 container 级锁
+- `FastAddInbound` 抽出的 `addInboundLocked` 是相对原 stage 4 代码的小重构(defer unlock 改为显式 unlock 以便 reconcile 跑锁外);其他 CRUD 逻辑未变
+
+**验证**:
+
+- `go test ./pkg/proxy/containers/mihomo/... -race -count=1`:**80 个**测试全绿(stage 4 的 66 个 + stage 5 新增 14 个:7 个 inbound + 7 个 container)
+- `go test ./... -race -count=1`(全仓):通过,无新回归
+
+### 阶段 4 开工前提示
+
+- `rest_client.go` 的 `PutConfigs(ctx, yamlPayload, false)` 为"全量下发 listeners 数组"提供单一入口;阶段 4 `FastAddInbound/RemoveInboundConfig` 的实现模式是:改 `c.inbounds` map → 序列化整份 yaml → `PutConfigs`
+- listener name 规则:`<inbound_tag>__<username>`(阶段 5 per-user);阶段 4 `FastAddInbound` 每个 inbound 先只下发 listener 壳子(users=[])验证增删链路,user 填充在阶段 5
+- mihomo yaml 骨架见 `process.go` 的 `mihomoInitialConfig` struct;阶段 4 需要扩展 `Listeners []any` 字段的结构化类型
+
+### 阶段 6(2026-04-23 完成)
+
+**交付**:
+
+- `pkg/proxy/containers/mihomo/container.go`:
+  - `Restore(ctx context.Context) error` —— `Restorable` 接口入口,`restoreAndPushInbounds + reconcileUsers` 组合,幂等;在 `ContainerMgr.StartAll` 路径下即使 Start hook 跑过一次,Restore 再跑一次也只是一次 REST PUT(name-keyed diff,无 listener 重建)+ 一次 user 对账(addedUsers fast-path skip)
+  - `Reload()` 已实现为 `pushConfig()`,阶段 4 就位,阶段 6 补详尽 Godoc 说明证书/共享凭据热更语义
+  - 新增 `reconcileDrift()`:先 `pushConfig()`(map → mihomo 漂移修正,name-keyed diff,未变更 listener 不重建)再 `reconcileUsers()`(user → forward 漂移修正);push 失败仅 log,不阻断 user 对账
+  - `startReconcileLoop` 的 tick 回调从直接调 `reconcileUsers()` 改为 `reconcileDrift()`
+- `pkg/proxy/containers/mihomo/container_test.go`:新增 7 个 stage 6 测试
+  - `TestRestore_ReloadsStoreAndConvergesUsers` —— 完整 Restorable 流
+  - `TestRestore_Idempotent` —— 双调 port 不变、inbounds map 不变、forward rule 不换
+  - `TestRestore_ReturnsRestoreError` —— restore fail 则不走 reconcile(不会在失败 mihomo 上建 forward rule)
+  - `TestRestore_NilStoreMgr` —— 无 store 场景 Restore 正常
+  - `TestReconcileDrift_PushesConfigAndReconcilesUsers` —— 周期 tick 行为
+  - `TestReconcileDrift_ContinuesAfterPushFailure` —— push 失败不阻断 user reconcile
+  - `TestRestore_AfterStartHook_IsNoOp` —— StartAll 路径幂等契约
+
+**实际变动**(相对阶段 6 计划原文):
+
+- **不加 `MihomoConfig.ReconcileInterval`**:设计文档已标注"MVP 暂不抽,生产需调优再加",30s hardcode 与 xray/snell 一致
+- **不做 store-vs-map 三向漂移主动检测**:运行时 FastAddInbound/RemoveInboundConfig 保证两者同步,重启窗口已被 `restoreAndPushInbounds` 覆盖;在 reconcile loop 里重复 store Load 是浪费
+- **map-vs-mihomo 漂移通过"周期 pushConfig"被动对账**:mihomo 的 `PatchInboundListeners(dropOld=true)` 在 name-keyed diff 下,未变 listener 不重建 → 周期 PUT 是安全且开销低的
+- **Restore 和 Start hook 幂等共存**:Start hook 内置 restore+reconcile 保证"Start 自包含"(单测可以只调 Start 不调 Restore);ContainerMgr.StartAll 路径的第二次 Restore 调用是设计允许的冗余,测试用 `TestRestore_AfterStartHook_IsNoOp` 锁定该契约
+
+**验证**:
+
+- `go test ./pkg/proxy/containers/mihomo/... -race -count=10`:通过(10 次轮询,65s 全绿)
+- `go test ./... -race -count=1`:通过
+
+### 阶段 7(2026-04-23 完成)
+
+**交付**:
+
+- `pkg/proxy/containers/mihomo/subscription.go`:
+  - `GetUserSubscriptions(req)` —— 遍历 `c.snapshotInbounds()`,对每个有 forward 端口映射的 inbound 生成一条 `SubscriptionSpec`;无映射的 inbound 跳过;不支持的协议 log+skip
+  - `buildSubscriptionSpec(inb, req, port)` —— per-inbound spec 构造,按协议分支映射共享凭据:vmess→UUID、trojan→Password、ss→Password+Cipher(cipher 为空则 `defaultSSMethod=aes-256-gcm`,匹配 clash converter 的兜底)
+  - URI 生成复用 `core/subscription/codec` 的 `VMessNode.Encode / TrojanNode.Encode / ShadowsocksNode.Encode` —— 全部在 codec 层完成,本包零 URI 组装代码
+  - 请求参数校验:空 username / 空 host → 早返回 error;`userMgr==nil` → 返 (nil, nil) 与 snell/hysteria 对齐
+- `pkg/proxy/containers/mihomo/container.go`:删除阶段 4 的占位 `GetUserSubscriptions` 实现
+- `pkg/proxy/containers/mihomo/subscription_test.go`:新增 12 个测试
+  - 参数校验:`MissingUsername` / `MissingHost` / `NilUserMgr`
+  - 协议正例:`VMess` / `Trojan` / `ShadowsocksExplicitCipher`(含 URI 字段 round-trip 断言)
+  - 单元级 defense-in-depth:`BuildSubscriptionSpec_ShadowsocksDefaultCipher`(因为 profilegen 拒绝无 cipher 的 ss,实际流程不能走到 GetUserSubscriptions,但保留 fallback 是对未来协议字段变迁的韧性)
+  - 聚合:`AggregatesMultipleInbounds`
+  - 漂移场景:`SkipsInboundsWithoutMapping`(用户没 bind 到某 inbound 时静默跳过) / `EmptyContainer`(零 inbound 返 `[]`)
+  - 错误分支:`BuildSubscriptionSpec_UnsupportedProtocolErrors` / `BuildSubscriptionSpec_EmptyCredentialErrors`(vmess/trojan/ss 各一)
+
+**实际变动**(相对阶段 7 计划原文):
+
+- **不扩展 clash converter**:scan `pkg/proxy/core/subscription/converter/clash.go` 发现 `convertVMess / convertTrojan / convertShadowsocks` 已覆盖 MVP 三协议所需的最小字段集合(ss 默认 cipher 一致、vmess 无 transport 场景简单、trojan plain TLS 默认)。D4 风险 R4 降为低
+- **订阅层不处理 ExcludeProtocols**:xray 也没做,留给上层 HTTP handler 统一过滤,保持 container 职责单一
+- **不写 integration 测试**:集成测试需要真实 mihomo 启动 + 真实客户端连接,这条链路在阶段 10(规模/协议矩阵)再统一覆盖;阶段 7 的价值在"spec 生成正确"而非"end-to-end 可连"
+
+**验证**:
+
+- `go build ./...` 通过
+- `go test ./pkg/proxy/containers/mihomo/... -race -count=10`:80+12=92 个测试全绿
+- `go test ./... -race -count=1`:全仓通过,无回归
+
+### Stage 6+7 Review 修复(2026-04-23 完成)
+
+用 general-purpose agent 做了 stage 6+7 code review,共 15 条发现。按 P0/P1/P2/P3 处置:
+
+| 发现 | 优先级 | 处置 | 说明 |
+|------|-------|------|------|
+| `restoreAndPushInbounds` 失败时 map 已修改 | P1 | **文档化** | Restore Godoc 明确"失败时 map 反映 store 状态,reconcileDrift 会重推达成最终一致";改"两阶段 swap"会失去重启后即时可见性,不划算 |
+| `snapshotInbounds` 陈旧指针竞态 | P1 | **文档化** | Restore Godoc 注明"设计用于相对静默窗口;热态下陈旧指针无 correctness 问题只有幂等开销" |
+| Start retry 后 goroutine 泄漏 | P1 | **已修** | `MihomoContainer` 加 `userEventHandlerStarted bool`;`startUserEventHandler` 走该 guard;`startReconcileLoop` 改为 `reconcileStopCh != nil` 则跳过。Stop 的 `stopReconcileLoop` 末尾把 `reconcileStopCh` 置 nil,合法 Stop+Start 仍能拉起新 loop |
+| reconcileUsers 对 deleting 用户重复 Remove | P1 | **驳回** | 幂等;Stage 5 既有行为,非 Stage 6 引入 |
+| `Close()` 持锁跨 `Unsubscribe` | P2 | **已修** | 锁内捕获 `sub/stopCh` 引用后释放锁,外部调用 `Unsubscribe`。Godoc 同步 |
+| `Close()` 并发 close channel panic | P2 | **已修** | `MihomoContainer.closeOnce sync.Once` 包装;同时发现并修 race:`forwardStopCh` 不能在 close 后 nil(forwardUserEvents goroutine 从 select 读取,并发 nil-write 会 race);现在只 close,不 nil |
+| `reconcileDrift` Godoc 过度宣称"detect drift" | P2 | **已修** | 措辞改为"enforces our map as source of truth against mihomo";明确不做 probe,只重推 |
+| subscription 测试 helper 绕过 FastAddInbound | P2 | **已修** | 删除 `wireAndAllocate` / `setUserManagerOnInbound`;改用 `c.FastAddInbound(tag, params)` 驱动(production shape),`SkipsInboundsWithoutMapping` 保留手工 inboundsMu 直接写以构造"未 reconcile"窗口 |
+| trojan URI over plain TCP(UNCERTAIN) | P2 | **阶段 8 前核实** | 已核实 mihomo Alpha `TrojanOption.Certificate/PrivateKey` 都 omitempty,decode 能过;**未核实** runtime 是否真能以 plain TCP 启动、常见 trojan 客户端是否接受 plain URI。进入阶段 8 前需用真实客户端握手验证,必要时改用自签 cert / 移除 trojan MVP / URI 加 allowInsecure |
+| subscription 静默跳过 inbound | P2 | **已修** | 跳过时 `log.Debugf` 一行 |
+| `TestRestore_Idempotent` PUT 计数脆弱 | P2 | **已修** | 改为 `srv.bodyCount()-pushesAfterFirst == 1` 严格 delta 断言;加注释说明"依赖测试路径不启 reconcile loop,未来 refactor 若破坏此假设会显式 fail" |
+| `TestReconcileDrift_ContinuesAfterPushFailure` 核心不变式不足 | P2 | **已修** | 加 `putsBeforeTick` 捕获 + delta ≥ 1 断言,锁定"push 被尝试了,只是失败" |
+| `reconcileUsers` 与 snell 样式差异 | P3 | **驳回** | 有意为之 |
+| buildSubscriptionSpec 总分配空 Extensions | P3 | **驳回** | 保持统一 |
+| `defaultSSMethod` 常量缺跨文件链接 | P3 | **已修** | 注释指向 `core/subscription/converter/clash.go` convertShadowsocks |
+
+**本轮代码改动**:
+
+- `pkg/proxy/containers/mihomo/container.go`:idempotent guard / sync.Once / Godoc 改写 / Restore Godoc 补失败后置条件 + 并发语义
+- `pkg/proxy/containers/mihomo/subscription.go`:debug log + `defaultSSMethod` 注释
+- `pkg/proxy/containers/mihomo/container_test.go`:测试精度(P2-11/P2-12)
+- `pkg/proxy/containers/mihomo/subscription_test.go`:helper 清理,改走 production shape
+
+**验证**:
+
+- `go vet ./pkg/proxy/containers/mihomo/...` 通过
+- `go test ./pkg/proxy/containers/mihomo/... -race -count=3`:全绿
+- `go test ./... -race -count=1` × 5:全仓 5/5 通过,无回归
+
+**阶段 8 开工前必办**:按 P2-9 的 UNCERTAIN 标注,跑一次真实 trojan 客户端 ↔ 真实 mihomo 握手。建议在阶段 10 系统测试前完成,阶段 8 的 HTTP 层改动不依赖此结论。
 
 ## 阶段 1:骨架与 Factory 注册
 
@@ -183,70 +344,77 @@
 - 所有 REST 方法单测覆盖成功 + 典型失败路径
 - 集成测试:真实 mihomo 上执行 GetConfigs → PutConfigs(修改 log-level)→ GetConfigs 验证生效
 
-## 阶段 4:Inbound 生命周期
+## 阶段 4:Inbound 生命周期(共享凭据 listener)
 
-**目标**:`FastAddInbound` / `RemoveInboundConfig` / `GetInboundConfig` / `ListInboundConfigs` 可用,listener 正确增删。注意此阶段**还不含 user 级 listener 展开**,每个 inbound 先只生成一个"无用户"listener(listener 的 users 数组为空或占位),验证 inbound 元数据管理链路。
+> **模型修正**:原计划写的是 per-user listener(每用户独立 listener);2026-04-22 对照 `docs/container-design-principles.md` 原则 3 发现违反"业务用户路径只走 forward 层"的硬要求,设计切换为**每 inbound 一条 listener + 一把共享凭据**,与 xray / snell 同构。相关设计文档 `docs/mihomo-container-design.md` 已同步重写。
+
+**目标**:`FastAddInbound` / `RemoveInboundConfig` / `GetInboundConfig` / `ListInboundConfigs` 可用。每个 inbound 对应一条 mihomo listener,持**一把共享凭据**(vmess uuid / trojan password / ss password+cipher),所有用户共用。用户不参与 listener 配置(stage 5 通过 forward 层接入)。
 
 **产出**:
 
-- `inbound.go`:`MihomoInbound` 实现 `core/inbound.Inbound`,extensions 存 tls/transport/per-protocol 字段
-- `adapter.go`:`contracts.InboundSpec → MihomoInbound`
-- `profilegen.go` v0:仅生成 listener 壳子(name/type/listen/port/tls),users 数组留空待阶段 5 填充
-  - 覆盖协议(D4):vmess / trojan / shadowsocks 三个;其他协议本阶段不支持,`FastAddInbound` 遇到返回 `errs.ErrProtocolNotSupported`
+- `inbound.go`:`MihomoInbound` 嵌 `inbound.DefaultInbound`,持共享凭据 + TLS/transport 与协议特有字段
+- `adapter.go`:`params map → MihomoInbound`,按协议验必填(vmess 要 uuid;trojan 要 password;ss 要 password + cipher);未知协议返 `errs.ErrProtocolNotSupported`
+- `profilegen.go`:`MihomoInbound → map[string]any` mihomo listener yaml entry;key 用 mihomo `inbound:"..."` tag 字面值(`ws-path` / `alterId` 等)绕过 KeyReplacer
+  - MVP 协议:vmess / trojan / shadowsocks(D4)
+- `config_builder.go`:`BuildConfig(initial, []*MihomoInbound) ([]byte, error)`,把 `listeners:` 数组追加到 base yaml
 - `container.go`:
-  - `FastAddInbound(tag, params)`:构造 MihomoInbound → InboundStore 持久化 → `PUT /configs` 全量下发
-  - `RemoveInboundConfig(tag)`:剔除该 inbound 的所有 listener → 更新 store → `PUT /configs`
-  - `GetInboundConfig(tag)` / `ListInboundConfigs()`:查 `c.inbounds` map
-- `InboundStore` 新 record 类型:`ContainerType="mihomo"`,`NativeJSON` 存 MihomoInbound 序列化
+  - `inbounds map[tag]*MihomoInbound` + `inboundsMu sync.RWMutex`
+  - `storeMgr *store.StoreManager`(通过 `WithStoreMgr` option)
+  - `FastAddInbound(tag, params)`:adapter → lock → 拒重复 tag → `InboundStore.Save` → 入 map → rebuild yaml → 若容器运行中调 `PutConfigs(yaml, false)`
+  - `RemoveInboundConfig(tag)`:lock → 从 map 摘 → rebuild yaml → 若运行中 `PutConfigs` → `InboundStore.Delete` → 预留钩子用于 stage 5 回收该 inbound 下所有用户 forward rule
+  - `GetInboundConfig(tag)` / `ListInboundConfigs()`:查 map
+  - Start hook:process ready 后从 InboundStore 加载 → rebuild yaml → 一次性 `PutConfigs(yaml, false)`(未启动时 FastAddInbound 只落 store+map,不调 REST,由 Start 统一推)
+- `InboundStore`:复用 `store.InboundRecord`,`ContainerType="mihomo"`,`NativeJSON` 存 MihomoInbound JSON(含共享凭据)
 
 **验收**:
 
-- 单元测试:profilegen 对每个 D4 协议输出的 YAML 能通过 mihomo ParseListener(可用真实 mihomo 的 `/configs` PUT 验证)
-- 集成测试:FastAddInbound → GET /configs 能看到 listener;Remove → GET /configs 不再有该 listener
-- 其他 inbound 在 Add/Remove 过程中**连接不受影响**(mihomo name-keyed diff 特性验证)
+- 单元:profilegen 对 vmess/trojan/ss 各一个 golden map 断言(`map[string]any` 深比较,避免 yaml 顺序);adapter 错误路径(缺必填、未知协议、port 范围);config_builder 空 inbound / 多 inbound 拼装正确
+- container 单元:mock REST server 捕获 `PUT /configs` body,断言 listeners 数组(listener name = inbound tag、共享凭据、port、listen 127.0.0.1);mock store 验持久化
+- 集成(可选,推迟):GET /configs 不返 listeners 数组,集成验证留到 stage 5 有 forward rule 时用客户端连端口验证
+- **不做项**:用户事件订阅 + forward rule(stage 5);周期 reconcile(stage 6);TLS 证书热更路径(stage 6 Reload)
 
-## 阶段 5:内部端口池 + User Event
+## 阶段 5:User Event Handler + forward 集成
 
-**目标**:UserEventAdd/Remove/Update 打通,per-user listener 正确生成,forward 层端口正确分配。
+> **模型修正**:原计划依赖内部端口池 + per-user listener 生成,已随 stage 4 模型调整一并废弃。用户对每个 mihomo inbound 走 forward 层,listener 完全不动。
+
+**目标**:UserEventAdd/Remove/Update 全链路打通。对每 (user, mihomo inbound) 分配一个公网端口,走 forward 层 relay 到 `127.0.0.1:<inbound-port>`。**listener 配置不动**。
 
 **产出**:
 
-- `ports.go`:内部端口池(`InternalPortRange` 配置驱动,分配/释放/持久化到 store 或内存)
-- `profilegen.go` v1:`(MihomoInbound, UserSpec) → listener YAML`,listener name 规则 `<inbound_tag>__<username>`,users 数组单用户
 - `container.go`:
-  - `UserEventChannel()` 返回 `c.userEventCh`
-  - `forwardUserEvents` / `startUserEventHandler`:抄 `hysteria/container.go:473-570` 模板
+  - `userEventCh chan usermanager.UserEvent` + `UserEventChannel() <-chan`
+  - `forwardUserEvents` + `startUserEventHandler`:抄 `pkg/proxy/containers/snell/container.go:356-377`
   - `handleUserEvent`:
-    - `Add`:分配 internal_port → profilegen → 合并当前 listeners → `PUT /configs` → `GetBindPort(TargetPort=internal_port)`
-    - `Remove`:遍历该用户所有 listener → `PUT /configs` 剔除 → `ReleaseBindPort` → 释放 internal_port
+    - `Add`:遍历 `c.inbounds`,对每个 inbound 调 `userMgr.GetBindPort({ContainerType: mihomo, InboundTag: inb.Tag, TargetPort: inb.Port, Protocol: inb.Protocol})`
+    - `Remove`:遍历 `c.inbounds`,对每个 inbound 调 `GetUserPortByDstForCleanup(user, inb.Port)` → `ReleaseBindPort`
     - `Update`:按 `IsUserVisible` 走 Add/Remove 分支
-- `addedUsers map[username]map[tag]{internal_port, listener_name}` + `sync.Mutex` 保护
+  - `addedUsers map[username]map[inboundTag]struct{}` + mutex
+  - `releaseAllForwardRules(tag)`:给 stage 4 `RemoveInboundConfig` 调,拆掉该 inbound 下所有用户端口
+  - 初始 reconcile(Start 钩子补步骤 3-4):process ready + stage 4 PUT /configs 完成后,为每 (可见用户, inbound) 幂等 GetBindPort
 
 **验收**:
 
-- 单元测试:mock UserManager 发事件,验证 addedUsers 状态机 + REST 调用序列
-- 集成测试:真实 mihomo,AddUser → 公网端口可连 → RemoveUser → 公网端口不可连
-- 并发测试:同一用户并发 Add/Remove 幂等(`go test -race`)
+- 单元:mock UserManager,验 Add/Remove/Update 事件触发的 GetBindPort/Release 调用序列 + addedUsers 状态机
+- 集成(真实 mihomo):FastAddInbound(vmess, 共享 uuid) → AddUser → 用该 uuid 从 v2ray 客户端连用户公网端口握手成功 → RemoveUser → 端口不通 → RemoveInboundConfig → 所有该 inbound 下用户端口被回收
+- 并发:`go test -race`,同一用户并发 Add/Remove 幂等
 
-## 阶段 6:Restore + Reconcile
+## 阶段 6:Restore + Reload 语义完善
 
-**目标**:进程重启后,listeners 和 forward 规则都能自动恢复,无须人工干预。
+> **范围收缩**:原阶段 6 的"周期性对账"已在阶段 5 落地(见 `startReconcileLoop` / `reconcileUsers`)。阶段 6 聚焦 `Restorable.Restore` 入口 + `Reload` 热更新语义,以及周期对账中**listener/store 侧**漂移的补齐(forward 侧漂移已被阶段 5 reconcileUsers 覆盖)。
+
+**目标**:进程重启或外部状态漂移后,listeners / forward 规则都能收敛到 store + UserManager 的真值。
 
 **产出**:
 
-- `container.go`:实现 `Restorable.Restore(ctx)`
-  - 从 InboundStore 读全量 mihomo inbound
-  - 从 UserManager 读当前可见用户
-  - 展开为全量 listeners + 对应 internal_port 分配
-  - 一次性 `PUT /configs`
-  - 对账 forward 层:缺失的 `GetBindPort` 补申请,多余的 `ReleaseBindPort`
-- `reconcile.go`:周期性对账(`ReconcileInterval`,默认 30s),检测 store/mihomo/forward 三方漂移
-- `Reload()` 实现:重拉 Restore 逻辑但**不重启进程**(用于证书/全局配置更新)
+- `container.go`:实现 `Restorable.Restore(ctx)` —— 复用阶段 5 的 `restoreAndPushInbounds + reconcileUsers` 组合,暴露为 Restorable 接口入口
+- 阶段 5 的 `reconcileUsers` 扩展:加入 store vs map vs mihomo 三向漂移检测 —— 当前只做 UserManager ↔ inbound.addedUsers 对账,需要补"inbound 在 store 但不在 c.inbounds"(restart loop)和"listener 在 mihomo 但不在 c.inbounds"(外部干预)的检测
+- `Reload()` 实现:不重启进程,重拉整份 listener 配置 `PUT /configs` —— 证书/共享凭据变化后该 inbound 的 listener Close+Listen(该 inbound 既有连接断,跨 inbound 不受影响)
+- 可能需要的 MihomoConfig 新字段:`ReconcileInterval`(当前 hardcode 30s,若生产需要调优再抽)
 
 **验收**:
 
 - 集成测试:启动 → Add N 个 inbound + M 个用户 → kill mihomo 进程 → 进程再启 → listeners/forward 完整恢复
-- 故意删 mihomo 侧某个 listener 后等 ReconcileInterval → 自动补回
+- 故意删 mihomo 侧某个 listener 后等 reconcileInterval → 自动补回
 - Reload 触发后进程未重启(pid 不变),但 listeners 内容更新
 
 ## 阶段 7:订阅生成
@@ -361,20 +529,19 @@
 
 | # | 风险 | 触发阶段 | 缓解 |
 |---|------|---------|-------|
-| R1 | listener 数量膨胀导致 mihomo yaml 加载慢 | 阶段 10 | 规模测试摸底;超阈值切混合模型 |
+| ~~R1~~ | ~~listener 数量膨胀导致 mihomo yaml 加载慢~~ | — | **已消除**:共享凭据模型下 listener 数量 = inbound 数量(典型 1~10),与用户规模解耦 |
 | R2 | mihomo Alpha schema / REST 行为漂移 | 全程 | D2 决定不锁版本:开发期读 HEAD 做功能参考;rest_client 层探测 mihomo 版本 + 关键字段,不兼容时报清晰错误而非默默降级 |
-| R3 | 证书热更时 listener 必须重建 | 阶段 6 `Reload()` | 若不支持仅 patch TLS,Reload 降级为 Restart |
+| R3 | 证书或共享凭据热更时 listener 重建 | 阶段 6 `Reload()` | 该 inbound 上现有连接会随 Close+Listen 断开;跨 inbound 不受影响。可接受(部分用户瞬时重连);若未来要求零中断需另行设计 |
 | R4 | clash converter 对 MVP 三协议(vmess/trojan/ss)输出不完整 | 阶段 7 | 阶段 7 先扫描,基本不会缺。hysteria2/tuic/anytls/vless 等扩展协议阶段由对应任务自带 converter 补写 |
-| R5 | Alpha 分支 REST API 行为变化(例如 PUT force 语义) | 阶段 3 | rest_client 层探测 mihomo 版本,不兼容时报清晰错误 |
-| R6 | per-user internal_port 池耗尽 | 阶段 5 | 池范围配置化;默认 [30000, 40000] 可容 1w 用户 |
+| R5 | Alpha 分支 REST API 行为变化(例如 PUT force 语义) | 阶段 3 | **已核实**(2026-04-22):`PUT force=false` 内部总走 `PatchInboundListeners(map, tunnel, dropOld=true)` 做 name-keyed diff,未变 listener 不重建。详见 memory `reference_mihomo_protocol_facts.md` |
+| ~~R6~~ | ~~per-user internal_port 池耗尽~~ | — | **已消除**:共享凭据模型下无内部端口池,inbound 的 listen port 由调用方通过 FastAddInbound params 指定 |
 
 ## 待解问题(MVP 完成后再评估)
 
 - **扩展协议任务**:vless / hysteria2 / tuic / anytls 各作为独立后续任务,复用 MVP 架构,增量补 profilegen + clash converter + 测试
 - 是否把 TUIC/anytls 提为 `contracts.Protocol` 一等公民
-- 混合模型(多用户共享 listener)的阈值/开关如何放进 `MihomoConfig`
 - 跨节点用户编排(`docs/user-placement-controller-design.md`)如何识别 mihomo container 的可用容量
-- `docs/inbound-user-tracker-refactor.md` 延后项落地时,mihomo 如何对齐
+- `docs/inbound-user-tracker-refactor.md` 延后项落地时,mihomo 如何对齐(共享凭据模型下 `addedUsers` 结构接近 snell,大概率可直接套用统一方案)
 - mihomo container 启用 hysteria2 后,是否替代/合并现有 `containers/hysteria/`(单 inbound 专用容器)
 
 ## 参考
@@ -382,5 +549,6 @@
 - `docs/mihomo-container-design.md` — 本计划的设计依据
 - `docs/container-design-principles.md` — 三原则 + 模式矩阵
 - `docs/xray-container-architecture.md` / `docs/snell-container-design.md` — 已有 container 实现参照
-- `pkg/proxy/containers/hysteria/container.go:473-570` — per-user forward 模板
+- `pkg/proxy/containers/snell/container.go:368-467` — user event handler + forward 模板(stage 5 抄,多 inbound 扩展)
+- `pkg/proxy/containers/xray/exec_runner.go:523-593` — 多 inbound CRUD 模板(stage 4 抄)
 - `docs/cluster-user-implementation-plan.md` — 阶段式实施计划风格参照

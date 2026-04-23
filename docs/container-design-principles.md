@@ -122,7 +122,9 @@
  │  xray:    共享 clients[0] 的 UUID/password,所有 │
  │           用户订阅同一个 UUID,协议级认证通过   │
  │           共享凭据完成;gRPC AddUser 未使用     │
- │  mihomo:  per-user listener(每用户独立 UUID)   │
+ │  mihomo:  每 inbound 一条 listener + 一把共享   │
+ │           凭据,所有用户订阅同一把凭据;mihomo   │
+ │           的 user-level REST API 未使用         │
  │  hysteria: 内核通过 HTTP 回调 v2raymg 做认证     │
  │  snell:    共享 PSK                              │
  └─────────────────────────────────────────────────┘
@@ -157,11 +159,11 @@
 | Container | 原则 1 | 原则 2 模式 | 运行时通道 | 协议层 user list | 原则 3 对齐 |
 |-----------|--------|-------------|------------|-------------------|-------------|
 | **xray** | exec | B(gRPC AddInbound/RemoveInbound) | xray gRPC(仅用于 inbound 增删) | **共享 clients[0] 的 UUID/password,所有用户订阅同一个 UUID**;gRPC AddUser/RemoveUser 有封装但业务路径上**从未被调用** | ✓ 共享凭据 + forward per-user 端口,与 snell 同构 |
-| **mihomo** | exec | B(`PatchInboundListeners` / `PUT /configs`) | mihomo HTTP REST | per-user listener(每用户独立 UUID,规避 listener 重建) | ✓ per-user listener + forward relay |
+| **mihomo** | exec | B(`PatchInboundListeners` / `PUT /configs`) | mihomo HTTP REST | **每 inbound 一条 listener + 一把共享凭据**(vmess uuid / trojan password / ss password+cipher),所有用户共用;mihomo 的 user-level REST API 不使用 | ✓ 共享凭据 + forward per-user 端口,与 xray/snell 同构 |
 | **hysteria** | exec | A(单 inbound) | 无(HTTP auth callback) | 不需要(内核回调 v2raymg 做认证) | ✓ 只有 forward 层做 per-user |
 | **snell** | exec | A(单 inbound) | 无(共享 PSK) | 不需要(所有用户同一 PSK) | ✓ 只有 forward 层做 per-user |
 
-> **重要事实**:xray 虽然提供了 gRPC `AddUser/RemoveUser` 能力,但 v2raymg 在业务路径上**完全不使用**。`XrayInbound.AddUser/RemoveUser`(`exec_runner.go:1325-1387`)方法注释明确写着 `Note: This does NOT call xray gRPC AddUser`,实现只调 `userMgr.GetBindPort/ReleaseBindPort`。`Executor.AddUser/RemoveUser`(`exec_runner.go:883-893`)是 gRPC 的封装但全仓无调用者,属于历史遗留能力。结论:**所有 container 的业务用户路径都只走 forward 层,无一例外**。
+> **重要事实**:xray 虽然提供了 gRPC `AddUser/RemoveUser` 能力,但 v2raymg 在业务路径上**完全不使用**。`XrayInbound.AddUser/RemoveUser`(`exec_runner.go:1325-1387`)方法注释明确写着 `Note: This does NOT call xray gRPC AddUser`,实现只调 `userMgr.GetBindPort/ReleaseBindPort`。`Executor.AddUser/RemoveUser`(`exec_runner.go:883-893`)是 gRPC 的封装但全仓无调用者,属于历史遗留能力。mihomo 同理:即便 mihomo 本身的 listener 支持 users 数组,v2raymg 也只在 listener 层放**一把共享凭据**,业务用户路径不走 mihomo 的任何 user-level API。结论:**所有 container 的业务用户路径都只走 forward 层,无一例外**。
 
 ---
 
@@ -169,6 +171,6 @@
 
 - `docs/xray-container-architecture.md`、`docs/xray-container-flow.md` — 模式 B 标杆
 - `docs/snell-container-design.md` — 模式 A 标杆
-- `docs/mihomo-container-design.md` — 模式 B(per-user listener 变种)
+- `docs/mihomo-container-design.md` — 模式 B(多 listener + 共享凭据)
 - `wiki/knowledge/port-management/` — forward 层端口/流量统计细节
 - `CLAUDE.md` 核心设计决策 #1 / #3 / #4 / #5 — 本文档的精简上游

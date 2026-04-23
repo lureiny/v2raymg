@@ -1,0 +1,173 @@
+package mihomo
+
+import (
+	"fmt"
+
+	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+)
+
+// FromParams builds a MihomoInbound from a FastAddInbound params map.
+//
+// Required keys (all protocols):
+//   - protocol: string ("vmess" | "trojan" | "shadowsocks")
+//   - port:     numeric; accepted as uint32, int, int64, or float64
+//
+// Required protocol-specific credentials:
+//   - vmess:        uuid     (string)
+//   - trojan:       password (string)
+//   - shadowsocks:  password (string), cipher (string)
+//
+// Optional:
+//   - listen_addr: string; defaults to 127.0.0.1. Non-loopback values are
+//                  accepted but strongly discouraged — the forward layer is
+//                  the only sanctioned ingress path (see principle 3).
+//
+// Errors wrap ErrProtocolNotSupported or ErrMissingCredential from inbound.go
+// so HTTP handlers can map them to appropriate status codes.
+func FromParams(tag string, params map[string]any) (*MihomoInbound, error) {
+	protocol, err := requireString(params, "protocol")
+	if err != nil {
+		return nil, err
+	}
+
+	port, err := requirePort(params, "port")
+	if err != nil {
+		return nil, err
+	}
+
+	cred, err := extractSharedCred(contracts.Protocol(protocol), params)
+	if err != nil {
+		return nil, err
+	}
+
+	inb := NewMihomoInbound(tag, contracts.Protocol(protocol), port, cred)
+
+	if listen, ok := params["listen_addr"].(string); ok && listen != "" {
+		if !isLoopbackListen(listen) {
+			// Non-loopback binds expose mihomo directly to the network,
+			// bypassing the forward layer. Principle 3 says forward is the
+			// only sanctioned ingress path; warn so operators who did this
+			// by accident can spot it in the logs. Not rejected because
+			// tests and one-off integration scenarios may still want it.
+			log.Warnf("mihomo: inbound %q listen_addr=%q is non-loopback; forward layer is the sanctioned external ingress path (see docs/container-design-principles.md principle 3)", tag, listen)
+		}
+		inb.DefaultInbound.SetListenAddr(listen)
+	}
+
+	// Final validation: catches Tag/Port bounds plus any per-protocol rule
+	// that extractSharedCred missed. Redundant with above for the happy path,
+	// cheap insurance for edge cases (e.g. whitespace-only tag).
+	if err := inb.Validate(); err != nil {
+		return nil, err
+	}
+	return inb, nil
+}
+
+func extractSharedCred(protocol contracts.Protocol, params map[string]any) (MihomoSharedCred, error) {
+	switch protocol {
+	case contracts.ProtocolVMess:
+		uuid, err := requireString(params, "uuid")
+		if err != nil {
+			return MihomoSharedCred{}, err
+		}
+		return MihomoSharedCred{UUID: uuid}, nil
+
+	case contracts.ProtocolTrojan:
+		pw, err := requireString(params, "password")
+		if err != nil {
+			return MihomoSharedCred{}, err
+		}
+		return MihomoSharedCred{Password: pw}, nil
+
+	case contracts.ProtocolShadowsocks:
+		pw, err := requireString(params, "password")
+		if err != nil {
+			return MihomoSharedCred{}, err
+		}
+		cipher, err := requireString(params, "cipher")
+		if err != nil {
+			return MihomoSharedCred{}, err
+		}
+		return MihomoSharedCred{Password: pw, Cipher: cipher}, nil
+
+	default:
+		return MihomoSharedCred{}, fmt.Errorf("%w: %q", ErrProtocolNotSupported, protocol)
+	}
+}
+
+func requireString(params map[string]any, key string) (string, error) {
+	v, ok := params[key]
+	if !ok {
+		return "", fmt.Errorf("mihomo: param %q required", key)
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("mihomo: param %q must be string, got %T", key, v)
+	}
+	if s == "" {
+		return "", fmt.Errorf("mihomo: param %q must not be empty", key)
+	}
+	return s, nil
+}
+
+// requirePort parses a numeric port from a map, accepting the common shapes
+// that flow in from decoders and typed callers:
+//   - int / int64 — literal yaml / config structs
+//   - float64 — encoding/json default for JSON numbers
+//   - int32 — proto-generated structs (FastAddInboundReq.Port is int32)
+//   - uint / uint16 / uint32 — typed callers with a port-specific alias
+func requirePort(params map[string]any, key string) (uint32, error) {
+	v, ok := params[key]
+	if !ok {
+		return 0, fmt.Errorf("mihomo: param %q required", key)
+	}
+	switch vv := v.(type) {
+	case uint32:
+		if vv > 65535 {
+			return 0, fmt.Errorf("mihomo: param %q out of range [0,65535]: %d", key, vv)
+		}
+		return vv, nil
+	case uint16:
+		return uint32(vv), nil
+	case uint:
+		if vv > 65535 {
+			return 0, fmt.Errorf("mihomo: param %q out of range [0,65535]: %d", key, vv)
+		}
+		return uint32(vv), nil
+	case int:
+		if vv < 0 || vv > 65535 {
+			return 0, fmt.Errorf("mihomo: param %q out of range [0,65535]: %d", key, vv)
+		}
+		return uint32(vv), nil
+	case int32:
+		if vv < 0 || vv > 65535 {
+			return 0, fmt.Errorf("mihomo: param %q out of range [0,65535]: %d", key, vv)
+		}
+		return uint32(vv), nil
+	case int64:
+		if vv < 0 || vv > 65535 {
+			return 0, fmt.Errorf("mihomo: param %q out of range [0,65535]: %d", key, vv)
+		}
+		return uint32(vv), nil
+	case float64:
+		if vv != float64(uint32(vv)) || vv < 0 || vv > 65535 {
+			return 0, fmt.Errorf("mihomo: param %q must be integer in [0,65535]: %v", key, vv)
+		}
+		return uint32(vv), nil
+	default:
+		return 0, fmt.Errorf("mihomo: param %q must be numeric, got %T", key, v)
+	}
+}
+
+// isLoopbackListen tells whether an address string binds only to the local
+// interface. Covers the common forms; more exotic forms (e.g. 127.0.0.2)
+// are flagged as non-loopback by omission, which is the conservative
+// default for the listen_addr warning.
+func isLoopbackListen(addr string) bool {
+	switch addr {
+	case "127.0.0.1", "::1", "localhost":
+		return true
+	}
+	return false
+}

@@ -22,5 +22,9 @@ func (f *mihomoFactory) New(opts container.BuildOptions) (container.Container, e
 	if !ok || cfg == nil {
 		return nil, fmt.Errorf("mihomo: invalid config type, expected *MihomoConfig")
 	}
-	return NewMihomoContainer(*cfg)
+	var options []MihomoOption
+	if opts.StoreMgr != nil {
+		options = append(options, WithStoreMgr(opts.StoreMgr))
+	}
+	return NewMihomoContainer(*cfg, options...)
 }
