@@ -47,7 +47,7 @@ func (handler *InboundListHandler) getRelativePath() string { return "/inbounds"
 
 func (handler *InboundListHandler) help() string {
 	return `GET /api/inbounds
-	列出所有节点的所有 inbound（跨 xray/snell/hysteria container）
+	列出所有节点的所有 inbound（跨 xray/snell/hysteria/mihomo container）
 	query: target（默认当前节点）
 	返回: [{"container":"xray","name":"tag1"}, ...]`
 }
@@ -58,7 +58,7 @@ type InboundDeleteByNameHandler struct{ HttpHandlerImp }
 func (handler *InboundDeleteByNameHandler) handlerFunc(c *gin.Context) {
 	var req struct {
 		Target    string `json:"target"`
-		Container string `json:"container"` // "xray" / "snell" / "hysteria"
+		Container string `json:"container"` // "xray" / "snell" / "hysteria" / "mihomo"
 		Name      string `json:"name"`      // inbound tag
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -104,5 +104,5 @@ func (handler *InboundDeleteByNameHandler) getRelativePath() string { return "/i
 func (handler *InboundDeleteByNameHandler) help() string {
 	return `DELETE /api/inbounds
 	按 container 类型 + name 删除 inbound
-	body: {"target": "", "container": "xray|snell|hysteria", "name": "<inbound tag>"}`
+	body: {"target": "", "container": "xray|snell|hysteria|mihomo", "name": "<inbound tag>"}`
 }

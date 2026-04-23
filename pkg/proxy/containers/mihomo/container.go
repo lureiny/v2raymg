@@ -54,6 +54,12 @@ type MihomoContainer struct {
 
 	storeMgr *store.StoreManager
 
+	// updater handles the download → verify → swap → restart flow used by
+	// both Update() and the Start-time auto-download path. nil when
+	// AutoDownload=false and no explicit updater was injected — in that case
+	// Update() returns ErrNotSupported and a missing binary at Start fails.
+	updater *Updater
+
 	// User event + reconcile plumbing. All populated by WithUserManager at
 	// construction time; nil if no user manager is provided (unit tests
 	// that exercise only inbound CRUD).
@@ -94,6 +100,14 @@ func WithStoreMgr(sm *store.StoreManager) MihomoOption {
 // container's local channel rather than dropped. Matches xray's pattern.
 func WithUserManager(um *usermanager.UserManager) MihomoOption {
 	return func(c *MihomoContainer) { c.userMgr = um }
+}
+
+// WithUpdater injects a pre-built updater, overriding the default constructed
+// from MihomoConfig.AutoDownload. Primary use: tests wiring fake release
+// clients / downloaders / swappers. Production wiring relies on
+// AutoDownload=true and the default constructor.
+func WithUpdater(u *Updater) MihomoOption {
+	return func(c *MihomoContainer) { c.updater = u }
 }
 
 type mihomoHooks struct {
@@ -146,6 +160,32 @@ func NewMihomoContainer(cfg MihomoConfig, opts ...MihomoOption) (*MihomoContaine
 		opt(c)
 	}
 	c.BaseContainer = container.NewBaseContainer(contracts.ContainerMihomo, &mihomoHooks{c: c})
+
+	// Build the updater once BaseContainer is wired so we can pass c as the
+	// ProcessController without risk of calling Start/Stop on a half-built
+	// container. Skipped when WithUpdater already injected one (test paths)
+	// or when AutoDownload is explicitly disabled.
+	//
+	// DownloadDir defaults to cfg.DataDir (already writable by mihomo) rather
+	// than filepath.Dir(cfg.BinaryPath). The binary's parent is often
+	// /usr/local/bin, which is read-only on hardened / immutable hosts and
+	// pollutes a system directory with 30MB .gz scratch files when writable.
+	// DataDir is mihomo's own home and always writable.
+	if c.updater == nil && cfg.AutoDownload {
+		downloadDir := cfg.DataDir
+		if downloadDir == "" {
+			downloadDir = "/tmp"
+		}
+		updater, err := NewUpdater(UpdaterConfig{
+			BinaryPath:  cfg.BinaryPath,
+			DownloadDir: downloadDir,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("mihomo: init updater: %w", err)
+		}
+		updater.SetProcessController(c)
+		c.updater = updater
+	}
 
 	// Subscribe to user events eagerly so early events (added between
 	// construction and Start) are buffered rather than lost. Buffer size
@@ -277,8 +317,74 @@ func (c *MihomoContainer) Version() string {
 	return c.cachedVersion
 }
 
-func (c *MihomoContainer) Update(_ context.Context, _ container.UpdateRequest) (*container.UpdateResult, error) {
-	return nil, container.ErrNotSupported
+// Update hands off to the bundled mihomo Updater when one is configured. The
+// Updater handles fetch → download → verify → extract → swap → restart with
+// rollback on post-swap failure. When the caller asked for a restart and the
+// update succeeded, we re-probe GET /version to refresh cachedVersion so that
+// subsequent Version() calls return the new build string (the Updater's
+// result.ToVersion is the GitHub tag, which is distinct from what mihomo
+// reports at runtime — e.g. tag "v1.19.24" vs runtime "1.19.24").
+//
+// Without an updater (AutoDownload=false and no WithUpdater injection) this
+// returns ErrNotSupported, matching the "no updater wired" contract shared
+// with xray/snell/hysteria.
+func (c *MihomoContainer) Update(ctx context.Context, req container.UpdateRequest) (*container.UpdateResult, error) {
+	if c.updater == nil {
+		return nil, container.ErrNotSupported
+	}
+	// Capture the pre-update runtime version (the GET /version string) so the
+	// result carries a complete before/after for callers displaying update
+	// outcomes. Updater itself sets ToVersion from the GitHub tag.
+	fromVersion := c.Version()
+
+	result, err := c.updater.Update(ctx, req)
+	if result != nil {
+		result.FromVersion = fromVersion
+	}
+	if err != nil {
+		return result, err
+	}
+	if result != nil && result.Restarted {
+		c.refreshCachedVersionAfterRestart()
+	}
+	return result, nil
+}
+
+// refreshCachedVersionAfterRestart probes mihomo's /version post-restart and
+// updates cachedVersion on success. Best-effort — on failure we log and keep
+// the prior value rather than blanking cachedVersion, since a transient REST
+// blip here doesn't mean the container is broken (Update has already restarted
+// the process; the next Reload / reconcileDrift will retry implicitly).
+//
+// Uses its own bounded context rather than inheriting the caller's. If the
+// caller cancelled mid-Update (common pattern with timeouts), the restart has
+// already succeeded — we want the version probe to still get a chance instead
+// of inheriting the cancellation. readinessTimeout (10s) matches startProcess.
+//
+// The read of restClient (RLock) and the write of cachedVersion (Lock) are
+// separate lock regions with a REST call between them. A concurrent Stop that
+// nils restClient between the two regions would still cause us to write the
+// freshly-fetched version even though the container is now stopped — benign,
+// because Stop intentionally preserves cachedVersion (see process.go
+// stopProcess) so Version() keeps showing the last-known build until the next
+// Start replaces it.
+func (c *MihomoContainer) refreshCachedVersionAfterRestart() {
+	c.mu.RLock()
+	rc := c.restClient
+	c.mu.RUnlock()
+	if rc == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), readinessTimeout)
+	defer cancel()
+	v, err := rc.GetVersion(ctx)
+	if err != nil {
+		log.Warnf("mihomo: post-update version probe failed: %v", err)
+		return
+	}
+	c.mu.Lock()
+	c.cachedVersion = v
+	c.mu.Unlock()
 }
 
 // FastAddInbound creates a new mihomo listener from the given params and

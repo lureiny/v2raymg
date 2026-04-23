@@ -145,10 +145,12 @@ containers:
         data_dir: /var/lib/v2raymg/mihomo
         external_controller: "127.0.0.1:9090"
         secret: ""                    # 留空即无 secret,配合 loopback 绑定可接受
-        version: Prerelease-Alpha     # auto-download 的 GitHub tag
+        release_tag: latest           # GitHub release tag; "latest" → /releases/latest (最新 stable)
+                                      # 设为 "Prerelease-Alpha" 可跟踪 Alpha 永续 pre-release
+        auto_download: true           # 二进制缺失时由 updater 下载(stage 9)
 ```
 
-没有 `internal_port_range`(无内部端口池);没有 `reconcile_interval`(stage 6 添加时再引)。
+没有 `internal_port_range`(无内部端口池);没有 `reconcile_interval`(stage 6 添加时再引)。字段名原为 `version`,stage 9 重命名为 `release_tag`(避免与 `Container.Version()` 语义撞名)。默认值原为 `Prerelease-Alpha`,stage 9 改为 `latest` —— 生产默认跑 stable,开发跑 Alpha 请显式覆盖。
 
 ### 初始 mihomo config.yaml(Start 时生成)
 

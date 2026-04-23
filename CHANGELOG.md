@@ -1,5 +1,22 @@
 # CHANGELOG.md
 
+## 2026-04-23 — Mihomo Container Stage 8-9
+
+### Stage 9: Updater + auto-download — **BREAKING**
+
+- **`MihomoConfig.Version` → `MihomoConfig.ReleaseTag`**(字段重命名)。旧 yaml key `version` 不再识别。运维升级时 config 里 `mihomo.version: ...` 必须改为 `mihomo.release_tag: ...`。
+- **默认值改变**:`release_tag` 默认从 `"Prerelease-Alpha"` 改为 `"latest"`。`"latest"` 走 GitHub `/releases/latest`,只返回最新 non-prerelease(stable v1.19.x);**不会** 返 Alpha pre-release。想继续跑 Alpha 的部署必须显式设 `release_tag: Prerelease-Alpha`。
+- 新增 `MihomoConfig.AutoDownload bool`,默认 `true`。false 时 binary 缺失直接报错、`Update()` 返 `ErrNotSupported`。
+- 新增 `pkg/proxy/containers/mihomo/updater.go`:`Update(ctx, req)` 热替换(fetch → pick asset → download → verify → gunzip → swap → restart),按 `RestartPolicy` 决定重启;SHA256 当 release 发 `checksums.txt`(目前仅 Alpha)就校验,否则 warn + 跳过;失败路径 rollback,rollback 本身也失败时通过 `errors.Join` 合并返回。
+- `pkg/proxy/tools/VerifyChecksum` 从 `strings.Contains + ==` 宽松比对改为 TrimSpace + ToLower 后严格相等,避免短/畸形 expected 被假过(安全 primitives 不得松匹配)。
+- 删除 `downloader.go::downloadMihomo` wrapper(updater 已取代)。
+
+### Stage 8: HTTP API 对齐 mihomo
+
+- `pkg/rpc/server/end_node_inbound.go::getContainerByType` 由硬编 switch 改为"别名规范化 + ContainerMgr.Get 多态",mihomo 及未来新 container 自动工作。
+- `pkg/rpc/server/end_node_inbound.go::ListInbound` 硬编 3-container slice 改为 `containerMgr.Types()` 迭代。
+- 相关 HTTP help / design doc 同步补 mihomo。
+
 ## 2026-02-22 — T-032 目录重组与引用迁移（container 体系）
 - 目录重组：
   - `core/container`：抽象接口与基础类型

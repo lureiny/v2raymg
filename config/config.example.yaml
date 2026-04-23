@@ -84,7 +84,10 @@ containers:
         data_dir: /var/lib/v2raymg/mihomo
         external_controller: 127.0.0.1:9090 # mihomo REST API listen address (loopback only)
         secret: ""                          # REST API bearer token; empty disables auth
-        version: Prerelease-Alpha           # mihomo release tag used for auto-download when binary is missing
+        release_tag: latest                 # GitHub release tag used by updater; "latest" = newest stable.
+                                            # Set to "Prerelease-Alpha" to track the permanent alpha pre-release.
+                                            # (Pre-stage-9 this field was named `version`; stage 9 renamed it.)
+        auto_download: true                 # download via updater when binary is missing at start
 
 # End Node configuration (effective when node_type=end)
 end_node:

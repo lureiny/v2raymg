@@ -7,36 +7,29 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/tools"
 )
 
-// mihomo Alpha release asset prefix for the default Go toolchain, GOAMD64=v1
-// build. Full name shape: "mihomo-linux-amd64-v1-alpha-<git-short-hash>.gz".
-// The "-v1-" segment distinguishes from "-v2-/-v3-/-compatible-" variants and
-// from the "-v1-go120-/-v1-go123-" toolchain variants (those have a different
-// prefix because go12x sits between "v1" and "alpha").
+// mihomoV1AssetPrefix is the Alpha GOAMD64=v1 asset prefix — full shape
+// "mihomo-linux-amd64-v1-alpha-<git-short-hash>.gz". The "-v1-" segment
+// distinguishes from "-v2-/-v3-/-compatible-" variants and from the
+// "-v1-go120-/-v1-go123-" toolchain builds (go12x sits between "v1" and
+// "alpha", producing a different prefix).
+//
+// Kept in downloader.go alongside downloadMihomoWith for the existing asset
+// matching tests. The production download path is updater.go, which
+// reconstructs the same prefix inline via alphaAssetPrefix for both Alpha and
+// stable releases; they're duplicated intentionally so each file reads
+// standalone.
 const mihomoV1AssetPrefix = "mihomo-linux-amd64-v1-alpha-"
 
-// downloadMihomo fetches the mihomo linux-amd64 v1 binary for the given release
-// tag and writes it atomically to destPath (chmod 0755). It is the convenience
-// wrapper used by the container at start-up.
-//
-// Only linux/amd64 is supported — the asset filter and binary are hard-coded
-// for that platform. Other OS/arch combinations are rejected early so a
-// developer running on macOS/arm64 gets a clear error instead of a downloaded
-// binary that won't execute. Stage 9's updater will add OS/arch autodetection.
-func downloadMihomo(ctx context.Context, tag, destPath string) error {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		return fmt.Errorf("mihomo: auto-download only supports linux/amd64 (current runtime is %s/%s); pre-install the binary at %s", runtime.GOOS, runtime.GOARCH, destPath)
-	}
-	return downloadMihomoWith(ctx, tools.NewGitHubReleaseClient(), tag, destPath)
-}
-
-// downloadMihomoWith is the testable form: the caller provides the GitHub
-// client so tests can redirect BaseURL to a local httptest server.
+// downloadMihomoWith is the testable Alpha-only download helper kept for the
+// asset-matching tests in downloader_test.go. Production uses updater.go
+// instead, which handles both Alpha and stable releases and adds SHA256
+// verification. Callers inject the GitHub client so tests can redirect
+// BaseURL to a local httptest server.
 func downloadMihomoWith(ctx context.Context, gh *tools.GitHubReleaseClient, tag, destPath string) error {
 	rel, err := gh.FetchRelease(ctx, "MetaCubeX", "mihomo", tag)
 	if err != nil {

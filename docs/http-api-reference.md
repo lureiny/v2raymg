@@ -741,7 +741,7 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 
 #### GET /api/inbounds - 列出所有 Inbound
 
-跨容器（xray, snell, hysteria）列出所有 inbound。
+跨容器（xray, snell, hysteria, mihomo）列出所有 inbound。
 
 **Query:** `?target=节点名`
 
@@ -761,7 +761,7 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 ```json
 {
   "target": "节点名",
-  "container": "xray|snell|hysteria",
+  "container": "xray|snell|hysteria|mihomo",
   "name": "inbound-tag"
 }
 ```

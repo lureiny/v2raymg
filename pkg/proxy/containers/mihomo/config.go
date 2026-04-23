@@ -20,10 +20,19 @@ type MihomoConfig struct {
 	// authentication entirely; acceptable as long as ExternalController is
 	// bound to 127.0.0.1.
 	Secret string `json:"secret"`
-	// Version is the mihomo release tag used when the binary is missing and
-	// must be auto-downloaded (e.g. "Prerelease-Alpha"). Alpha branch is the
-	// development target; see docs/mihomo-container-design.md.
-	Version string `json:"version"`
+	// ReleaseTag is the mihomo release tag used by the updater / auto-download
+	// path. The default "latest" resolves via GitHub's /releases/latest endpoint
+	// (returns the most recent non-prerelease stable). To track the permanent
+	// Alpha pre-release, set this to "Prerelease-Alpha" explicitly.
+	//
+	// Name: "ReleaseTag" (not "Version") to avoid collision with the running
+	// mihomo build string exposed by Container.Version().
+	ReleaseTag string `json:"release_tag"`
+	// AutoDownload enables fetching the binary via the updater when it is
+	// missing at Start, and makes Container.Update() a real implementation
+	// instead of an ErrNotSupported stub. Default true — set to false only
+	// when the binary is pre-installed and its version is externally managed.
+	AutoDownload bool `json:"auto_download"`
 }
 
 // Decode implements container.ContainerConfig.
@@ -33,7 +42,8 @@ func (c *MihomoConfig) Decode(cfg map[string]any) error {
 	c.DataDir = "/var/lib/v2raymg/mihomo"
 	c.ExternalController = "127.0.0.1:9090"
 	c.Secret = ""
-	c.Version = "Prerelease-Alpha"
+	c.ReleaseTag = "latest"
+	c.AutoDownload = true
 
 	if v, ok := cfg["binary_path"].(string); ok {
 		c.BinaryPath = v
@@ -50,8 +60,11 @@ func (c *MihomoConfig) Decode(cfg map[string]any) error {
 	if v, ok := cfg["secret"].(string); ok {
 		c.Secret = v
 	}
-	if v, ok := cfg["version"].(string); ok {
-		c.Version = v
+	if v, ok := cfg["release_tag"].(string); ok {
+		c.ReleaseTag = v
+	}
+	if v, ok := cfg["auto_download"].(bool); ok {
+		c.AutoDownload = v
 	}
 
 	return c.validate()
@@ -73,8 +86,8 @@ func (c *MihomoConfig) validate() error {
 	if _, _, err := net.SplitHostPort(c.ExternalController); err != nil {
 		return fmt.Errorf("mihomo: external_controller %q is not a valid host:port: %w", c.ExternalController, err)
 	}
-	if c.Version == "" {
-		return fmt.Errorf("mihomo: version must not be empty")
+	if c.ReleaseTag == "" {
+		return fmt.Errorf("mihomo: release_tag must not be empty")
 	}
 	return nil
 }

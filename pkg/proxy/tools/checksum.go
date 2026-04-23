@@ -10,16 +10,22 @@ import (
 	"strings"
 )
 
-// VerifyChecksum verifies a file's SHA256 checksum.
+// VerifyChecksum verifies a file's SHA256 checksum by exact (case-insensitive)
+// match against expectedChecksum after TrimSpace. Historically this used
+// strings.Contains as a loose fallback, which made short/garbage expected
+// strings (e.g. "beef") silently accept any file whose real digest happened to
+// contain the substring — unacceptable for a security primitive. Strict
+// equality is the only correct SHA256 semantics.
 func VerifyChecksum(filePath, expectedChecksum string) error {
 	checksum, err := ComputeChecksum(filePath)
 	if err != nil {
 		return err
 	}
 
-	expected := strings.TrimSpace(expectedChecksum)
-	if !strings.Contains(checksum, expected) && checksum != expected {
-		return fmt.Errorf("checksum mismatch: got %s, want %s", checksum, expected)
+	expected := strings.ToLower(strings.TrimSpace(expectedChecksum))
+	got := strings.ToLower(checksum)
+	if got != expected {
+		return fmt.Errorf("checksum mismatch: got %s, want %s", got, expected)
 	}
 	return nil
 }

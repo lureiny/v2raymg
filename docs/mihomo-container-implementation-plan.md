@@ -45,8 +45,8 @@
 | 阶段 5 | **DONE** 2026-04-22 | 包含周期 reconcile loop(原属阶段 6 的一半);剩余 Restore 入口 + Reload 语义留给阶段 6 |
 | 阶段 6 | **DONE** 2026-04-23 | |
 | 阶段 7 | **DONE** 2026-04-23 | |
-| 阶段 8 | TODO | |
-| 阶段 9 | TODO(MVP 已能 auto-download;此阶段补 SHA256 / Update 热替换 / OS-arch 检测 / latest 解析) | |
+| 阶段 8 | **DONE** 2026-04-23 | HTTP 层本就多态,改动集中在 RPC 层:getContainerByType 去 switch + ListInbound 改 Types() 迭代 |
+| 阶段 9 | **DONE** 2026-04-23 | Updater 热替换 + SHA256(Alpha 有 checksums.txt)+ AutoDownload 字段 + Version 重命名 ReleaseTag 默认 latest |
 | 阶段 10 | TODO | |
 | 阶段 11 | TODO | |
 
@@ -292,6 +292,178 @@
 - `go test ./... -race -count=1` × 5:全仓 5/5 通过,无回归
 
 **阶段 8 开工前必办**:按 P2-9 的 UNCERTAIN 标注,跑一次真实 trojan 客户端 ↔ 真实 mihomo 握手。建议在阶段 10 系统测试前完成,阶段 8 的 HTTP 层改动不依赖此结论。
+
+### 阶段 9(2026-04-23 完成)
+
+**开工前核实**(WebFetch `api.github.com/repos/MetaCubeX/mihomo/releases/latest` + `/tags/Prerelease-Alpha`):
+
+- 正式 release(`v1.19.24`,prerelease=false)asset 命名 `mihomo-linux-amd64-v1-v1.19.24.gz`(精确 tag 嵌在文件名里);**无 `checksums.txt`** 文件;每个 asset 的 API response 附带 `digest` 字段但要改 `tools.GitHubReleaseClient` 解码才能用
+- Alpha(prerelease=true)asset 命名 `mihomo-linux-amd64-v1-alpha-<hash>.gz`(含 git short hash);**有 `checksums.txt`**(SHA256)
+- 两套 release 的 asset matching 规则天然要分开:Alpha 按前缀 + `.gz` 后缀匹配,正式按 `"mihomo-linux-amd64-v1-" + tag + ".gz"` 精确匹配(排除 `-go120-` / `-go123-` toolchain 变体)
+
+**决策回顾**(用户确认):Q1 A(SHA256 有就做)/ Q2 A(维持 linux/amd64-only)/ Q3 A(加 AutoDownload 默认 true)/ Q4 B + 默认 `latest`(`/releases/latest`,**默认从 Alpha 切到 stable**)/ Q5 A(downloader.go 保留)/ Q6 A(重启后重读 `cachedVersion`)/ Q7 A(`Version` → `ReleaseTag` 顺手重命名)
+
+**交付**:
+
+- `pkg/proxy/containers/mihomo/config.go`:
+  - `MihomoConfig.Version` 重命名 `ReleaseTag string`,默认值从 `"Prerelease-Alpha"` 改 `"latest"`(**默认行为从 Alpha 切到 stable**;Alpha 部署需显式 `release_tag: Prerelease-Alpha`)
+  - 新增 `AutoDownload bool`,默认 `true`;`false` 时 Start 遇 missing binary 直接 fail、`Update()` 仍 `ErrNotSupported`
+  - `validate()` 同步改名、Decode 读 `release_tag` / `auto_download` key
+- `pkg/proxy/containers/mihomo/updater.go`(新建):
+  - `Updater` + `UpdaterConfig{BinaryPath/Owner/Repo/DownloadDir}` + `NewUpdater`,仿 xray 的 `ReleaseClient / AssetDownloader / BinarySwapper / ProcessController` 四个 seam
+  - `Update(ctx, req)` 7 步:runtime check → fetch → pick asset → download → verify(optional)→ gunzip → swap → restart,post-swap 失败走 `Rollback`
+  - `pickLinuxAmd64V1Asset(release)`:`TagName == "Prerelease-Alpha"` → 前缀匹配 `mihomo-linux-amd64-v1-alpha-*.gz`;其他 → 精确 `mihomo-linux-amd64-v1-<tag>.gz`
+  - `extractChecksumFor(path, assetName)`:解析 coreutils 格式 `<hex>  <name>` 的 checksums.txt
+  - `gunzipToTemp(src, dir)`:gunzip → 临时文件 → chmod 0755(复用 downloader.go 的 `gunzipFile`)
+  - `ErrUpdateFailed{Stage, Cause, Wrapped}` + `ErrRestartFailed` sentinel
+- `pkg/proxy/containers/mihomo/container.go`:
+  - 新字段 `updater *Updater`
+  - 新 Option `WithUpdater(u *Updater)`(测试可注入 fake);`NewMihomoContainer` 在 BaseContainer 构造完后若 `cfg.AutoDownload` 且 `c.updater == nil` 则默认构造一个 `NewUpdater` + `SetProcessController(c)`
+  - `Update(ctx, req)` 改为委托给 updater,成功且 `Restarted=true` 时调 `refreshCachedVersionAfterRestart` 重读 `/version` 刷新 `cachedVersion`(Q6);失败 / 无 updater 走原有 `ErrNotSupported` 语义
+- `pkg/proxy/containers/mihomo/process.go`:
+  - `startProcess` 的"binary not found"路径从直接调 `downloadMihomo` 改为调 `c.updater.Update(RestartPolicyNever)`,单一下载入口
+  - `c.cfg.Version` 引用同步改 `c.cfg.ReleaseTag`
+  - AutoDownload=false 或 updater==nil 时遇 missing binary 直接报错
+- `pkg/proxy/containers/mihomo/downloader.go`:
+  - 删除 dead production 入口 `downloadMihomo`(updater 已取代,且 `downloader_test.go` 只测 `downloadMihomoWith`)
+  - 保留 `downloadMihomoWith` / `findMihomoV1AssetURL` / `mihomoV1AssetPrefix` / `gunzipFile`(gunzipFile 被 updater.gunzipToTemp 复用;其余保留是因为 downloader_test.go 还在跑,用户 Q5 决定不强行合并)
+  - 更新 package doc 说明"production 入口在 updater.go,这里只留测试支撑"
+- `pkg/proxy/containers/mihomo/config_test.go`:默认值改 `"latest"`、overrides 测 `"Prerelease-Alpha"` / `auto_download=false`、validation 改 `"release_tag"`
+- `pkg/proxy/containers/mihomo/integration_test.go`:`Version` → `ReleaseTag`,补 `AutoDownload: true`
+- `pkg/proxy/containers/mihomo/container_test.go`:`sed` 批量把 4 处 `Version:` 改 `ReleaseTag:`
+- `pkg/proxy/containers/mihomo/updater_test.go`(新建,27 个测试):
+  - `NewUpdater` 默认值 + validation
+  - `Update` 全流程:DryRun / EmptyTag→latest / FetchFailure / Stable happy path / Alpha happy path (含 checksum 匹配) / Checksum mismatch / Checksum missing entry / Download failure / Missing asset (stable + alpha) / BadGzip extract fails / Swap failure / RestartPolicyNever 跳过 pc / NilProcessCtrl 跳过 pc / Stop 失败 rollback / Start 失败 rollback
+  - `pickLinuxAmd64V1Asset` 4 个纯函数 subtests(Alpha 前缀 / Stable 精确 / Alpha 无匹配 / Stable 无匹配)
+  - `extractChecksumFor` 3 个(含 `no entry for` 错误) + `gunzipToTemp` 2 个(成功 + bad gzip)
+  - OS/arch guard 在非 linux/amd64 skip(保留形式供将来跨平台 CI 启用)
+  - Container 层集成:AutoDownload 构造 updater / AutoDownload=false 不建 / WithUpdater 覆盖 / Update 无 updater 返 `ErrNotSupported` / Update 有 updater 转发结果
+- `config/config.example.yaml`:mihomo 段 `version: Prerelease-Alpha` → `release_tag: latest` + 新增 `auto_download: true` + 两行注释说明"set to Prerelease-Alpha to track the permanent alpha pre-release"
+
+**实际变动**(相对阶段 9 计划原文):
+
+- **SHA256 只在 Alpha 生效**:原计划模糊写"sha256 校验",实际验证正式 release 没发 `checksums.txt`,只有 API response 的 `digest` 字段。走 `digest` 字段要改 `tools.GitHubReleaseClient` 的 JSON 解码 + 引入新字段;成本不值这次阶段的进度。策略:有 `checksums.txt` 就校验(Alpha 命中)、无就 `log.Warn` + 跳过(stable 命中)。Q1 A 的"有就做没就留空"得以落地。如果未来 mihomo stable 加了 checksums.txt,同一代码路径自动生效无需改动。改接 API digest 留作 follow-up
+- **默认行为改变 = 运维需要关注**:`release_tag` 默认 `latest` → GitHub `/releases/latest` → 最新 stable(v1.19.x)。阶段 1~8 期间的部署如果依赖"默认拉 Alpha 跑新功能",必须升级 config 加 `release_tag: Prerelease-Alpha` 才能保持原行为。config.example.yaml 加了注释提醒;CHANGELOG / 升级 notes 待阶段 11 补
+- **未做 OS/arch 动态检测**:按 Q2 A 决定,仍硬编 linux/amd64。runtime check 只在 Update 入口判一次,非 linux/amd64 直接返 `fetch` 阶段错误。跨平台 Updater 作为独立后续任务
+- **downloader.go 的 `downloadMihomo` 删除了**:Q5 A 说"保留 downloader.go 不合并",但 `downloadMihomo` 是顶层 wrapper 且已无生产/测试引用,保留等于死代码。按 CLAUDE.md "certain that something is unused, you can delete it completely" 原则清理。余下函数(`downloadMihomoWith` / 常量 / `findMihomoV1AssetURL` / `gunzipFile`)保留:gunzipFile 有 updater 复用;其他支撑自己的测试
+- **未做 `downloader_test.go` 合并到 `updater_test.go`**:与 Q5 A 决定一致。`TestFindMihomoV1AssetURL` 和 `TestDownloadMihomoWith_*` 功能上被 updater_test 覆盖(`TestPickLinuxAmd64V1Asset_*` + `TestUpdater_Update_Alpha_*`),但独立保留不伤害
+- **cachedVersion 刷新是 best-effort**:`refreshCachedVersionAfterRestart` 拿 `restClient` 读 `/version`;restClient 为 nil(container 从未 Start)或 REST 错误时 `log.Warn` 保留旧值,不 panic、不把 cachedVersion 清空 —— 设计上 Update 已成功重启了进程,version 探测只是显示层;下次 Reload / reconcileDrift 会隐式重试
+
+**验证**:
+
+- `go build ./...` 通过
+- `go test ./pkg/proxy/containers/mihomo/... -race -count=1` × 3 全绿(27 个 stage 9 新增 + stage 1-7 的全部 existing)
+- `go test ./... -race -count=1` 全仓 32 包全绿,无回归
+- 未跑 integration(真实下载 + swap + restart),阶段 10 系统测试时统一跑
+
+### Stage 8+9 Review 修复(2026-04-23 完成)
+
+用 3 个 general-purpose agent 并行审查 stage 8+9(agent 分工:RPC 多态 / Updater 核心 / Container 集成),共 33 条发现。其中一条在核实 mihomo checksums.txt 真实格式时(`curl -sL .../checksums.txt`)暴露的 bug 被追加为 **P0-2**。按 P0→P1→P2→P3 分 6 批处置:
+
+**Batch 1(P0 + P1 功能类)**:
+
+- **P0-1** `pkg/proxy/tools/checksum.go::VerifyChecksum`:改严格相等(TrimSpace + ToLower)。旧逻辑 `strings.Contains(real, expected) || ==` 让短/畸形 expected 被假过,是共享工具老 bug;stage 9 是首个把 SHA256 接到生产路径的 caller,必须修。`TestVerifyChecksum_RejectsSubstring` 锁定行为。
+- **P0-2(核实后新增)** `extractChecksumFor`:`strip "./"` 前缀。核实真实 Alpha `checksums.txt` 发现行格式 `<hex>  ./mihomo-...gz` —— 文件名带 `./` 前缀,旧 `fields[last] == assetName` 永远不匹配 → Alpha SHA256 校验永远 "no entry for"。测试 `TestExtractChecksumFor` 改为使用真实 64-hex digest + `./` 前缀的 body,补 `TestExtractChecksumFor_NoDotSlashPrefix` 覆盖兜底。
+- **P1-1** updater.go 的 `restartFailure` helper:rollback 失败时 `log.Errorf` 并通过 `errors.Join` 组合 Cause,避免"restart 失败 + rollback 也失败"时 caller 只看到第一个错。
+- **P1-3** `ErrUpdateFailed.Unwrap() []error`:同时暴露 Cause 和 Wrapped,`errors.Is(err, ErrRestartFailed)` 和 `errors.Is(err, context.Canceled)` 都能命中。配测试 `TestUpdater_Unwrap_ExposesBothCauseAndWrapped`。
+- **P1-4** Updater 加 `sync.Mutex` 串行化 `Update`,避免共享 `DownloadDir` 下 `checksums.txt` / .gz 并发碰撞。测试 `TestUpdater_Update_ConcurrentCallsSerialized`(8 并发 goroutine,`-race` 通过)。
+- **P1-5** `NewMihomoContainer` 默认 `DownloadDir = cfg.DataDir`(原为 `filepath.Dir(cfg.BinaryPath)`,在 `/usr/local/bin` 为只读的 hardened host 上必失败;即便 writable 也污染系统目录)。
+- **P1-8** 补 3 个 `refreshCachedVersionAfterRestart` 测试(Q6 核心路径原零覆盖):httptest + 真 RESTClient 验证重启后 cachedVersion 刷新 / restClient==nil no-op / REST 500 保留旧值不 blank。
+
+**Batch 2(P1 文档)**:
+
+- **P1-6** `docs/mihomo-container-design.md` config 示例 `version: Prerelease-Alpha` → `release_tag: latest` + `auto_download: true`,附迁移说明。
+- **P1-7** `CHANGELOG.md` 加 2026-04-23 条目,明示 `Version`→`ReleaseTag` rename 是 BREAKING、默认值从 Alpha 切 stable 的运行时含义、`VerifyChecksum` 的安全语义修正。
+
+**Batch 3(P2 docs/CLI 漂移)**:
+
+- **A1-1** `cmd/cli/suggest.go::knownContainers` 加 `mihomo`,附注释提醒与 `contracts.ContainerType` 保持一致。
+- **A1-2** `docs/http-api-reference.md:744,764` 补 mihomo 枚举。
+- **A3-12** `config/config.example.yaml` 补 "Pre-stage-9 this field was named version" 注释。
+
+**Batch 4(P2 updater 资源 + 测试)**:
+
+- **A2-6** 并发 `checksums.txt` 碰撞:P1-4 mutex 已 serialize,无需独立命名,留现状。
+- **A2-8** stable 的 "no checksums.txt" `log.Warn` → `log.Debugf`(stable 确实不发 checksums.txt,warn 会每次升级刷日志)。
+- **A2-12** runtime guard 从 `runtime.GOOS/GOARCH` 直取改为 package-level `updaterRuntimeGOOS`/`updaterRuntimeGOARCH`,`TestUpdater_Update_NonLinuxAmd64Fails` 从 `t.Skip` 改为 t.Cleanup 覆写 + 断言 stage/cause,**linux/amd64 CI 也会跑**。
+- **A2-13** 补测试:`TestUpdater_Update_ContextCancelledMidDownload`(ctx cancel → download stage + errors.Is(context.Canceled))、`TestPickLinuxAmd64V1Asset_AlphaAmbiguous`(多条 `-v1-alpha-` 匹配时锁定"取第一条"契约)、`TestPickLinuxAmd64V1Asset_AlphaRejectsGzSig`(`.gz.sig` 不误匹配)。
+
+**Batch 5(P2 行为细节)**:
+
+- **A1-3** `DeleteInboundByName` Godoc 明确和 FastAddInbound 的"空 container 语义"**有意不对称**:破坏性操作不得默认到 xray。
+- **A1-4** `ListInbound` 按 `(container, name)` 排序,脚本 diff 稳定。测试 `TestListInbound_Sorted` 锁定。
+- **A3-5** `refreshCachedVersionAfterRestart` 改用独立 `context.WithTimeout(Background, readinessTimeout)`,不继承 caller ctx。测试已覆盖 REST 失败保留旧值分支。
+- **A3-6** Updater 入口 normalize 空 `RestartPolicy` → `Always`(显式化原隐式行为,避免将来默认值变更悄然改变语义)。
+- **A3-7** `MihomoContainer.Update` 入口 `result.FromVersion = c.Version()`(原为空串,callers 无法拿到 before/after)。
+- **A3-9** `downloadTimeout` 2min → 5min(Alpha 路径多一次 checksums.txt RT,2 分钟在慢链路吃紧)。
+
+**Batch 6(P3 nit)**:
+
+- **A1-5** 删 `getSnellContainer`(stage 8 `getContainerByType` 多态化后 0 调用方)。
+- **A1-6** `getContainerByType` not-found 错误消息加 `resolved from` 段,empty/`hysteria2` 别名的实际查找能看到。
+- **A2-11** `pickLinuxAmd64V1Asset` Alpha 单一匹配契约 —— Godoc 内联,`TestPickLinuxAmd64V1Asset_AlphaAmbiguous` 锁定。
+- **A2-14** `alphaAssetPrefix` Godoc 扩成独立一段说明前缀语义(原指向 downloader.go)。
+- **A2-15** `MkdirAll(DownloadDir)` 移到 `NewUpdater` 一次性做,`Update` 不再重复。
+- **A2-16 驳回**:helper pattern 重构 brittle-if-validation-changes,当前无 validation 变更,test 函数 20 行即可读,不强行 DRY。
+- **A3-8** `refreshCachedVersionAfterRestart` Godoc 补"restClient 读+cachedVersion 写跨锁区,Stop 并发 benign(Stop 保留 cachedVersion 语义)"。
+- **A3-10 驳回**:`mihomoV1AssetPrefix` vs `alphaAssetPrefix` 重复已有意注释,留现状。
+
+**驳回的其他发现**:
+
+- **A2-7** `defer os.Remove(extractedPath)` 对已被 SwapAtomic rename 的路径会 ENOENT —— `os.Remove` 对 missing file 本来就是 silent no-op,benign。
+
+**验证**:
+
+- `go build ./...` 通过
+- `go test ./... -race -count=1` 全仓 32 包全绿,无回归
+- mihomo 包:原 27 + 新增 9 = 36 个 stage 9 updater 测试,包含本轮 P1-1 / P1-3 / P1-4 / P1-8 / A2-12 / A2-13 新增
+
+**仍未关闭**:
+
+- **A2-3 post-Start liveness probe**:swap + Start 成功但新 binary 立刻 crash 的场景当前会误报 success,P1 级但修复比较大(需要 Start 后再跑一次 `/version` 探活,并把失败加进 rollback 路径)。单独开任务跟踪,不放 stage 9 review 批次
+- **A2-10 checksums.txt 格式**:核实后升级为 P0-2 已修。UNCERTAIN 关闭
+
+### 阶段 8(2026-04-23 完成)
+
+**审阅结论**:`pkg/http/` 下 handler(bound/fastAddInbound/inbound_list/rotate_*/sub/node_containers/user/profile)全部 Container-agnostic —— 走 `req.Container` 透传 + RPC 多态。唯二需要修的 non-polymorphic 点都在 RPC 层:
+
+1. `pkg/rpc/server/end_node_inbound.go::getContainerByType` 原本是 `switch` 硬编 xray/snell/hysteria,mihomo 落 default 分支报 "unsupported container type"。
+2. `pkg/rpc/server/end_node_inbound.go::ListInbound` 原本硬编 `[Xray, Snell, Hysteria]` slice,mihomo inbound 在 `GET /inbounds` 不可见。
+
+`POST /inbound`(raw xray JSON)和 `GET /inbound`(xray 原生配置)结构性只支持 xray,mihomo 走 `/inbound/fast`,保留 xray-only 校验不动。
+
+**交付**:
+
+- `pkg/rpc/server/end_node_inbound.go::getContainerByType`:重写为"别名规范化 + ContainerMgr.Get 多态"
+  - 剩余 switch 只做两件事:`""` → xray(向后兼容老 xray-only caller)、`"hysteria2"` → hysteria(别名)
+  - 其余全走 `containerMgr.Get(ContainerType(s))`,未知/未注册类型统一返 "container %q not found or not enabled"
+  - 和 `DeleteInboundByName` 已有的多态写法一致;未来加新 container 不再动这里
+- `pkg/rpc/server/end_node_inbound.go::ListInbound`:硬编 slice 改为遍历 `s.containerMgr.Types()`
+  - 语义上等同"先 ListContainer 再 per-container ListInbound";走 `Container` 接口 `ListInboundConfigs()`,不依赖具体类型
+  - 与 `GetContainers`、`subscription.Manager.GetSubscription` 已有的多态迭代模式对齐
+- `pkg/rpc/server/end_node_inbound.go::DeleteInboundByName` Godoc 更新:点出"polymorphic via ContainerMgr",移除"Supports xray, snell, and hysteria"的枚举
+- `pkg/http/inbound_list_handler.go`:help 文本 + JSON 字段注释 + DELETE body 示例,"xray/snell/hysteria" → "xray/snell/hysteria/mihomo"
+- `pkg/rpc/server/fastadd_params_test.go::captureContainer` 扩展:增 `kind contracts.ContainerType` + `inbounds []inbound.Inbound` 字段,`Type()` 在未设置时返 ContainerXray(向后兼容现有 xray 测试);`ListInboundConfigs()` 返 `c.inbounds`
+- `pkg/rpc/server/end_node_inbound_test.go`:新增 7 个测试
+  - `TestGetContainerByType`:表驱动 7 case(空串默认 xray / 显式 xray/snell/hysteria/mihomo / hysteria2 别名 / unknown 返 not-found)
+  - `TestGetContainerByType_NotRegistered`:mihomo 未注册时返 not-found,不 panic
+  - `TestListInbound_PolymorphicAcrossContainers`:xray+mihomo+snell 混注册,断言四条 inbound 都出现
+  - `TestListInbound_Empty`:零 container 注册时返 empty list,无错
+  - `TestFastAddInbound_MihomoRouted`:`ContainerType="mihomo"` 路由到 mihomo,xray 未被触发;params(uuid/ws_path/transport/port/protocol)透传完整
+  - `TestFastAddInbound_MihomoNotRegistered`:mihomo 未注册时 `code=1020` + 错误 msg 含 "mihomo",xray 不吞请求
+
+**实际变动**(相对阶段 8 计划原文):
+
+- **`getContainerByType` 深度简化超出原计划**:原计划是"加 case mihomo 分支",实际用户建议下做了深度重构。Switch 从"类型分派"降级为"别名规范化",真正的容器查找走 Get 多态。对所有未来 container 免维护。风险:`""` → xray 的默认值改到 switch 规范化阶段统一兜底,行为不变;`"hysteria2"` 别名语义保留;unknown 错误信息从 "unsupported container type: foo" 改为 `container "foo" not found or not enabled`(更准确 —— 区分"根本不是合法类型"和"类型合法但这台节点没启用")
+- **`ListInbound` 的 Types() 迭代不再依赖硬编 slice**:这是更隐蔽的兼容性缺陷 —— 老写法下即使未来新 container 正确 RegisterFactory 并在 config 里 enable,ListInbound 仍然看不到它。改多态后这个级联问题一并消除
+- **Proto 注释漂移延后 stage 11**:`pkg/rpc/proto/rpc_server.proto` 里 line 169/222/238/296 的 "xray / snell / hysteria" 枚举没改(需 `make proto` 重生成 .pb.go,担心无关 diff),统一留给 stage 11 文档对齐
+- **未跑 integration 测试**:HTTP↔RPC↔容器的跨层行为已被单测覆盖(mihomo 路由 + param 透传 + ListInbound polymorphic + 未注册报错);真实 mihomo 的 FastAdd / DeleteInbound / ListInbound HTTP 调用在 stage 10 系统测试阶段统一过
+
+**验证**:
+
+- `go build ./...` 通过
+- `go test ./pkg/rpc/server/... -race -count=1` 全绿
+- `go test ./... -race -count=1` 全仓 32 个包全绿,无回归
 
 ## 阶段 1:骨架与 Factory 注册
 

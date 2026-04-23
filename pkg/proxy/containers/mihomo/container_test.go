@@ -40,7 +40,7 @@ func newTestContainer(t *testing.T) *MihomoContainer {
 		DataDir:            "/unused",
 		ExternalController: "127.0.0.1:9090",
 		Secret:             "",
-		Version:            "Prerelease-Alpha",
+		ReleaseTag:         "Prerelease-Alpha",
 	}
 	c, err := NewMihomoContainer(cfg, WithStoreMgr(sm))
 	if err != nil {
@@ -157,7 +157,7 @@ func newTestContainerWithUserMgr(t *testing.T) (*MihomoContainer, *usermanager.U
 		DataDir:            "/unused",
 		ExternalController: "127.0.0.1:9090",
 		Secret:             "",
-		Version:            "Prerelease-Alpha",
+		ReleaseTag:         "Prerelease-Alpha",
 	}
 	c, err := NewMihomoContainer(cfg, WithStoreMgr(sm), WithUserManager(um))
 	if err != nil {
@@ -538,7 +538,7 @@ func TestRestoreAndPushInbounds_NilStoreMgr(t *testing.T) {
 		DataDir:            "/unused",
 		ExternalController: "127.0.0.1:9090",
 		Secret:             "",
-		Version:            "Prerelease-Alpha",
+		ReleaseTag:         "Prerelease-Alpha",
 	}
 	c, err := NewMihomoContainer(cfg) // no WithStoreMgr
 	if err != nil {
@@ -1141,7 +1141,7 @@ func TestRestore_NilStoreMgr(t *testing.T) {
 		DataDir:            "/unused",
 		ExternalController: "127.0.0.1:9090",
 		Secret:             "",
-		Version:            "Prerelease-Alpha",
+		ReleaseTag:         "Prerelease-Alpha",
 	}
 	c, err := NewMihomoContainer(cfg, WithUserManager(um))
 	if err != nil {

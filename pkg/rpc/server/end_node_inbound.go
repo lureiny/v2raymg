@@ -4,6 +4,7 @@ import (
 	context "context"
 	"encoding/base64"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/log"
@@ -34,32 +35,26 @@ func (s *EndNodeServer) getXrayContainer() (container.Container, error) {
 	return c, nil
 }
 
-// getSnellContainer gets the snell Container.
-func (s *EndNodeServer) getSnellContainer() (container.Container, error) {
-	c, ok := s.containerMgr.Get(contracts.ContainerSnell)
+// getContainerByType looks up a registered container by type string.
+// Empty string defaults to xray for backward compatibility with older callers
+// that omit container_type. "hysteria2" is normalized to hysteria (legacy alias).
+// Any other value is passed through to the ContainerMgr; unknown or unregistered
+// types surface as "container not found or not enabled".
+func (s *EndNodeServer) getContainerByType(containerType string) (container.Container, error) {
+	ct := contracts.ContainerType(containerType)
+	switch ct {
+	case "":
+		ct = contracts.ContainerXray
+	case "hysteria2":
+		ct = contracts.ContainerHysteria
+	}
+	c, ok := s.containerMgr.Get(ct)
 	if !ok {
-		return nil, fmt.Errorf("snell container not found")
+		// Use the resolved ct in the message so empty/"hysteria2" input
+		// shows the actual lookup that failed, not just the raw caller string.
+		return nil, fmt.Errorf("container %q (resolved from %q) not found or not enabled", ct, containerType)
 	}
 	return c, nil
-}
-
-// getContainerByType returns the container for the given type string.
-// Empty or "xray" returns the xray container; "snell" returns snell.
-func (s *EndNodeServer) getContainerByType(containerType string) (container.Container, error) {
-	switch containerType {
-	case "", "xray":
-		return s.getXrayContainer()
-	case "snell":
-		return s.getSnellContainer()
-	case "hysteria", "hysteria2":
-		c, ok := s.containerMgr.Get(contracts.ContainerHysteria)
-		if !ok {
-			return nil, fmt.Errorf("hysteria container not found")
-		}
-		return c, nil
-	default:
-		return nil, fmt.Errorf("unsupported container type: %s", containerType)
-	}
 }
 
 func (s *EndNodeServer) AddInbound(ctx context.Context, inboundOpReq *proto.InboundOpReq) (*proto.InboundOpRsp, error) {
@@ -281,17 +276,16 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 }
 
 // ListInbound returns all inbounds across all registered containers.
+// Iterates every container type registered in ContainerMgr (polymorphic) so
+// new container types (e.g. mihomo) are picked up without changing this handler.
 // Each InboundInfo contains the container type and the inbound's unique name (tag).
+//
+// Result is sorted by (container, name) so scripts diffing the API output
+// between calls don't see reshuffles caused by Go map iteration order.
 func (s *EndNodeServer) ListInbound(ctx context.Context, req *proto.ListInboundReq) (*proto.ListInboundRsp, error) {
 	rsp := &proto.ListInboundRsp{Code: 0}
 
-	containerTypes := []contracts.ContainerType{
-		contracts.ContainerXray,
-		contracts.ContainerSnell,
-		contracts.ContainerHysteria,
-	}
-
-	for _, ct := range containerTypes {
+	for _, ct := range s.containerMgr.Types() {
 		c, ok := s.containerMgr.Get(ct)
 		if !ok {
 			continue
@@ -304,11 +298,26 @@ func (s *EndNodeServer) ListInbound(ctx context.Context, req *proto.ListInboundR
 		}
 	}
 
+	sort.Slice(rsp.Inbounds, func(i, j int) bool {
+		if rsp.Inbounds[i].GetContainer() != rsp.Inbounds[j].GetContainer() {
+			return rsp.Inbounds[i].GetContainer() < rsp.Inbounds[j].GetContainer()
+		}
+		return rsp.Inbounds[i].GetName() < rsp.Inbounds[j].GetName()
+	})
+
 	return rsp, nil
 }
 
 // DeleteInboundByName deletes an inbound identified by container type and name (tag).
-// Supports xray, snell, and hysteria containers.
+// Dispatches polymorphically via ContainerMgr — works for any registered container
+// type (xray / snell / hysteria / mihomo / future).
+//
+// Container contract asymmetry with FastAddInbound (intentional): FastAddInbound
+// treats empty ContainerType as xray for backward compatibility with older
+// xray-only callers. DeleteInboundByName requires a non-empty Container — an
+// accidental empty field on a destructive op must not default to the biggest
+// container. Callers who genuinely want the xray container should pass "xray"
+// explicitly.
 func (s *EndNodeServer) DeleteInboundByName(ctx context.Context, req *proto.DeleteInboundByNameReq) (*proto.InboundOpRsp, error) {
 	rsp := &proto.InboundOpRsp{Code: 0}
 

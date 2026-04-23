@@ -68,3 +68,44 @@ func TestVerifyChecksum_Invalid(t *testing.T) {
 		t.Error("expected error for invalid checksum")
 	}
 }
+
+// TestVerifyChecksum_RejectsSubstring guards against a prior bug where
+// strings.Contains was used as a loose fallback — that would falsely accept
+// any expected string that happened to be a substring of the real digest.
+func TestVerifyChecksum_RejectsSubstring(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "verify_substring_test")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	tmpFile.Write([]byte("hello world"))
+	tmpFile.Close()
+
+	// Real SHA256: b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
+	// Use the first few chars as the "expected" — old loose match would accept
+	// this; strict match must reject.
+	err = VerifyChecksum(tmpFile.Name(), "b94d27b9")
+	if err == nil {
+		t.Error("expected error when expected is a substring of real digest (loose match regression)")
+	}
+}
+
+// TestVerifyChecksum_CaseInsensitive confirms uppercase / mixed-case hex on
+// either side of the compare still succeeds. GNU sha256sum emits lowercase,
+// but defensive parsing shouldn't care.
+func TestVerifyChecksum_CaseInsensitive(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "verify_case_test")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	tmpFile.Write([]byte("hello world"))
+	tmpFile.Close()
+
+	err = VerifyChecksum(tmpFile.Name(), "B94D27B9934D3E08A52E52D7DA7DABFAC484EFE37A5380EE9088F7ACE2EFCDE9")
+	if err != nil {
+		t.Errorf("uppercase expected hex should still match: %v", err)
+	}
+}

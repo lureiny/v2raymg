@@ -353,7 +353,9 @@ func getNodeSuggest(input string) ([]prompt.Suggest, error) {
 }
 
 // knownContainers lists all supported container types for inbound autocomplete.
-var knownContainers = []string{"xray", "snell", "hysteria"}
+// Keep in sync with contracts.ContainerType constants in
+// pkg/proxy/core/contracts/protocol.go.
+var knownContainers = []string{"xray", "snell", "hysteria", "mihomo"}
 
 // getContainerSuggest returns fixed container type suggestions.
 func getContainerSuggest(currentInput string) ([]prompt.Suggest, error) {

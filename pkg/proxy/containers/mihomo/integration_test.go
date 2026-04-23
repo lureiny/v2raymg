@@ -38,7 +38,8 @@ func TestMihomoContainer_StartStop(t *testing.T) {
 		DataDir:            filepath.Join(dir, "data"),
 		ExternalController: fmt.Sprintf("127.0.0.1:%d", port),
 		Secret:             "",
-		Version:            "Prerelease-Alpha",
+		ReleaseTag:         "Prerelease-Alpha",
+		AutoDownload:       true,
 	}
 
 	c, err := NewMihomoContainer(cfg)

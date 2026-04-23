@@ -25,8 +25,11 @@ func TestMihomoConfig_Decode_Defaults(t *testing.T) {
 	if c.Secret != "" {
 		t.Errorf("Secret default = %q (want empty)", c.Secret)
 	}
-	if c.Version != "Prerelease-Alpha" {
-		t.Errorf("Version default = %q", c.Version)
+	if c.ReleaseTag != "latest" {
+		t.Errorf("ReleaseTag default = %q (want \"latest\")", c.ReleaseTag)
+	}
+	if !c.AutoDownload {
+		t.Error("AutoDownload default = false (want true)")
 	}
 }
 
@@ -38,7 +41,8 @@ func TestMihomoConfig_Decode_Overrides(t *testing.T) {
 		"data_dir":            "/var/opt/mihomo",
 		"external_controller": "127.0.0.1:19090",
 		"secret":              "s3cr3t",
-		"version":             "v1.19.0",
+		"release_tag":         "Prerelease-Alpha",
+		"auto_download":       false,
 	})
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
@@ -58,8 +62,11 @@ func TestMihomoConfig_Decode_Overrides(t *testing.T) {
 	if c.Secret != "s3cr3t" {
 		t.Errorf("Secret = %q", c.Secret)
 	}
-	if c.Version != "v1.19.0" {
-		t.Errorf("Version = %q", c.Version)
+	if c.ReleaseTag != "Prerelease-Alpha" {
+		t.Errorf("ReleaseTag = %q", c.ReleaseTag)
+	}
+	if c.AutoDownload {
+		t.Error("AutoDownload = true (want false after override)")
 	}
 }
 
@@ -95,9 +102,9 @@ func TestMihomoConfig_Decode_ValidationFailures(t *testing.T) {
 			wantErrMatch: "host:port",
 		},
 		{
-			name:         "empty version",
-			cfg:          map[string]any{"version": ""},
-			wantErrMatch: "version",
+			name:         "empty release_tag",
+			cfg:          map[string]any{"release_tag": ""},
+			wantErrMatch: "release_tag",
 		},
 	}
 

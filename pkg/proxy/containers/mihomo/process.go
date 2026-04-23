@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/tools/process"
 )
@@ -32,8 +33,11 @@ type mihomoInitialConfig struct {
 }
 
 const (
-	// downloadTimeout is generous: first run may fetch ~30MB over a slow link.
-	downloadTimeout = 2 * time.Minute
+	// downloadTimeout is generous: first run may fetch ~30MB over a slow link,
+	// and the Alpha path adds a second request for checksums.txt. 5 minutes
+	// absorbs a noticeably slow link without masking a genuinely stuck
+	// download. Prior value was 2m, bumped in stage-9 Batch-5 cleanup.
+	downloadTimeout = 5 * time.Minute
 	// readinessTimeout matches docs/mihomo-container-implementation-plan.md stage 2.
 	readinessTimeout = 10 * time.Second
 )
@@ -42,16 +46,31 @@ const (
 // initial config, spawns the mihomo process, then polls GET /version until
 // the REST API is responsive. On readiness failure the process is stopped
 // to avoid a zombie.
+//
+// Auto-download path: when the binary is missing and AutoDownload is true,
+// we delegate to the updater with RestartPolicyNever (we're in the middle of
+// Start, so the updater must not try to restart us). AutoDownload=false with
+// a missing binary fails fast — the operator pre-installs the binary and
+// manages its version out-of-band.
 func (c *MihomoContainer) startProcess() error {
 	if _, err := os.Stat(c.cfg.BinaryPath); os.IsNotExist(err) {
-		log.Infof("mihomo: binary not found at %s, downloading %s", c.cfg.BinaryPath, c.cfg.Version)
-		dlCtx, cancel := context.WithTimeout(context.Background(), downloadTimeout)
-		err := downloadMihomo(dlCtx, c.cfg.Version, c.cfg.BinaryPath)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("mihomo: auto-download failed: %w", err)
+		if !c.cfg.AutoDownload {
+			return fmt.Errorf("mihomo: binary not found at %s and auto_download is disabled", c.cfg.BinaryPath)
 		}
-		log.Infof("mihomo: downloaded %s to %s", c.cfg.Version, c.cfg.BinaryPath)
+		if c.updater == nil {
+			return fmt.Errorf("mihomo: binary not found at %s and no updater is configured", c.cfg.BinaryPath)
+		}
+		log.Infof("mihomo: binary not found at %s, auto-downloading release %q", c.cfg.BinaryPath, c.cfg.ReleaseTag)
+		dlCtx, cancel := context.WithTimeout(context.Background(), downloadTimeout)
+		_, dlErr := c.updater.Update(dlCtx, container.UpdateRequest{
+			TargetTag:     c.cfg.ReleaseTag,
+			RestartPolicy: container.RestartPolicyNever,
+		})
+		cancel()
+		if dlErr != nil {
+			return fmt.Errorf("mihomo: auto-download failed: %w", dlErr)
+		}
+		log.Infof("mihomo: auto-download complete, binary at %s", c.cfg.BinaryPath)
 	}
 
 	if err := os.MkdirAll(c.cfg.DataDir, 0755); err != nil {

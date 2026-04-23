@@ -15,9 +15,13 @@ import (
 )
 
 // captureContainer records the params passed to FastAddInbound.
+// kind is optional — when empty, Type() returns ContainerXray for backward
+// compat with existing tests. Set kind to test other container types.
 type captureContainer struct {
 	lastTag    string
 	lastParams map[string]any
+	kind       contracts.ContainerType
+	inbounds   []inbound.Inbound
 }
 
 func (c *captureContainer) Init(any) error                                                  { return nil }
@@ -27,7 +31,12 @@ func (c *captureContainer) Restart() error                                      
 func (c *captureContainer) Reload() error                                                    { return nil }
 func (c *captureContainer) IsRunning() bool                                                  { return true }
 func (c *captureContainer) Version() string                                                  { return "test" }
-func (c *captureContainer) Type() container.ContainerType                                    { return contracts.ContainerXray }
+func (c *captureContainer) Type() container.ContainerType {
+	if c.kind == "" {
+		return contracts.ContainerXray
+	}
+	return c.kind
+}
 func (c *captureContainer) ConfigFile() string                                               { return "" }
 func (c *captureContainer) Update(context.Context, container.UpdateRequest) (*container.UpdateResult, error) {
 	return nil, nil
@@ -35,7 +44,7 @@ func (c *captureContainer) Update(context.Context, container.UpdateRequest) (*co
 func (c *captureContainer) GetRunFunc() (func() error, func() error)                        { return nil, nil }
 func (c *captureContainer) RemoveInboundConfig(string) error                                 { return nil }
 func (c *captureContainer) GetInboundConfig(string) (inbound.Inbound, error)                 { return nil, nil }
-func (c *captureContainer) ListInboundConfigs() []inbound.Inbound                            { return nil }
+func (c *captureContainer) ListInboundConfigs() []inbound.Inbound                            { return c.inbounds }
 func (c *captureContainer) UserEventChannel() <-chan usermanager.UserEvent                   { return nil }
 func (c *captureContainer) GetUserSubscriptions(contracts.SubscriptionRequest) ([]contracts.SubscriptionSpec, error) {
 	return nil, nil
