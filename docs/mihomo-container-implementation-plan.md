@@ -47,8 +47,11 @@
 | 阶段 7 | **DONE** 2026-04-23 | |
 | 阶段 8 | **DONE** 2026-04-23 | HTTP 层本就多态,改动集中在 RPC 层:getContainerByType 去 switch + ListInbound 改 Types() 迭代 |
 | 阶段 9 | **DONE** 2026-04-23 | Updater 热替换 + SHA256(Alpha 有 checksums.txt)+ AutoDownload 字段 + Version 重命名 ReleaseTag 默认 latest |
-| 阶段 10 | TODO | |
-| 阶段 11 | TODO | |
+| 阶段 10a(A2-3 post-Start liveness probe) | **DONE** 2026-04-23 | ProcessController 扩 WaitReady + Updater Step 7 接入;MihomoContainer 实现走 restClient /version 探活。原属阶段 9 review 遗留 P1,按计划前置到 stage 10 |
+| 阶段 10b(功能集成测试) | **DONE** 2026-04-23 | 跳过规模测试(用户决策 D6);mihomo_protocol_matrix + mihomo_restore 两个 integration 测试,客户端复用 xray 作 vmess/trojan/ss outbound;MIHOMO_BIN 优先缺省走 Updater 下载 |
+| 阶段 11(文档 + wiki) | **DONE** 2026-04-23 | CHANGELOG 2 条新条目、README 补 Supported Proxy Kernels 段、wiki 新建 mihomo-container 概念页并登记 _manifest.json |
+| 阶段 11+(真实 E2E 系统测试) | **DONE** 2026-04-24 | TestMihomoE2E_RealInternet:mihomo 双开做 server+client,curl→client→server→google.com 三协议 × 5 步全绿;P2-9 CERTAIN 并落实 trojan cert_file/key_file 扩展 |
+| 阶段 12(params 统一归一 + certmgr 联动) | **DONE** 2026-04-24 | 新建 `pkg/proxy/core/params/defaults.go`:凭据 fill + cert 4 源归一(cert_file/certificate/domain/self_signed);RPC FastAddInbound 接入;mihomo 侧 SAFE_PATHS env 接受 certmgr 路径 + CertScratchDir 写自签到 DataDir + CertSource 驱动 RemoveInboundConfig 清理。顺手修 mihomo factory 漏 wire UserManager 的生产 bug |
 
 ### 阶段 1(2026-04-22 完成)
 
@@ -715,6 +718,254 @@
 - 跨节点用户编排(`docs/user-placement-controller-design.md`)如何识别 mihomo container 的可用容量
 - `docs/inbound-user-tracker-refactor.md` 延后项落地时,mihomo 如何对齐(共享凭据模型下 `addedUsers` 结构接近 snell,大概率可直接套用统一方案)
 - mihomo container 启用 hysteria2 后,是否替代/合并现有 `containers/hysteria/`(单 inbound 专用容器)
+
+### 阶段 10a(2026-04-23 完成)
+
+**动机**:原 Stage 8+9 Review 遗留的 A2-3 post-Start liveness probe 问题。`updater.Update` 的 Step 7 仅靠 `processCtrl.Start()` 返回值判成败;Start 返回 nil 仅证明 fork+exec 成功,新 binary 立刻 crash(GOAMD64 不兼容、缺动态依赖、config 解析错等)时 updater 仍返回 `Restarted=true`,旧 binary 已被 swap 走。用户 D5 决策在开工前将其前置为 stage 10a,避免阶段 10b 的真实二进制替换场景把该 gap 放大成事故。
+
+**交付**:
+
+- `pkg/proxy/containers/mihomo/updater.go`:
+  - `ProcessController` 接口新增 `WaitReady(ctx context.Context) error`
+  - `UpdaterConfig` 新增 `ReadinessTimeout time.Duration`,`NewUpdater` 默认 10s(与 `process.go::readinessTimeout` 对齐),`Update` 入口兜底 `<=0 → 10s`(沿用 stage 9 Batch 5 A3-6 "显式化默认值"先例,防止直接 assign `cfg` 的 test/caller 撞上零超时)
+  - Step 7 流程扩为:`Stop(if running) → Start → WaitReady(bounded by ReadinessTimeout) → 失败走 Stop + restartFailure(joined err)`。任何 WaitReady 失败都被分类为 `restart` stage,与现有 Stop/Start 失败同构;rollback 路径通过既有的 `restartFailure` 复用
+  - WaitReady 失败 + 清理 Stop 失败时两者通过 `errors.Join` 合并,caller 可通过 `errors.Is` 同时命中
+- `pkg/proxy/containers/mihomo/container.go`:
+  - `MihomoContainer.WaitReady(ctx)` 实现:RLock 拿 `restClient` 快照 → `GetVersion(ctx)` → 成功返 nil,失败返 wrap error
+  - 不与 `refreshCachedVersionAfterRestart` 合并:WaitReady 是通用 ProcessController 接口,语义是"纯探活、返错就中止";`refreshCachedVersionAfterRestart` 是 container-private 的 best-effort 刷缓存(失败只 warn),职责分离
+- `pkg/proxy/containers/mihomo/updater_test.go`:
+  - `fakeProcessCtrl` 新增 `readyErr` 字段 + `readyN` 计数 + `WaitReady` 方法(默认遵循 `ctx.Err()`,使 timeout 测试无需设 readyErr 即可生效)
+  - 新增 3 个测试:
+    - `TestUpdater_Update_StartSucceededButNotReady_Rollback` —— A2-3 主线,Start 成功但 WaitReady 失败 → Stop(pre+post)+ Rollback + `ErrUpdateFailed{Stage:"restart"}` Wraps `ErrRestartFailed` + `errors.Is(readyErr)` 仍可达
+    - `TestUpdater_Update_ReadinessFailure_StopAlsoFails` —— 双失败路径,WaitReady + 清理 Stop 都失败,两 cause 通过 `errors.Join` 同时可达
+    - `TestUpdater_Update_NotReady_RestartPolicyNever_SkipsProbe` —— 不变式测试,RestartPolicyNever 路径下 Start/Stop/WaitReady 都不应被调用
+- `pkg/proxy/containers/mihomo/container_test.go`:新增 3 个 MihomoContainer.WaitReady 单元测试:`_Success`(httptest /version 200)/ `_NilRestClient`(未 attach → err,驱动 Updater rollback)/ `_CtxCancelled`(ctx 已 cancel → errors.Is(context.Canceled))
+
+**实际变动**(相对 stage 10a 方案):
+
+- **未改 `refreshCachedVersionAfterRestart`**:WaitReady 探活成功后 `refreshCachedVersionAfterRestart` 再探一次 `/version`,快速路径下一次额外 RT <50ms,代码清晰度 > 合并开销。刻意不优化
+- **ReadinessTimeout 双防御**:NewUpdater 里设默认 10s + Update 入口 `<=0` 兜底 10s。单独哪一处都能让 prod 正确,合起来还覆盖 hand-built `UpdaterConfig` 的 test harness。删了 NewUpdater 的默认会让测试用默认 0 → 立即 cancel;删了 Update 的兜底会让任何绕过 NewUpdater 的 caller 撞零超时。保留两处
+- **未扩 xray 的 ProcessController**:xray 的 Updater 也有同名接口(独立副本,不共享)但 xray 有自己的 Start→Ping 流程(`exec_runner.go::Start` 内置 gRPC probe),post-Start crash 不是 xray 的已知 gap。stage 10a 只对 mihomo 收口。xray 若未来被证明也有此 gap,可独立成任务
+
+**验证**:
+
+- `go build ./...` 通过
+- `go vet ./pkg/proxy/containers/mihomo/...` 通过
+- `go test ./pkg/proxy/containers/mihomo/... -race -count=1`:36+6 = **42 个** updater/container 测试全绿(stage 9 的 36 + 本轮 6)
+- `go test ./... -race -count=1` 全仓 32 包全绿,无回归
+
+### 阶段 10b(2026-04-23 完成)
+
+**决策**(开工前用户确认):
+
+| # | 决策点 | 选定 |
+|---|-------|------|
+| D6 | 规模测试范围 | **跳过**。只做协议矩阵 + restore 功能集成;规模基线留独立任务 |
+| D7 | mihomo 二进制来源 | **MIHOMO_BIN 优先,缺省走 Updater**。MIHOMO_BIN 设置但文件不存在 → fail fast 不降级 |
+| D8 | 客户端选型 | **抄 xray systemtest 的客户端代码**,xray 作 vmess/trojan/ss 的 outbound client,零新依赖 |
+
+**交付**(全部在 `pkg/proxy/systemtest/`,build tag `integration`):
+
+- `mihomo_helpers_test.go`:
+  - `ensureMihomoBin(t, tmpDir) string` —— MIHOMO_BIN 优先解析,否则 `mihomo.NewUpdater` + `Update(Prerelease-Alpha, RestartPolicyNever)` 下载到 tmpDir
+  - `mihomoTestRig` struct:`{container, userMgr, forwardMgr, apiAddr}`,生命周期挂 `t.Cleanup`
+  - `startMihomoContainer(t, tmpDir, binaryPath)`:构造 `forward.NewDefaultForwardManager(MinPort:40000, MaxPort:50000)` + `usermanager.NewUserManager` + `store.NewStoreManager` + `mihomo.NewMihomoContainer(WithStoreMgr, WithUserManager)`,调 `c.Start()` 走真实启动链路
+  - `addMihomoUserAndWaitForPort(rig, username, inboundPort)`:走真实 `AddUser(AddUserRequest)` 触发 UserEventAdd → container.handleUserEvent → GetBindPort;轮询 `GetUserPortByDst` 最多 5s 拿到 forward 端口
+  - `removeMihomoUserAndWaitForPortRelease(rig, username, inboundTag)`:走真实 `RemoveUser` + 轮询 `forwardMgr.GetRule` 直到 nil
+
+- `mihomo_protocol_matrix_test.go`(`TestMihomoProtocolMatrix`):
+  - MVP 三协议 subtest(`vmess` / `trojan` / `shadowsocks`),共用同一个 MihomoContainer
+  - 每个 subtest:FastAddInbound → AddUser → xray client(SOCKS5 in → 协议 outbound → 127.0.0.1:forwardPort)→ HTTP GET via SOCKS5 → 验证 marker;然后 RemoveUser + 访问 → 必须失败(负控,排除 false positive)
+  - **trojan plain TCP** 在这里顺带验证 P2-9(无 TLS/cert);若失败需要把 trojan case 降级到 "必须带 TLS"。代码里 inline 注释标注了 fallback 方向
+  - shadowsocks cipher 固定 `aes-256-gcm`(clash converter 的默认 fallback、AEAD 2022 规范内;mihomo Alpha 2024+ 和 xray 都支持)
+
+- `mihomo_restore_test.go`(`TestMihomoRestore_RecoversInboundAndUser`):
+  - 一个 vmess inbound + 一个用户,pre-restart 全链路 marker 验证
+  - `container.Stop()` + `container.Start()`(即 ContainerMgr.StartAll 后的重启路径;不做 hard-kill,因为 v2raymg 目前没有 mihomo-crash-auto-restart,production 重启也走 Stop+Start)
+  - post-restart:**forward 端口稳定性**(PortMappings 保证)+ listener 重建 + 新 xray client 再次握手成功
+  - 新建独立 `runRestoreHandshake` helper,避免 pre/post client 进程状态串扰
+
+- 顺手修 `pkg/proxy/systemtest/README.md`:
+  - 清理 5 处 `./pkg/proxyrefactor/...` 老路径残留为 `./pkg/proxy/...`(CLAUDE.md 里已标注的历史残留)
+  - 新增 "Mihomo (stage 10b)" 段落,列出三文件用途 + 前置条件(XRAY_BIN 必须 / MIHOMO_BIN 可选)+ 运行命令
+  - 开头 "Purpose" 改写,不再只提 xray
+
+- 顺手修 `pkg/proxy/systemtest/helpers_test.go`:
+  - `noopForwardManager` 补 `DropUser` / `AllocatePort` / `ReleasePort` 三个 stage 5 前置加的接口方法。**pre-existing bug**,vet 在 `-tags=integration` 下才暴露(`go build` 不报,因为 noop 结构没在接口位置使用);新加的 `mihomo_helpers_test.go` 用真实 `NewDefaultForwardManager`,不依赖 noop,但 noop 的 interface 不完整本身是问题,stage 10b 顺手修
+
+**未做项**:
+
+- **规模测试**(D6 用户决策跳过):单节点 {100, 500, 1000} × {1, 3} 的 PUT /configs 延迟 / yaml 加载时长 / 内存基线。留作独立后续任务;当前共享凭据模型下 listener 数 = inbound 数(典型 1~10),与用户规模解耦,R1 已消除(设计文档已注),不卡 MVP
+- **hard-kill mihomo 进程** 再 Restore:production 无 auto-restart,Stop+Start 覆盖重启路径。若未来加 crash-watch daemon,再补 kill-then-restart 测试(需要扩 MihomoContainer 或走 `pkill -f <config_file>` 外置 shell)
+- **trojan plain TCP 核实的自动回退**:P2-9 代码里 inline 注释给出了 TLS fallback 的方向,但未实际写 fallback 分支。真实集成跑发现 trojan 失败时手动切换代码
+
+**编译/ vet 验证**:
+
+- `go build ./...` 通过
+- `go build -tags=integration ./pkg/proxy/systemtest/...` 通过
+- `go vet -tags=integration ./pkg/proxy/systemtest/...` 通过(pre-existing 3 个 vet 警告分布在 `pkg/log`/`pkg/collecter`/`pkg/rpc/server`,均与 stage 10b 无关)
+- `go test ./... -race -count=1` 全仓 32 包全绿,无回归
+
+**实测待办**(integration 路径的行为验证,本地缺 mihomo/xray 二进制 + 可控网络环境):
+
+- `XRAY_BIN=... MIHOMO_BIN=... go test ./pkg/proxy/systemtest -tags=integration -run TestMihomo -v`:预期三协议 subtest 全绿 + restore 绿
+- 若 trojan 失败(P2-9),按代码注释改为 TLS 案例,参数里加 cert/key 并在 client 的 outbound 配 TLS + allowInsecure=true
+
+### 阶段 11(2026-04-23 完成)
+
+**交付**:
+
+- `CHANGELOG.md`:新增 `## 2026-04-23 — Mihomo Container Stage 10` 段落,分 10a / 10b 两小节,覆盖 ProcessController 接口扩 WaitReady、Updater Step 7 重组、新 integration 测试清单、运行命令
+- `README.md`:
+  - 开头 tagline 从"for v2ray/xray" 改为泛化的"orchestrates multiple proxy kernels (xray / hysteria / snell / mihomo)"
+  - 新增 `## Supported Proxy Kernels` 表,列出四个 kernel 的 container 名 / MVP 协议 / 备注;指向 `docs/container-design-principles.md` 作为"加新 kernel" 的入口
+- `wiki/knowledge/mihomo-container/`(通过 `write-wiki-page` skill):
+  - `index.md`(frontmatter + 8 个 answers + 18 条 Key Facts + 数据流图 + 核心文件清单)
+  - `details.md`(生命周期 / User 事件管线 / 共享凭据 listener 布局 / REST 客户端 / Updater 7 步 / 订阅生成)
+  - `edge-cases.md`(7 条 FAQ + 4 条反例 + 5 条注意事项;覆盖 stage 9 breaking 迁移 / stable 无 SHA256 / trojan plain TCP 的 UNCERTAIN / crash 无 auto-restart 等)
+  - `related.md`(依赖 `port-management`;外部资源 MetaCubeX 仓库 + Alpha release + clash.meta wiki)
+  - `.meta.yaml`(status=draft, owner=v2raymg-core, source 列 8 份代码+设计文档, changelog 2 条)
+  - wiki-lint 全绿 + wiki-stamp + wiki-manifest --rebuild 完成;`_manifest.json` 现在登记了 mihomo-container + port-management 两个概念
+
+**未做项**:
+
+- wiki 的 `confidence` 设为 `high`,`status` 留作 `draft`。`status=verified` 等第一个用 `read-wiki-page` skill 路由到这页并实际纠偏后再升。按契约 "first draft 默认 draft" 惯例
+- `docs/http-api-reference.md` 未改(stage 8 review 修复里已补 mihomo 枚举,本阶段无新字段改动)
+- `docs/mihomo-container-design.md` 的 R1/D5 规模基线一节未填(D6 跳过规模测试,R1 已在该文档里注明"消除";D5 后续任务承接)
+
+**验证**:`wiki-lint mihomo-container` 0 errors;`wiki-manifest --rebuild` 两个 concept 均被 indexed
+
+### 阶段 11+(2026-04-24 完成)
+
+**动机**:阶段 10b 的 protocol matrix 用 xray 作 client、本地 httptest 作目标,不是"生产实际链路"。用户 stage 11+ 指定:mihomo **server 和 client 都用同一个 binary**(和线上完全同构),访问**真实 google.com**,加三种"动 server 让链路断"的对比实验,证明流量确实经过 server。
+
+**决策**(开工前用户确认 Q1~Q4):
+
+| # | 决策点 | 选定 |
+|---|-------|------|
+| Q1 | 协议范围 | **三协议全覆盖** vmess / trojan / shadowsocks |
+| Q2 | 负向对比数 | **三种**:Stop server + RemoveUser + 改凭据 |
+| Q3 | 目标 URL | 默认 `https://www.google.com`,`MIHOMO_E2E_TARGET` env 可覆盖 |
+| Q4 | 网络不可达 | 强制 fail(precheck 直连目标),不走 skip |
+
+**交付**:
+
+- `pkg/proxy/systemtest/mihomo_e2e_test.go`(`TestMihomoE2E_RealInternet`,`//go:build integration`):
+  - 顶层:网络 precheck(直连目标不通 → t.Fatalf,不 skip)→ ensureMihomoBin → startMihomoContainer(server 侧)→ 三协议 subtest
+  - 每协议 subtest 跑 5 步(positive_baseline / negative_stop_server / recover_restart_server / negative_change_credential / negative_remove_user),每步 inline 断言 + log 步骤名,失败时日志像完整 transcript
+  - `buildMihomoClientConfig` + `marshalProxyInline` + `yamlScalar` 手写 yaml 字符串(mihomo client 配置),`mixed-port` 做 SOCKS5/HTTP 混合入口,`proxies→proxy-groups→rules` 路由把 SOCKS5 流量全走 upstream
+  - `startMihomoClient` 拉起独立 mihomo 进程,等 external-controller API + mixed-port 都就绪
+  - `expectProxiedOK` / `expectProxyFail` / `assertDirectReachable` 三个断言 helper:proxied fail 的语义宽松(net error / 5xx 都算"chain down"),proxied ok 宽松为 status<500(google 可能返 3xx 地区重定向)
+  - HTTP client 关 keep-alive(`Transport.DisableKeepAlives=true`),每步都是全新 SOCKS5 连接,避免 keep-alive 复用让 stop_server 步骤出现假阳性
+
+- `pkg/proxy/systemtest/mihomo_helpers_test.go::mihomoTestRig`:新增 `dataDir` 字段。mihomo Alpha 的 SAFE_PATHS 规则要求 config 引用的文件路径位于 `-d` 参数指定的 home directory 下,否则 `path is not subpath of home directory` 报错 — trojan cert 必须写在 DataDir 里
+
+**P2-9 CERTAIN + trojan cert 扩展**(E2E 首跑的意外收获):
+
+第一次跑出 baseline fail,mihomo 报 `disallow using Trojan without both certificates/reality/ss config` — 证实 P2-9 的 UNCERTAIN 升级为 CERTAIN:**mihomo Alpha 的 trojan listener 运行时硬约束需要 cert/reality/ss 其一**,不是 "decode 能过" 就完事。用户决策走"扩 FastAddInbound 支持 trojan TLS cert"(而非从 MVP 移除 trojan):
+
+- `pkg/proxy/containers/mihomo/inbound.go::MihomoSharedCred`:加 `CertFile` / `KeyFile` 字段(json omitempty,向后兼容旧 JSON 记录)。`Validate` 加成对校验(both or neither,不允许单侧)
+- `pkg/proxy/containers/mihomo/adapter.go::extractSharedCred`:trojan 分支读可选的 `cert_file` / `key_file` 参数;不强制,留给 Validate 和 mihomo runtime 各自拒绝不合法配置。Godoc 说明"缺 cert 会在 mihomo 启动时失败"
+- `pkg/proxy/containers/mihomo/profilegen.go::BuildListener`:trojan 分支当 cert 都设时输出 mihomo yaml 字段 `certificate` / `private-key`(路径形式);都为空时保持原 stage 4 行为(只 emit users),保证 profilegen 旧单测不回归
+- e2e 中 trojan case 在 `runE2EProtocolCase` 里分支调 `writeTempCert(rig.dataDir)`(CN=localhost 自签),写到 DataDir 下满足 SAFE_PATHS;credential swap 步骤复用同一对 cert(只换 password),失败明确归因为 password mismatch 而非 cert/SNI 冲突
+- e2e 中 trojan client proxy 加 `sni: 'localhost'` + `skip-cert-verify: true`
+
+**实际 E2E 跑通**(2026-04-24 08:38,本地环境):
+
+```
+--- PASS: TestMihomoE2E_RealInternet (16.54s)
+    --- PASS: TestMihomoE2E_RealInternet/vmess (4.61s)
+    --- PASS: TestMihomoE2E_RealInternet/trojan (7.39s)
+    --- PASS: TestMihomoE2E_RealInternet/shadowsocks (3.87s)
+```
+
+三协议 × 5 步 = **15 个断言点全绿**;mihomo Alpha(`alpha-1fea551`)通过 Updater 自动下载;google.com 正向 HTTP GET 成功,三种负向按预期失败。PortMappings 在 restart + credential swap 两个场景下均保持 forward port 稳定(vmess 40139→40139,trojan 49598→49598,ss 40272→40272)。
+
+**实际变动**(相对 stage 11+ 开工方案):
+
+- **trojan cert 扩展**原不在方案,是 E2E 首跑发现 P2-9 CERTAIN 后的决策执行(详见 Q5 用户确认)
+- **rig 暴露 dataDir**原不在方案,是 mihomo SAFE_PATHS 二次发现导致必须让 e2e 知道 mihomo home directory
+- **HTTP client 关 keep-alive**原不在方案,审计代码时意识到 keep-alive 可能在 stop_server 步骤产生假阳性,主动加
+- **subtest 顺序**:原设计 remove_user 在 change_credential 前面;审视时发现"先 remove 再 swap"会让 swap 步骤的证据弱化(无法归因到凭据层),调换为 swap → remove,swap 步骤得以精确到"同 forward port、新凭据、client 旧凭据 → 握手失败"
+
+**未做项**:
+
+- vless / hysteria2 / tuic / anytls 的 e2e 扩展:独立后续任务,架构已预留(e2eCase 表驱动易扩)
+- **trojan 的真实生产级 cert 管理**:现在的 adapter 接 cert_file/key_file 路径字符串,交给运维在节点上准备 cert 文件。线上完整路径是"cluster certmgmt 签发 → 存到 DataDir → FastAddInbound 时引用",可以留到 trojan MVP 用户实际落地时打通
+
+**紧跟 stage 11+ 的 stage 1 原始遗漏修复**(2026-04-24):
+
+用户尝试在生产 config 里开启 mihomo container 时直接报错(factory not found)。根因是 `cmd/server.go` 的 blank-import 列表原本只 wire 了 xray / hysteria / snell:
+
+```go
+_ "github.com/lureiny/v2raymg/pkg/proxy/containers/hysteria"
+_ "github.com/lureiny/v2raymg/pkg/proxy/containers/snell"
+_ "github.com/lureiny/v2raymg/pkg/proxy/containers/xray"
+```
+
+mihomo 的 `register.go::init()` 因此永远不跑,`container.RegisterFactory(ContainerMihomo, ...)` 未执行,`ContainerMgr` 加载配置遇 `type: mihomo` 落到 "unknown container type" 错误分支。
+
+stage 1 的单测 `TestMihomoFactoryLoadable` 在 mihomo 包内部(`init` 被同包 import 自动触发)过,stage 10b/11+ 的集成测试直接调 `mihomo.NewMihomoContainer`(同包 import,init 也跑),**没有任何一个测试走 ContainerMgr 的配置加载路径** —— 是测试设计的真实盲区。
+
+修复 1 行:`cmd/server.go` 补 `_ "github.com/lureiny/v2raymg/pkg/proxy/containers/mihomo"` blank import。`make build` 通过,用户重启 server 后配置加载正常。
+
+**后续**:可考虑加一个 e2e 测试或冒烟测试走完整的"读 config → ContainerMgr 构造 → Start" 路径,避免未来再漏 wire 新 container。优先级 P3。
+
+**验证**:
+
+- `go build ./...` 通过
+- `go test ./pkg/proxy/containers/mihomo/... -race -count=1`:全绿,42 + 0 = 42 测试(stage 10a 后数量稳定,trojan 扩展没引入新单元测试,但 profilegen 和 adapter 现有单元测试全绿覆盖了新分支的"cert 都为空"分支;新分支 "cert 都为非空" 由 e2e 覆盖)
+- `go vet ./...`:只剩 3 个 pre-existing 警告(pkg/log/pkg/collecter/pkg/rpc/server),与本轮无关
+- `go test -tags=integration ./pkg/proxy/systemtest -run TestMihomoE2E_RealInternet -v`:三协议 5 步 15 断言全绿
+- `go test ./... -race -count=1`:32 包全绿,无回归
+
+### 阶段 12(2026-04-24 完成)
+
+**动机**:用户在 CLI 上跑 `FastAddInbound -container mihomo` 直接报 `param "password" required`。
+根因链:
+- CLI 默认 protocol = trojan(stage 1 前就定的)
+- mihomo adapter 对 uuid/password/cipher 合约**严格**,缺一即 `ErrMissingCredential`
+- xray 的 adapter 虽然也严格,但 xray 的 FastAdd 实现层(`buildFastAddSimpleSpec` + `profilegen/*`)**自动生成**缺失字段
+- mihomo 没有这层"底层自动生成",UX 不对齐
+- 加上 mihomo trojan 运行时还要求 cert(stage 11+ P2-9),CLI 默认路径"三重失败"
+
+用户明确决策:
+- **方案 B** 抽独立 pkg 做协议级归一(与 container 无关)
+- xray 底层 auto-gen 保留不动
+- trojan 的 TLS 必需性检查放在新层
+- cert 要跟 certmgr 联动(4 源),mihomo 用 SAFE_PATHS env 信任 certmgr 目录(不走软链,避开 mihomo symlink issue)
+- CLI 不加 extra_params 字段(维持 scope 最小)
+
+**交付**:
+
+- `pkg/proxy/core/params/defaults.go`(新包 + 20 个单测):
+  - `FillDefaults(params, protocol, certMgr, scratchDir) error` — 凭据 fill(vmess uuid / trojan password / ss password+cipher default aes-256-gcm) + trojan TLS 4 源归一(cert_file+key_file / certificate+key / domain via certMgr / self_signed) → params["cert_file"]+params["key_file"]+params["cert_source"]
+  - 协议无关:和 xray / mihomo 两边都兼容;xray 底层已有的 auto-gen 在 params 归一后退化为 no-op(cert_file 已在)
+- `pkg/rpc/server/end_node_inbound.go::FastAddInbound`:在 extra_params merge 后、c.FastAddInbound 前调 `FillDefaults`;scratchDir 通过 `CertScratchDir()` interface 从 container 拿(mihomo → DataDir,其他 → os.TempDir);certMgrAdapter 包装 `s.certManager.GetCertFiles` → `params.CertManager.GetCert`
+- `pkg/certmgmt/service.Manager.Path() string`:暴露 storage root
+- `MihomoContainer`:
+  - `WithSafePathRoots(roots ...string)` option — 启动时拼 `SAFE_PATHS=<roots>` env var
+  - `CertScratchDir() string` — 返 DataDir(SAFE_PATHS 默认信任),让 RPC 归一层把自签/PEM 内容写到 DataDir 下
+  - 工厂 `New` 里 type-assert `opts.CertManager.(interface{ Path() string })` → 拼 certmgr 路径进 SAFE_PATHS
+  - **顺手修**:工厂之前没 wire `WithUserManager(opts.UserManager)` — production mihomo user 事件链路实际没接,因为 stage 10b/11+ 测试绕过 factory 所以没暴露。stage 12 补上
+- `pkg/proxy/tools/process.RunnerConfig.Env []string`:新字段,child 进程 env = `os.Environ() + Env`(非 nil 时)
+- `MihomoSharedCred.CertSource` + `shouldCleanupCerts()`:记录 cert 来源("file"/"pem"/"domain"/"self_signed"),`RemoveInboundConfig` 仅清理 v2raymg 自己写的 cert 文件(pem/self_signed),file/domain 不动(运维 / certmgr 管)
+- `pkg/proxy/systemtest/mihomo_e2e_test.go::TestMihomoE2E_FillDefaults_TrojanSelfSigned`(新 integration test):走 `self_signed=true` 路径,验证 FillDefaults + mihomo DataDir SAFE_PATHS + end-to-end + cleanup 全链路
+- `cmd/cli/suggest.go::containerSuggest` 描述扩:`xray (default) / snell / hysteria / mihomo`
+
+**验证**:
+
+- `go test ./pkg/proxy/core/params/... -race -count=1`:20/20 测试全绿
+- `go test ./pkg/proxy/containers/mihomo/... -race -count=1`:全绿
+- `go test ./pkg/rpc/server/... -race -count=1`:全绿
+- `go test ./... -race -count=1`:34 包全绿,无回归
+- `go test -tags=integration ./pkg/proxy/systemtest -run TestMihomoE2E -v`:三协议 15 断言 + FillDefaults self_signed baseline + cleanup 全绿
+
+**未做项(scope 控制)**:
+
+- 让 xray 底层 auto-gen 退出(改依赖 RPC 的 FillDefaults):保留原因是防御式 — 有非 RPC 路径直接调 xray FastAdd(如 test helpers)时仍兜底,scope 变大不值
+- CLI `FastAddInbound` 的 `extra_params` JSON 字段:用户明确 scope 不加,trojan cert 路径场景由 HTTP/API 直接传
+- E2E 的 `domain` 源路径(需要 mock certmgr + 写 cert):FillDefaults 单测已覆盖,mihomo 的 SAFE_PATHS 对 DataDir 之外路径的运行时接纳靠 env var 语义保证。留作独立任务
 
 ## 参考
 

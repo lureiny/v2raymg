@@ -24,6 +24,7 @@ import (
 	"github.com/lureiny/v2raymg/pkg/store"
 	"github.com/lureiny/v2raymg/pkg/store/migrations"
 	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/hysteria"         // register hysteria factory
+	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/mihomo"          // register mihomo factory
 	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/snell"           // register snell factory
 	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/xray"            // register xray factory
 	_ "github.com/lureiny/v2raymg/pkg/proxy/core/subscription/converter" // register converters

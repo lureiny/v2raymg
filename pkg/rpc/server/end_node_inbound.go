@@ -4,12 +4,14 @@ import (
 	context "context"
 	"encoding/base64"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/params"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
@@ -223,7 +225,7 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		}
 	}
 
-	params := map[string]any{
+	reqParams := map[string]any{
 		"protocol":  protocol,
 		"port":      fastAddInboundReq.GetPort(),
 		"domain":    domain,
@@ -233,16 +235,16 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 	}
 	// If no domain is provided and security requires TLS, use self-signed cert
 	if fastAddInboundReq.GetDomain() == "" && (security == "tls" || security == "xtls") {
-		params["self_signed"] = true
+		reqParams["self_signed"] = true
 	}
 	if fastAddInboundReq.GetRealityTarget() != "" {
-		params["reality_target"] = fastAddInboundReq.GetRealityTarget()
+		reqParams["reality_target"] = fastAddInboundReq.GetRealityTarget()
 	}
 	if len(fastAddInboundReq.GetRealityServerNames()) > 0 {
-		params["reality_server_names"] = fastAddInboundReq.GetRealityServerNames()
+		reqParams["reality_server_names"] = fastAddInboundReq.GetRealityServerNames()
 	}
 	if len(fastAddInboundReq.GetRealityShortIds()) > 0 {
-		params["reality_short_ids"] = fastAddInboundReq.GetRealityShortIds()
+		reqParams["reality_short_ids"] = fastAddInboundReq.GetRealityShortIds()
 	}
 
 	// Merge extra_params: pass through all transport/security/sniffing params to Executor.
@@ -250,29 +252,78 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 	for k, v := range fastAddInboundReq.GetExtraParams() {
 		switch k {
 		case "sniffing_enabled", "sniffing_route_only", "tls_reject_unknown_sni", "self_signed":
-			params[k] = v == "true"
+			reqParams[k] = v == "true"
 		case "ocsp_stapling":
 			var n int
 			fmt.Sscanf(v, "%d", &n)
-			params[k] = n
+			reqParams[k] = n
 		case "reality_server_names", "sniffing_dest_override", "alpn", "xhttp_host", "http_host":
-			params[k] = strings.Split(v, ",")
+			reqParams[k] = strings.Split(v, ",")
 		case "reality_short_ids":
-			if _, exists := params["reality_short_ids"]; !exists {
-				params[k] = strings.Split(v, ",")
+			if _, exists := reqParams["reality_short_ids"]; !exists {
+				reqParams[k] = strings.Split(v, ",")
 			}
 		default:
 			// String params: ws_path, grpc_service_name, httpupgrade_path, httpupgrade_host,
 			// xhttp_path, xhttp_mode, tls_min_version, flow, uuid, method, password, etc.
-			params[k] = v
+			reqParams[k] = v
 		}
 	}
 
-	if err := c.FastAddInbound(fastAddInboundReq.GetTag(), params); err != nil {
+	// Container-agnostic normalisation: credential auto-fill + cert-source
+	// resolution. Runs AFTER extra_params merge so caller-supplied values
+	// always win. scratchDir comes from the container when it has a
+	// specific requirement (mihomo: DataDir for SAFE_PATHS compliance),
+	// falling back to os.TempDir for containers without one (xray's own
+	// resolveFastAddCert already handles /tmp → xray-internal temp files).
+	scratchDir := os.TempDir()
+	if p, ok := c.(interface{ CertScratchDir() string }); ok {
+		scratchDir = p.CertScratchDir()
+	}
+	if err := params.FillDefaults(reqParams, protocol, newCertMgrAdapter(s.certManager), scratchDir); err != nil {
+		fastAddInboundRsp.Code = 1020
+		fastAddInboundRsp.Msg = err.Error()
+		return fastAddInboundRsp, nil
+	}
+
+	if err := c.FastAddInbound(fastAddInboundReq.GetTag(), reqParams); err != nil {
 		fastAddInboundRsp.Code = 1021
 		fastAddInboundRsp.Msg = err.Error()
 	}
 	return fastAddInboundRsp, nil
+}
+
+// certMgrAdapter turns the RPC layer's CertManager interface into the
+// narrow params.CertManager shape. The adapter short-circuits to nil when
+// the underlying manager doesn't expose GetCertFiles (test doubles); this
+// disables the domain-cert-source path gracefully rather than crashing.
+type certMgrAdapter struct {
+	mgr CertManager
+}
+
+func newCertMgrAdapter(mgr CertManager) params.CertManager {
+	if mgr == nil {
+		return nil
+	}
+	return &certMgrAdapter{mgr: mgr}
+}
+
+func (a *certMgrAdapter) GetCert(domain string) *params.CertRecord {
+	// The concrete certmgmt.Manager exposes GetCertFiles; test doubles
+	// may not. Treat missing support as "no cert available" — callers
+	// that needed domain resolution will see a clean not-found error
+	// from params.FillDefaults rather than a panic here.
+	g, ok := a.mgr.(interface {
+		GetCertFiles(domain string) (certFile, keyFile string, ok bool)
+	})
+	if !ok {
+		return nil
+	}
+	cf, kf, found := g.GetCertFiles(domain)
+	if !found || cf == "" || kf == "" {
+		return nil
+	}
+	return &params.CertRecord{CertFile: cf, KeyFile: kf}
 }
 
 // ListInbound returns all inbounds across all registered containers.

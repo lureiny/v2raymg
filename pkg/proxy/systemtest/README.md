@@ -1,11 +1,16 @@
-# System Test (Proxyrefactor)
+# System Test (pkg/proxy)
 
 ## Purpose
 
-Validate reconstructed framework availability with a simple end-to-end flow:
-1. Start xray container
-2. Add/use socks5 inbound
-3. Access website through proxy
+Validate reconstructed framework availability with end-to-end flows against
+real proxy kernels. xray is the primary covered kernel; stage 10b added
+mihomo coverage (vmess / trojan / shadowsocks) mirroring the xray fixture.
+
+Typical flow:
+1. Start a container (xray or mihomo)
+2. Add/use a protocol inbound via FastAdd
+3. Access a local httptest origin through the proxy chain
+4. (mihomo) Stop + Start the container, verify user port + listener restore
 
 ## Quick Start
 
@@ -14,13 +19,13 @@ Validate reconstructed framework availability with a simple end-to-end flow:
 export XRAY_BIN=/path/to/xray
 
 # Run all tests (unit + integration)
-go test ./pkg/proxyrefactor/... -tags=integration -v
+go test ./pkg/proxy/... -tags=integration -v
 
 # Run only unit tests
-go test ./pkg/proxyrefactor/... -v
+go test ./pkg/proxy/... -v
 
 # Run only system tests (requires XRAY_BIN)
-go test ./pkg/proxyrefactor/systemtest -tags=integration -v
+go test ./pkg/proxy/systemtest -tags=integration -v
 ```
 
 ## Test Cases
@@ -30,7 +35,7 @@ File: `xray_socks5_system_test.go` (build tag: `integration`)
 
 Run:
 ```bash
-XRAY_BIN=/path/to/xray go test ./pkg/proxyrefactor/systemtest -tags=integration -run TestXrayContainerSocks5WebsiteAccess -v
+XRAY_BIN=/path/to/xray go test ./pkg/proxy/systemtest -tags=integration -run TestXrayContainerSocks5WebsiteAccess -v
 ```
 
 Success criteria:
@@ -49,7 +54,7 @@ File: `degraded_socks5_chain_test.go`
 
 Run:
 ```bash
-go test ./pkg/proxyrefactor/systemtest -run TestDegradedLocalSocks5ProxyChain -v
+go test ./pkg/proxy/systemtest -run TestDegradedLocalSocks5ProxyChain -v
 ```
 
 What it validates:
@@ -75,7 +80,7 @@ The protocol matrix test (`xray_protocol_matrix_test.go`) validates all supporte
 
 Run:
 ```bash
-XRAY_BIN=/path/to/xray go test ./pkg/proxyrefactor/systemtest -tags=integration -run TestXrayDynamicInbound_ProtocolMatrix -v
+XRAY_BIN=/path/to/xray go test ./pkg/proxy/systemtest -tags=integration -run TestXrayDynamicInbound_ProtocolMatrix -v
 ```
 
 ## Examples Reference
@@ -103,6 +108,30 @@ For protocol configuration examples, see `pkg/proxyrefactor/examples/inbound/`:
 | Test (B: Light Modification) | Suggested Example Reference |
 |------------------------------|----------------------------|
 | xray_dynamic_inbound_system_test.go | Base: socks5.go + vmess.go |
+
+## Mihomo (stage 10b)
+
+Files:
+- `mihomo_helpers_test.go` — binary resolution + rig startup
+- `mihomo_protocol_matrix_test.go` — vmess / trojan / shadowsocks FastAdd + user
+  handshake + port release negative control (MVP D4 scope)
+- `mihomo_restore_test.go` — Stop → Start → forward port stability + handshake
+  recovery
+
+Run:
+```bash
+# XRAY_BIN is always required (used as the protocol client)
+# MIHOMO_BIN optional — if unset, the Updater downloads the Alpha release
+XRAY_BIN=/path/to/xray MIHOMO_BIN=/path/to/mihomo \
+  go test ./pkg/proxy/systemtest -tags=integration -run "TestMihomo" -v
+```
+
+Preconditions:
+- XRAY_BIN: required. xray is the client speaking vmess / trojan / ss into
+  mihomo's listener via the forward layer.
+- MIHOMO_BIN: optional. When missing, `ensureMihomoBin` pulls the Alpha
+  pre-release into `t.TempDir()` (requires network egress to GitHub).
+- Network: required when MIHOMO_BIN is absent.
 
 ## Notes
 

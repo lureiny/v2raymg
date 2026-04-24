@@ -1,0 +1,17 @@
+schema_version: 1
+status: draft
+last_verified: 2026-04-17
+owner: proxy-team
+source:
+  - pkg/proxy/forward/port_allocator.go
+  - pkg/proxy/forward/types.go
+  - pkg/proxy/forward/traffic.go
+  - pkg/proxy/forward/relay.go
+  - pkg/proxy/forward/manager.go
+  - pkg/proxy/usermanager/usermanager.go
+  - pkg/proxy/core/contracts/user.go
+  - CLAUDE.md
+changelog:
+  - date: 2026-04-17
+    change: 初始版本,覆盖 PortAllocator/ForwardRule/TrafficCounter 三大抽象、GetBindPort/ReleaseBindPort 流程、Relay 数据平面与 Forward 层统计体系
+    reason: 用户需求,将端口管理与流量统计功能的梳理沉淀为 wiki

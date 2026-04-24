@@ -22,6 +22,13 @@ import (
 //   - listen_addr: string; defaults to 127.0.0.1. Non-loopback values are
 //                  accepted but strongly discouraged — the forward layer is
 //                  the only sanctioned ingress path (see principle 3).
+//   - cert_file / key_file: trojan only. Absolute paths to PEM cert and
+//                  private key files. Mihomo refuses to start a trojan
+//                  listener without them. Both must be set together or
+//                  both omitted (omitting is allowed at adapter layer for
+//                  legacy/unit-test configurations, but a production
+//                  trojan inbound without them will fail at mihomo
+//                  startup).
 //
 // Errors wrap ErrProtocolNotSupported or ErrMissingCredential from inbound.go
 // so HTTP handlers can map them to appropriate status codes.
@@ -78,7 +85,30 @@ func extractSharedCred(protocol contracts.Protocol, params map[string]any) (Miho
 		if err != nil {
 			return MihomoSharedCred{}, err
 		}
-		return MihomoSharedCred{Password: pw}, nil
+		cred := MihomoSharedCred{Password: pw}
+		// cert_file / key_file are optional at the adapter layer — but
+		// mihomo Alpha refuses to boot a trojan listener without TLS
+		// credentials (verified at stage 11+ E2E). Callers in production
+		// should always pass a valid pair; tests that intentionally omit
+		// them will still fail at mihomo startup, with an error that
+		// clearly names the missing config. The adapter only enforces
+		// the "both or neither" pairing rule (see Validate); it does not
+		// fabricate default certs.
+		if certFile, ok := params["cert_file"].(string); ok && certFile != "" {
+			cred.CertFile = certFile
+		}
+		if keyFile, ok := params["key_file"].(string); ok && keyFile != "" {
+			cred.KeyFile = keyFile
+		}
+		// cert_source (optional) is populated by pkg/proxy/core/params
+		// during RPC FastAddInbound normalisation. It tells
+		// RemoveInboundConfig whether the cert files are ours to delete.
+		// Legacy records without this field default to "" which is
+		// treated as "external" (don't touch).
+		if src, ok := params["cert_source"].(string); ok && src != "" {
+			cred.CertSource = src
+		}
+		return cred, nil
 
 	case contracts.ProtocolShadowsocks:
 		pw, err := requireString(params, "password")

@@ -1,0 +1,23 @@
+schema_version: 1
+status: draft
+last_verified: 2026-04-24
+owner: v2raymg-core
+source:
+  - docs/mihomo-container-design.md
+  - docs/mihomo-container-implementation-plan.md
+  - pkg/proxy/containers/mihomo/container.go
+  - pkg/proxy/containers/mihomo/process.go
+  - pkg/proxy/containers/mihomo/updater.go
+  - pkg/proxy/containers/mihomo/subscription.go
+  - pkg/proxy/containers/mihomo/profilegen.go
+  - pkg/proxy/containers/mihomo/rest_client.go
+changelog:
+  - date: 2026-04-23
+    change: 初始版本;覆盖 stage 1-10 全量架构(模式 B + 共享凭据 + Updater + WaitReady)
+    reason: stage 11 wiki 登记,MVP(vmess/trojan/ss)功能完结
+  - date: 2026-04-24
+    change: stage 11 wiki init
+    reason: mihomo MVP(vmess/trojan/ss)功能完结,登记到 wiki 便于未来 read-wiki-page 路由
+  - date: 2026-04-24
+    change: stage 11+ E2E: trojan cert_file/key_file 支持 + SAFE_PATHS 约束
+    reason: 真实 E2E 测试证实 P2-9 CERTAIN,扩 adapter/profilegen 支持 trojan cert,wiki 同步

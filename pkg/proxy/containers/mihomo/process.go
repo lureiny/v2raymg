@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/lureiny/v2raymg/pkg/log"
@@ -86,6 +87,7 @@ func (c *MihomoContainer) startProcess() error {
 		Args:       []string{"-d", c.cfg.DataDir, "-f", c.cfg.ConfigFilePath},
 		Stdout:     log.NewPrefixWriter(os.Stdout, string(contracts.ContainerMihomo)),
 		Stderr:     log.NewPrefixWriter(os.Stderr, string(contracts.ContainerMihomo)),
+		Env:        c.buildProcessEnv(),
 	})
 	if err != nil {
 		return fmt.Errorf("mihomo: create runner: %w", err)
@@ -120,6 +122,26 @@ func (c *MihomoContainer) startProcess() error {
 	log.Infof("mihomo: ready (version=%s)", version)
 
 	return nil
+}
+
+// buildProcessEnv returns the additional env entries fed to the mihomo
+// process. Today that's just SAFE_PATHS, which mihomo reads at config-
+// parse time to decide which directories can hold file paths referenced
+// from the config (e.g. trojan listener certificate/private-key). DataDir
+// is trusted implicitly — this appends any extra roots wired in via
+// WithSafePathRoots (typically the certmgr storage root).
+//
+// Returns nil when there are no extra roots, which Runner treats as
+// "inherit os.Environ() unchanged".
+func (c *MihomoContainer) buildProcessEnv() []string {
+	if len(c.safePathRoots) == 0 {
+		return nil
+	}
+	// mihomo documents SAFE_PATHS as sharing the OS PATH separator: ":"
+	// on Unix, ";" on Windows. This binary only targets linux/amd64 (see
+	// the Updater runtime guard), so ":" is safe here.
+	joined := strings.Join(c.safePathRoots, ":")
+	return []string{"SAFE_PATHS=" + joined}
 }
 
 // stopProcess stops the mihomo process gracefully. Safe to call when the

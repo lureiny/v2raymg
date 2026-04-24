@@ -84,7 +84,7 @@ var (
 
 	containerSuggest = prompt.Suggest{
 		Text:        "container",
-		Description: "container type, xray( default) or snell",
+		Description: "container type: xray (default) / snell / hysteria / mihomo",
 		Default:     "xray",
 	}
 

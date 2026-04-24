@@ -27,6 +27,12 @@ type RunnerConfig struct {
 
 	// Stderr specifies where to pipe stderr (nil = os.Stderr).
 	Stderr interface{}
+
+	// Env holds additional KEY=VALUE environment entries appended to the
+	// parent process's environment. Empty slice (or nil) leaves the child
+	// with the default os.Environ(). Used e.g. by the mihomo container to
+	// set SAFE_PATHS without having to reimplement process launching.
+	Env []string
 }
 
 // Runner provides generic external process lifecycle management.
@@ -74,6 +80,15 @@ func (p *Runner) Start() error {
 		cmd.Stderr = p.config.Stderr.(interface{ Write([]byte) (int, error) })
 	} else {
 		cmd.Stderr = os.Stderr
+	}
+
+	// Append caller-supplied env on top of the inherited environment.
+	// Leaving cmd.Env at nil would use os.Environ() — equivalent to "no
+	// override"; explicitly appending makes it obvious what we're doing
+	// and avoids dropping the parent env if a future caller sets only
+	// Env without realising nil means "inherit".
+	if len(p.config.Env) > 0 {
+		cmd.Env = append(os.Environ(), p.config.Env...)
 	}
 
 	if err := cmd.Start(); err != nil {

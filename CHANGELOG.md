@@ -1,5 +1,201 @@
 # CHANGELOG.md
 
+## 2026-04-24 — FastAddInbound Params Normalisation + Mihomo certmgr Integration
+
+Unifies the "caller picks a protocol + port, the system fills the rest" UX
+across every container by introducing a single container-agnostic
+normalisation layer between the RPC FastAddInbound handler and the
+container's own FastAddInbound. The layer handles protocol-level defaults
+(credentials + TLS cert sourcing) so individual adapters no longer have
+to each reinvent the "generate if absent" logic — and so that mihomo
+(which used to reject empty credentials at the adapter) now accepts the
+same CLI default path that xray has always handled.
+
+### `pkg/proxy/core/params/defaults.go` (new)
+
+- `FillDefaults(params, protocol, certMgr, scratchDir) error` — two jobs:
+  1. **Credential fill** — missing vmess uuid / trojan password / ss
+     password+cipher are generated on the spot. Matches xray's
+     long-standing behaviour.
+  2. **Cert source normalisation** for TLS-required protocols (currently
+     trojan). Accepts four equivalent inputs:
+       - `cert_file` + `key_file` (paths)
+       - `certificate` + `key` (PEM content; materialised to scratchDir)
+       - `domain` (looked up via CertManager)
+       - `self_signed: true` (generated + materialised)
+     On success, `params["cert_file"]` and `params["key_file"]` hold
+     absolute paths every downstream adapter can consume directly.
+     `params["cert_source"]` records provenance so the container layer
+     knows whether v2raymg owns the files (and must clean them up).
+  3. **Trojan TLS enforcement** — a trojan request with no cert source
+     returns a clear error before the container ever sees it.
+- 20 unit tests cover every protocol × every source path + error modes.
+
+### RPC layer
+
+- `pkg/rpc/server/end_node_inbound.go::FastAddInbound` now calls
+  `FillDefaults` after the `extra_params` merge but before handing
+  `params` to `c.FastAddInbound`. A small adapter bridges
+  `pkg/rpc/server.CertManager` to `params.CertManager`.
+
+### Mihomo container changes (all backward-compatible)
+
+- `process.Runner.RunnerConfig.Env []string` — new field; the child
+  process's env is `os.Environ() + Env` when non-nil.
+- `MihomoContainer.CertScratchDir() string` — returns DataDir. The RPC
+  handler type-asserts this interface to decide where to materialise
+  cert files so they satisfy mihomo's SAFE_PATHS rule.
+- `MihomoContainer.WithSafePathRoots(roots ...string)` — adds directories
+  to the `SAFE_PATHS` env var set at mihomo process startup. The
+  mihomo factory wires `certmgmt.Manager.Path()` in automatically via
+  `BuildOptions.CertManager`, so certmgr-issued cert paths (outside
+  DataDir) get accepted by mihomo's path safety check.
+- `pkg/certmgmt/service.Manager.Path() string` — new getter exposing
+  the storage root so the mihomo container can whitelist it.
+- `MihomoSharedCred.CertSource` — new JSON field ("", file, pem,
+  domain, self_signed). `RemoveInboundConfig` now deletes cert+key
+  files when source is pem/self_signed (material v2raymg wrote); it
+  leaves file/domain sources untouched (caller- or certmgr-managed).
+- `mihomoFactory.New` now also wires `BuildOptions.UserManager` via
+  `WithUserManager`. Previously unwired — production mihomo user
+  events did not flow through ContainerMgr-built containers. Unit
+  tests bypassed the factory so this was hidden; production tripped
+  over it once the container actually loaded from config.
+
+### E2E
+
+- `TestMihomoE2E_FillDefaults_TrojanSelfSigned` (integration) — drives
+  trojan through the FillDefaults self_signed source, verifies:
+  cert lands under DataDir, mihomo boots the listener, chain reaches
+  the configured target, RemoveInboundConfig deletes cert+key files.
+  Shares rig with `TestMihomoE2E_RealInternet`.
+
+### CLI
+
+- `cmd/cli/suggest.go::containerSuggest` description expanded to
+  `xray (default) / snell / hysteria / mihomo`. No other CLI changes:
+  the v2raymg HTTP API's `extra_params` stays the escape hatch for
+  uncommon fields; CLI wiring for it is left as a future task.
+
+### Migration
+
+No config changes. Existing deployments keep working — callers that
+hand-crafted full `params` with all credentials + cert paths continue
+to pass through unchanged. The new behaviour only kicks in when a
+field is absent.
+
+## 2026-04-24 — Mihomo Container Stage 11+: Real E2E System Test
+
+End-to-end system test that runs mihomo as BOTH the v2raymg-managed server
+and the SOCKS5 client, proving the full production chain
+(`curl → mihomo-client → forward port → mihomo-server → google.com`) and
+three disruption scenarios that prove the chain really goes through the
+server.
+
+### New integration test: `TestMihomoE2E_RealInternet`
+
+File: `pkg/proxy/systemtest/mihomo_e2e_test.go`. Three protocol subtests
+(vmess / trojan / shadowsocks), each running a five-step sequence:
+
+1. **positive_baseline** — HTTP GET https://www.google.com (or
+   `MIHOMO_E2E_TARGET` override) via SOCKS5 → mihomo-client → forward port
+   → mihomo-server → DIRECT → target. Must return < 500.
+2. **negative_stop_server** — `container.Stop()`; same GET must fail.
+3. **recover_restart_server** — `container.Start()`; GET must succeed
+   AGAIN and the user's forward port must be the same (PortMappings
+   invariant).
+4. **negative_change_credential** — `RemoveInboundConfig` +
+   `FastAddInbound` on the same tag+port with fresh credentials;
+   PortMappings keeps the forward port stable, so the only changed
+   variable is the listener's uuid/password/cipher. Client still armed
+   with old credentials → handshake fails.
+5. **negative_remove_user** — `RemoveUser`; forward rule is torn down;
+   same GET must fail.
+
+Run:
+```bash
+# MIHOMO_BIN optional (Updater downloads Alpha if unset)
+# XRAY_BIN is NOT required for this test
+go test -tags=integration ./pkg/proxy/systemtest -run TestMihomoE2E_RealInternet -v
+```
+
+### Trojan TLS certificate support (P2-9 resolved)
+
+The E2E test surfaced P2-9 as CERTAIN (not UNCERTAIN as the stage 6+7
+review left it): mihomo Alpha rejects trojan listeners at boot time with
+`disallow using Trojan without both certificates/reality/ss config`. And
+once a cert is attached, mihomo enforces a SAFE_PATHS rule — the cert file
+MUST live under mihomo's DataDir (`-d` argument).
+
+FastAddInbound now supports optional `cert_file` / `key_file` trojan
+params:
+
+- `pkg/proxy/containers/mihomo/inbound.go::MihomoSharedCred` adds
+  `CertFile` / `KeyFile` fields with `omitempty` JSON tags (store format
+  stays compatible with vmess/ss records). `Validate` enforces the pair
+  rule: both set or both empty.
+- `pkg/proxy/containers/mihomo/adapter.go::extractSharedCred` reads
+  `cert_file` / `key_file` when present, ignoring them when absent (non-
+  trojan callers and legacy unit-test fixtures are unaffected).
+- `pkg/proxy/containers/mihomo/profilegen.go::BuildListener` emits the
+  mihomo yaml fields `certificate` / `private-key` when the pair is set.
+- `pkg/proxy/systemtest/mihomo_helpers_test.go::mihomoTestRig` exposes
+  `dataDir` so integration tests can write cert files under mihomo's home
+  directory (SAFE_PATHS).
+
+## 2026-04-23 — Mihomo Container Stage 10
+
+### Stage 10a: Post-Start Liveness Probe (A2-3, P1)
+
+Closes the gap where `pkg/proxy/containers/mihomo/updater.go::Update` reported
+`Restarted=true` if the new binary forked+execed successfully but then crashed
+on startup (GOAMD64 mismatch, missing dynamic deps, config parse error). The
+old binary was already swapped; there was no auto-rollback path.
+
+- `ProcessController` interface adds `WaitReady(ctx context.Context) error`.
+  `MihomoContainer.WaitReady` probes `GET /version` via its internal REST
+  client, returning `ctx.Err()` on timeout. A nil `restClient` (container
+  never Started through its own hooks) returns an error so the Updater
+  triggers rollback instead of silently passing.
+- `UpdaterConfig` adds `ReadinessTimeout time.Duration` (default 10s, matches
+  `process.go::readinessTimeout`). `Update` also falls back to 10s when the
+  config was built without `NewUpdater` (mirrors the existing
+  `RestartPolicy` "" → Always normalisation).
+- `Update` Step 7 now: `Stop(if running) → Start → WaitReady(bounded) →
+  failure: Stop + Rollback + ErrUpdateFailed{Stage:"restart"}`. A failure in
+  the WaitReady cleanup Stop is joined into the returned cause via
+  `errors.Join`, so `errors.Is(err, readinessCause)` and `errors.Is(err,
+  stopCause)` both succeed.
+
+### Stage 10b: Functional Integration Tests
+
+New `pkg/proxy/systemtest/` integration tests targeting a real mihomo binary
+(MVP D4 scope — vmess / trojan / shadowsocks). Scale testing skipped per
+user decision; R1 (listener count blow-up) already neutralised by the
+shared-credential model (listener count = inbound count, decoupled from
+user count).
+
+- `mihomo_helpers_test.go`: `ensureMihomoBin` (MIHOMO_BIN > Updater download
+  of Alpha), `startMihomoContainer` (real ForwardManager + UserManager +
+  SQLite store), `addMihomoUserAndWaitForPort` / `removeMihomoUserAndWaitForPortRelease`
+  (real AddUser/RemoveUser through the user-event pipeline).
+- `mihomo_protocol_matrix_test.go`: `TestMihomoProtocolMatrix` — table-driven
+  over vmess / trojan / shadowsocks. Uses xray as the protocol client
+  (D8: zero new dependencies; pattern mirrors xray_fastadd_connectivity).
+  Each subtest runs a positive handshake through the SOCKS5→proxy chain,
+  then confirms RemoveUser actually tears down the forward rule (negative
+  control).
+- `mihomo_restore_test.go`: `TestMihomoRestore_RecoversInboundAndUser` —
+  Stop + Start round-trip with PortMappings stability assertion and fresh
+  handshake through the restored chain.
+- `pkg/proxy/systemtest/README.md` cleaned of 5 residual `./pkg/proxyrefactor/...`
+  paths + new "Mihomo (stage 10b)" section.
+- `helpers_test.go::noopForwardManager`: added missing `DropUser` /
+  `AllocatePort` / `ReleasePort` methods (pre-existing bug; interface
+  incomplete since stage 5 forward-manager extension).
+
+Run: `XRAY_BIN=... MIHOMO_BIN=... go test ./pkg/proxy/systemtest -tags=integration -run TestMihomo -v`
+
 ## 2026-04-23 — Mihomo Container Stage 8-9
 
 ### Stage 9: Updater + auto-download — **BREAKING**

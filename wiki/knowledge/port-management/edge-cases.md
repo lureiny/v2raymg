@@ -1,0 +1,90 @@
+---
+title: 端口管理与流量统计
+layer: edge
+---
+
+## FAQ
+
+**Q: 同一个用户对同一个 inbound 反复调用 GetBindPort 会分到多个端口吗?**
+
+A: 不会。`forwardMgr` 用 `RuleKey = "{ct}:{tag}:{user}"` 做幂等;第二次调用直接返回已存在的 `ListenPort`。这是协议要求的幂等语义,不是偶发行为,可以依赖。
+
+**Q: 容器/服务重启后,之前用户的端口还是同一个吗?**
+
+A: 是,只要 `User.PortMappings[dstPort]` 还在。恢复流程会读 `PortMappings` 拿到 `preferredPort`,然后走 `PortAllocator.AllocateSpecific(preferredPort)` 分回原端口。如果该端口被别人占了(不应该发生),恢复会失败,需要排查端口池一致性。
+
+**Q: 一个用户可以有多个端口吗?**
+
+A: 可以。用户有多个 inbound(多个 protocol+tag)就会有多个 ForwardRule → 多个 ListenPort。`User.BindPorts` 是列表,`PortMappings` 是 map(每个 dstPort 映射一个 forwardPort)。
+
+**Q: 流量统计的准确性如何,会不会漏掉握手阶段?**
+
+A: Relay 在 TCP 层做字节转发,从 `Dial` 后的第一个字节就计数,包括协议握手和后续数据,不漏。但因为是 TCP 字节计数,不是应用层有效载荷计数,所以**包含代理协议头部开销**。
+
+**Q: 为什么不用 xray 自带的统计 (container.QueryStats)?**
+
+A: 三个原因:① 不同 inbound 协议的统计精度/完整性不一致;② 耦合容器内部实现;③ 口径需要统一。所以项目约定:**流量 ground truth 只来自 Forward 层**,UserManager 只做聚合和落库。
+
+**Q: Delta 和 Total 的区别,什么时候用哪个?**
+
+A: `Total*` 是累计量,持久化到 DB,适合展示用户历史消耗。`Delta*` 是自上次 `reset=true` 以来的增量,**专为 Prometheus 抓取设计**——Prometheus 每次拉取后重置,这样多实例聚合不会重复计数。两个字段互相独立维护。
+
+**Q: MaxClients 和 MaxConnections 有什么区别?**
+
+A: `MaxConnections` 是全局并发连接数上限(全部 IP 加起来);`MaxClients` 是同一时间活跃的**不同客户端 IP 数**上限。举例:`MaxClients=2, MaxConnections=10` 表示最多 2 个不同 IP,但这 2 个 IP 之间总共可以开 10 条连接。
+
+---
+
+## 注意事项
+
+⚠️ **Forward 规则创建入口唯一**:业务规则只能通过 `UserManager.GetBindPort / ReleaseBindPort` 创建和销毁。**禁止**在 inbound adapter、container 实现、或任何其他模块内部直接调用 `forwardMgr.AddRule / RemoveRule` 来创建业务规则。违反会导致用户状态与 forward 规则不一致、统计丢失、重启不幂等。这是 CLAUDE.md 里明确写的项目约束。
+
+⚠️ **统计只看 Forward 层**:任何流量相关的新需求(限额、报表、告警)都应该读 `forwardMgr` 的 API 或 `UserManager` 的聚合层。**禁止**新增对 `container.QueryStats` 的依赖,也不要自己在 inbound 里再埋一套统计。
+
+⚠️ **PortMappings 不能手动改**:`User.PortMappings` 是重启幂等的关键,由 `GetBindPort/ReleaseBindPort` 内部维护。手动改写(例如运维脚本直接改 DB)会导致恢复时端口冲突或错位。如需迁移端口,走完整的 Release → GetBindPort 流程。
+
+⚠️ **RuleKey 是合约**:`{containerType}:{inboundTag}:{username}` 的三元组是稳定键,被 TrafficCounter、AggregatedStats、日志、事件追溯等多处使用。修改格式会引发连锁不兼容,改前必须全局评估。
+
+⚠️ **端口强制随机分配**:`PortAllocator.useRandom` 当前强制 true,不要改成顺序分配——那样端口可预测,暴露给攻击者有安全风险。
+
+---
+
+## 反例
+
+### ❌ 在 xray inbound adapter 里创建 forward 规则
+
+```go
+// 错误:直接在 inbound 层调 forwardMgr
+func (a *XrayInboundAdapter) AddUser(user User) error {
+    a.forwardMgr.AddRule(ForwardRule{...})  // ❌ 绕过了 UserManager
+}
+```
+
+### ✅ 通过 UserManager 入口
+
+```go
+// 正确:调用 UserManager 入口,由它负责 forward 规则
+port, err := userMgr.GetBindPort(GetBindPortRequest{
+    Username:      user.Name,
+    TargetPort:    inbound.DstPort,
+    ContainerType: "xray",
+    InboundTag:    inbound.Tag,
+    Protocol:      inbound.Protocol,
+})
+```
+
+### ❌ 为了"精确计流量"调 container 原生 API
+
+```go
+// 错误:新增 xray gRPC 统计依赖
+stats := xrayClient.QueryStats(ctx, &StatsRequest{...})  // ❌ 禁止
+```
+
+### ✅ 读 forward 层统计
+
+```go
+// 正确:从 forward/usermanager 读
+stats := userMgr.GetUserTrafficStats(username)
+// 或
+records := forwardMgr.GetAllTrafficRecords(false)
+```

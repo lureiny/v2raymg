@@ -68,6 +68,14 @@ func NewManagerWithIssuer(cfg Config, issuer domain.Issuer) *Manager {
 	}
 }
 
+// Path returns the filesystem root under which certmgmt stores all
+// certificate material (ACME-issued, imported, etc). Exposed so callers
+// that need to whitelist the directory — e.g. the mihomo container, whose
+// SAFE_PATHS env var must include every directory a cert path might point
+// into — can wire it up at container-start time without hardcoding the
+// layout.
+func (m *Manager) Path() string { return m.cfg.Path }
+
 // domainLock returns the per-domain mutex, creating it if necessary.
 func (m *Manager) domainLock(d string) *sync.Mutex {
 	v, _ := m.domainMu.LoadOrStore(d, &sync.Mutex{})

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
@@ -73,6 +74,13 @@ type ProcessController interface {
 	Start() error
 	Stop() error
 	IsRunning() bool
+	// WaitReady blocks until the process has passed its readiness probe or ctx
+	// fires. Added for stage 10a A2-3: Start() only proves fork+exec succeeded;
+	// a binary that crashes on startup (GOAMD64 mismatch, missing shared libs,
+	// bad config) still lets Start() return nil, so Update would silently
+	// report Restarted=true with a dead process and an already-swapped binary.
+	// WaitReady closes that gap. Callers pass a bounded ctx.
+	WaitReady(ctx context.Context) error
 }
 
 // UpdaterConfig holds the mihomo updater configuration.
@@ -81,6 +89,10 @@ type UpdaterConfig struct {
 	Owner       string // GitHub owner; defaults to "MetaCubeX"
 	Repo        string // GitHub repo;  defaults to "mihomo"
 	DownloadDir string // scratch dir for .gz + extracted binary; defaults to /tmp
+	// ReadinessTimeout bounds the post-restart WaitReady probe. Defaults to
+	// 10s to match process.go's readinessTimeout (same REST endpoint, same
+	// expected response time). Use 0 to accept the default.
+	ReadinessTimeout time.Duration
 }
 
 // Updater owns the download → verify → swap → restart flow for mihomo.
@@ -117,6 +129,9 @@ func NewUpdater(cfg UpdaterConfig) (*Updater, error) {
 	}
 	if cfg.DownloadDir == "" {
 		cfg.DownloadDir = "/tmp"
+	}
+	if cfg.ReadinessTimeout == 0 {
+		cfg.ReadinessTimeout = 10 * time.Second
 	}
 	// Ensure the scratch dir exists up front. Idempotent; avoids re-MkdirAll
 	// on every Update call. On failure we still surface at Update time (the
@@ -279,6 +294,37 @@ func (u *Updater) Update(ctx context.Context, req container.UpdateRequest) (*con
 		}
 		if err := u.processCtrl.Start(); err != nil {
 			return result, u.restartFailure(err, backupPath)
+		}
+		// Post-Start liveness probe (stage 10a A2-3). Start() returning nil
+		// only proves fork+exec succeeded; a new binary can still crash on
+		// startup (GOAMD64 mismatch, missing dynamic deps, config parse
+		// error) and the old code would still report Restarted=true with a
+		// dead process and an already-swapped binary. Bound the probe by
+		// ReadinessTimeout; treat failure the same as Start failure — stop
+		// the (possibly half-alive) process, roll back the binary, and
+		// surface a restart-stage ErrUpdateFailed.
+		//
+		// Fallback to 10s when the config was built by hand without running
+		// NewUpdater (mirrors the RestartPolicy "" → Always normalisation
+		// above; sub-callers and test harnesses that assign cfg literally
+		// shouldn't fire a zero-timeout cancelled context at every probe).
+		readinessTimeout := u.cfg.ReadinessTimeout
+		if readinessTimeout <= 0 {
+			readinessTimeout = 10 * time.Second
+		}
+		readyCtx, cancel := context.WithTimeout(ctx, readinessTimeout)
+		readyErr := u.processCtrl.WaitReady(readyCtx)
+		cancel()
+		if readyErr != nil {
+			// Stop the half-alive process before rollback so Rollback's
+			// atomic rename doesn't race a running process still holding
+			// an fd on the new binary path. Stop failures are joined into
+			// the returned Cause so callers see both the readiness error
+			// and any Stop failure.
+			if stopErr := u.processCtrl.Stop(); stopErr != nil {
+				readyErr = errors.Join(readyErr, fmt.Errorf("stop after readiness failure: %w", stopErr))
+			}
+			return result, u.restartFailure(readyErr, backupPath)
 		}
 		result.Restarted = true
 	}

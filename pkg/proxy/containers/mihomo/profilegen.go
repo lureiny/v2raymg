@@ -58,6 +58,17 @@ func BuildListener(inb *MihomoInbound) (map[string]any, error) {
 		m["users"] = []map[string]any{
 			{"password": inb.SharedCred.Password},
 		}
+		// certificate / private-key: mihomo Alpha's TrojanOption fields
+		// (see listener/inbound/trojan.go, inbound tags "certificate" and
+		// "private-key"). Omitted when CertFile/KeyFile are empty — that
+		// path exists mainly for unit tests; production callers must set
+		// both or mihomo refuses to boot the listener with
+		// "disallow using Trojan without both certificates/reality/ss
+		// config". Validate already ensures the pair is consistent.
+		if inb.SharedCred.CertFile != "" && inb.SharedCred.KeyFile != "" {
+			m["certificate"] = inb.SharedCred.CertFile
+			m["private-key"] = inb.SharedCred.KeyFile
+		}
 	case contracts.ProtocolShadowsocks:
 		// shadowsocks has no users array; credentials are top-level
 		// password/cipher on ShadowSocksOption.

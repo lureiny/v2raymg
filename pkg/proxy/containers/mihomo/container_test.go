@@ -1294,3 +1294,71 @@ func TestRestore_AfterStartHook_IsNoOp(t *testing.T) {
 		t.Errorf("inbounds map mutated: %+v", inbs)
 	}
 }
+
+// --- Stage 10a: MihomoContainer.WaitReady tests ---
+
+// TestMihomoContainer_WaitReady_Success wires a real RESTClient pointed at an
+// httptest server that answers /version, then calls WaitReady directly. This
+// is the happy path: GET /version returns 200, WaitReady returns nil. Asserts
+// the method is implemented against the same restClient snapshot used by the
+// rest of the container.
+func TestMihomoContainer_WaitReady_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version" {
+			_, _ = w.Write([]byte(`{"version":"1.19.24","meta":true}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	c := newTestContainer(t)
+	attachRunningREST(c, srv.URL)
+
+	if err := c.WaitReady(context.Background()); err != nil {
+		t.Fatalf("WaitReady: %v", err)
+	}
+}
+
+// TestMihomoContainer_WaitReady_NilRestClient covers the case where the
+// container's own startProcess has never wired a restClient (e.g. the Updater
+// invoked Start/Stop/WaitReady on a brand-new container that only completed
+// swap but not its own boot path). WaitReady must return an error rather than
+// dereferencing nil — the Updater relies on that error to trigger rollback.
+func TestMihomoContainer_WaitReady_NilRestClient(t *testing.T) {
+	c := newTestContainer(t)
+	// c.restClient stays nil
+
+	err := c.WaitReady(context.Background())
+	if err == nil {
+		t.Fatal("WaitReady must error when restClient is nil")
+	}
+}
+
+// TestMihomoContainer_WaitReady_CtxCancelled verifies WaitReady honours the
+// caller's ctx — an already-cancelled ctx must produce an error without
+// hanging. The stage 10a Updater passes a bounded ctx so a stuck probe can't
+// hold the Update path open indefinitely.
+func TestMihomoContainer_WaitReady_CtxCancelled(t *testing.T) {
+	// Server that never returns — guarantees the probe can only finish via ctx.
+	block := make(chan struct{})
+	defer close(block)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block
+	}))
+	defer srv.Close()
+
+	c := newTestContainer(t)
+	attachRunningREST(c, srv.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled
+
+	err := c.WaitReady(ctx)
+	if err == nil {
+		t.Fatal("WaitReady with cancelled ctx must error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitReady error must chain context.Canceled, got %v", err)
+	}
+}

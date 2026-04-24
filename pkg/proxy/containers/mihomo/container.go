@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -82,6 +83,15 @@ type MihomoContainer struct {
 	// against concurrent callers (two callers can both observe default
 	// and race to close, panicking on the second call).
 	closeOnce sync.Once
+
+	// safePathRoots feeds mihomo's SAFE_PATHS env var at process start.
+	// mihomo refuses config paths that aren't under $PWD (the -d DataDir)
+	// or under one of these extra roots. Use WithSafePathRoots to include
+	// e.g. the certmgr storage directory so trojan cert paths resolved
+	// via domain → certmgr don't get rejected at config parse time.
+	// DataDir itself is always trusted by mihomo without needing to be
+	// listed here.
+	safePathRoots []string
 }
 
 // MihomoOption configures optional dependencies at construction time.
@@ -109,6 +119,33 @@ func WithUserManager(um *usermanager.UserManager) MihomoOption {
 func WithUpdater(u *Updater) MihomoOption {
 	return func(c *MihomoContainer) { c.updater = u }
 }
+
+// WithSafePathRoots extends mihomo's SAFE_PATHS whitelist. Pass the
+// certmgr storage root (via certmgmtservice.Manager.Path()) so cert
+// paths resolved through the domain → certmgr source don't get rejected
+// by mihomo's config-time path safety check. Multiple roots are joined
+// with the OS PATH separator (":" on Unix) at process start.
+// Empty / non-existent paths are filtered out; calling with nothing is
+// a no-op (DataDir is always implicitly trusted by mihomo).
+func WithSafePathRoots(roots ...string) MihomoOption {
+	return func(c *MihomoContainer) {
+		for _, r := range roots {
+			if r == "" {
+				continue
+			}
+			c.safePathRoots = append(c.safePathRoots, r)
+		}
+	}
+}
+
+// CertScratchDir is where externally-supplied TLS cert material (PEM
+// content, self-signed) should be written when it needs to be referenced
+// by a mihomo inbound. Returns the DataDir: mihomo trusts DataDir paths
+// without needing SAFE_PATHS entries, and the directory is guaranteed to
+// exist after Start. Satisfies the pkg/rpc/server CertScratchDirProvider
+// interface that the FastAdd RPC handler uses to pick a write location
+// for PEM/self-signed material at normalisation time.
+func (c *MihomoContainer) CertScratchDir() string { return c.cfg.DataDir }
 
 type mihomoHooks struct {
 	c *MihomoContainer
@@ -317,6 +354,31 @@ func (c *MihomoContainer) Version() string {
 	return c.cachedVersion
 }
 
+// WaitReady satisfies the Updater's ProcessController interface. Stage 10a
+// A2-3: after the updater's Start() succeeds we still need positive evidence
+// the new binary is actually serving — a binary that crashes on startup
+// (GOAMD64 mismatch, missing dynamic deps, config parse error) otherwise
+// slips past the Start return value and Update silently reports success.
+//
+// Implementation probes GET /version via the restClient the container built
+// during its most recent startProcess. Returns ctx.Err() on timeout. A nil
+// restClient means the container was never started through its own hooks
+// (the Updater runs the restart, but the container wires restClient inside
+// startProcess); in that case WaitReady has no target and returns an error
+// so the Updater treats it as a readiness failure and rolls back.
+func (c *MihomoContainer) WaitReady(ctx context.Context) error {
+	c.mu.RLock()
+	rc := c.restClient
+	c.mu.RUnlock()
+	if rc == nil {
+		return fmt.Errorf("mihomo: WaitReady: rest client not initialized")
+	}
+	if _, err := rc.GetVersion(ctx); err != nil {
+		return fmt.Errorf("mihomo: WaitReady: %w", err)
+	}
+	return nil
+}
+
 // Update hands off to the bundled mihomo Updater when one is configured. The
 // Updater handles fetch → download → verify → extract → swap → restart with
 // rollback on post-swap failure. When the caller asked for a restart and the
@@ -510,6 +572,25 @@ func (c *MihomoContainer) RemoveInboundConfig(tag string) error {
 	}
 
 	delete(c.inbounds, tag)
+
+	// Phase 5: Clean up cert material v2raymg itself wrote to the scratch
+	// dir. We never delete externally-managed cert files (CertSource =
+	// "file"/"domain"), only the ones we created from caller-supplied PEM
+	// content or generated on demand ("pem"/"self_signed"). Failures here
+	// are logged but non-fatal — the inbound is already fully removed
+	// from mihomo and the store; a leftover cert file is a leak, not a
+	// correctness issue. Phase ordering puts cleanup after map delete so
+	// a retry caused by an earlier phase never touches cert files twice.
+	if inb.SharedCred.shouldCleanupCerts() {
+		for _, p := range []string{inb.SharedCred.CertFile, inb.SharedCred.KeyFile} {
+			if p == "" {
+				continue
+			}
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				log.Warnf("mihomo: cleanup cert file %q for inbound %q: %v", p, tag, err)
+			}
+		}
+	}
 	return nil
 }
 

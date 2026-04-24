@@ -1,11 +1,22 @@
 # v2raymg
 
-Proxy node management tool for v2ray/xray. Supports multi-node cluster deployment with center/end node architecture.
+Proxy node management tool that orchestrates multiple proxy kernels (xray / hysteria / snell / mihomo). Supports multi-node cluster deployment with center/end node architecture.
 
 ## Architecture
 
 - **Center Node** — cluster coordinator, handles node discovery and state synchronization
-- **End Node** — runs proxy containers (xray), exposes HTTP management API and gRPC for cluster communication
+- **End Node** — runs proxy containers, exposes HTTP management API and gRPC for cluster communication
+
+## Supported Proxy Kernels
+
+| Kernel  | Container | Protocols (MVP)                | Notes |
+|---------|-----------|--------------------------------|-------|
+| xray    | `xray`    | VLESS / VMess / Trojan / Shadowsocks / SOCKS5 / HTTP (plus Reality, ws/grpc/httpupgrade/xhttp transports) | Primary kernel, most feature-complete |
+| hysteria | `hysteria` | Hysteria2 (UDP)              | Single-inbound specialization |
+| snell   | `snell`   | Snell v4                       | Single-inbound kernel |
+| mihomo  | `mihomo`  | VMess / Trojan / Shadowsocks   | Shared-credential listener per inbound; user-level isolation via the forward layer. Tracks MetaCubeX/mihomo Alpha |
+
+All kernels plug into the same Container abstraction (`pkg/proxy/core/container`), share the forward layer for user-facing ports (`pkg/proxy/forward`), and are driven by the same HTTP / RPC / subscription / updater surface. Adding a new kernel follows the three principles in `docs/container-design-principles.md`.
 
 ## Quick Start
 

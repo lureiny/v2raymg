@@ -88,13 +88,16 @@ func (f *fakeSwapper) Rollback(_, _ string) error {
 	return f.rollbackErr
 }
 
-// fakeProcessCtrl records IsRunning/Start/Stop call order + optional errors.
+// fakeProcessCtrl records IsRunning/Start/Stop/WaitReady call order + optional
+// errors. readyErr is consumed by WaitReady (stage 10a A2-3 probe).
 type fakeProcessCtrl struct {
 	isRunning bool
 	stopErr   error
 	startErr  error
+	readyErr  error
 	startN    atomic.Int32
 	stopN     atomic.Int32
+	readyN    atomic.Int32
 }
 
 func (f *fakeProcessCtrl) IsRunning() bool { return f.isRunning }
@@ -112,6 +115,18 @@ func (f *fakeProcessCtrl) Start() error {
 		return f.startErr
 	}
 	f.isRunning = true
+	return nil
+}
+func (f *fakeProcessCtrl) WaitReady(ctx context.Context) error {
+	f.readyN.Add(1)
+	if f.readyErr != nil {
+		return f.readyErr
+	}
+	// Honour cancelled ctx so tests exercising timeout can rely on it even
+	// when readyErr is unset.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -590,6 +605,104 @@ func TestUpdater_Update_RestartStartFailure_Rollback(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrRestartFailed))
 	assert.Equal(t, int32(1), pc.stopN.Load(), "Stop should run before Start fails")
 	assert.Equal(t, int32(1), sw.rollbackCount.Load(), "rollback must be invoked")
+}
+
+// TestUpdater_Update_StartSucceededButNotReady_Rollback is the stage 10a A2-3
+// scenario: Start() returns nil (fork+exec worked) but WaitReady fails because
+// the new binary crashed on startup or cannot serve /version. The Updater must
+// treat this as a restart-stage failure — Stop the half-alive process, roll
+// back the binary, and surface ErrUpdateFailed{Stage:"restart"} wrapping
+// ErrRestartFailed so callers that `errors.Is(err, ErrRestartFailed)` still
+// trigger. Without WaitReady the old code would report Restarted=true.
+func TestUpdater_Update_StartSucceededButNotReady_Rollback(t *testing.T) {
+	rc := &fakeReleaseClient{release: stableRelease()}
+	gz := gzipBytes(t, []byte("ok"))
+	dl := newFakeDownloader()
+	dl.bytes["https://gh/stable-v1.gz"] = gz
+
+	sw := &fakeSwapper{}
+	readyErr := errors.New("mihomo: /version: connection refused")
+	pc := &fakeProcessCtrl{isRunning: true, readyErr: readyErr}
+	u := newUpdaterForTest(t, rc, dl, sw, pc)
+
+	result, err := u.Update(context.Background(), container.UpdateRequest{
+		TargetTag:     "v1.19.24",
+		RestartPolicy: container.RestartPolicyAlways,
+	})
+	require.Error(t, err)
+
+	var uerr *ErrUpdateFailed
+	require.True(t, errors.As(err, &uerr))
+	assert.Equal(t, "restart", uerr.Stage, "readiness failure is reported as a restart-stage error")
+	assert.True(t, errors.Is(err, ErrRestartFailed), "sentinel must chain so callers can detect restart failures")
+	assert.True(t, errors.Is(err, readyErr), "original readiness cause must remain reachable via errors.Is")
+
+	// Full call ordering: Stop (pre-swap) → Start → WaitReady (fail) → Stop
+	// (post-failure cleanup) → Rollback.
+	assert.Equal(t, int32(1), pc.startN.Load(), "Start must have been invoked once")
+	assert.Equal(t, int32(1), pc.readyN.Load(), "WaitReady must have been invoked once")
+	assert.Equal(t, int32(2), pc.stopN.Load(), "Stop runs both pre-swap and post-readiness-failure")
+	assert.Equal(t, int32(1), sw.rollbackCount.Load(), "rollback must be invoked")
+	assert.False(t, result.Restarted, "Restarted must remain false when readiness fails")
+}
+
+// TestUpdater_Update_ReadinessFailure_StopAlsoFails covers the double-failure
+// path inside the stage 10a branch: WaitReady fails AND the cleanup Stop also
+// fails. Both causes must be reachable via errors.Is, mirroring the rollback-
+// also-fails contract (P1-3 test nearby).
+func TestUpdater_Update_ReadinessFailure_StopAlsoFails(t *testing.T) {
+	rc := &fakeReleaseClient{release: stableRelease()}
+	gz := gzipBytes(t, []byte("ok"))
+	dl := newFakeDownloader()
+	dl.bytes["https://gh/stable-v1.gz"] = gz
+
+	sw := &fakeSwapper{}
+	readyErr := errors.New("post-start probe timed out")
+	stopErr := errors.New("SIGKILL refused")
+	// isRunning must be false so the initial pre-swap Stop is skipped and
+	// the first Stop we exercise is the post-readiness cleanup one. Then
+	// set stopErr so that cleanup Stop fails.
+	pc := &fakeProcessCtrl{isRunning: false, readyErr: readyErr, stopErr: stopErr}
+	u := newUpdaterForTest(t, rc, dl, sw, pc)
+
+	_, err := u.Update(context.Background(), container.UpdateRequest{
+		TargetTag:     "v1.19.24",
+		RestartPolicy: container.RestartPolicyAlways,
+	})
+	require.Error(t, err)
+
+	var uerr *ErrUpdateFailed
+	require.True(t, errors.As(err, &uerr))
+	assert.Equal(t, "restart", uerr.Stage)
+	assert.True(t, errors.Is(err, ErrRestartFailed), "restart sentinel must chain")
+	assert.True(t, errors.Is(err, readyErr), "readiness cause must chain")
+	assert.True(t, errors.Is(err, stopErr), "cleanup-Stop cause must chain via errors.Join")
+	assert.Equal(t, int32(1), sw.rollbackCount.Load(), "rollback still runs after the joined cleanup failure")
+}
+
+// TestUpdater_Update_NotReady_RestartPolicyNever_SkipsProbe locks the
+// invariant that the A2-3 probe only fires on policies that actually restart
+// the process. RestartPolicyNever must not invoke Start/Stop/WaitReady.
+func TestUpdater_Update_NotReady_RestartPolicyNever_SkipsProbe(t *testing.T) {
+	rc := &fakeReleaseClient{release: stableRelease()}
+	gz := gzipBytes(t, []byte("ok"))
+	dl := newFakeDownloader()
+	dl.bytes["https://gh/stable-v1.gz"] = gz
+
+	sw := &fakeSwapper{}
+	// readyErr would trip the probe IF it ran — must not.
+	pc := &fakeProcessCtrl{isRunning: true, readyErr: errors.New("should never be read")}
+	u := newUpdaterForTest(t, rc, dl, sw, pc)
+
+	result, err := u.Update(context.Background(), container.UpdateRequest{
+		TargetTag:     "v1.19.24",
+		RestartPolicy: container.RestartPolicyNever,
+	})
+	require.NoError(t, err, "RestartPolicyNever must skip the entire restart block including WaitReady")
+	assert.False(t, result.Restarted)
+	assert.Equal(t, int32(0), pc.startN.Load())
+	assert.Equal(t, int32(0), pc.stopN.Load())
+	assert.Equal(t, int32(0), pc.readyN.Load())
 }
 
 // --- pickLinuxAmd64V1Asset pure function tests ---

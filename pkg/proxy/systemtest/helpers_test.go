@@ -52,7 +52,12 @@ func (n *noopForwardManager) SetUserClientLimitConfig(string, forward.ClientLimi
 func (n *noopForwardManager) GetUserClientLimitConfig(string) (forward.ClientLimitConfig, bool) {
 	return forward.ClientLimitConfig{}, false
 }
-func (n *noopForwardManager) Close() error { return nil }
+func (n *noopForwardManager) DropUser(string) bool    { return false }
+func (n *noopForwardManager) AllocatePort() (uint32, error) {
+	return 0, fmt.Errorf("noopForwardManager: AllocatePort is not supported in this test harness")
+}
+func (n *noopForwardManager) ReleasePort(uint32) {}
+func (n *noopForwardManager) Close() error     { return nil }
 
 // newTestUserManager creates a minimal UserManager for testing.
 func newTestUserManager() *usermanager.UserManager {

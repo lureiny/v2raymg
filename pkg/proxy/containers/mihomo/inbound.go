@@ -46,10 +46,44 @@ type MihomoInbound struct {
 // MihomoSharedCred holds the union of per-protocol credential fields. A
 // typed struct keeps JSON serialisation stable and lets Validate enumerate
 // required fields per protocol without a map[string]any detour.
+//
+// CertFile / KeyFile are trojan-specific: mihomo Alpha rejects a trojan
+// listener at boot time without "certificates/reality/ss" configured
+// (observed in stage 11+ E2E: "disallow using Trojan without both
+// certificates/reality/ss config"). Both must be non-empty together or
+// both empty; Validate enforces this. They map to the mihomo yaml
+// "certificate" / "private-key" inbound fields, each expecting an absolute
+// path to a PEM file on disk.
 type MihomoSharedCred struct {
 	UUID     string `json:"uuid,omitempty"`
 	Password string `json:"password,omitempty"`
 	Cipher   string `json:"cipher,omitempty"`
+	CertFile string `json:"cert_file,omitempty"`
+	KeyFile  string `json:"key_file,omitempty"`
+	// CertSource records where CertFile/KeyFile came from. It governs
+	// whether RemoveInboundConfig deletes the files on the way out — we
+	// only clean up material v2raymg itself wrote to the scratch dir.
+	// Possible values:
+	//   ""            — unset / no cert (non-trojan protocols)
+	//   "file"        — caller supplied absolute paths; do NOT delete
+	//   "domain"      — paths came from certmgr; do NOT delete (certmgr owns)
+	//   "pem"         — v2raymg wrote the files from user-supplied PEM content
+	//                   → DELETE on inbound removal
+	//   "self_signed" — v2raymg generated the files on demand
+	//                   → DELETE on inbound removal
+	// Written by the RPC normalisation layer (pkg/proxy/core/params) and
+	// echoed through the Adapter; empty strings on legacy records are
+	// treated as "file" (safe-by-default: don't delete unknown files).
+	CertSource string `json:"cert_source,omitempty"`
+}
+
+// shouldCleanupCerts reports whether RemoveInboundConfig may remove the
+// cert/key files on disk. True only for sources v2raymg itself writes
+// ("pem" and "self_signed"); externally-managed sources are left alone
+// to avoid accidentally nuking caller-maintained material or certmgr's
+// renewal state.
+func (c MihomoSharedCred) shouldCleanupCerts() bool {
+	return c.CertSource == "pem" || c.CertSource == "self_signed"
 }
 
 // Errors surfaced by the mihomo inbound layer. Callers can use errors.Is to
@@ -95,6 +129,13 @@ func (i *MihomoInbound) Validate() error {
 	case contracts.ProtocolTrojan:
 		if i.SharedCred.Password == "" {
 			return fmt.Errorf("%w: trojan requires password", ErrMissingCredential)
+		}
+		// Cert + key must be paired. mihomo itself will reject a trojan
+		// listener with no cert at all (see MihomoSharedCred.CertFile
+		// doc), but the mismatched-pair case is a v2raymg-layer bug we
+		// can catch earlier with a clearer error.
+		if (i.SharedCred.CertFile == "") != (i.SharedCred.KeyFile == "") {
+			return fmt.Errorf("%w: trojan cert_file and key_file must be set together", ErrMissingCredential)
 		}
 	case contracts.ProtocolShadowsocks:
 		if i.SharedCred.Password == "" {
