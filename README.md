@@ -14,7 +14,7 @@ Proxy node management tool that orchestrates multiple proxy kernels (xray / hyst
 | xray    | `xray`    | VLESS / VMess / Trojan / Shadowsocks / SOCKS5 / HTTP (plus Reality, ws/grpc/httpupgrade/xhttp transports) | Primary kernel, most feature-complete |
 | hysteria | `hysteria` | Hysteria2 (UDP)              | Single-inbound specialization |
 | snell   | `snell`   | Snell v4                       | Single-inbound kernel |
-| mihomo  | `mihomo`  | VMess / Trojan / Shadowsocks   | Shared-credential listener per inbound; user-level isolation via the forward layer. Tracks MetaCubeX/mihomo Alpha |
+| mihomo  | `mihomo`  | VLESS / VMess / Trojan / Shadowsocks / Hysteria2 | Shared-credential listener per inbound; user-level isolation via the forward layer. Hysteria2 uses UDP forward rules. Tracks MetaCubeX/mihomo Alpha |
 
 All kernels plug into the same Container abstraction (`pkg/proxy/core/container`), share the forward layer for user-facing ports (`pkg/proxy/forward`), and are driven by the same HTTP / RPC / subscription / updater surface. Adding a new kernel follows the three principles in `docs/container-design-principles.md`.
 

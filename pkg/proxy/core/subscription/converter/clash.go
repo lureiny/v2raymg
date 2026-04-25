@@ -190,6 +190,13 @@ func ConvertSSForTest(spec contracts.SubscriptionSpec) *ClashProxy {
 	return (&ClashConverter{}).convertShadowsocks(spec)
 }
 
+// ConvertHysteria2ForTest exposes convertHysteria2 to integration tests for
+// the same reason as ConvertVMessForTest. Phase 5 systemtest uses this to
+// drive the real GetUserSubscriptions → convertHysteria2 chain.
+func ConvertHysteria2ForTest(spec contracts.SubscriptionSpec) *ClashProxy {
+	return (&ClashConverter{}).convertHysteria2(spec)
+}
+
 // convertSpec returns nil if the protocol is unsupported by Clash/mihomo or
 // the node's transport/security combination is not expressible.
 func (c *ClashConverter) convertSpec(spec contracts.SubscriptionSpec) *ClashProxy {
@@ -510,6 +517,18 @@ func (c *ClashConverter) convertHysteria2(spec contracts.SubscriptionSpec) *Clas
 	if pwd := extString(ext, "obfs_password"); pwd != "" {
 		proxy.ObfsPassword = pwd
 	}
+	// Up/Down advertise the client's bandwidth to the server. They are
+	// optional on the client side; mihomo accepts strings like "50 Mbps".
+	// Masquerade is server-only and intentionally NOT propagated here —
+	// the upstream client schema has no field for it. (No read of
+	// "masquerade" anywhere in this function — TestConvertHysteria2_DropsMasquerade
+	// locks this contract.)
+	if up := extString(ext, "up"); up != "" {
+		proxy.Up = up
+	}
+	if down := extString(ext, "down"); down != "" {
+		proxy.Down = down
+	}
 	return proxy
 }
 
@@ -687,7 +706,9 @@ type ClashProxy struct {
 	GrpcOpts          *GrpcOpts    `yaml:"grpc-opts,omitempty"`
 	XHTTPOpts         *XHTTPOpts   `yaml:"xhttp-opts,omitempty"`
 	Obfs              string       `yaml:"obfs,omitempty"`          // Hysteria2: salamander
-	ObfsPassword      string       `yaml:"obfs-password,omitempty"` // Hysteria2
+	ObfsPassword      string       `yaml:"obfs-password,omitempty"` // Hysteria2: obfs password
+	Up                string       `yaml:"up,omitempty"`            // Hysteria2: client bandwidth advertise
+	Down              string       `yaml:"down,omitempty"`          // Hysteria2: client bandwidth advertise
 }
 
 // PluginOpts obfs/v2ray-plugin/shadow-tls 选项。

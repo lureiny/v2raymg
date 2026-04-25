@@ -1037,6 +1037,48 @@ stage 1 的单测 `TestMihomoFactoryLoadable` 在 mihomo 包内部(`init` 被同
 - `go test ./... -race -count=1 -timeout 300s`:35 packages 全绿
 - `go test -tags=integration ./pkg/proxy/systemtest -run TestMihomoSSMatrix -v -timeout 180s`:需外网 + MIHOMO_BIN 或 GitHub egress
 
+### 协议扩展 Phase 5:Hysteria2(2026-04-25 完成)
+
+**范围**:对应 `/home/node/.claude/plans/cosmic-leaping-moon.md` 的 Phase 5(T-M-P5-50 ~ P5-57)。目标是把 Hysteria2 协议接入 mihomo 容器的 ProtocolParams 路径,作为首个 QUIC/UDP 协议在 mihomo 上跑通。Phase 5 是该协议在 mihomo 容器中的**首次出现**(无 legacy SharedCred 路径),hysteria 容器(`pkg/proxy/containers/hysteria/`)保持单 inbound legacy 形态不动。
+
+**事实核对(实施前)**:
+
+- mihomo Alpha `listener/inbound/hysteria2.go::Hysteria2Option` schema:`users: map[string]string`(无顶层 password)、`certificate` / `private-key`(非 cert-file/key-file)、`obfs` / `obfs-password`、`up` / `down` / `ignore-client-bandwidth`、`masquerade`、`alpn`(数组)。键全部 kebab-case
+- 上游 `hysteria2://` URI spec(<https://v2.hysteria.network/docs/developers/URI-Scheme/>)只识别 5 个 query key:`obfs` / `obfs-password` / `sni` / `insecure` / `pinSHA256`;`up` / `down` / `masquerade` 不在标准里
+- mihomo Alpha 客户端 hy2 outbound schema **没有** `masquerade` 字段(server-only)
+
+**关键变更**:
+
+- `pkg/proxy/core/params/protocolparams/params_hysteria2.go`(新建):`parseHysteria2`,required `password`(FillDefaults 兜底);Transport 强制 nil(QUIC 固定),Security 强制 tls(reality / none 拒绝);obfs ∈ {`""`, `"salamander"`},salamander 必须有 obfs_password;up/down 与 ignore_client_bandwidth **不互斥**(mihomo 允许共存)
+- `pkg/proxy/core/params/protocolparams/parser.go`:Hysteria2 dispatch 从 stub 改为 `parseHysteria2`
+- `pkg/proxy/core/subscription/codec/hysteria2.go`:`Hysteria2Node` struct 加 `Up` / `Down` / `Masquerade` 三字段。**Encode/Decode 不读不写这三字段** —— 上游 URI spec 不带,放进 URI 会污染标准客户端兼容性。三字段仅通过 `SubscriptionSpec.Extensions` 透传到 ClashConverter
+- `pkg/proxy/core/subscription/converter/clash.go`:`ClashProxy` struct 加 `Up` / `Down`(yaml `up` / `down`);`convertHysteria2` 从 `Extensions` 读 `up` / `down` 写入 ClashProxy。**Masquerade 故意不传到客户端** —— mihomo client schema 无该字段。新增 `ConvertHysteria2ForTest` 供系统测试走订阅链路
+- `pkg/proxy/containers/mihomo/adapter.go::fastAddBuildInbound`:Hysteria2 加入 ProtocolParams 路径
+- `pkg/proxy/containers/mihomo/inbound.go`:新增 `validateHysteria2`(无 legacy SharedCred 路径);新增 `forwardNetworkForProtocol(p)` —— hy2 → `"udp"`,其它协议保持 TCP 默认;`MihomoInbound.AddUser` 调用 `userMgr.GetBindPort` 时填入 `Network` 字段。`ErrProtocolNotSupported` 错误信息更新到当前已支持协议清单
+- `pkg/proxy/containers/mihomo/profilegen.go::fillHysteria2Listener`:输出 mihomo yaml `users: { default: <password> }`(单用户用 `"default"` 作 username,后续多用户走 user-tracker refactor)、`certificate` / `private-key`(从 `cert_file` / `key_file` 映射)、`alpn` 默认 `["h3"]`、按需输出 `obfs` / `obfs-password` / `up` / `down` / `ignore-client-bandwidth` / `masquerade`
+- `pkg/proxy/containers/mihomo/subscription.go`:新增 `fillHysteria2SubscriptionSpec`,把 `obfs` / `obfs_password` / `up` / `down` / `masquerade` / `skip_cert_verify` / `server_name` 写入 Extensions
+- `pkg/http/fastAddInbound_handler.go`:request struct 加 6 个便捷字段(`Obfs` / `ObfsPassword` / `Up` / `Down` / `Masquerade` / `IgnoreClientBandwidth`);convFields 同步;help 文本更新
+
+**测试**:
+
+- 单元测试新增 `params_hysteria2_test.go`(15 case,含 IgnoreClientBandwidth 字符串/bool/unparseable 类型分支)、`profilegen_hy2_test.go`(5 case)、`subscription_hy2_test.go`(3 case)、`container_fastadd_test.go`(hysteria container legacy 路径回归)
+- `inbound_test.go::TestValidateHysteria2_ErrorPaths`:9 个错误路径用例(missing Hy2Params / empty password / missing security / security=none / TLS spec nil / missing cert/key / unknown obfs / salamander missing obfs_password)+ baseline 哨兵
+- `clash_protocol_test.go`:`TestConvertHysteria2_UpDown` + `TestConvertHysteria2_DropsMasquerade`(后者用 `yaml.Marshal` 输出后断言不含 `masquerade` 子串,真锁住"masquerade 不进客户端配置"的契约)
+- 系统测试 `mihomo_hy2_matrix_test.go`(integration build tag):3 矩阵 case(tls baseline / tls+salamander obfs / tls+up/down 限速)+ 1 cross-cutting subscription chain case(走 `GetUserSubscriptions → ConvertHysteria2ForTest → spawnMihomoClient` 链路);新增 `waitUDPListener` helper 用 UDP dial 轮询替代固定 sleep(50ms × ≤60 次,3s deadline)
+
+**review 修复**:Phase 5 实现后并行起 4 个 agent 做了 code review,共识别 P1-P3 共 14 条问题(`TestConvertHysteria2_DropsMasquerade` 测试虚假保证、systemtest 500ms 固定 sleep、validateHysteria2 vs parseHysteria2 双重校验注释缺失、forwardNetworkForProtocol 单 if 不易扩、IgnoreClientBandwidth 测试覆盖不全、buildSubscriptionSpec dispatch docstring 漏 hy2、ErrProtocolNotSupported 文案过时、users 测试未 type-assert string、validateHysteria2 错误路径未覆盖、codec.Hysteria2Node 注释 server-side / client-advertised 矛盾、clash.go 缺 masquerade 反向 grep 锚点、HTTP help 文案过时、`hy2ProxyFromSpec` 漏 cp.UDP、`buildHy2ClashProxy` alpn 注释不一致);全部修复 + gofmt 一把梭对齐。最终 36 packages `go test ./... -race -count=1` 全绿。
+
+**已知限制**:
+
+- mihomo client outbound schema 没有 `masquerade` 字段,只在 server-side 输出
+- forwardNetworkForProtocol 已为 Phase 6 TUIC 留 `TODO` 钩点(`return "udp"` 分支)
+- waitUDPListener 是 kernel-level connect 探活,不验证 QUIC 握手 —— 实际 connect 由后续 mihomo client 发起的真实流量验证
+
+**验证命令**:
+
+- `go test ./... -race -count=1 -timeout 300s`:36 packages 全绿
+- `go test -tags=integration ./pkg/proxy/systemtest -run TestMihomoHy2Matrix -v -timeout 180s`:需外网 + MIHOMO_BIN 或 GitHub egress
+
 ## 参考
 
 - `docs/mihomo-container-design.md` — 本计划的设计依据

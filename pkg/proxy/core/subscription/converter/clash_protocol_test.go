@@ -1,9 +1,11 @@
 package converter
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+	"gopkg.in/yaml.v3"
 )
 
 // --- convertVLess tests ---
@@ -579,6 +581,64 @@ func TestConvertHysteria2_ObfsSalamander(t *testing.T) {
 	}
 	if p.ObfsPassword != "shh" {
 		t.Errorf("ObfsPassword = %q, want shh", p.ObfsPassword)
+	}
+}
+
+func TestConvertHysteria2_UpDown(t *testing.T) {
+	c := &ClashConverter{}
+	spec := contracts.SubscriptionSpec{
+		Protocol: contracts.ProtocolHysteria2,
+		Host:     "hy2.example.com",
+		Port:     443,
+		Password: "pass",
+		Extensions: map[string]any{
+			"up":   "50 Mbps",
+			"down": "100 Mbps",
+		},
+	}
+	p := c.convertHysteria2(spec)
+	if p == nil {
+		t.Fatal("expected non-nil proxy")
+	}
+	if p.Up != "50 Mbps" {
+		t.Errorf("Up = %q, want 50 Mbps", p.Up)
+	}
+	if p.Down != "100 Mbps" {
+		t.Errorf("Down = %q, want 100 Mbps", p.Down)
+	}
+}
+
+// Masquerade is server-only on mihomo's hysteria2 client schema; the
+// converter must NOT propagate it to ClashProxy even when Extensions
+// carries it (the listener emits the value but the client config drops it).
+//
+// We validate by yaml-marshalling the converter output and asserting the
+// `masquerade` key is absent. Earlier versions only spot-checked `Up`/`Down`,
+// which gave a false sense of safety: a future "ClashProxy.Masquerade
+// string `yaml:\"masquerade\"`" plus a one-line write in convertHysteria2
+// would silently slip through. The marshal-then-Contains check fails the
+// moment any field on ClashProxy serialises a `masquerade:` key.
+func TestConvertHysteria2_DropsMasquerade(t *testing.T) {
+	c := &ClashConverter{}
+	spec := contracts.SubscriptionSpec{
+		Protocol: contracts.ProtocolHysteria2,
+		Host:     "hy2.example.com",
+		Port:     443,
+		Password: "pass",
+		Extensions: map[string]any{
+			"masquerade": "https://www.microsoft.com",
+		},
+	}
+	p := c.convertHysteria2(spec)
+	if p == nil {
+		t.Fatal("expected non-nil proxy")
+	}
+	out, err := yaml.Marshal(p)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+	if strings.Contains(string(out), "masquerade") {
+		t.Errorf("ClashProxy yaml output must not contain 'masquerade' (server-only field); got:\n%s", out)
 	}
 }
 

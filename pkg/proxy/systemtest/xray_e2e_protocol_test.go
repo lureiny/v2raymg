@@ -1,4 +1,5 @@
 //go:build ignore
+
 // FIXME: this file uses stale UserSpec fields (Email, Protocol, Extensions, Level, Password)
 // that no longer exist in contracts.UserSpec after the domain model refactor.
 // Its coverage is now superseded by xray_fastadd_connectivity_test.go (14 protocol combos).

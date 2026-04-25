@@ -23,12 +23,12 @@ type noopForwardManager struct{}
 func (n *noopForwardManager) AddRule(rule forward.ForwardRule) (*forward.ForwardRule, error) {
 	return &rule, nil
 }
-func (n *noopForwardManager) RemoveRule(string) error                          { return nil }
-func (n *noopForwardManager) RemoveRulesByUser(string) error                   { return nil }
-func (n *noopForwardManager) RemoveRulesByInbound(string) error                { return nil }
-func (n *noopForwardManager) GetRule(string) *forward.ForwardRule              { return nil }
-func (n *noopForwardManager) GetRulesByUser(string) []*forward.ForwardRule     { return nil }
-func (n *noopForwardManager) GetAllRules() []*forward.ForwardRule              { return nil }
+func (n *noopForwardManager) RemoveRule(string) error                      { return nil }
+func (n *noopForwardManager) RemoveRulesByUser(string) error               { return nil }
+func (n *noopForwardManager) RemoveRulesByInbound(string) error            { return nil }
+func (n *noopForwardManager) GetRule(string) *forward.ForwardRule          { return nil }
+func (n *noopForwardManager) GetRulesByUser(string) []*forward.ForwardRule { return nil }
+func (n *noopForwardManager) GetAllRules() []*forward.ForwardRule          { return nil }
 func (n *noopForwardManager) GetTraffic(string, bool) (*forward.TrafficSnapshot, error) {
 	return &forward.TrafficSnapshot{}, nil
 }
@@ -52,12 +52,12 @@ func (n *noopForwardManager) SetUserClientLimitConfig(string, forward.ClientLimi
 func (n *noopForwardManager) GetUserClientLimitConfig(string) (forward.ClientLimitConfig, bool) {
 	return forward.ClientLimitConfig{}, false
 }
-func (n *noopForwardManager) DropUser(string) bool    { return false }
+func (n *noopForwardManager) DropUser(string) bool { return false }
 func (n *noopForwardManager) AllocatePort() (uint32, error) {
 	return 0, fmt.Errorf("noopForwardManager: AllocatePort is not supported in this test harness")
 }
 func (n *noopForwardManager) ReleasePort(uint32) {}
-func (n *noopForwardManager) Close() error     { return nil }
+func (n *noopForwardManager) Close() error       { return nil }
 
 // newTestUserManager creates a minimal UserManager for testing.
 func newTestUserManager() *usermanager.UserManager {

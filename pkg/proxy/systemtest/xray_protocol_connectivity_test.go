@@ -1,4 +1,5 @@
 //go:build ignore
+
 // FIXME: uses stale contracts.UserSpec / InboundSpec fields (Email, Level, Expiry, Users, Extensions).
 // These were already broken before this change. Coverage superseded by xray_fastadd_connectivity_test.go.
 // To re-enable: update to current contracts.UserSpec + Adapter.ToProvider pattern.

@@ -100,7 +100,7 @@ Makefile                   # build / build-full (full_dns tag) / proto
   3. 按 P0 → P1 → P2 → P3 优先级顺序处理
 - 延后事项:`Inbound 用户追踪架构统一`(见 `docs/inbound-user-tracker-refactor.md`),P0/P1 清空后再评估
 
-**近期主题**(git log 可查):集群用户同步、reset traffic/auth token API、node containers RPC、hysteria UDP 转发、订阅协议统一转换层、FastAdd 对齐最新 xray、cluster 心跳与 RPC 加固。
+**近期主题**(git log 可查):集群用户同步、reset traffic/auth token API、node containers RPC、hysteria UDP 转发、订阅协议统一转换层、FastAdd 对齐最新 xray、cluster 心跳与 RPC 加固;mihomo 协议扩展(Phase 0-5 完成 vless/vmess+/trojan+/ss+/hysteria2,Phase 6-7 待开工 tuic/anytls)。
 
 ## 知识库(wiki)
 

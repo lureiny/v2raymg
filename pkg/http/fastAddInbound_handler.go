@@ -69,10 +69,10 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		Target             string            `json:"target"`
 		Tag                string            `json:"tag"`
 		Protocol           string            `json:"protocol"`
-		Stream             string            `json:"stream"`     // legacy: "tcp","ws","grpc","http"
-		Transport          string            `json:"transport"`  // preferred: "tcp","ws","grpc","httpupgrade","xhttp","splithttp"
+		Stream             string            `json:"stream"`    // legacy: "tcp","ws","grpc","http"
+		Transport          string            `json:"transport"` // preferred: "tcp","ws","grpc","httpupgrade","xhttp","splithttp"
 		Domain             string            `json:"domain"`
-		IsXtls             bool              `json:"is_xtls"`    // deprecated: use security field
+		IsXtls             bool              `json:"is_xtls"` // deprecated: use security field
 		Port               int32             `json:"port"`
 		SelfSigned         bool              `json:"self_signed"`
 		Container          string            `json:"container"`
@@ -82,18 +82,18 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		RealityShortIDs    []string          `json:"reality_short_ids"`
 		ExtraParams        map[string]string `json:"extra_params"` // transport/security/sniffing params
 		// Convenience fields that map into extra_params
-		WSPath          string   `json:"ws_path,omitempty"`
-		GRPCServiceName string   `json:"grpc_service_name,omitempty"`
-		HTTPPath string `json:"http_path,omitempty"`
-		HTTPHost string `json:"http_host,omitempty"` // comma-separated, e.g. "host1.com,host2.com"
-		HTTPUpgradePath string   `json:"httpupgrade_path,omitempty"`
-		HTTPUpgradeHost string   `json:"httpupgrade_host,omitempty"`
-		XHTTPPath       string   `json:"xhttp_path,omitempty"`
-		XHTTPMode       string   `json:"xhttp_mode,omitempty"`
-		XHTTPHost       string   `json:"xhttp_host,omitempty"`
-		ALPN            string   `json:"alpn,omitempty"` // comma-separated, e.g. "h2,http/1.1"
-		Flow            string   `json:"flow,omitempty"` // vless flow, e.g. "xtls-rprx-vision"
-		SniffingEnabled bool     `json:"sniffing_enabled,omitempty"`
+		WSPath          string `json:"ws_path,omitempty"`
+		GRPCServiceName string `json:"grpc_service_name,omitempty"`
+		HTTPPath        string `json:"http_path,omitempty"`
+		HTTPHost        string `json:"http_host,omitempty"` // comma-separated, e.g. "host1.com,host2.com"
+		HTTPUpgradePath string `json:"httpupgrade_path,omitempty"`
+		HTTPUpgradeHost string `json:"httpupgrade_host,omitempty"`
+		XHTTPPath       string `json:"xhttp_path,omitempty"`
+		XHTTPMode       string `json:"xhttp_mode,omitempty"`
+		XHTTPHost       string `json:"xhttp_host,omitempty"`
+		ALPN            string `json:"alpn,omitempty"` // comma-separated, e.g. "h2,http/1.1"
+		Flow            string `json:"flow,omitempty"` // vless flow, e.g. "xtls-rprx-vision"
+		SniffingEnabled bool   `json:"sniffing_enabled,omitempty"`
 		// SkipCertVerify:subscription-side override. true emits
 		// skip-cert-verify on the client config regardless of cert source.
 		SkipCertVerify bool `json:"skip_cert_verify,omitempty"`
@@ -105,6 +105,15 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		PluginTLS      bool   `json:"plugin_tls,omitempty"`      // v2ray-plugin TLS flag
 		PluginPassword string `json:"plugin_password,omitempty"` // shadow-tls password
 		PluginVersion  string `json:"plugin_version,omitempty"`  // shadow-tls version: "2" or "3"
+		// Hysteria2 convenience fields. Map onto the protocolparams keys
+		// of the same name (obfs/obfs_password/up/down/masquerade/
+		// ignore_client_bandwidth).
+		Obfs                  string `json:"obfs,omitempty"`                    // "salamander" or empty
+		ObfsPassword          string `json:"obfs_password,omitempty"`           // required when obfs is set
+		Up                    string `json:"up,omitempty"`                      // e.g. "50 Mbps"
+		Down                  string `json:"down,omitempty"`                    // e.g. "100 Mbps"
+		Masquerade            string `json:"masquerade,omitempty"`              // server-side decoy URL/proxy/file
+		IgnoreClientBandwidth bool   `json:"ignore_client_bandwidth,omitempty"` // hy2: ignore client up/down adv
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
@@ -170,6 +179,10 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		"plugin": req.Plugin, "plugin_mode": req.PluginMode,
 		"plugin_host": req.PluginHost, "plugin_path": req.PluginPath,
 		"plugin_password": req.PluginPassword, "plugin_version": req.PluginVersion,
+		// Hysteria2
+		"obfs": req.Obfs, "obfs_password": req.ObfsPassword,
+		"up": req.Up, "down": req.Down,
+		"masquerade": req.Masquerade,
 	}
 	for k, v := range convFields {
 		if v != "" {
@@ -196,12 +209,15 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 	if req.PluginTLS {
 		extra["plugin_tls"] = "true"
 	}
+	if req.IgnoreClientBandwidth {
+		extra["ignore_client_bandwidth"] = "true"
+	}
 
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
 	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.FastAddInboundType, &proto.FastAddInboundReq{
 		InboundBuilderType: getBuilderType(req.Protocol),
 		StreamBuilderType:  getBuilderType(transport), // legacy field for backward compat
-		Transport:          transport,                  // new string field
+		Transport:          transport,                 // new string field
 		Port:               req.Port,
 		Domain:             req.Domain,
 		IsXtls:             req.IsXtls,
@@ -232,12 +248,13 @@ func (handler *FastAddInboundHandler) help() string {
 	return `POST /api/inbound/fast
 	快速添加指定配置的inbound
 	body: {"target":"", "tag":"", "protocol":"vless", "transport":"tcp", "domain":"", "security":"tls", "port":0, ...}
-	protocol: vless, vmess, trojan, shadowsocks (hysteria2/tuic/anytls 仅 container=mihomo 支持, 计划分阶段接入)
+	protocol: vless, vmess, trojan, shadowsocks, hysteria2 (hysteria2 仅 container=mihomo; tuic/anytls 计划分阶段接入)
 	transport: tcp, ws, h2(http), grpc, httpupgrade, xhttp, splithttp (也可用 stream 字段, 向后兼容)
 	security: tls(默认), reality
 	domain: 证书域名 (tls 时使用); 为空则自签
 	reality_target, reality_server_names, reality_short_ids: Reality 参数
 	flow: VLESS flow, 一般为 "xtls-rprx-vision" (配合 reality 使用)
 	convenience fields: ws_path, grpc_service_name, http_path, http_host(逗号分隔), httpupgrade_path, xhttp_path, xhttp_mode, alpn, flow, sniffing_enabled
+	hysteria2 (container=mihomo): obfs, obfs_password, up, down, masquerade, ignore_client_bandwidth
 	extra_params: map[string]string, 透传任意参数到 Executor (如 tls_min_version, tls_reject_unknown_sni, uuid, 以及尚未提升为便捷字段的协议参数)`
 }

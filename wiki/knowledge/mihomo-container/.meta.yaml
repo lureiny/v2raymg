@@ -10,9 +10,13 @@ source:
   - pkg/proxy/containers/mihomo/updater.go
   - pkg/proxy/containers/mihomo/subscription.go
   - pkg/proxy/containers/mihomo/profilegen.go
+  - pkg/proxy/containers/mihomo/inbound.go
   - pkg/proxy/containers/mihomo/rest_client.go
   - pkg/proxy/core/params/protocolparams/params_ss.go
+  - pkg/proxy/core/params/protocolparams/params_hysteria2.go
   - pkg/proxy/core/params/defaults.go
+  - pkg/proxy/core/subscription/codec/hysteria2.go
+  - pkg/proxy/core/subscription/converter/clash.go
 changelog:
   - date: 2026-04-23
     change: 初始版本;覆盖 stage 1-10 全量架构(模式 B + 共享凭据 + Updater + WaitReady)
@@ -29,3 +33,6 @@ changelog:
   - date: 2026-04-25
     change: protocol expansion Phase 4: shadowsocks 迁移到 ProtocolParams;默认 cipher 改为 2022-blake3-aes-256-gcm(SIP022 base64 密钥);新增 obfs/v2ray-plugin/shadow-tls 三种插件;shadow-tls 不下发到 server listener,仅写入订阅 Extensions
     reason: Phase 4 实现 + P0-P3 review 修复完成,wiki 同步 SS 当前协议状态
+  - date: 2026-04-25
+    change: protocol expansion Phase 5 - hysteria2;首个 QUIC/UDP 协议接入,无 SharedCred legacy 路径;listener users:{default:<password>}、certificate/private-key、obfs salamander、up/down、ignore-client-bandwidth、masquerade(server-only);forward 层为 hy2 自动 UDP(forwardNetworkForProtocol);标准 hy2:// URI 不带 up/down/masquerade,只通过订阅 Extensions 透传到客户端 Clash 配置
+    reason: Phase 5 实现 + 4-agent code review 修复 14 条 P1-P3 完成,wiki 同步当前协议状态;hysteria 容器仍保持 legacy 单 inbound 形态不动

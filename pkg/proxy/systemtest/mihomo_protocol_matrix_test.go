@@ -286,4 +286,3 @@ func randHex(n int) string {
 	}
 	return hex
 }
-

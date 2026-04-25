@@ -357,9 +357,9 @@ func TestOptionalStringSliceShapes(t *testing.T) {
 
 func TestOptionalBoolShapes(t *testing.T) {
 	cases := []struct {
-		raw       map[string]any
-		wantVal   bool
-		wantOk    bool
+		raw     map[string]any
+		wantVal bool
+		wantOk  bool
 	}{
 		{map[string]any{"b": true}, true, true},
 		{map[string]any{"b": false}, false, true},

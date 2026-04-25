@@ -61,6 +61,10 @@ func BuildListener(inb *MihomoInbound) (map[string]any, error) {
 		if err := fillSSListener(m, inb); err != nil {
 			return nil, err
 		}
+	case contracts.ProtocolHysteria2:
+		if err := fillHysteria2Listener(m, inb); err != nil {
+			return nil, err
+		}
 	default:
 		// Unreachable under correctly-validated inbound, but keeps the
 		// switch exhaustive in the face of future protocol additions
@@ -342,6 +346,74 @@ func fillVMessListener(m map[string]any, inb *MihomoInbound) error {
 		default:
 			return fmt.Errorf("%w: vmess security %q not supported", ErrProtocolNotSupported, s.Kind)
 		}
+	}
+	return nil
+}
+
+// fillHysteria2Listener maps Hysteria2 ProtocolParams onto mihomo Alpha
+// listener yaml. Hysteria2 has no legacy SharedCred path — Phase 5 is its
+// first appearance in this container.
+//
+// Sources (mihomo Alpha listener/inbound/hysteria2.go:Hysteria2Option):
+//   - users: map[string]string (username → password). Single-user case
+//     uses "default" as the username. Future per-user expansion will
+//     extend this map; today the user manager handles per-user routing in
+//     the forward layer instead.
+//   - obfs / obfs-password: only "salamander" supported by mihomo Alpha.
+//   - certificate / private-key: absolute PEM paths (not cert-file/key-file).
+//     These differ from the cert_file / key_file keys carried on
+//     ProtocolParams.TLSSpec — the mapping happens here.
+//   - alpn: defaults to ["h3"] when caller didn't specify (Hysteria2 is
+//     QUIC, h3 is the only meaningful ALPN).
+//   - up / down: bandwidth advertised to clients; "50 Mbps" form.
+//   - ignore-client-bandwidth: independent of up/down (mihomo allows both
+//     to be set; runtime picks).
+//   - masquerade: server-side decoy URL/proxy/file — silently dropped on
+//     the client side by convertHysteria2 since the client schema has no
+//     equivalent.
+func fillHysteria2Listener(m map[string]any, inb *MihomoInbound) error {
+	if inb.ProtocolParams == nil || inb.ProtocolParams.Hysteria2 == nil {
+		return fmt.Errorf("%w: hysteria2 inbound missing ProtocolParams.Hysteria2", ErrMissingCredential)
+	}
+	hy2 := inb.ProtocolParams.Hysteria2
+
+	m["users"] = map[string]any{
+		"default": hy2.Password,
+	}
+
+	sec := inb.ProtocolParams.Security
+	if sec == nil || sec.Kind != contracts.SecurityTLS || sec.TLS == nil {
+		return fmt.Errorf("%w: hysteria2 requires tls security", ErrMissingCredential)
+	}
+	if sec.TLS.CertFile == "" || sec.TLS.KeyFile == "" {
+		return fmt.Errorf("%w: hysteria2 requires cert_file and key_file", ErrMissingCredential)
+	}
+	m["certificate"] = sec.TLS.CertFile
+	m["private-key"] = sec.TLS.KeyFile
+
+	alpn := sec.TLS.ALPN
+	if len(alpn) == 0 {
+		alpn = []string{"h3"}
+	}
+	m["alpn"] = alpn
+
+	if hy2.Obfs != "" {
+		m["obfs"] = hy2.Obfs
+		if hy2.ObfsPassword != "" {
+			m["obfs-password"] = hy2.ObfsPassword
+		}
+	}
+	if hy2.Up != "" {
+		m["up"] = hy2.Up
+	}
+	if hy2.Down != "" {
+		m["down"] = hy2.Down
+	}
+	if hy2.IgnoreClientBandwidth {
+		m["ignore-client-bandwidth"] = true
+	}
+	if hy2.Masquerade != "" {
+		m["masquerade"] = hy2.Masquerade
 	}
 	return nil
 }

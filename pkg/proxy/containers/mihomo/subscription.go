@@ -98,8 +98,9 @@ func (c *MihomoContainer) GetUserSubscriptions(req contracts.SubscriptionRequest
 //	vmess → fillVMessSubscriptionSpec (Phase 2, ProtocolParams preferred + SharedCred legacy fallback)
 //	trojan → fillTrojanSubscriptionSpec (Phase 3, ProtocolParams preferred + SharedCred legacy fallback)
 //	shadowsocks → fillSSSubscriptionSpec (Phase 4, ProtocolParams preferred + SharedCred legacy fallback)
+//	hysteria2 → fillHysteria2SubscriptionSpec (Phase 5, ProtocolParams only)
 //
-// Adding a protocol (hysteria2 / tuic / anytls) means (a) extending
+// Adding a protocol (tuic / anytls) means (a) extending
 // MihomoInbound.Validate + adapter, (b) adding a codec.<Proto>Node Encode
 // path here.
 func buildSubscriptionSpec(inb *MihomoInbound, req contracts.SubscriptionRequest, port uint32) (contracts.SubscriptionSpec, error) {
@@ -135,6 +136,11 @@ func buildSubscriptionSpec(inb *MihomoInbound, req contracts.SubscriptionRequest
 
 	case contracts.ProtocolShadowsocks:
 		if err := fillSSSubscriptionSpec(&spec, inb); err != nil {
+			return contracts.SubscriptionSpec{}, err
+		}
+
+	case contracts.ProtocolHysteria2:
+		if err := fillHysteria2SubscriptionSpec(&spec, inb); err != nil {
 			return contracts.SubscriptionSpec{}, err
 		}
 
@@ -574,6 +580,78 @@ func fillSSSubscriptionSpecPP(spec *contracts.SubscriptionSpec, inb *MihomoInbou
 			spec.Extensions["plugin_version"] = v
 		}
 	}
+	return nil
+}
+
+// fillHysteria2SubscriptionSpec projects a Hysteria2 inbound onto a
+// SubscriptionSpec. There is no legacy SharedCred path — Phase 5 is
+// hysteria2's first appearance in the mihomo container.
+//
+// Extensions populated for the clash converter:
+//
+//	"server_name"      — TLS SNI
+//	"skip_cert_verify" — true for self-signed or explicit override
+//	"obfs"             — "salamander" or absent
+//	"obfs_password"    — paired with obfs
+//	"up" / "down"      — bandwidth advertise (passed through to client)
+//	"masquerade"       — server-side decoy; converter intentionally drops it
+//	                     (mihomo client schema has no field), kept here so
+//	                     other converters / debug tooling can read it.
+func fillHysteria2SubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInbound) error {
+	if inb.ProtocolParams == nil || inb.ProtocolParams.Hysteria2 == nil {
+		return fmt.Errorf("%w: hysteria2 inbound %q has no ProtocolParams", ErrMissingCredential, inb.Tag())
+	}
+	hy2 := inb.ProtocolParams.Hysteria2
+	if hy2.Password == "" {
+		return fmt.Errorf("%w: hysteria2 inbound %q has empty password", ErrMissingCredential, inb.Tag())
+	}
+
+	spec.Protocol = contracts.ProtocolHysteria2
+	spec.Password = hy2.Password
+
+	node := &codec.Hysteria2Node{
+		NodeName:     spec.NodeName,
+		Host:         spec.Host,
+		Port:         spec.Port,
+		Password:     hy2.Password,
+		Obfs:         hy2.Obfs,
+		ObfsPassword: hy2.ObfsPassword,
+		Up:           hy2.Up,
+		Down:         hy2.Down,
+		Masquerade:   hy2.Masquerade,
+	}
+
+	if sec := inb.ProtocolParams.Security; sec != nil && sec.Kind == contracts.SecurityTLS && sec.TLS != nil {
+		node.SNI = sec.TLS.SNI
+		if sec.TLS.SNI != "" {
+			spec.Extensions["server_name"] = sec.TLS.SNI
+		}
+		if len(sec.TLS.ALPN) > 0 {
+			node.ALPN = sec.TLS.ALPN
+		}
+		if sec.TLS.CertSource == "self_signed" || sec.TLS.SkipCertVerify {
+			node.SkipCertVerify = true
+			spec.Extensions["skip_cert_verify"] = true
+		}
+	}
+
+	if hy2.Obfs != "" {
+		spec.Extensions["obfs"] = hy2.Obfs
+		if hy2.ObfsPassword != "" {
+			spec.Extensions["obfs_password"] = hy2.ObfsPassword
+		}
+	}
+	if hy2.Up != "" {
+		spec.Extensions["up"] = hy2.Up
+	}
+	if hy2.Down != "" {
+		spec.Extensions["down"] = hy2.Down
+	}
+	if hy2.Masquerade != "" {
+		spec.Extensions["masquerade"] = hy2.Masquerade
+	}
+
+	spec.URI = node.Encode()
 	return nil
 }
 

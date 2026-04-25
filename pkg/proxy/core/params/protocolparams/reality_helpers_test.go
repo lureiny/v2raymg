@@ -110,11 +110,11 @@ func TestValidateRealityShortID(t *testing.T) {
 	}
 
 	bad := []string{
-		"",                 // empty
-		"aa",               // too short
+		"",                  // empty
+		"aa",                // too short
 		"aabbccddeeff00110", // 17 chars
-		"xxbbccddeeff0011", // non-hex
-		"0123456789abcdeG", // non-hex G
+		"xxbbccddeeff0011",  // non-hex
+		"0123456789abcdeG",  // non-hex G
 	}
 	for _, s := range bad {
 		if err := ValidateRealityShortID(s); err == nil {
@@ -139,9 +139,9 @@ func TestValidateRealityBase64Key(t *testing.T) {
 
 	// Gibberish / wrong length.
 	bad := []string{
-		"not$base64!!",            // invalid characters in any base64 alphabet
-		"short",                   // too short to decode to 32 bytes
-		strings.Repeat("!", 43),   // 43 chars, none are valid base64
+		"not$base64!!",          // invalid characters in any base64 alphabet
+		"short",                 // too short to decode to 32 bytes
+		strings.Repeat("!", 43), // 43 chars, none are valid base64
 	}
 	for _, s := range bad {
 		if err := ValidateRealityBase64Key(s); err == nil {

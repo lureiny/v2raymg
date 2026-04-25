@@ -49,7 +49,7 @@ func parseSS(raw map[string]any, pp *ProtocolParams) error {
 				udp = false
 			case "true", "1":
 				udp = true
-			// empty string or unrecognised value: leave default (true)
+				// empty string or unrecognised value: leave default (true)
 			}
 		}
 	}

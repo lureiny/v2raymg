@@ -25,6 +25,7 @@ import (
 //   - errors.Is(err, ErrRestartFailed) → true when Wrapped == ErrRestartFailed
 //   - errors.Is(err, context.Canceled) → true when the download got cancelled
 //     and Cause wrapped context.Canceled
+//
 // A previous version returned only Wrapped, which hid Cause from the error
 // chain and silently failed the second kind of probe.
 type ErrUpdateFailed struct {

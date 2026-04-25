@@ -130,9 +130,10 @@ func (i *MihomoInbound) cleanupCertFiles() []string {
 // status codes for "unknown protocol" vs "missing field").
 var (
 	// ErrProtocolNotSupported is returned when an inbound targets a protocol
-	// outside the MVP trio (vmess / trojan / shadowsocks). See D4 in
+	// the mihomo container doesn't yet wire (currently TUIC and AnyTLS;
+	// Phase 6/7 will land them). See D4 in
 	// docs/mihomo-container-implementation-plan.md.
-	ErrProtocolNotSupported = errors.New("mihomo: protocol not supported (MVP: vmess/trojan/shadowsocks)")
+	ErrProtocolNotSupported = errors.New("mihomo: protocol not supported (supported: vless/vmess/trojan/shadowsocks/hysteria2)")
 
 	// ErrMissingCredential is returned when a required protocol-specific
 	// credential field is empty.
@@ -195,9 +196,57 @@ func (i *MihomoInbound) Validate() error {
 		return i.validateTrojan()
 	case contracts.ProtocolShadowsocks:
 		return i.validateSS()
+	case contracts.ProtocolHysteria2:
+		return i.validateHysteria2()
 	default:
 		return fmt.Errorf("%w: %q", ErrProtocolNotSupported, i.Protocol())
 	}
+}
+
+// validateHysteria2 enforces the Phase 5 invariants. Hysteria2 has no legacy
+// SharedCred path — Phase 5 is its first appearance in the mihomo container,
+// so ProtocolParams.Hysteria2 is mandatory.
+//
+// Several rules here overlap with parseHysteria2 (TLS-only, obfs ∈ {"",
+// "salamander"}, salamander requires obfs_password). The duplication is
+// deliberate: Validate is the single gate FromNative records cross when
+// reloaded from InboundStore, and a record on disk could carry combinations
+// that never went through Parse — either from a hand-edited store row or
+// from a future migration that bypasses the parser. Keep this function
+// self-sufficient rather than trusting Parse already ran.
+func (i *MihomoInbound) validateHysteria2() error {
+	if i.ProtocolParams == nil || i.ProtocolParams.Hysteria2 == nil {
+		return fmt.Errorf("%w: hysteria2 inbound missing ProtocolParams.Hysteria2", ErrMissingCredential)
+	}
+	hy2 := i.ProtocolParams.Hysteria2
+	if hy2.Password == "" {
+		return fmt.Errorf("%w: hysteria2 requires password", ErrMissingCredential)
+	}
+	sec := i.ProtocolParams.Security
+	if sec == nil {
+		return fmt.Errorf("%w: hysteria2 requires tls security", ErrMissingCredential)
+	}
+	if sec.Kind != contracts.SecurityTLS {
+		return fmt.Errorf("%w: hysteria2 security must be tls, got %q", ErrProtocolNotSupported, sec.Kind)
+	}
+	if sec.TLS == nil {
+		return fmt.Errorf("%w: hysteria2 security=tls but TLS spec is nil", ErrMissingCredential)
+	}
+	if sec.TLS.CertFile == "" || sec.TLS.KeyFile == "" {
+		return fmt.Errorf("%w: hysteria2 requires cert_file and key_file", ErrMissingCredential)
+	}
+	// Unrecognised obfs uses ErrProtocolNotSupported because this package
+	// only exposes two sentinels (ErrProtocolNotSupported / ErrMissingCredential)
+	// and "this obfs implementation isn't wired up" reads closer to the
+	// "not supported" frame than to "missing credential". The parser layer
+	// has a richer ErrInvalidCombination but Validate is mihomo-package-local.
+	if hy2.Obfs != "" && hy2.Obfs != "salamander" {
+		return fmt.Errorf("%w: hysteria2 obfs %q not recognised", ErrProtocolNotSupported, hy2.Obfs)
+	}
+	if hy2.Obfs == "salamander" && hy2.ObfsPassword == "" {
+		return fmt.Errorf("%w: hysteria2 obfs=salamander requires obfs_password", ErrMissingCredential)
+	}
+	return nil
 }
 
 // validateSS dispatches between the Phase 4 ProtocolParams path and the legacy
@@ -422,6 +471,27 @@ func (i *MihomoInbound) SetUserManager(um *usermanager.UserManager) {
 	i.userMgr = um
 }
 
+// forwardNetworkForProtocol returns the forward-layer transport ("tcp"|"udp")
+// that the given protocol's listener requires. The forward layer routes the
+// per-user public port to 127.0.0.1:<inbound-port>; QUIC-based protocols
+// must use UDPRelay or the relay won't pass packets through. SS UDP is a
+// per-user wrap inside the SS protocol stream, NOT a separate forward port,
+// so SS stays on the TCP default.
+//
+// Returning "" preserves the legacy default of TCP that pre-Phase-5 callers
+// (vless/vmess/trojan/ss) relied on. New UDP protocols (TUIC in Phase 6,
+// AnyTLS keeps TCP) extend the switch below.
+func forwardNetworkForProtocol(p contracts.Protocol) string {
+	switch p {
+	case contracts.ProtocolHysteria2:
+		return "udp"
+	// TODO(Phase 6): case contracts.ProtocolTUIC: return "udp"
+	// AnyTLS (Phase 7) is TCP-based and should fall through to "".
+	default:
+		return ""
+	}
+}
+
 // hasAddedUser reports whether the given user is already tracked on this inbound.
 func (i *MihomoInbound) hasAddedUser(username string) bool {
 	i.addedUsersMu.Lock()
@@ -484,6 +554,7 @@ func (i *MihomoInbound) AddUser(username string, _ *contracts.User) (uint32, err
 		ContainerType: contracts.ContainerMihomo,
 		InboundTag:    i.Tag(),
 		Protocol:      i.Protocol(),
+		Network:       forwardNetworkForProtocol(i.Protocol()),
 	})
 	if err != nil {
 		return 0, fmt.Errorf("mihomo: inbound %q: get bind port for %q: %w", i.Tag(), username, err)

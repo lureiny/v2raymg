@@ -404,7 +404,9 @@ func TestBuildSubscriptionSpec_UnsupportedProtocolErrors(t *testing.T) {
 	// Construct a MihomoInbound with an unsupported protocol directly —
 	// NewMihomoInbound + Validate would reject it, but buildSubscriptionSpec
 	// is the defense-in-depth guard for a record that slipped through.
-	base := NewMihomoInbound("exotic", contracts.ProtocolHysteria2, 10001, MihomoSharedCred{Password: "p"})
+	// Phase 5 added hysteria2; use TUIC as the unsupported-protocol sentinel
+	// until Phase 6 lands.
+	base := NewMihomoInbound("exotic", contracts.ProtocolTUIC, 10001, MihomoSharedCred{Password: "p"})
 
 	req := contracts.SubscriptionRequest{
 		User: contracts.UserSpec{Username: "alice"},

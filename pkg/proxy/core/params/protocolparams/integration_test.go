@@ -140,9 +140,25 @@ func TestIntegrationFillDefaultsThenParseHysteria2(t *testing.T) {
 	}
 
 	before := copyMap(raw)
-	_, err := protocolparams.Parse(raw)
-	if err == nil {
-		t.Fatal("Parse returned nil error for stubbed hy2 branch")
+	pp, err := protocolparams.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if pp.Hysteria2 == nil {
+		t.Fatal("Parse did not populate Hysteria2Params")
+	}
+	if pp.Hysteria2.Password == "" {
+		t.Error("Hysteria2.Password empty after Parse")
+	}
+	if pp.Security == nil || pp.Security.TLS == nil {
+		t.Fatal("Parse did not populate Security.TLS for hy2")
+	}
+	if pp.Security.TLS.CertFile == "" || pp.Security.TLS.KeyFile == "" {
+		t.Errorf("TLS cert/key not propagated: cert=%q key=%q",
+			pp.Security.TLS.CertFile, pp.Security.TLS.KeyFile)
+	}
+	if pp.Transport != nil {
+		t.Errorf("Transport must be nil for hy2, got %+v", pp.Transport)
 	}
 	if !reflect.DeepEqual(raw, before) {
 		t.Errorf("Parse mutated raw map")

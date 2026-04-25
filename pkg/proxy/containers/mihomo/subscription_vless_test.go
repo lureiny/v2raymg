@@ -14,10 +14,10 @@ import (
 // form — placeholders like "PRIV" no longer pass. Generate a real pair
 // once per test process.
 var (
-	subTestRealityPriv  string
-	subTestRealityPub   string
-	subTestShortID      = "aabbccddeeff0011"
-	subTestShortIDAlt   = "1122334455667788"
+	subTestRealityPriv string
+	subTestRealityPub  string
+	subTestShortID     = "aabbccddeeff0011"
+	subTestShortIDAlt  = "1122334455667788"
 )
 
 func init() {
@@ -78,16 +78,16 @@ func TestGetUserSubscriptions_VLess_TCP_Reality(t *testing.T) {
 		t.Fatalf("AddUserForTest: %v", err)
 	}
 	wireUserAndInbound(t, c, "alice", "vless-reality", map[string]any{
-		"protocol":              "vless",
-		"port":                  10202,
-		"uuid":                  "u-vless-rl",
-		"flow":                  "xtls-rprx-vision",
-		"security":              "reality",
-		"reality_target":        "www.microsoft.com:443",
-		"reality_server_names":  []string{"www.microsoft.com"},
-		"reality_short_ids":     []string{subTestShortID, subTestShortIDAlt},
-		"reality_private_key":   subTestRealityPriv,
-		"reality_public_key":    subTestRealityPub,
+		"protocol":             "vless",
+		"port":                 10202,
+		"uuid":                 "u-vless-rl",
+		"flow":                 "xtls-rprx-vision",
+		"security":             "reality",
+		"reality_target":       "www.microsoft.com:443",
+		"reality_server_names": []string{"www.microsoft.com"},
+		"reality_short_ids":    []string{subTestShortID, subTestShortIDAlt},
+		"reality_private_key":  subTestRealityPriv,
+		"reality_public_key":   subTestRealityPub,
 	})
 
 	specs, err := c.GetUserSubscriptions(contracts.SubscriptionRequest{

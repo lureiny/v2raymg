@@ -27,28 +27,28 @@ type CertReader interface {
 // HysteriaContainer implements the Container interface for hysteria2.
 type HysteriaContainer struct {
 	*container.BaseContainer
-	cfg              HysteriaConfig
-	httpPort         int          // v2raymg HTTP server port, used for auth callback
-	inbound          inbound.Inbound
-	runner           *process.Runner
-	userMgr          *usermanager.UserManager
-	userEventCh      chan usermanager.UserEvent
-	storeMgr         *store.StoreManager
-	certReader       CertReader
-	certMgr          certIssuer        // triggers cert issuance if not found
+	cfg         HysteriaConfig
+	httpPort    int // v2raymg HTTP server port, used for auth callback
+	inbound     inbound.Inbound
+	runner      *process.Runner
+	userMgr     *usermanager.UserManager
+	userEventCh chan usermanager.UserEvent
+	storeMgr    *store.StoreManager
+	certReader  CertReader
+	certMgr     certIssuer // triggers cert issuance if not found
 	// mu guards addedUsers and inboundEnabled against concurrent access between
 	// the user-event handler goroutine (handleUserEvent) and the reconcile-loop
 	// goroutine (reconcileUsers). Held only around map/field reads/writes —
 	// never while calling userMgr.GetBindPort / ReleaseBindPort.
-	mu               sync.Mutex
+	mu sync.Mutex
 	// addedUsers tracks users for whom a forward UDP rule has been allocated.
-	addedUsers       map[string]struct{}
+	addedUsers map[string]struct{}
 	// inboundEnabled controls whether per-user forward rules are active.
 	// FastAddInbound sets it true; RemoveInboundConfig sets it false.
-	inboundEnabled   bool
-	reconcileStopCh  chan struct{}
-	reconcileWg      sync.WaitGroup
-	certWaitStopCh   chan struct{}
+	inboundEnabled  bool
+	reconcileStopCh chan struct{}
+	reconcileWg     sync.WaitGroup
+	certWaitStopCh  chan struct{}
 }
 
 // hysteriaHooks implements container.Hooks for HysteriaContainer.
@@ -841,4 +841,3 @@ func (hc *HysteriaContainer) closeUserEventCh() {
 		hc.userEventCh = nil
 	}
 }
-

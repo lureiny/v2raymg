@@ -64,6 +64,7 @@ listener 模型仍是一条 inbound 一把共享凭据,但新协议扩展使用 
 | vmess | tcp/ws/grpc + none/tls/reality |
 | trojan | tcp/ws/grpc + tls/reality |
 | shadowsocks | tcp + 任意 cipher(默认 `2022-blake3-aes-256-gcm`)+ obfs/v2ray-plugin/shadow-tls 插件 |
+| hysteria2 | QUIC(固定,无 transport 选项)+ tls(强制,reality/none 拒绝)+ 可选 salamander obfs / up/down 带宽宣告 / ignore_client_bandwidth / 服务端 masquerade |
 
 **trojan 必须带 TLS 或 Reality**(stage 11+ E2E 确认):mihomo Alpha 的 trojan listener 运行时拒绝没有 `certificate + private-key` / `reality-config` / ss config 的配置,报 `disallow using Trojan without both certificates/reality/ss config`。Phase 3 后 FastAdd 的 trojan 新记录走 ProtocolParams:`security=tls` 输出 `certificate` / `private-key`;`security=reality` 输出 `reality-config`;transport 支持 tcp/ws/grpc。未显式传 `security` 时 parseTrojan 默认 TLS,生产 RPC/HTTP 路径由 `FillDefaults` 物化 cert_file/key_file。
 
@@ -80,7 +81,21 @@ cipher 必须先于 password 落定,否则 `randomSSPassword` 拿不到正确 ci
 
 **SS plugin opts 命名约定**:HTTP handler 用平铺无前缀字段(`plugin_mode` / `plugin_host` / `plugin_path` / `plugin_tls` / `plugin_password` / `plugin_version`),`SSParams.PluginOpts` 内用 mihomo canonical 短名(`mode` / `host` / ...),订阅 Extensions 又退回 `plugin_mode` 等前缀名以便 `buildPluginOpts`(clash converter)对齐。
 
-**SAFE_PATHS 约束**:mihomo 对 config 里引用的文件路径做安全检查 —— 路径必须位于 `-d` 参数指定的 home directory(即 `MihomoConfig.DataDir`)之下,否则报 `path is not subpath of home directory`。生产部署要把 trojan cert 写到 `DataDir` 或其子目录。
+**SAFE_PATHS 约束**:mihomo 对 config 里引用的文件路径做安全检查 —— 路径必须位于 `-d` 参数指定的 home directory(即 `MihomoConfig.DataDir`)之下,否则报 `path is not subpath of home directory`。生产部署要把 trojan/hy2 cert 写到 `DataDir` 或其子目录。
+
+**Hysteria2 listener schema(Phase 5,实证自 mihomo Alpha `listener/inbound/hysteria2.go::Hysteria2Option`)**:
+- 顶层 **没有** `password` 字段,认证完全走 `users: map[string]string`(username → password)。Phase 5 单用户固定写 `users: { default: <password> }`,后续多用户走 user-tracker refactor 逐步扩展该 map
+- cert 字段是 `certificate` + `private-key`(注意:不是 cert-file/key-file),profilegen 把 ProtocolParams 内部的 `cert_file`/`key_file` 映射到这两个 yaml key
+- `alpn` 是数组,默认 `["h3"]`(QUIC,h3 是唯一有意义的 ALPN)
+- `obfs` 仅识别 `salamander` 或空;空字符串 = 不开 obfs,salamander 必须配 `obfs-password`
+- `up`/`down` 是字符串(如 `"50 Mbps"`),`ignore-client-bandwidth` 是 bool,**两者不互斥**(parser 不做互斥校验,mihomo 运行时自决)
+- `masquerade` 是 server-only —— mihomo 客户端 outbound schema 没有该字段,convertHysteria2 故意不传到客户端 ClashProxy,只在订阅 Extensions 保留以便调试
+
+**Hysteria2 forward 转发(Phase 5)**:`MihomoInbound.AddUser` 调用 `userMgr.GetBindPort` 时通过 `forwardNetworkForProtocol(p)` 决定 Network:`ProtocolHysteria2 → "udp"`,其它协议返空字符串(走 GetBindPort TCP 默认)。Phase 6 TUIC 落地时该函数已留 TODO 钩点。SS 的 UDP 是协议内部 wrap,不在 forward 层切 Network,因此 SS 走 TCP 默认即可。
+
+**Hysteria2 URI 与订阅(Phase 5)**:上游 `hysteria2://` URI spec 仅识别 `obfs` / `obfs-password` / `sni` / `insecure` / `pinSHA256` 五个 query key,因此 `codec.Hysteria2Node.Encode/Decode` 故意**不读不写** `Up`/`Down`/`Masquerade` 三字段(避免污染标准客户端兼容性,如 NekoBox / Hiddify)。这三字段只通过 `SubscriptionSpec.Extensions` 透传到 ClashConverter;`convertHysteria2` 从 Extensions 读 `up`/`down` 写入 `ClashProxy.Up`/`Down`,**不读 masquerade**(`TestConvertHysteria2_DropsMasquerade` 用 yaml.Marshal 反向断言锁住此契约)。
+
+**Hysteria2 Validate(Phase 5)**:`validateHysteria2` 与 `parseHysteria2` 在 obfs / TLS 必须 / cert 必须几条上**双重校验**,这是 FromNative 兜底设计 —— 一条记录从 InboundStore 重新加载时只过 Validate 不过 Parse,Parse 已校验过的规则在 Validate 里也得复制一份。Phase 5 是 hy2 在 mihomo 容器的首次出现,无 SharedCred legacy 路径。
 
 **证书清理**:`RemoveInboundConfig` 会从 legacy SharedCred 或 ProtocolParams TLS block 读取 `cert_source`,仅清理 v2raymg 自己写入的 `pem` / `self_signed` 证书;`file` / `domain` 来源不动。
 

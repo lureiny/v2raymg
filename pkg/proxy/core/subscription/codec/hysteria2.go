@@ -12,6 +12,15 @@ import (
 // Hysteria2Node is the decoded form of a hysteria2:// URI.
 // Accepts both "hysteria2://" and "hy2://" schemes on Decode; Encode always
 // uses the canonical "hysteria2://" prefix.
+//
+// Up / Down / Masquerade are server-side advertised parameters that the
+// upstream hysteria2 URI scheme does not carry. They are kept on the node
+// struct so SubscriptionSpec.Extensions can be populated when this node
+// type is the in-memory exchange shape, but Encode/Decode deliberately
+// skip them — putting non-standard query keys on the URI would confuse
+// generic hysteria2 clients (NekoBox, Hiddify, …) without buying any
+// useful interop, since our own clash converter reads them from
+// Extensions, not from the URI.
 type Hysteria2Node struct {
 	NodeName string
 	Host     string
@@ -24,6 +33,16 @@ type Hysteria2Node struct {
 
 	Obfs         string // "salamander" or ""
 	ObfsPassword string
+
+	// Server-advertised bandwidth (Up/Down) plus server-only masquerade.
+	// Up and Down are bandwidth caps the client config emits to the server
+	// at handshake (clash output side); Masquerade is configured solely
+	// on the listener and never appears in client config. None of the
+	// three is encoded into the hy2:// URI — they ride on
+	// SubscriptionSpec.Extensions for the clash path only.
+	Up         string
+	Down       string
+	Masquerade string
 }
 
 func (n *Hysteria2Node) Protocol() contracts.Protocol { return contracts.ProtocolHysteria2 }

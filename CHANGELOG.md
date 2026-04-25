@@ -1,5 +1,60 @@
 # CHANGELOG.md
 
+## 2026-04-25 — Mihomo Protocol Expansion Phase 5 (Hysteria2)
+
+Adds Hysteria2 to the mihomo container's structured `ProtocolParams`
+path — the first QUIC/UDP protocol to land on this container, completing
+Phase 5 of the protocol expansion plan. Hysteria2 in mihomo has no
+legacy SharedCred path; the older single-inbound `hysteria` container is
+unchanged and stays in service for legacy deployments.
+
+### Highlights
+
+- New `parseHysteria2`: required `password`, Transport forced nil
+  (QUIC fixed), Security forced TLS, `obfs ∈ {"", "salamander"}` with
+  `obfs_password` mandatory under salamander, `up`/`down` and
+  `ignore_client_bandwidth` allowed to coexist.
+- `MihomoInbound.AddUser` now picks the forward-layer transport per
+  protocol (`hy2 → udp`, others remain TCP); Phase 6 TUIC reuses the
+  same hook.
+- `fillHysteria2Listener` emits mihomo's exact yaml schema:
+  `users: { default: <password> }`, `certificate`/`private-key`,
+  `alpn: [h3]` default, plus optional obfs/up/down/ignore-client-bandwidth/masquerade.
+- `ClashProxy` gains `Up`/`Down`; `convertHysteria2` reads them from
+  Extensions. **Masquerade is server-only** and intentionally NOT
+  propagated to client config (mihomo's outbound schema lacks it);
+  `TestConvertHysteria2_DropsMasquerade` locks this with a
+  `yaml.Marshal` + `strings.Contains` reverse assertion.
+- Hysteria2 URI standard only carries 5 query keys; Up/Down/Masquerade
+  travel via `SubscriptionSpec.Extensions`, not the URI, preserving
+  third-party client compatibility.
+- HTTP handler gains six hy2 convenience fields:
+  `Obfs`, `ObfsPassword`, `Up`, `Down`, `Masquerade`, `IgnoreClientBandwidth`.
+
+### Tests
+
+- 33 new unit tests across `params_hysteria2_test.go`,
+  `profilegen_hy2_test.go`, `subscription_hy2_test.go`,
+  `clash_protocol_test.go`, and `TestValidateHysteria2_ErrorPaths`
+  (9 cases + baseline).
+- Regression test for the legacy hysteria container at
+  `pkg/proxy/containers/hysteria/container_fastadd_test.go`.
+- Integration test `pkg/proxy/systemtest/mihomo_hy2_matrix_test.go`:
+  three matrix cases plus a cross-cutting subscription-chain case
+  walking `GetUserSubscriptions → ConvertHysteria2ForTest →
+  spawnMihomoClient`. New `waitUDPListener` helper polls UDP dial
+  (50ms × ≤60 iterations) instead of a fixed sleep.
+- `go test ./... -race -count=1` — 36 packages green.
+
+### Docs
+
+- `docs/mihomo-container-implementation-plan.md` adds "协议扩展 Phase 5"
+  with upstream schema research and verification commands.
+- `docs/http-api-reference.md` adds Hysteria2 row to the protocol
+  matrix and a worked example.
+- `wiki/knowledge/mihomo-container/{index,details,edge-cases,.meta.yaml}`
+  refreshed with hy2 schema facts and 5 new FAQ entries.
+
 ## 2026-04-24 — FastAddInbound Params Normalisation + Mihomo certmgr Integration
 
 Unifies the "caller picks a protocol + port, the system fills the rest" UX

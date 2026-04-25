@@ -149,15 +149,15 @@ func TestMihomoVMessMatrix(t *testing.T) {
 	// subtest catches the regression class going forward.
 	t.Run("subscription_chain_reality", func(t *testing.T) {
 		runVMessSubscriptionChainCase(t, rig, mihomoBin, vmessMatrixCase{
-			name:         "subscription-chain-grpc-reality",
-			transport:    "grpc",
-			security:     "reality",
+			name:            "subscription-chain-grpc-reality",
+			transport:       "grpc",
+			security:        "reality",
 			grpcServiceName: "VmessTunnel",
-			realityPriv:  realityPriv,
-			realityPub:   realityPub,
-			realityDest:  "www.microsoft.com:443",
-			realityNames: []string{"www.microsoft.com"},
-			realityShort: []string{"aabbccddeeff0011"},
+			realityPriv:     realityPriv,
+			realityPub:      realityPub,
+			realityDest:     "www.microsoft.com:443",
+			realityNames:    []string{"www.microsoft.com"},
+			realityShort:    []string{"aabbccddeeff0011"},
 		}, upstream)
 	})
 }

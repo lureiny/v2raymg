@@ -53,6 +53,26 @@ A: 可以,但 `ExternalController` 必须各不相同(`apiPort` 冲突会导致�
 
 A: stage 10a 之前会误报 `Restarted=true`。stage 10a 后:`Updater.Update` 的 Step 7 在 `Start` 返回后跑 `WaitReady`(GET /version 探活,10s 超时),失败则走 `Stop + Rollback + ErrUpdateFailed{Stage:"restart"}`。rollback 也失败时两 cause 通过 `errors.Join` 合并,operator 需手动从 `<BinaryPath>.bak` 恢复。
 
+**Q: Hysteria2 在 mihomo 容器和 hysteria 容器有什么区别?**
+
+A: hysteria 容器是**单 inbound legacy**形态:`pkg/proxy/containers/hysteria/container.go::FastAddInbound` 只接受 `defaultInboundTag`,params 全部忽略,协议参数通过 `HysteriaConfig` 进程级配置。mihomo 容器从 Phase 5 起支持 hy2 多 inbound,每条 inbound 独立 password / obfs / 带宽宣告 / masquerade,都通过 `FastAddInbound` 的 ProtocolParams 路径进入 mihomo `listeners:` 数组。Phase 5 实施期间 hysteria 容器**完全不动**,新加的 `container_fastadd_test.go` 锁定它的旧行为,以便后续重构时不被误改。两个容器可以共存(实际部署用同一台机器跑 mihomo 接 hy2 + hysteria 容器跑 legacy 单 inbound,验证迁移路径)。
+
+**Q: hy2 inbound 的 forward 转发是 TCP 还是 UDP?哪里区分的?**
+
+A: UDP。`MihomoInbound.AddUser` 调用 `userMgr.GetBindPort` 时传 `Network: forwardNetworkForProtocol(protocol)`,该 helper 对 `ProtocolHysteria2` 返回 `"udp"`,其它协议返空(走 GetBindPort 默认 TCP)。Phase 6 TUIC 会扩到同一 switch。注意:**SS 的 UDP 是协议内部 wrap**(SS 协议帧自己携带 UDP payload),不在 forward 层切 Network,所以 SS 走 TCP 默认即可。
+
+**Q: hy2 mihomo 客户端配置为什么不写 masquerade?**
+
+A: mihomo Alpha 的 `adapter/outbound/hysteria2.go::Hysteria2Option`(客户端 outbound)**没有** `masquerade` 字段 —— masquerade 是服务端伪装(响应未鉴权流量时假装成 nginx / file server / proxy),只在 mihomo `listener/inbound/hysteria2.go::Hysteria2Option` 里。所以 `convertHysteria2` 故意不传 masquerade 到 ClashProxy;`TestConvertHysteria2_DropsMasquerade` 用 `yaml.Marshal` 输出后 `strings.Contains` 反向断言锁住此契约。masquerade 仍写到订阅 spec.Extensions(为了完整性 + 调试可见),只是 client 端永远 drop。
+
+**Q: hy2:// URI 为什么不带 up/down/masquerade 参数?**
+
+A: 上游 hysteria2 URI spec(<https://v2.hysteria.network/docs/developers/URI-Scheme/>)只规定了 5 个 query key:`obfs` / `obfs-password` / `sni` / `insecure` / `pinSHA256`。`up`/`down`/`masquerade` 不在标准里,塞进 URI 会导致 NekoBox / Hiddify 等通用客户端解析失败。所以 `codec.Hysteria2Node.Encode/Decode` 故意不读不写这三字段;它们只通过 `SubscriptionSpec.Extensions` 在我们自己的 mihomo client 那条订阅链路里传。
+
+**Q: hy2 listener 为什么用 `users:{default:...}` 而不是顶层 password?**
+
+A: 实证 mihomo Alpha `listener/inbound/hysteria2.go::Hysteria2Option` 字段:**没有顶层 `password`**,只有 `users: map[string]string`(username → password)。空 users map 会让 mihomo 不强制鉴权(危险),所以 Phase 5 至少写一条 entry。Phase 5 单用户固定用 `"default"` 作 username(见 `forwardNetworkForProtocol` 用户级 memory 决策),后续多用户走"inbound 用户追踪架构统一"延后事项时把多 user 灌进这个 map。
+
 ## 反例
 
 ### ❌ 把用户字段塞进 listener 配置

@@ -696,9 +696,24 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 
 > shadow-tls 是网络层 wrapper proxy，**不会下发到 mihomo SS listener**；服务端只跑 plain SS，shadow-tls 信息只写入订阅 Extensions 用于客户端 Clash 配置生成。
 
-**Protocol:** `vless` | `vmess` | `trojan` | `ss` / `shadowsocks`
+**Hysteria2 便捷字段**（仅 mihomo container 接入）:
 
-**Transport:** `tcp` | `ws` | `h2`（`http` 自动 normalize 为 `h2`）| `grpc` | `httpupgrade` | `xhttp` | `splithttp`
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `obfs` | string | 当前仅支持 `salamander`；空值代表不开 obfs |
+| `obfs_password` | string | obfs=salamander 时必填 |
+| `up` | string | 上行带宽宣告，如 `50 Mbps`（mihomo 字符串解析） |
+| `down` | string | 下行带宽宣告，如 `100 Mbps` |
+| `masquerade` | string | 服务端伪装，URL（`https://...`）/ `file:/path` / `proxy:...`；**仅服务端**,不下发到客户端配置 |
+| `ignore_client_bandwidth` | bool | 服务端忽略客户端宣告的 up/down,使用 BBR 拥塞控制；可与 up/down 共存 |
+
+> Hysteria2 是 QUIC over UDP；mihomo 容器创建 hy2 inbound 时 forward 层自动用 UDP 转发规则（其它协议保持 TCP 默认）。证书与 vless/vmess/trojan 共用 `cert_file`/`key_file`/`certificate`/`key`/`domain`/`self_signed` 来源（mihomo yaml 中映射为 `certificate`/`private-key`）。
+>
+> Hysteria2 的标准 `hysteria2://` URI 仅携带 `obfs`/`obfs-password`/`sni`/`insecure`/`pinSHA256`；`up`/`down`/`masquerade` 不在 URI 标准中,通过订阅 Extensions 透传到客户端 Clash 配置。
+
+**Protocol:** `vless` | `vmess` | `trojan` | `ss` / `shadowsocks` | `hysteria2`
+
+**Transport:** `tcp` | `ws` | `h2`（`http` 自动 normalize 为 `h2`）| `grpc` | `httpupgrade` | `xhttp` | `splithttp`（Hysteria2 是 QUIC 固定,不接受 transport 字段）
 
 > 注意:mihomo container 的 FastAdd 支持范围按协议收窄。HTTP 层接受的 transport 是跨 container 的全集,具体组合以表格为准。
 
@@ -710,6 +725,7 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 | VMess(mihomo) | tcp, ws, grpc | none, tls, reality | |
 | Trojan(mihomo) | tcp, ws, grpc | tls, reality | TLS 必填 cert；reality 必填 server_names + short_ids |
 | Shadowsocks(mihomo) | tcp | none | 默认 cipher `2022-blake3-aes-256-gcm`；可选 obfs / v2ray-plugin / shadow-tls 插件 |
+| Hysteria2(mihomo) | QUIC(固定,不接受 transport 字段) | tls(reality / none 拒绝) | 必填 cert；可选 obfs=salamander、up/down 带宽宣告、ignore_client_bandwidth、masquerade(server-only) |
 | Xray | 见 xray 协议矩阵 | 见 xray 协议矩阵 | |
 
 Trojan+TLS 需要提供证书来源(`cert_file/key_file`、`certificate/key`、`domain` 或 `self_signed`)；Trojan+Reality 使用 `reality-config`，不需要也不会由 `FillDefaults` 强制补 TLS 证书。
@@ -740,6 +756,23 @@ Trojan+TLS 需要提供证书来源(`cert_file/key_file`、`certificate/key`、`
   "alpn": "http/1.1"
 }
 ```
+
+**示例 - Hysteria2 + 自签 TLS + salamander obfs + 带宽宣告（mihomo container）:**
+```json
+{
+  "tag": "hy2-bundled",
+  "protocol": "hysteria2",
+  "container": "mihomo",
+  "port": 443,
+  "self_signed": true,
+  "obfs": "salamander",
+  "obfs_password": "shh-secret",
+  "up": "50 Mbps",
+  "down": "100 Mbps",
+  "masquerade": "https://www.microsoft.com"
+}
+```
+> Hysteria2 不接受 `transport` 字段（QUIC 固定）；`security` 默认 tls，显式 `reality`/`none` 会被拒绝。
 
 **示例 - Trojan+gRPC+Reality:**
 ```json

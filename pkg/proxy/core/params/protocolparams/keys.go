@@ -72,11 +72,11 @@ const (
 	KeySkipCertVerify = "skip_cert_verify"
 
 	// Reality
-	KeyRealityTarget      = "reality_target"
-	KeyRealityServerNames = "reality_server_names"
-	KeyRealityShortIDs    = "reality_short_ids"
-	KeyRealityPrivateKey  = "reality_private_key"
-	KeyRealityPublicKey   = "reality_public_key"
+	KeyRealityTarget       = "reality_target"
+	KeyRealityServerNames  = "reality_server_names"
+	KeyRealityShortIDs     = "reality_short_ids"
+	KeyRealityPrivateKey   = "reality_private_key"
+	KeyRealityPublicKey    = "reality_public_key"
 	KeyRealityMinClientVer = "reality_min_client_ver"
 	KeyRealityMaxTimeDiff  = "reality_max_time_diff"
 

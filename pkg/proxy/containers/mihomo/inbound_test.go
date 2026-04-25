@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/params/protocolparams"
 	"github.com/lureiny/v2raymg/pkg/proxy/forward"
 	"github.com/lureiny/v2raymg/pkg/proxy/usermanager"
 )
@@ -87,8 +88,11 @@ func TestMihomoInbound_Validate(t *testing.T) {
 			wantErr: ErrMissingCredential,
 		},
 		{
+			// Phase 5 added hysteria2 support; pick another unimplemented
+			// protocol as the "unsupported" sentinel. Phase 6/7 will need
+			// to migrate this when TUIC/AnyTLS land.
 			name:    "unsupported protocol",
-			inbound: NewMihomoInbound("t", contracts.ProtocolHysteria2, 10001, MihomoSharedCred{Password: "pw"}),
+			inbound: NewMihomoInbound("t", contracts.ProtocolTUIC, 10001, MihomoSharedCred{Password: "pw"}),
 			wantErr: ErrProtocolNotSupported,
 		},
 	}
@@ -106,6 +110,105 @@ func TestMihomoInbound_Validate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestValidateHysteria2_ErrorPaths covers the validateHysteria2 sentinel
+// rejections. Phase 5 has no SharedCred legacy path, so all cases construct
+// the inbound directly via NewMihomoInboundFromProtocolParams.
+func TestValidateHysteria2_ErrorPaths(t *testing.T) {
+	hy2BasePP := func() *protocolparams.ProtocolParams {
+		return &protocolparams.ProtocolParams{
+			Tag:      "hy2-test",
+			Protocol: contracts.ProtocolHysteria2,
+			Port:     10101,
+			Hysteria2: &protocolparams.Hysteria2Params{
+				Password: "pw",
+			},
+			Security: &protocolparams.SecuritySpec{
+				Kind: contracts.SecurityTLS,
+				TLS: &protocolparams.TLSSpec{
+					CertFile: "/tmp/cert.pem",
+					KeyFile:  "/tmp/key.pem",
+				},
+			},
+		}
+	}
+
+	cases := []struct {
+		name    string
+		mutate  func(*protocolparams.ProtocolParams)
+		wantErr error
+	}{
+		{
+			name:    "missing Hysteria2Params",
+			mutate:  func(pp *protocolparams.ProtocolParams) { pp.Hysteria2 = nil },
+			wantErr: ErrMissingCredential,
+		},
+		{
+			name:    "empty password",
+			mutate:  func(pp *protocolparams.ProtocolParams) { pp.Hysteria2.Password = "" },
+			wantErr: ErrMissingCredential,
+		},
+		{
+			name:    "no security",
+			mutate:  func(pp *protocolparams.ProtocolParams) { pp.Security = nil },
+			wantErr: ErrMissingCredential,
+		},
+		{
+			name:    "security=none",
+			mutate:  func(pp *protocolparams.ProtocolParams) { pp.Security.Kind = contracts.SecurityNone },
+			wantErr: ErrProtocolNotSupported,
+		},
+		{
+			name:    "security=tls but TLS spec nil",
+			mutate:  func(pp *protocolparams.ProtocolParams) { pp.Security.TLS = nil },
+			wantErr: ErrMissingCredential,
+		},
+		{
+			name:    "missing cert_file",
+			mutate:  func(pp *protocolparams.ProtocolParams) { pp.Security.TLS.CertFile = "" },
+			wantErr: ErrMissingCredential,
+		},
+		{
+			name:    "missing key_file",
+			mutate:  func(pp *protocolparams.ProtocolParams) { pp.Security.TLS.KeyFile = "" },
+			wantErr: ErrMissingCredential,
+		},
+		{
+			name:    "unknown obfs",
+			mutate:  func(pp *protocolparams.ProtocolParams) { pp.Hysteria2.Obfs = "snowflake" },
+			wantErr: ErrProtocolNotSupported,
+		},
+		{
+			name: "obfs=salamander missing password",
+			mutate: func(pp *protocolparams.ProtocolParams) {
+				pp.Hysteria2.Obfs = "salamander"
+				pp.Hysteria2.ObfsPassword = ""
+			},
+			wantErr: ErrMissingCredential,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pp := hy2BasePP()
+			tc.mutate(pp)
+			inb := NewMihomoInboundFromProtocolParams(pp)
+			err := inb.Validate()
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("error = %v, want wrapping %v", err, tc.wantErr)
+			}
+		})
+	}
+
+	// Sanity: the unmutated baseline must pass — otherwise the mutate
+	// helpers above could pass for the wrong reason.
+	t.Run("baseline ok", func(t *testing.T) {
+		inb := NewMihomoInboundFromProtocolParams(hy2BasePP())
+		if err := inb.Validate(); err != nil {
+			t.Fatalf("baseline should validate, got %v", err)
+		}
+	})
 }
 
 func TestMihomoInbound_ToNative_OmitsIrrelevantCredFields(t *testing.T) {

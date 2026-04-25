@@ -1114,4 +1114,3 @@ func TestGunzipToTemp_BadGzip(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, dst)
 }
-

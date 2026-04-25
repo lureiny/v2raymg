@@ -50,7 +50,7 @@ func allFastAddCases() []fastAddCase {
 			"transport": "grpc", "security": "reality",
 			"server_name": "www.microsoft.com", "reality_target": "www.microsoft.com:443",
 			"reality_server_names": []string{"www.microsoft.com"},
-			"grpc_service_name": "testgrpc",
+			"grpc_service_name":    "testgrpc",
 		}},
 		{Name: "vless-httpupgrade-tls", Protocol: "vless", NeedsCert: true, Params: map[string]any{
 			"transport": "httpupgrade", "security": "tls", "server_name": "localhost",
@@ -64,7 +64,7 @@ func allFastAddCases() []fastAddCase {
 			"transport": "xhttp", "security": "reality",
 			"server_name": "www.microsoft.com", "reality_target": "www.microsoft.com:443",
 			"reality_server_names": []string{"www.microsoft.com"},
-			"xhttp_path": "/xhttptest",
+			"xhttp_path":           "/xhttptest",
 		}},
 		{Name: "vless-splithttp-tls", Protocol: "vless", NeedsCert: true, Params: map[string]any{
 			"transport": "splithttp", "security": "tls", "server_name": "localhost",
@@ -74,7 +74,7 @@ func allFastAddCases() []fastAddCase {
 			"transport": "splithttp", "security": "reality",
 			"server_name": "www.microsoft.com", "reality_target": "www.microsoft.com:443",
 			"reality_server_names": []string{"www.microsoft.com"},
-			"xhttp_path": "/splittest",
+			"xhttp_path":           "/splittest",
 		}},
 
 		// --- VMess ---
