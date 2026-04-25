@@ -293,6 +293,84 @@ func TestConvertVMess_ClientFingerprint(t *testing.T) {
 	}
 }
 
+// TestConvertVMess_Reality covers the Phase 2 review P0: convertVMess
+// must emit tls=true + RealityOpts for security=reality. Without this,
+// the clash client falls back to plain TLS and the handshake fails.
+// Mirrors TestConvertVLess_Reality intent.
+func TestConvertVMess_Reality(t *testing.T) {
+	c := &ClashConverter{}
+	spec := contracts.SubscriptionSpec{
+		Protocol: contracts.ProtocolVMess,
+		Host:     "sg.example.com",
+		Port:     443,
+		Password: "uuid-vmess",
+		NodeName: "SG",
+		Extensions: map[string]any{
+			"security":           "reality",
+			"transport":          "tcp",
+			"server_name":        "sg.example.com",
+			"reality_public_key": "vmessPubKey",
+			"reality_short_ids":  []string{"abc123", "def456"},
+			"utls_fingerprint":   "chrome",
+		},
+	}
+	p := c.convertVMess(spec)
+	if p == nil {
+		t.Fatal("expected non-nil proxy")
+	}
+	if !p.TLS {
+		t.Error("expected TLS=true for reality (mihomo client requirement)")
+	}
+	if p.RealityOpts == nil {
+		t.Fatal("expected reality-opts populated")
+	}
+	if p.RealityOpts.PublicKey != "vmessPubKey" {
+		t.Errorf("public-key = %q, want vmessPubKey", p.RealityOpts.PublicKey)
+	}
+	if p.RealityOpts.ShortID != "abc123" {
+		t.Errorf("short-id = %q, want abc123 (first)", p.RealityOpts.ShortID)
+	}
+	if p.Servername != "sg.example.com" {
+		t.Errorf("servername = %q, want sg.example.com", p.Servername)
+	}
+	if p.ClientFingerprint != "chrome" {
+		t.Errorf("client-fingerprint = %q, want chrome", p.ClientFingerprint)
+	}
+}
+
+// TestConvertVMess_LegacyAlterID covers the Phase 2 review P1-1:
+// AlterID > 0 (legacy MD5-auth VMess) must reach the converter via
+// Extensions["alter_id"] so the clash client uses legacy mode. Without
+// this transit the clash output silently downgrades AEAD-only.
+//
+// Note: alterId > 0 is legacy v2/v3 mode (non-AEAD); AEAD is the modern
+// default at alterId=0. Real-world traffic almost never sets alterId>0,
+// but we keep the field plumbed correctly for callers that need it.
+func TestConvertVMess_LegacyAlterID(t *testing.T) {
+	c := &ClashConverter{}
+	spec := contracts.SubscriptionSpec{
+		Protocol: contracts.ProtocolVMess,
+		Host:     "example.com",
+		Port:     443,
+		Password: "uuid",
+		Extensions: map[string]any{
+			"security":  "tls",
+			"transport": "tcp",
+			"alter_id":  64,
+		},
+	}
+	p := c.convertVMess(spec)
+	if p == nil {
+		t.Fatal("expected non-nil proxy")
+	}
+	if p.AlterId == nil {
+		t.Fatal("AlterId pointer nil")
+	}
+	if *p.AlterId != 64 {
+		t.Errorf("AlterId = %d, want 64", *p.AlterId)
+	}
+}
+
 // --- convertTrojan tests ---
 
 func TestConvertTrojan_Reality(t *testing.T) {

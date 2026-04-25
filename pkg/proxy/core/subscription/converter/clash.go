@@ -158,6 +158,18 @@ func (c *ClashConverter) ConvertWithOptions(specs []contracts.SubscriptionSpec, 
 	return string(data), nil
 }
 
+// ConvertVMessForTest exposes convertVMess to integration tests in the
+// systemtest package so they can exercise the real subscription→converter
+// chain without going through the full ConvertWithOptions pipeline (which
+// requires network access to fetch the external Clash template).
+//
+// Not part of the public API; the "ForTest" suffix marks it as a
+// test-only seam. Production code paths must continue to go through
+// ConvertWithOptions.
+func ConvertVMessForTest(spec contracts.SubscriptionSpec) *ClashProxy {
+	return (&ClashConverter{}).convertVMess(spec)
+}
+
 // convertSpec returns nil if the protocol is unsupported by Clash/mihomo or
 // the node's transport/security combination is not expressible.
 func (c *ClashConverter) convertSpec(spec contracts.SubscriptionSpec) *ClashProxy {
@@ -194,10 +206,16 @@ func (c *ClashConverter) convertVMess(spec contracts.SubscriptionSpec) *ClashPro
 		UDP:     true,
 	}
 
-	// TLS
+	// Security: tls / reality. Reality requires the same tls=true marker
+	// mihomo VLESS uses (see convertVLess line ~360); without RealityOpts
+	// the client falls back to plain TLS and the handshake fails.
 	security := extString(ext, "security")
-	if security == "tls" {
+	switch security {
+	case "tls":
 		proxy.TLS = true
+	case "reality":
+		proxy.TLS = true
+		proxy.RealityOpts = buildRealityOpts(ext)
 	}
 	if skipVerify, _ := ext["skip_cert_verify"].(bool); skipVerify {
 		proxy.SkipCertVerify = true

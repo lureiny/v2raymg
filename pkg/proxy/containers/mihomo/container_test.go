@@ -406,10 +406,21 @@ func TestRemoveInboundConfig_RESTFailure_LeavesStateIntact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stored record no longer round-trips: %v", err)
 	}
+	// UUID now lives on ProtocolParams.VMess (Phase 2) — the SharedCred.UUID
+	// legacy slot is empty for newly-created vmess records. Accept either
+	// slot so the assertion continues to work if SharedCred ever sees data
+	// again via a backfill path.
+	storedUUID := ""
+	if restored.ProtocolParams != nil && restored.ProtocolParams.VMess != nil {
+		storedUUID = restored.ProtocolParams.VMess.UUID
+	}
+	if storedUUID == "" {
+		storedUUID = restored.SharedCred.UUID
+	}
 	if restored.Tag() != "t" ||
 		restored.Protocol() != contracts.ProtocolVMess ||
 		restored.Port() != 10001 ||
-		restored.SharedCred.UUID != "u-original" {
+		storedUUID != "u-original" {
 		t.Errorf("stored record mutated during failed Remove: %+v", restored)
 	}
 }
