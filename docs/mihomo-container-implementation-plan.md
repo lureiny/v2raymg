@@ -52,6 +52,10 @@
 | 阶段 11(文档 + wiki) | **DONE** 2026-04-23 | CHANGELOG 2 条新条目、README 补 Supported Proxy Kernels 段、wiki 新建 mihomo-container 概念页并登记 _manifest.json |
 | 阶段 11+(真实 E2E 系统测试) | **DONE** 2026-04-24 | TestMihomoE2E_RealInternet:mihomo 双开做 server+client,curl→client→server→google.com 三协议 × 5 步全绿;P2-9 CERTAIN 并落实 trojan cert_file/key_file 扩展 |
 | 阶段 12(params 统一归一 + certmgr 联动) | **DONE** 2026-04-24 | 新建 `pkg/proxy/core/params/defaults.go`:凭据 fill + cert 4 源归一(cert_file/certificate/domain/self_signed);RPC FastAddInbound 接入;mihomo 侧 SAFE_PATHS env 接受 certmgr 路径 + CertScratchDir 写自签到 DataDir + CertSource 驱动 RemoveInboundConfig 清理。顺手修 mihomo factory 漏 wire UserManager 的生产 bug |
+| 协议扩展 Phase 1(VLESS) | **DONE** 2026-04-25 | ProtocolParams 基础设施 + VLESS tcp/ws/grpc/xhttp/splithttp + tls/reality;9/10 系统测试通过(ws-reality skip) |
+| 协议扩展 Phase 2(VMess) | **DONE** 2026-04-25 | VMess 高级特性迁移到 ProtocolParams;6/7 通过(ws-reality skip) |
+| 协议扩展 Phase 3(Trojan) | **DONE** 2026-04-25 | Trojan tcp/ws/grpc + tls/reality 矩阵 + subscription chain cross-cutting test |
+| 协议扩展 Phase 4(Shadowsocks) | **DONE** 2026-04-25 | SS 迁移 ProtocolParams,默认 SIP022 cipher,obfs/v2ray-plugin/shadow-tls 插件支持;含 12 条 P0-P3 review 修复 |
 
 ### 阶段 1(2026-04-22 完成)
 
@@ -996,6 +1000,42 @@ stage 1 的单测 `TestMihomoFactoryLoadable` 在 mihomo 包内部(`init` 被同
 - `go test -tags=integration ./pkg/proxy/systemtest -run TestMihomoTrojanMatrix -v -timeout 180s`:7 PASS + 1 SKIP
 
 详细开发记录见 `tmp/phase3-dev-report.md`。
+
+### 协议扩展 Phase 4:Shadowsocks 增强(2026-04-25 完成)
+
+**范围**:对应 `/home/node/.claude/plans/cosmic-leaping-moon.md` 的 Phase 4(T-M-P4-40 ~ P4-44)。目标是把 Shadowsocks 从 legacy SharedCred FastAdd 路径迁到 ProtocolParams 结构化路径,默认 cipher 升级到 SIP022,并接入 obfs / v2ray-plugin / shadow-tls 三种插件。
+
+**关键变更**:
+
+- `pkg/proxy/core/params/protocolparams/params_ss.go`(新建):新增 `parseSS`,required `password` + `cipher`,udp 默认 true,plugin 可选;6 个 plugin opt 键(`plugin_mode/host/path/tls/password/version`)读入后用 mihomo canonical 短名(`mode/host/path/tls/password/version`)存入 `SSParams.PluginOpts`
+- `pkg/proxy/core/params/protocolparams/parser.go`:Shadowsocks dispatch 从 stub 改为 `parseSS`;`keys.go` 增 `KeyPluginMode/Host/Path/TLS/Password/Version`
+- `pkg/proxy/core/params/defaults.go`:默认 cipher 改为 `2022-blake3-aes-256-gcm`;新增 `randomSSPassword(cipher)` —— SIP022 系列(`2022-` 前缀)按 cipher 决定密钥长度(aes-256 → 32 bytes,aes-128 → 16 bytes),`base64.StdEncoding.EncodeToString` 输出;classic AEAD 沿用 `randomHex(16)`。**cipher 必须先于 password 落定**(原顺序倒置会让 randomSSPassword 拿不到正确 cipher)
+- `pkg/proxy/containers/mihomo/adapter.go::fastAddBuildInbound`:SS 加入 ProtocolParams 路径
+- `pkg/proxy/containers/mihomo/inbound.go`:新增 `validateSS` dual-rail(ProtocolParams 优先 + SharedCred legacy 兜底);消除 `Validate()` 末尾 unreachable `return nil`;`shouldCleanupCerts()` 改为调用 `shouldCleanupCertSource()` 去重
+- `pkg/proxy/containers/mihomo/profilegen.go::fillSSListener`:ProtocolParams 路径下发 `password` / `cipher` / `udp`(true 时显式输出);`plugin=shadow-tls` **跳过** `plugin` / `plugin-opts` 字段(shadow-tls 是网络层 wrapper 而非 mihomo SS 原生 plugin);其他 plugin 输出 `plugin-opts` map,`tls` → bool,`version` → `strconv.Atoi` 转 int
+- `pkg/proxy/containers/mihomo/subscription.go`:新增 `fillSSSubscriptionSpec / fillSSSubscriptionSpecPP / fillSSSubscriptionSpecLegacy`;Phase 4 路径把 `method` / `udp` / `plugin` / `plugin_*` 全部写入订阅 Extensions(shadow-tls 也写,因为客户端 Clash config 需要这些字段生成 outbound)
+- `pkg/proxy/core/subscription/converter/clash.go`:`PluginOpts` struct 增 `Password` / `Version` 字段(shadow-tls);`buildPluginOpts` 增 `plugin_password` / `plugin_version` 读取,空值时返回 nil 避免 emit 空 `plugin-opts`;`convertShadowsocks` 默认 cipher 改为 `2022-blake3-aes-256-gcm`,`UDP` 改为读 `Extensions["udp"]`(Phase 4 之前硬编码 true);新增 `defaultRealityFingerprint = "chrome"` 常量,`convertVLess` / `convertVMess` / `convertTrojan` reality 路径自动 fallback;新增 `ConvertSSForTest` 供 mihomo SS matrix 走订阅链路验证 converter parity
+- `pkg/http/fastAddInbound_handler.go`:request struct 增 `Plugin` / `PluginMode` / `PluginHost` / `PluginPath` / `PluginTLS` / `PluginPassword` / `PluginVersion` 便捷字段;PluginTLS 的 `!exists` 冗余 guard 简化
+
+**测试**:
+
+- 单元测试新增 `params_ss_test.go`(10 case)、`profilegen_ss_test.go`(6 case)、`subscription_ss_test.go`(8 case,含 plugin_tls Extensions 路径)
+- `defaults_test.go` 新增 SIP022 base64 密码验证测试 + classic AEAD hex 密码验证测试
+- 系统测试 `mihomo_ss_matrix_test.go`(integration build tag):4 cipher case(aes-256-gcm / chacha20-ietf-poly1305 / 2022-blake3-aes-256-gcm / 2022-blake3-aes-128-gcm)+ subscription chain cross-cutting test(走 `GetUserSubscriptions → ConvertSSForTest → spawnMihomoClient` 链路)
+- shadow-tls server-side e2e 测试用 `t.Skip("shadow-tls requires external server")` 占位
+
+**review 修复**:Phase 4 实现后跑了一次多 agent 后台 review,共识别 12 条 P0-P3 问题(SS password 生成缺陷、unreachable code、UDP 透传缺失、buildPluginOpts 空值返回 non-nil、stale 注释、缺系统测试、version int 转换、UDP 空字符串处理、缺 plugin_tls 测试、cleanup 重复逻辑、PluginTLS guard 冗余、缺 base64 密码测试);全部当场修复,最终 35 packages `go test ./... -race -count=1` 全绿。
+
+**已知限制**:
+
+- shadow-tls server 需外部基础设施,系统测试 skip
+- kcp-tun 插件未实现(`params_ss.go` 留 TODO,作为独立任务)
+- mihomo Alpha SS listener 无 transport / security 概念,所以 SS 的 ProtocolParams 不读 `pp.Transport` / `pp.Security`(与 vless/vmess/trojan 不同)
+
+**验证命令**:
+
+- `go test ./... -race -count=1 -timeout 300s`:35 packages 全绿
+- `go test -tags=integration ./pkg/proxy/systemtest -run TestMihomoSSMatrix -v -timeout 180s`:需外网 + MIHOMO_BIN 或 GitHub egress
 
 ## 参考
 

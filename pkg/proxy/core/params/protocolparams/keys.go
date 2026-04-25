@@ -83,7 +83,15 @@ const (
 	// Shadowsocks
 	KeyUDP        = "udp"
 	KeyPlugin     = "plugin"
-	KeyPluginOpts = "plugin_opts"
+	KeyPluginOpts = "plugin_opts" // reserved for raw SIP003 string; individual opts use the keys below
+
+	// Shadowsocks plugin opts (flat keys, no prefix)
+	KeyPluginMode     = "plugin_mode"     // obfs-local: "http"|"tls"; v2ray-plugin: "websocket"|"quic"
+	KeyPluginHost     = "plugin_host"     // obfs-local/shadow-tls target host
+	KeyPluginPath     = "plugin_path"     // v2ray-plugin path
+	KeyPluginTLS      = "plugin_tls"      // v2ray-plugin TLS bool
+	KeyPluginPassword = "plugin_password" // shadow-tls password
+	KeyPluginVersion  = "plugin_version"  // shadow-tls version ("2" or "3")
 
 	// Hysteria2
 	KeyObfs                  = "obfs"

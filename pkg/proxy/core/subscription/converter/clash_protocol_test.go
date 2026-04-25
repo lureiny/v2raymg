@@ -620,3 +620,130 @@ func TestBuildRealityOpts_NoPubKey_ReturnsNil(t *testing.T) {
 		t.Error("expected nil when public-key is missing")
 	}
 }
+
+// --- defaultRealityFingerprint fallback tests ---
+
+func TestConvertVLess_Reality_DefaultFingerprint(t *testing.T) {
+	c := &ClashConverter{}
+	spec := contracts.SubscriptionSpec{
+		Protocol: contracts.ProtocolVLess,
+		Host:     "sg.example.com",
+		Port:     443,
+		Password: "uuid-vless",
+		Extensions: map[string]any{
+			"security":           "reality",
+			"reality_public_key": "pubkeyVL",
+		},
+	}
+	p := c.convertVLess(spec)
+	if p == nil {
+		t.Fatal("expected non-nil proxy")
+	}
+	if p.ClientFingerprint != defaultRealityFingerprint {
+		t.Errorf("client-fingerprint = %q, want %q (reality fallback)", p.ClientFingerprint, defaultRealityFingerprint)
+	}
+}
+
+func TestConvertVLess_Reality_ExplicitFingerprint(t *testing.T) {
+	c := &ClashConverter{}
+	spec := contracts.SubscriptionSpec{
+		Protocol: contracts.ProtocolVLess,
+		Host:     "sg.example.com",
+		Port:     443,
+		Password: "uuid-vless",
+		Extensions: map[string]any{
+			"security":           "reality",
+			"reality_public_key": "pubkeyVL",
+			"utls_fingerprint":   "safari",
+		},
+	}
+	p := c.convertVLess(spec)
+	if p == nil {
+		t.Fatal("expected non-nil proxy")
+	}
+	if p.ClientFingerprint != "safari" {
+		t.Errorf("client-fingerprint = %q, want safari (caller override)", p.ClientFingerprint)
+	}
+}
+
+func TestConvertVMess_Reality_DefaultFingerprint(t *testing.T) {
+	c := &ClashConverter{}
+	spec := contracts.SubscriptionSpec{
+		Protocol: contracts.ProtocolVMess,
+		Host:     "sg.example.com",
+		Port:     443,
+		Password: "uuid-vmess",
+		Extensions: map[string]any{
+			"security":           "reality",
+			"reality_public_key": "pubkeyVM",
+		},
+	}
+	p := c.convertVMess(spec)
+	if p == nil {
+		t.Fatal("expected non-nil proxy")
+	}
+	if p.ClientFingerprint != defaultRealityFingerprint {
+		t.Errorf("client-fingerprint = %q, want %q (reality fallback)", p.ClientFingerprint, defaultRealityFingerprint)
+	}
+}
+
+func TestConvertVMess_TLS_NoFingerprintSet(t *testing.T) {
+	c := &ClashConverter{}
+	spec := contracts.SubscriptionSpec{
+		Protocol: contracts.ProtocolVMess,
+		Host:     "sg.example.com",
+		Port:     443,
+		Password: "uuid-vmess",
+		Extensions: map[string]any{
+			"security": "tls",
+		},
+	}
+	p := c.convertVMess(spec)
+	if p == nil {
+		t.Fatal("expected non-nil proxy")
+	}
+	if p.ClientFingerprint != "" {
+		t.Errorf("client-fingerprint = %q, want empty for plain tls", p.ClientFingerprint)
+	}
+}
+
+func TestConvertTrojan_Reality_DefaultFingerprint(t *testing.T) {
+	c := &ClashConverter{}
+	spec := contracts.SubscriptionSpec{
+		Protocol: contracts.ProtocolTrojan,
+		Host:     "sg.example.com",
+		Port:     443,
+		Password: "trojan-pw",
+		Extensions: map[string]any{
+			"security":           "reality",
+			"reality_public_key": "pubkeyTR",
+		},
+	}
+	p := c.convertTrojan(spec)
+	if p == nil {
+		t.Fatal("expected non-nil proxy")
+	}
+	if p.ClientFingerprint != defaultRealityFingerprint {
+		t.Errorf("client-fingerprint = %q, want %q (reality fallback)", p.ClientFingerprint, defaultRealityFingerprint)
+	}
+}
+
+func TestConvertTrojan_TLS_NoFingerprintSet(t *testing.T) {
+	c := &ClashConverter{}
+	spec := contracts.SubscriptionSpec{
+		Protocol: contracts.ProtocolTrojan,
+		Host:     "sg.example.com",
+		Port:     443,
+		Password: "trojan-pw",
+		Extensions: map[string]any{
+			"security": "tls",
+		},
+	}
+	p := c.convertTrojan(spec)
+	if p == nil {
+		t.Fatal("expected non-nil proxy")
+	}
+	if p.ClientFingerprint != "" {
+		t.Errorf("client-fingerprint = %q, want empty for plain tls", p.ClientFingerprint)
+	}
+}

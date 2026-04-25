@@ -25,6 +25,22 @@ A: **不能**。stage 11+ 的真实 E2E 测试(`TestMihomoE2E_RealInternet`)确�
 
 A: 当前 mihomo Alpha 上不能稳定通过。`TestMihomoTrojanMatrix` 实测 tcp/grpc reality 通过,ws+reality 客户端连接报 `unexpected status: 200 OK`,与 VLESS/VMess ws+reality 的已知栈顺序限制同类。系统测试保留该 case 但 skip,等 upstream 修复后再解封。
 
+**Q: 为什么 SS 默认 cipher 用 `2022-blake3-aes-256-gcm` 而不是 `aes-256-gcm`?**
+
+A: SIP022(2022-blake3-* 系列)是 Shadowsocks 当前的推荐默认,提供前向安全和更强抗探测能力,mihomo 和大部分 Clash 衍生客户端都已支持。Phase 4 把 `FillDefaults` / `defaultSSMethod`(profilegen 和 subscription)/ `convertShadowsocks` 的默认全部统一到 `2022-blake3-aes-256-gcm`,确保 server listener、订阅 method 字段、URI 和 client clash 配置同步切换。如果客户端仍只支持 classic AEAD,显式传 `cipher=aes-256-gcm` 即可。
+
+**Q: 用 SIP022 cipher 时密码格式有要求吗?**
+
+A: 有。SIP022 把"密码"当作 raw key material,服务端期待 standard base64 编码的随机字节(`2022-blake3-aes-256-gcm` 需要 32 字节 → 44 字符 base64;`2022-blake3-aes-128-gcm` 需要 16 字节 → 24 字符 base64)。`FillDefaults::randomSSPassword` 会按 cipher 自动选择:`2022-` 前缀的 cipher 走 `base64.StdEncoding.EncodeToString(rand.Read(N))`;classic AEAD 仍走 hex 字符串(16 字节 → 32 字符 hex)。客户端手动指定密码时也要遵守该约束,否则 mihomo listener 会以 `EOF` / 解码失败的形式报错。
+
+**Q: shadow-tls 插件为什么只写到订阅,不下发到 mihomo listener?**
+
+A: shadow-tls 是一个**网络层 wrapper proxy**,不是 mihomo SS listener 的原生 plugin。架构上它需要单独跑一个 shadow-tls server 进程,把外部 TLS 流量解 wrap 后再转给后端 plain SS。mihomo 服务端只能跑 plain SS;`fillSSListener` 检测到 `plugin=shadow-tls` 时跳过 `plugin` / `plugin-opts` 字段,只把信息记录到订阅 Extensions(`plugin_host` / `plugin_password` / `plugin_version`),供客户端 Clash config 生成对应的 shadow-tls outbound 段。系统测试因此对 shadow-tls 用 `t.Skip("shadow-tls requires external server")`,需要外部基础设施做端到端验证。
+
+**Q: SS 的 udp 字段不传时是 true 还是 false?**
+
+A: 默认 **true**,因为 SS 在实际部署中绝大多数场景都需要 UDP(浏览 / DNS / QUIC)。`parseSS` 仅在显式传入 `udp=false` / `udp="false"` / `udp="0"` 时关闭;空字符串和未识别的字符串都保持默认 true(避免误把 `udp=""` 当成关闭信号)。订阅 Extensions 会把当前 udp 值原样写入,clash converter 的 `convertShadowsocks` 据此决定 `proxy.UDP`,所以 server 端关 UDP 后客户端 clash config 也会同步关。
+
 **Q: 进程 crash 后 v2raymg 会自动拉起吗?**
 
 A: **不会**。production 没有 auto-restart watchdog。运维需通过 HTTP API 的 Restart 端点触发,底层走 `container.Stop()` + `container.Start()`,Restore 和 reconcileUsers 负责恢复状态。

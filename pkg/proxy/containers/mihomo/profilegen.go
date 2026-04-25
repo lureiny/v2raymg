@@ -58,10 +58,9 @@ func BuildListener(inb *MihomoInbound) (map[string]any, error) {
 			return nil, err
 		}
 	case contracts.ProtocolShadowsocks:
-		// shadowsocks has no users array; credentials are top-level
-		// password/cipher on ShadowSocksOption.
-		m["password"] = inb.SharedCred.Password
-		m["cipher"] = inb.SharedCred.Cipher
+		if err := fillSSListener(m, inb); err != nil {
+			return nil, err
+		}
 	default:
 		// Unreachable under correctly-validated inbound, but keeps the
 		// switch exhaustive in the face of future protocol additions
@@ -121,6 +120,55 @@ func fillTrojanListener(m map[string]any, inb *MihomoInbound) error {
 			}
 		default:
 			return fmt.Errorf("%w: trojan security %q not supported", ErrProtocolNotSupported, s.Kind)
+		}
+	}
+	return nil
+}
+
+// fillSSListener maps Shadowsocks ProtocolParams onto mihomo Alpha listener
+// yaml. The legacy SharedCred path preserves pre-Phase-4 records exactly.
+//
+// Plugin note: the `plugin` and `plugin-opts` fields are emitted when
+// ProtocolParams.SS.Plugin is set. obfs-local and v2ray-plugin are supported
+// as server-side listener plugins by mihomo Alpha. shadow-tls is a separate
+// network proxy; its plugin info is stored for subscription (client config)
+// generation only — the listener itself runs plain SS.
+func fillSSListener(m map[string]any, inb *MihomoInbound) error {
+	if inb.ProtocolParams == nil || inb.ProtocolParams.SS == nil {
+		// Legacy SharedCred path: plain password + cipher only.
+		m["password"] = inb.SharedCred.Password
+		m["cipher"] = inb.SharedCred.Cipher
+		return nil
+	}
+
+	ss := inb.ProtocolParams.SS
+	m["password"] = ss.Password
+	m["cipher"] = ss.Cipher
+	if ss.UDP {
+		m["udp"] = true
+	}
+
+	// shadow-tls is a separate proxy layer (not a mihomo listener plugin);
+	// skip emitting plugin for shadow-tls so the mihomo SS listener stays plain.
+	if ss.Plugin != "" && ss.Plugin != "shadow-tls" {
+		m["plugin"] = ss.Plugin
+		if len(ss.PluginOpts) > 0 {
+			opts := make(map[string]any, len(ss.PluginOpts))
+			for k, v := range ss.PluginOpts {
+				if k == "tls" {
+					opts[k] = v == "true"
+				} else if k == "version" {
+					// mihomo expects an integer for the version field.
+					if n, err := strconv.Atoi(v); err == nil {
+						opts[k] = n
+					} else {
+						opts[k] = v
+					}
+				} else {
+					opts[k] = v
+				}
+			}
+			m["plugin-opts"] = opts
 		}
 	}
 	return nil

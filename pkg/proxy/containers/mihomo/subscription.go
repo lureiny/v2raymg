@@ -15,7 +15,7 @@ import (
 // the generated URI and any Clash rendering derived from it agree on the
 // cipher the client should use. If one side changes the default, update
 // both.
-const defaultSSMethod = "aes-256-gcm"
+const defaultSSMethod = "2022-blake3-aes-256-gcm"
 
 // GetUserSubscriptions returns one SubscriptionSpec per (request user, inbound)
 // pair where the user has a live forward port mapping on this node.
@@ -40,15 +40,13 @@ const defaultSSMethod = "aes-256-gcm"
 // treats an empty slice as "this container produced nothing for this user",
 // not as an error.
 //
-// Supported protocols today: vless / vmess / trojan (Phase 1+ structured-
-// params path) and shadowsocks (legacy SharedCred path). Phase 4
-// migration will move ss onto ProtocolParams as well; this list
-// must be updated when each phase lands. Unsupported protocols are
-// logged and skipped rather than surfaced as hard errors — a mihomo
-// container should never hold such an inbound (adapter rejects them
-// upfront), but a corrupt-record path could leak through; graceful skip
-// avoids breaking subscriptions for healthy inbounds on the same
-// container.
+// Supported protocols today: vless / vmess / trojan / shadowsocks (all via
+// Phase 1–4 ProtocolParams path, with legacy SharedCred fallback for
+// pre-migration records). Unsupported protocols are logged and skipped
+// rather than surfaced as hard errors — a mihomo container should never
+// hold such an inbound (adapter rejects them upfront), but a corrupt-record
+// path could leak through; graceful skip avoids breaking subscriptions for
+// healthy inbounds on the same container.
 func (c *MihomoContainer) GetUserSubscriptions(req contracts.SubscriptionRequest) ([]contracts.SubscriptionSpec, error) {
 	if req.User.Username == "" {
 		return nil, fmt.Errorf("mihomo: subscription request missing username")
@@ -96,15 +94,14 @@ func (c *MihomoContainer) GetUserSubscriptions(req contracts.SubscriptionRequest
 //
 // Per-protocol dispatch (current state):
 //
-//	vless → fillVLESSSubscriptionSpec (Phase 1, ProtocolParams; falls back to nothing — VLESS only ever lived on the new path)
-//	vmess → fillVMessSubscriptionSpec (Phase 2, ProtocolParams preferred + SharedCred legacy fallback for pre-Phase-2 records)
-//	trojan → fillTrojanSubscriptionSpec (Phase 3, ProtocolParams preferred + SharedCred legacy fallback for pre-Phase-3 records)
-//	shadowsocks → SharedCred.Password + (Cipher || default) (legacy; will migrate in Phase 4)
+//	vless → fillVLESSSubscriptionSpec (Phase 1, ProtocolParams only)
+//	vmess → fillVMessSubscriptionSpec (Phase 2, ProtocolParams preferred + SharedCred legacy fallback)
+//	trojan → fillTrojanSubscriptionSpec (Phase 3, ProtocolParams preferred + SharedCred legacy fallback)
+//	shadowsocks → fillSSSubscriptionSpec (Phase 4, ProtocolParams preferred + SharedCred legacy fallback)
 //
 // Adding a protocol (hysteria2 / tuic / anytls) means (a) extending
 // MihomoInbound.Validate + adapter, (b) adding a codec.<Proto>Node Encode
-// path here. Phase 4 will collapse the ss SharedCred branch onto
-// ProtocolParams; update this list at landing.
+// path here.
 func buildSubscriptionSpec(inb *MihomoInbound, req contracts.SubscriptionRequest, port uint32) (contracts.SubscriptionSpec, error) {
 	nodeName := req.NodeName
 	if nodeName == "" {
@@ -137,27 +134,9 @@ func buildSubscriptionSpec(inb *MihomoInbound, req contracts.SubscriptionRequest
 		}
 
 	case contracts.ProtocolShadowsocks:
-		if inb.SharedCred.Password == "" {
-			return contracts.SubscriptionSpec{}, fmt.Errorf("%w: shadowsocks inbound %q has empty password", ErrMissingCredential, inb.Tag())
+		if err := fillSSSubscriptionSpec(&spec, inb); err != nil {
+			return contracts.SubscriptionSpec{}, err
 		}
-		method := inb.SharedCred.Cipher
-		if method == "" {
-			method = defaultSSMethod
-		}
-		spec.Protocol = contracts.ProtocolShadowsocks
-		spec.Password = inb.SharedCred.Password
-		node := &codec.ShadowsocksNode{
-			NodeName: nodeName,
-			Host:     req.Host,
-			Port:     port,
-			Password: inb.SharedCred.Password,
-			Method:   method,
-		}
-		spec.URI = node.Encode()
-		// The clash converter reads `method` from Extensions to set the
-		// shadowsocks cipher in the Clash proxy entry. Expose it even when
-		// we fell back to the default so upstream never has to re-derive.
-		spec.Extensions["method"] = method
 
 	default:
 		return contracts.SubscriptionSpec{}, fmt.Errorf("%w: %q", ErrProtocolNotSupported, inb.Protocol())
@@ -520,5 +499,106 @@ func fillTrojanSubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInb
 	}
 
 	spec.URI = node.Encode()
+	return nil
+}
+
+// fillSSSubscriptionSpec projects the Shadowsocks inbound onto a SubscriptionSpec.
+// ProtocolParams path is preferred (Phase 4+); legacy SharedCred path handles
+// pre-Phase-4 records that carry no ProtocolParams.
+//
+// Extensions populated (for the clash converter):
+//
+//	"method"          — cipher name (converter emits it as the clash proxy cipher)
+//	"plugin"          — optional plugin name
+//	"plugin_mode"     — plugin opt: obfs mode (obfs-local) or transport mode (v2ray-plugin)
+//	"plugin_host"     — plugin opt: obfs/shadow-tls target host
+//	"plugin_path"     — plugin opt: v2ray-plugin path
+//	"plugin_tls"      — plugin opt: v2ray-plugin TLS (bool)
+//	"plugin_password" — plugin opt: shadow-tls password
+//	"plugin_version"  — plugin opt: shadow-tls version string
+func fillSSSubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInbound) error {
+	if inb.ProtocolParams != nil && inb.ProtocolParams.SS != nil {
+		return fillSSSubscriptionSpecPP(spec, inb)
+	}
+	return fillSSSubscriptionSpecLegacy(spec, inb)
+}
+
+func fillSSSubscriptionSpecPP(spec *contracts.SubscriptionSpec, inb *MihomoInbound) error {
+	ss := inb.ProtocolParams.SS
+	nodeName := spec.NodeName
+	if nodeName == "" {
+		nodeName = inb.Tag()
+	}
+
+	node := &codec.ShadowsocksNode{
+		NodeName: nodeName,
+		Host:     spec.Host,
+		Port:     spec.Port,
+		Password: ss.Password,
+		Method:   ss.Cipher,
+	}
+	if ss.Plugin != "" {
+		node.Plugin = ss.Plugin
+		if len(ss.PluginOpts) > 0 {
+			node.PluginOpts = make(map[string]string, len(ss.PluginOpts))
+			for k, v := range ss.PluginOpts {
+				node.PluginOpts[k] = v
+			}
+		}
+	}
+
+	spec.Protocol = contracts.ProtocolShadowsocks
+	spec.Password = ss.Password
+	spec.URI = node.Encode()
+
+	spec.Extensions["method"] = ss.Cipher
+	spec.Extensions["udp"] = ss.UDP
+	if ss.Plugin != "" {
+		spec.Extensions["plugin"] = ss.Plugin
+		if v, ok := ss.PluginOpts["mode"]; ok {
+			spec.Extensions["plugin_mode"] = v
+		}
+		if v, ok := ss.PluginOpts["host"]; ok {
+			spec.Extensions["plugin_host"] = v
+		}
+		if v, ok := ss.PluginOpts["path"]; ok {
+			spec.Extensions["plugin_path"] = v
+		}
+		if v, ok := ss.PluginOpts["tls"]; ok && v == "true" {
+			spec.Extensions["plugin_tls"] = true
+		}
+		if v, ok := ss.PluginOpts["password"]; ok {
+			spec.Extensions["plugin_password"] = v
+		}
+		if v, ok := ss.PluginOpts["version"]; ok {
+			spec.Extensions["plugin_version"] = v
+		}
+	}
+	return nil
+}
+
+func fillSSSubscriptionSpecLegacy(spec *contracts.SubscriptionSpec, inb *MihomoInbound) error {
+	if inb.SharedCred.Password == "" {
+		return fmt.Errorf("%w: shadowsocks inbound %q has empty password", ErrMissingCredential, inb.Tag())
+	}
+	method := inb.SharedCred.Cipher
+	if method == "" {
+		method = defaultSSMethod
+	}
+	nodeName := spec.NodeName
+	if nodeName == "" {
+		nodeName = inb.Tag()
+	}
+	spec.Protocol = contracts.ProtocolShadowsocks
+	spec.Password = inb.SharedCred.Password
+	node := &codec.ShadowsocksNode{
+		NodeName: nodeName,
+		Host:     spec.Host,
+		Port:     spec.Port,
+		Password: inb.SharedCred.Password,
+		Method:   method,
+	}
+	spec.URI = node.Encode()
+	spec.Extensions["method"] = method
 	return nil
 }

@@ -11,6 +11,8 @@ source:
   - pkg/proxy/containers/mihomo/subscription.go
   - pkg/proxy/containers/mihomo/profilegen.go
   - pkg/proxy/containers/mihomo/rest_client.go
+  - pkg/proxy/core/params/protocolparams/params_ss.go
+  - pkg/proxy/core/params/defaults.go
 changelog:
   - date: 2026-04-23
     change: 初始版本;覆盖 stage 1-10 全量架构(模式 B + 共享凭据 + Updater + WaitReady)
@@ -24,3 +26,6 @@ changelog:
   - date: 2026-04-25
     change: protocol expansion Phase 3: trojan 迁移到 ProtocolParams,支持 tcp/ws/grpc + tls/reality;记录 ws+reality upstream skip
     reason: Phase 3 实现和 TestMihomoTrojanMatrix 验证完成,wiki 同步当前协议状态
+  - date: 2026-04-25
+    change: protocol expansion Phase 4: shadowsocks 迁移到 ProtocolParams;默认 cipher 改为 2022-blake3-aes-256-gcm(SIP022 base64 密钥);新增 obfs/v2ray-plugin/shadow-tls 三种插件;shadow-tls 不下发到 server listener,仅写入订阅 Extensions
+    reason: Phase 4 实现 + P0-P3 review 修复完成,wiki 同步 SS 当前协议状态

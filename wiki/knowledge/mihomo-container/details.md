@@ -46,7 +46,7 @@ layer: details
 
 ## 共享凭据 listener 布局
 
-listener 模型仍是一条 inbound 一把共享凭据,但新协议扩展使用 `ProtocolParams` 保存协议/传输/安全层的结构化配置。旧 `SharedCred` 继续用于 shadowsocks 以及历史 vmess/trojan 持久化记录的兼容读取。
+listener 模型仍是一条 inbound 一把共享凭据,但新协议扩展使用 `ProtocolParams` 保存协议/传输/安全层的结构化配置。旧 `SharedCred` 字段保留是为了让 Phase 1-4 之前的持久化记录在重启后仍能被 `FromNative` 正确加载;新 FastAdd 路径已不写入 SharedCred。
 
 `MihomoInbound.SharedCred` legacy 字段按协议填不同字段:
 
@@ -54,7 +54,7 @@ listener 模型仍是一条 inbound 一把共享凭据,但新协议扩展使用 
 |------|------|
 | vmess | UUID(历史记录兼容;Phase 2+ 新记录走 ProtocolParams.VMess) |
 | trojan | Password + CertFile + KeyFile(历史记录兼容;Phase 3+ 新记录走 ProtocolParams.Trojan + SecuritySpec) |
-| shadowsocks | Password + Cipher |
+| shadowsocks | Password + Cipher(历史记录兼容;Phase 4+ 新记录走 ProtocolParams.SS) |
 
 `ProtocolParams` 当前已落地:
 
@@ -63,8 +63,22 @@ listener 模型仍是一条 inbound 一把共享凭据,但新协议扩展使用 
 | vless | tcp/ws/grpc/xhttp/splithttp + tls/reality |
 | vmess | tcp/ws/grpc + none/tls/reality |
 | trojan | tcp/ws/grpc + tls/reality |
+| shadowsocks | tcp + 任意 cipher(默认 `2022-blake3-aes-256-gcm`)+ obfs/v2ray-plugin/shadow-tls 插件 |
 
 **trojan 必须带 TLS 或 Reality**(stage 11+ E2E 确认):mihomo Alpha 的 trojan listener 运行时拒绝没有 `certificate + private-key` / `reality-config` / ss config 的配置,报 `disallow using Trojan without both certificates/reality/ss config`。Phase 3 后 FastAdd 的 trojan 新记录走 ProtocolParams:`security=tls` 输出 `certificate` / `private-key`;`security=reality` 输出 `reality-config`;transport 支持 tcp/ws/grpc。未显式传 `security` 时 parseTrojan 默认 TLS,生产 RPC/HTTP 路径由 `FillDefaults` 物化 cert_file/key_file。
+
+**Shadowsocks 默认 cipher 与 SIP022 密钥**:Phase 4 起 `FillDefaults` 默认 cipher 设为 `2022-blake3-aes-256-gcm`(`pkg/proxy/core/params/defaults.go::fillCredentials`),并按 cipher 决定密码生成策略:
+- `2022-blake3-aes-256-gcm` → 32 字节随机熵 → standard base64 → 44 字符密码
+- `2022-blake3-aes-128-gcm` → 16 字节随机熵 → standard base64 → 24 字符密码
+- 其他 classic AEAD(`aes-256-gcm` / `chacha20-ietf-poly1305` / ...)→ 16 字节 → hex → 32 字符密码
+
+cipher 必须先于 password 落定,否则 `randomSSPassword` 拿不到正确 cipher,会用 hex 兜底导致 SIP022 listener 启动失败。
+
+**Shadowsocks 插件分流**:`fillSSListener`(profilegen.go)对 plugin 字段的处理:
+- `obfs` / `v2ray-plugin` → mihomo 原生 listener plugin,下发 `plugin` + `plugin-opts` 到 yaml(`tls` 字段转 bool;`version` 字段转 int)
+- `shadow-tls` → **不下发到 listener**(shadow-tls 是网络层 wrapper,不是 mihomo SS listener 的原生 plugin),mihomo 服务端只跑 plain SS,plugin 信息只写入订阅 Extensions 供客户端 Clash config 使用
+
+**SS plugin opts 命名约定**:HTTP handler 用平铺无前缀字段(`plugin_mode` / `plugin_host` / `plugin_path` / `plugin_tls` / `plugin_password` / `plugin_version`),`SSParams.PluginOpts` 内用 mihomo canonical 短名(`mode` / `host` / ...),订阅 Extensions 又退回 `plugin_mode` 等前缀名以便 `buildPluginOpts`(clash converter)对齐。
 
 **SAFE_PATHS 约束**:mihomo 对 config 里引用的文件路径做安全检查 —— 路径必须位于 `-d` 参数指定的 home directory(即 `MihomoConfig.DataDir`)之下,否则报 `path is not subpath of home directory`。生产部署要把 trojan cert 写到 `DataDir` 或其子目录。
 
@@ -118,6 +132,6 @@ listener 模型仍是一条 inbound 一把共享凭据,但新协议扩展使用 
    - vless → `VLessNode{UUID, Port=forwardPort, Host=req.Host, ...}` → `Encode()`
    - vmess → `VMessNode{UUID, Port=forwardPort, Host=req.Host, ...}` → `Encode()`
    - trojan → `TrojanNode{Password, Port=forwardPort, ...}` → `Encode()`;Phase 3 会透传 `transport` / `security` / reality / skip-cert-verify 到 URI 和 Extensions
-   - ss → `ShadowsocksNode{Method, Password, Port=forwardPort, ...}`;cipher 为空时 fallback `aes-256-gcm`(与 clash converter 的 `defaultSSMethod` 对齐)→ `Encode()`
+   - ss → `ShadowsocksNode{Method, Password, Plugin, PluginOpts, Port=forwardPort, ...}` → `Encode()`;Phase 4 同时把 `method` / `udp` / `plugin` / `plugin_mode` / `plugin_host` / `plugin_path` / `plugin_tls` / `plugin_password` / `plugin_version` 写入 Extensions,clash converter 据此组装 mihomo `plugin-opts`(shadow-tls 同样输出到 Extensions,即便 server listener 跳过)。cipher 为空时 fallback 到 `defaultSSMethod=2022-blake3-aes-256-gcm`(legacy SharedCred 路径才会触发),与 clash converter 的 `convertShadowsocks` 默认对齐
 
 URI 组装全部在 `core/subscription/codec` 层完成,本包零字符串拼接。协议 filter 不在本层处理(交给上层 HTTP handler 做)。

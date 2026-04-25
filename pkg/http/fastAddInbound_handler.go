@@ -97,6 +97,14 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		// SkipCertVerify:subscription-side override. true emits
 		// skip-cert-verify on the client config regardless of cert source.
 		SkipCertVerify bool `json:"skip_cert_verify,omitempty"`
+		// Shadowsocks plugin convenience fields.
+		Plugin         string `json:"plugin,omitempty"`          // "obfs" | "v2ray-plugin" | "shadow-tls"
+		PluginMode     string `json:"plugin_mode,omitempty"`     // obfs: "http"|"tls"; v2ray-plugin: "websocket"|"quic"
+		PluginHost     string `json:"plugin_host,omitempty"`     // obfs-local/shadow-tls target host
+		PluginPath     string `json:"plugin_path,omitempty"`     // v2ray-plugin path
+		PluginTLS      bool   `json:"plugin_tls,omitempty"`      // v2ray-plugin TLS flag
+		PluginPassword string `json:"plugin_password,omitempty"` // shadow-tls password
+		PluginVersion  string `json:"plugin_version,omitempty"`  // shadow-tls version: "2" or "3"
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
@@ -158,6 +166,10 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		"xhttp_path": req.XHTTPPath, "xhttp_mode": req.XHTTPMode, "xhttp_host": req.XHTTPHost,
 		"alpn": req.ALPN,
 		"flow": req.Flow,
+		// Shadowsocks plugin
+		"plugin": req.Plugin, "plugin_mode": req.PluginMode,
+		"plugin_host": req.PluginHost, "plugin_path": req.PluginPath,
+		"plugin_password": req.PluginPassword, "plugin_version": req.PluginVersion,
 	}
 	for k, v := range convFields {
 		if v != "" {
@@ -180,6 +192,9 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		if _, exists := extra["skip_cert_verify"]; !exists {
 			extra["skip_cert_verify"] = "true"
 		}
+	}
+	if req.PluginTLS {
+		extra["plugin_tls"] = "true"
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())

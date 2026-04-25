@@ -56,10 +56,10 @@ func mihomoMVPCases() []mihomoProtocolCase {
 			Name:     "shadowsocks",
 			Protocol: "shadowsocks",
 			params: func() map[string]any {
-				// aes-256-gcm is the clash converter's default fallback and
-				// is accepted by both mihomo (Alpha 2024+) and xray as an
-				// AEAD 2022 cipher (see pkg/proxy/core/subscription/
-				// converter/clash.go convertShadowsocks).
+				// aes-256-gcm: classic AEAD cipher accepted by both mihomo
+				// (Alpha 2024+) and xray. This test uses the legacy SharedCred
+				// path (pre-Phase-4 record shape); Phase 4 system tests live
+				// in mihomo_ss_matrix_test.go.
 				return map[string]any{
 					"password": "ss-stage10-" + randHex(16),
 					"cipher":   "aes-256-gcm",

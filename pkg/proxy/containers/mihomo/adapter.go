@@ -210,7 +210,8 @@ func isLoopbackListen(addr string) bool {
 func fastAddBuildInbound(tag string, params map[string]any) (*MihomoInbound, error) {
 	protoStr, _ := params["protocol"].(string)
 	switch contracts.Protocol(protoStr) {
-	case contracts.ProtocolVLess, contracts.ProtocolVMess, contracts.ProtocolTrojan:
+	case contracts.ProtocolVLess, contracts.ProtocolVMess, contracts.ProtocolTrojan,
+		contracts.ProtocolShadowsocks:
 		// Parse reads KeyTag from params if present; we overwrite with
 		// the canonical FastAdd tag afterwards — that's the authoritative
 		// identifier, and it preserves Parse's read-only contract on

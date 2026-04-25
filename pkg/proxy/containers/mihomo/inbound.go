@@ -92,17 +92,17 @@ type MihomoSharedCred struct {
 	CertSource string `json:"cert_source,omitempty"`
 }
 
+func shouldCleanupCertSource(src string) bool {
+	return src == "pem" || src == "self_signed"
+}
+
 // shouldCleanupCerts reports whether RemoveInboundConfig may remove the
 // cert/key files on disk. True only for sources v2raymg itself writes
 // ("pem" and "self_signed"); externally-managed sources are left alone
 // to avoid accidentally nuking caller-maintained material or certmgr's
 // renewal state.
 func (c MihomoSharedCred) shouldCleanupCerts() bool {
-	return c.CertSource == "pem" || c.CertSource == "self_signed"
-}
-
-func shouldCleanupCertSource(src string) bool {
-	return src == "pem" || src == "self_signed"
+	return shouldCleanupCertSource(c.CertSource)
 }
 
 // cleanupCertFiles returns cert files owned by v2raymg. ProtocolParams and
@@ -194,14 +194,31 @@ func (i *MihomoInbound) Validate() error {
 	case contracts.ProtocolTrojan:
 		return i.validateTrojan()
 	case contracts.ProtocolShadowsocks:
-		if i.SharedCred.Password == "" {
-			return fmt.Errorf("%w: shadowsocks requires password", ErrMissingCredential)
-		}
-		if i.SharedCred.Cipher == "" {
-			return fmt.Errorf("%w: shadowsocks requires cipher", ErrMissingCredential)
-		}
+		return i.validateSS()
 	default:
 		return fmt.Errorf("%w: %q", ErrProtocolNotSupported, i.Protocol())
+	}
+}
+
+// validateSS dispatches between the Phase 4 ProtocolParams path and the legacy
+// SharedCred path. ProtocolParams takes precedence when present.
+func (i *MihomoInbound) validateSS() error {
+	if i.ProtocolParams != nil && i.ProtocolParams.SS != nil {
+		ss := i.ProtocolParams.SS
+		if ss.Password == "" {
+			return fmt.Errorf("%w: shadowsocks requires password", ErrMissingCredential)
+		}
+		if ss.Cipher == "" {
+			return fmt.Errorf("%w: shadowsocks requires cipher", ErrMissingCredential)
+		}
+		return nil
+	}
+	// Legacy SharedCred path.
+	if i.SharedCred.Password == "" {
+		return fmt.Errorf("%w: shadowsocks requires password", ErrMissingCredential)
+	}
+	if i.SharedCred.Cipher == "" {
+		return fmt.Errorf("%w: shadowsocks requires cipher", ErrMissingCredential)
 	}
 	return nil
 }

@@ -74,7 +74,10 @@ func Parse(raw map[string]any) (*ProtocolParams, error) {
 		}
 		return pp, nil
 	case contracts.ProtocolShadowsocks:
-		return nil, fmt.Errorf("%w: shadowsocks parser not yet implemented", ErrProtocolNotSupported)
+		if err := parseSS(raw, pp); err != nil {
+			return nil, err
+		}
+		return pp, nil
 	case contracts.ProtocolHysteria2:
 		return nil, fmt.Errorf("%w: hysteria2 parser not yet implemented", ErrProtocolNotSupported)
 	case contracts.ProtocolTUIC:

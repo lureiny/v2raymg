@@ -676,10 +676,25 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 | `sniffing_route_only` | "true"/"false" | 仅路由不替换目标 |
 | `uuid` | string | VLESS/VMess UUID（默认自动生成） |
 | `flow` | string | VLESS flow，如 `xtls-rprx-vision` |
-| `method` | string | Shadowsocks 加密方式 |
+| `method` / `cipher` | string | Shadowsocks 加密方式（mihomo 默认 `2022-blake3-aes-256-gcm`，SIP022 系列要求 base64 密钥；non-SIP022 用 hex 字符串） |
 | `password` | string | Trojan/Shadowsocks 密码 |
+| `udp` | "true"/"false" | Shadowsocks UDP 开关，默认 `true` |
 | `utls_fingerprint` | string | Reality 客户端 fingerprint，如 `chrome` |
 | `skip_cert_verify` | "true"/"false" | 订阅侧跳过证书校验提示 |
+
+**Shadowsocks 插件便捷字段**（仅 mihomo container 接入）:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `plugin` | string | `obfs` / `v2ray-plugin` / `shadow-tls` |
+| `plugin_mode` | string | obfs: `http`/`tls`；v2ray-plugin: `websocket`/`quic` |
+| `plugin_host` | string | obfs/v2ray-plugin/shadow-tls 的目标 host |
+| `plugin_path` | string | v2ray-plugin path |
+| `plugin_tls` | bool | v2ray-plugin TLS 开关 |
+| `plugin_password` | string | shadow-tls 密码 |
+| `plugin_version` | string | shadow-tls 版本（`2` / `3`） |
+
+> shadow-tls 是网络层 wrapper proxy，**不会下发到 mihomo SS listener**；服务端只跑 plain SS，shadow-tls 信息只写入订阅 Extensions 用于客户端 Clash 配置生成。
 
 **Protocol:** `vless` | `vmess` | `trojan` | `ss` / `shadowsocks`
 
@@ -689,13 +704,13 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 
 **支持的协议组合:**
 
-| 协议 | 传输 | 安全 |
-|------|------|------|
-| VLESS(mihomo) | tcp, ws, grpc, xhttp/splithttp | none, tls, reality |
-| VMess(mihomo) | tcp, ws, grpc | none, tls, reality |
-| Trojan(mihomo) | tcp, ws, grpc | tls, reality |
-| Shadowsocks(mihomo) | tcp | none |
-| Xray | 见 xray 协议矩阵 | 见 xray 协议矩阵 |
+| 协议 | 传输 | 安全 | 备注 |
+|------|------|------|------|
+| VLESS(mihomo) | tcp, ws, grpc, xhttp/splithttp | none, tls, reality | |
+| VMess(mihomo) | tcp, ws, grpc | none, tls, reality | |
+| Trojan(mihomo) | tcp, ws, grpc | tls, reality | TLS 必填 cert；reality 必填 server_names + short_ids |
+| Shadowsocks(mihomo) | tcp | none | 默认 cipher `2022-blake3-aes-256-gcm`；可选 obfs / v2ray-plugin / shadow-tls 插件 |
+| Xray | 见 xray 协议矩阵 | 见 xray 协议矩阵 | |
 
 Trojan+TLS 需要提供证书来源(`cert_file/key_file`、`certificate/key`、`domain` 或 `self_signed`)；Trojan+Reality 使用 `reality-config`，不需要也不会由 `FillDefaults` 强制补 TLS 证书。
 
@@ -739,6 +754,48 @@ Trojan+TLS 需要提供证书来源(`cert_file/key_file`、`certificate/key`、`
   "reality_server_names": ["www.microsoft.com"],
   "reality_short_ids": ["aabbccddeeff0011"],
   "utls_fingerprint": "chrome"
+}
+```
+
+**示例 - Shadowsocks（mihomo，默认 SIP022 cipher）:**
+```json
+{
+  "tag": "ss-2022",
+  "protocol": "shadowsocks",
+  "container": "mihomo",
+  "port": 8388
+}
+```
+> 不传 `cipher` / `password` 时，`FillDefaults` 会自动设置 `2022-blake3-aes-256-gcm` cipher 并生成对应的 base64(32 bytes) 密码。
+
+**示例 - Shadowsocks+obfs:**
+```json
+{
+  "tag": "ss-obfs",
+  "protocol": "shadowsocks",
+  "container": "mihomo",
+  "port": 8389,
+  "cipher": "aes-256-gcm",
+  "password": "your-password",
+  "plugin": "obfs",
+  "plugin_mode": "http",
+  "plugin_host": "cdn.example.com"
+}
+```
+
+**示例 - Shadowsocks+shadow-tls（仅订阅，server 跑 plain SS）:**
+```json
+{
+  "tag": "ss-stls",
+  "protocol": "shadowsocks",
+  "container": "mihomo",
+  "port": 8390,
+  "cipher": "aes-256-gcm",
+  "password": "your-password",
+  "plugin": "shadow-tls",
+  "plugin_host": "www.microsoft.com",
+  "plugin_password": "stls-pw",
+  "plugin_version": "3"
 }
 ```
 

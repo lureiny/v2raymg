@@ -1,6 +1,7 @@
 package params
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,8 +56,60 @@ func TestFillDefaults_Shadowsocks_DefaultsPasswordAndCipher(t *testing.T) {
 	if pw == "" {
 		t.Fatalf("password not filled")
 	}
-	if p["cipher"] != "aes-256-gcm" {
+	if p["cipher"] != "2022-blake3-aes-256-gcm" {
 		t.Fatalf("cipher default mismatch: got %v", p["cipher"])
+	}
+}
+
+func TestFillDefaults_Shadowsocks_2022CipherProducesBase64Password(t *testing.T) {
+	// SIP022 ciphers require a raw-key-material password encoded as standard
+	// base64; a hex string is NOT a valid key for these ciphers.
+	for _, cipher := range []string{
+		"2022-blake3-aes-256-gcm",
+		"2022-blake3-aes-128-gcm",
+	} {
+		t.Run(cipher, func(t *testing.T) {
+			p := map[string]any{"cipher": cipher}
+			if err := FillDefaults(p, "shadowsocks", nil, ""); err != nil {
+				t.Fatalf("FillDefaults: %v", err)
+			}
+			pw, _ := p["password"].(string)
+			if pw == "" {
+				t.Fatalf("password not filled for %s", cipher)
+			}
+			raw, err := base64.StdEncoding.DecodeString(pw)
+			if err != nil {
+				t.Fatalf("cipher %s: generated password %q is not valid standard base64: %v", cipher, pw, err)
+			}
+			want := 32
+			if strings.Contains(cipher, "128") {
+				want = 16
+			}
+			if len(raw) != want {
+				t.Fatalf("cipher %s: decoded key length = %d, want %d", cipher, len(raw), want)
+			}
+		})
+	}
+}
+
+func TestFillDefaults_Shadowsocks_ClassicCipherKeepsHexPassword(t *testing.T) {
+	// Non-2022 ciphers use a hex string (legacy behaviour preserved).
+	p := map[string]any{"cipher": "aes-256-gcm"}
+	if err := FillDefaults(p, "shadowsocks", nil, ""); err != nil {
+		t.Fatalf("FillDefaults: %v", err)
+	}
+	pw, _ := p["password"].(string)
+	if pw == "" {
+		t.Fatalf("password not filled")
+	}
+	// A 16-byte hex password is 32 characters, all hex digits.
+	if len(pw) != 32 {
+		t.Fatalf("expected 32-char hex password for aes-256-gcm, got %q (len %d)", pw, len(pw))
+	}
+	for _, c := range pw {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			t.Fatalf("non-hex character %q in password %q", c, pw)
+		}
 	}
 }
 
@@ -65,7 +118,7 @@ func TestFillDefaults_Shadowsocks_SS_Alias(t *testing.T) {
 	if err := FillDefaults(p, "ss", nil, ""); err != nil {
 		t.Fatalf("FillDefaults: %v", err)
 	}
-	if p["cipher"] != "aes-256-gcm" {
+	if p["cipher"] != "2022-blake3-aes-256-gcm" {
 		t.Fatalf("ss alias should default cipher; got %v", p["cipher"])
 	}
 }

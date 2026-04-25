@@ -31,6 +31,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
@@ -117,15 +118,18 @@ func fillCredentials(params map[string]any, protocol string) {
 			params["password"] = randomHex(16)
 		}
 	case "shadowsocks", "ss":
-		if isEmpty(params, "password") {
-			params["password"] = randomHex(16)
-		}
+		// Cipher must be set before password so randomSSPassword can pick
+		// the right key length (SIP022 requires base64-encoded 16 or 32 bytes).
 		if isEmpty(params, "cipher") {
-			// AEAD 2022 default. Matches the subscription converter's
+			// AEAD-2022 default. Matches the subscription converter's
 			// fallback in pkg/proxy/core/subscription/converter/clash.go
 			// convertShadowsocks, so listener and client-side subscription
 			// agree on the same cipher when the caller didn't pick one.
-			params["cipher"] = "aes-256-gcm"
+			params["cipher"] = "2022-blake3-aes-256-gcm"
+		}
+		if isEmpty(params, "password") {
+			cipher, _ := params["cipher"].(string)
+			params["password"] = randomSSPassword(cipher)
 		}
 	case "hysteria2":
 		// Hysteria2 auth is a single password (mihomo Alpha
@@ -341,6 +345,30 @@ func isEmpty(params map[string]any, key string) bool {
 		return false
 	}
 	return s == ""
+}
+
+// randomSSPassword generates a valid password for the given Shadowsocks cipher.
+//
+// SIP022 (2022-blake3-* family) requires a raw-key-material password encoded as
+// standard base64:
+//   - 2022-blake3-aes-256-gcm: 32-byte key → 44-char base64 string
+//   - 2022-blake3-aes-128-gcm: 16-byte key → 24-char base64 string
+//
+// Classic AEAD ciphers (aes-256-gcm, chacha20-ietf-poly1305, …) accept any
+// opaque string, so we continue to use a hex string for those.
+func randomSSPassword(cipher string) string {
+	if strings.HasPrefix(cipher, "2022-") {
+		keyLen := 32
+		if strings.Contains(cipher, "128") {
+			keyLen = 16
+		}
+		key := make([]byte, keyLen)
+		if _, err := rand.Read(key); err != nil {
+			return fmt.Sprintf("fallback-%x", time.Now().UnixNano())
+		}
+		return base64.StdEncoding.EncodeToString(key)
+	}
+	return randomHex(16)
 }
 
 // randomHex returns 2n hex characters sourced from crypto/rand. Used for

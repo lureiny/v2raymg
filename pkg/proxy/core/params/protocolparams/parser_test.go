@@ -37,10 +37,9 @@ func TestParseUnknownProtocol(t *testing.T) {
 // per-protocol test file and be removed from this list.
 //
 // Stub list shrinks one entry per phase. VLESS flipped in Phase 1, VMess
-// in Phase 2, and Trojan in Phase 3.
+// in Phase 2, Trojan in Phase 3, Shadowsocks in Phase 4.
 func TestParseKnownProtocolStub(t *testing.T) {
 	cases := []contracts.Protocol{
-		contracts.ProtocolShadowsocks,
 		contracts.ProtocolHysteria2,
 		contracts.ProtocolTUIC,
 		contracts.ProtocolAnyTLS,
@@ -60,15 +59,15 @@ func TestParseKnownProtocolStub(t *testing.T) {
 }
 
 func TestParseShorthandSS(t *testing.T) {
-	// "ss" folds to shadowsocks; once the shadowsocks branch is wired up the
-	// stub will still return ErrProtocolNotSupported, so we just verify the
-	// alias was recognised by checking we advanced past "unknown protocol".
-	_, err := Parse(map[string]any{KeyProtocol: "ss", KeyPort: 8388})
-	if !errors.Is(err, ErrProtocolNotSupported) {
-		t.Errorf("err = %v", err)
+	// "ss" folds to "shadowsocks" by normaliseProtocolString; verify the alias
+	// routes correctly into parseSS (which requires password+cipher).
+	_, err := Parse(map[string]any{KeyProtocol: "ss", KeyPort: uint32(8388)})
+	if err == nil {
+		t.Fatal("expected error for missing password+cipher, got nil")
 	}
-	if err != nil && !containsSubstring(err.Error(), "shadowsocks") {
-		t.Errorf("expected error message to mention 'shadowsocks' (alias-normalised), got: %v", err)
+	// Should fail on missing password (not ErrProtocolNotSupported)
+	if errors.Is(err, ErrProtocolNotSupported) {
+		t.Errorf("ss alias should route to parseSS, not return ErrProtocolNotSupported; got: %v", err)
 	}
 }
 

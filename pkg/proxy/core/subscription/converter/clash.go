@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -27,6 +28,11 @@ const (
 
 	clashProxiesKey     = "proxies"
 	clashProxyGroupsKey = "proxy-groups"
+
+	// defaultRealityFingerprint is the fallback client-fingerprint for reality
+	// nodes when the caller does not supply utls_fingerprint. mihomo requires
+	// a non-empty value; callers that supply an explicit value take precedence.
+	defaultRealityFingerprint = "chrome"
 )
 
 // ClashConverter emits a full Clash (mihomo) YAML including proxies,
@@ -177,6 +183,13 @@ func ConvertTrojanForTest(spec contracts.SubscriptionSpec) *ClashProxy {
 	return (&ClashConverter{}).convertTrojan(spec)
 }
 
+// ConvertSSForTest exposes convertShadowsocks to integration tests for the
+// same reason as ConvertVMessForTest: system tests can exercise the real
+// subscription→converter chain without fetching the external Clash template.
+func ConvertSSForTest(spec contracts.SubscriptionSpec) *ClashProxy {
+	return (&ClashConverter{}).convertShadowsocks(spec)
+}
+
 // convertSpec returns nil if the protocol is unsupported by Clash/mihomo or
 // the node's transport/security combination is not expressible.
 func (c *ClashConverter) convertSpec(spec contracts.SubscriptionSpec) *ClashProxy {
@@ -263,9 +276,11 @@ func (c *ClashConverter) convertVMess(spec contracts.SubscriptionSpec) *ClashPro
 		return nil
 	}
 
-	// client-fingerprint
+	// client-fingerprint; reality requires a non-empty value
 	if fp := extString(ext, "utls_fingerprint"); fp != "" {
 		proxy.ClientFingerprint = fp
+	} else if security == "reality" {
+		proxy.ClientFingerprint = defaultRealityFingerprint
 	}
 
 	return proxy
@@ -316,8 +331,11 @@ func (c *ClashConverter) convertTrojan(spec contracts.SubscriptionSpec) *ClashPr
 		proxy.Flow = flow
 	}
 
+	// client-fingerprint; reality requires a non-empty value
 	if fp := extString(ext, "utls_fingerprint"); fp != "" {
 		proxy.ClientFingerprint = fp
+	} else if security == "reality" {
+		proxy.ClientFingerprint = defaultRealityFingerprint
 	}
 	if skipVerify, _ := ext["skip_cert_verify"].(bool); skipVerify {
 		proxy.SkipCertVerify = true
@@ -395,9 +413,11 @@ func (c *ClashConverter) convertVLess(spec contracts.SubscriptionSpec) *ClashPro
 		proxy.Flow = flow
 	}
 
-	// client-fingerprint
+	// client-fingerprint; reality requires a non-empty value
 	if fp := extString(ext, "utls_fingerprint"); fp != "" {
 		proxy.ClientFingerprint = fp
+	} else if security == "reality" {
+		proxy.ClientFingerprint = defaultRealityFingerprint
 	}
 	if skipVerify, _ := ext["skip_cert_verify"].(bool); skipVerify {
 		proxy.SkipCertVerify = true
@@ -433,7 +453,16 @@ func (c *ClashConverter) convertVLess(spec contracts.SubscriptionSpec) *ClashPro
 func (c *ClashConverter) convertShadowsocks(spec contracts.SubscriptionSpec) *ClashProxy {
 	method := extString(spec.Extensions, "method")
 	if method == "" {
-		method = "aes-256-gcm"
+		method = "2022-blake3-aes-256-gcm"
+	}
+
+	// UDP defaults to true (SS is almost always used with UDP). When the
+	// ProtocolParams path emits udp=false in Extensions we honour it.
+	udp := true
+	if v, ok := spec.Extensions["udp"]; ok {
+		if b, ok := v.(bool); ok {
+			udp = b
+		}
 	}
 
 	proxy := &ClashProxy{
@@ -443,7 +472,7 @@ func (c *ClashConverter) convertShadowsocks(spec contracts.SubscriptionSpec) *Cl
 		Port:     int(spec.Port),
 		Password: spec.Password,
 		Cipher:   method,
-		UDP:      true,
+		UDP:      udp,
 	}
 
 	// obfs plugin
@@ -661,7 +690,7 @@ type ClashProxy struct {
 	ObfsPassword      string       `yaml:"obfs-password,omitempty"` // Hysteria2
 }
 
-// PluginOpts obfs/v2ray-plugin 选项。
+// PluginOpts obfs/v2ray-plugin/shadow-tls 选项。
 type PluginOpts struct {
 	Mode           string `yaml:"mode,omitempty"`
 	Host           string `yaml:"host,omitempty"`
@@ -669,6 +698,9 @@ type PluginOpts struct {
 	SkipCertVerify bool   `yaml:"skip-cert-verify,omitempty"`
 	Path           string `yaml:"path,omitempty"`
 	MUX            bool   `yaml:"mux,omitempty"`
+	// shadow-tls specific
+	Password string `yaml:"password,omitempty"`
+	Version  int    `yaml:"version,omitempty"`
 }
 
 // WSOpts WebSocket 选项。
@@ -911,6 +943,17 @@ func buildPluginOpts(ext map[string]any) *PluginOpts {
 	}
 	if tls, ok := ext["plugin_tls"].(bool); ok {
 		opts.TLS = tls
+	}
+	if pwd := extString(ext, "plugin_password"); pwd != "" {
+		opts.Password = pwd
+	}
+	if ver := extString(ext, "plugin_version"); ver != "" {
+		if n, err := strconv.Atoi(ver); err == nil {
+			opts.Version = n
+		}
+	}
+	if *opts == (PluginOpts{}) {
+		return nil
 	}
 	return opts
 }
