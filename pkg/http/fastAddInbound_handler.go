@@ -114,6 +114,17 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		Down                  string `json:"down,omitempty"`                    // e.g. "100 Mbps"
 		Masquerade            string `json:"masquerade,omitempty"`              // server-side decoy URL/proxy/file
 		IgnoreClientBandwidth bool   `json:"ignore_client_bandwidth,omitempty"` // hy2: ignore client up/down adv
+		// TUIC convenience fields. Map onto the protocolparams keys of the
+		// same name. ZeroRTTHandshake / HeartbeatInterval / DisableSNI are
+		// client-only knobs (mihomo listener has no field for them — they
+		// reach the client via the subscription path); we accept them on
+		// the listener-add request anyway so a single FastAdd call can pre-
+		// populate the client-side hint.
+		CongestionController string `json:"congestion_controller,omitempty"` // "" | "bbr" | "cubic" | "new_reno"
+		UDPRelayMode         string `json:"udp_relay_mode,omitempty"`        // "" | "native" | "quic"
+		ZeroRTTHandshake     bool   `json:"zero_rtt_handshake,omitempty"`    // client-only → reduce-rtt
+		HeartbeatInterval    string `json:"heartbeat_interval,omitempty"`    // client-only; e.g. "10s"
+		DisableSNI           bool   `json:"disable_sni,omitempty"`           // client-only
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
@@ -183,6 +194,10 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		"obfs": req.Obfs, "obfs_password": req.ObfsPassword,
 		"up": req.Up, "down": req.Down,
 		"masquerade": req.Masquerade,
+		// TUIC
+		"congestion_controller": req.CongestionController,
+		"udp_relay_mode":        req.UDPRelayMode,
+		"heartbeat_interval":    req.HeartbeatInterval,
 	}
 	for k, v := range convFields {
 		if v != "" {
@@ -211,6 +226,16 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 	}
 	if req.IgnoreClientBandwidth {
 		extra["ignore_client_bandwidth"] = "true"
+	}
+	if req.ZeroRTTHandshake {
+		if _, exists := extra["zero_rtt_handshake"]; !exists {
+			extra["zero_rtt_handshake"] = "true"
+		}
+	}
+	if req.DisableSNI {
+		if _, exists := extra["disable_sni"]; !exists {
+			extra["disable_sni"] = "true"
+		}
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
@@ -248,7 +273,7 @@ func (handler *FastAddInboundHandler) help() string {
 	return `POST /api/inbound/fast
 	快速添加指定配置的inbound
 	body: {"target":"", "tag":"", "protocol":"vless", "transport":"tcp", "domain":"", "security":"tls", "port":0, ...}
-	protocol: vless, vmess, trojan, shadowsocks, hysteria2 (hysteria2 仅 container=mihomo; tuic/anytls 计划分阶段接入)
+	protocol: vless, vmess, trojan, shadowsocks, hysteria2, tuic (hysteria2/tuic 仅 container=mihomo; anytls 计划下一阶段接入)
 	transport: tcp, ws, h2(http), grpc, httpupgrade, xhttp, splithttp (也可用 stream 字段, 向后兼容)
 	security: tls(默认), reality
 	domain: 证书域名 (tls 时使用); 为空则自签
@@ -256,5 +281,6 @@ func (handler *FastAddInboundHandler) help() string {
 	flow: VLESS flow, 一般为 "xtls-rprx-vision" (配合 reality 使用)
 	convenience fields: ws_path, grpc_service_name, http_path, http_host(逗号分隔), httpupgrade_path, xhttp_path, xhttp_mode, alpn, flow, sniffing_enabled
 	hysteria2 (container=mihomo): obfs, obfs_password, up, down, masquerade, ignore_client_bandwidth
+	tuic (container=mihomo): congestion_controller, udp_relay_mode, zero_rtt_handshake, heartbeat_interval(支持 "10s" / 纯毫秒数), disable_sni
 	extra_params: map[string]string, 透传任意参数到 Executor (如 tls_min_version, tls_reject_unknown_sni, uuid, 以及尚未提升为便捷字段的协议参数)`
 }

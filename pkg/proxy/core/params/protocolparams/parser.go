@@ -84,7 +84,10 @@ func Parse(raw map[string]any) (*ProtocolParams, error) {
 		}
 		return pp, nil
 	case contracts.ProtocolTUIC:
-		return nil, fmt.Errorf("%w: tuic parser not yet implemented", ErrProtocolNotSupported)
+		if err := parseTUIC(raw, pp); err != nil {
+			return nil, err
+		}
+		return pp, nil
 	case contracts.ProtocolAnyTLS:
 		return nil, fmt.Errorf("%w: anytls parser not yet implemented", ErrProtocolNotSupported)
 	default:

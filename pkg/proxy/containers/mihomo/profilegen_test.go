@@ -178,9 +178,9 @@ func TestBuildListener_RejectsInvalid(t *testing.T) {
 		t.Errorf("expected ErrMissingCredential, got %v", err)
 	}
 
-	// Phase 5 added hysteria2; use TUIC as the unsupported-protocol sentinel
-	// until Phase 6 lands.
-	_, err = BuildListener(NewMihomoInbound("t", contracts.ProtocolTUIC, 10001, MihomoSharedCred{Password: "p"}))
+	// Phase 6 added tuic; anytls is the unsupported-protocol sentinel
+	// until Phase 7 lands.
+	_, err = BuildListener(NewMihomoInbound("t", contracts.ProtocolAnyTLS, 10001, MihomoSharedCred{Password: "p"}))
 	if !errors.Is(err, ErrProtocolNotSupported) {
 		t.Errorf("expected ErrProtocolNotSupported, got %v", err)
 	}

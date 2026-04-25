@@ -65,6 +65,10 @@ func BuildListener(inb *MihomoInbound) (map[string]any, error) {
 		if err := fillHysteria2Listener(m, inb); err != nil {
 			return nil, err
 		}
+	case contracts.ProtocolTUIC:
+		if err := fillTuicListener(m, inb); err != nil {
+			return nil, err
+		}
 	default:
 		// Unreachable under correctly-validated inbound, but keeps the
 		// switch exhaustive in the face of future protocol additions
@@ -415,6 +419,79 @@ func fillHysteria2Listener(m map[string]any, inb *MihomoInbound) error {
 	if hy2.Masquerade != "" {
 		m["masquerade"] = hy2.Masquerade
 	}
+	return nil
+}
+
+// fillTuicListener maps TUIC ProtocolParams onto mihomo Alpha listener yaml
+// (v5 only — v2raymg targets v5 for per-user attribution; v4 token-based
+// auth is intentionally unsupported).
+//
+// Sources (mihomo Alpha listener/inbound/tuic.go::TuicOption + listener/parse.go):
+//   - users: map[uuid]password. v4 `token: []string` is mutually exclusive
+//     with users at the packet-overhead layer (server.go:109-112), so this
+//     function NEVER writes a `token:` key.
+//   - certificate / private-key: absolute PEM file paths (loaded via
+//     ca.NewTLSKeyPairLoader in listener/tuic/server.go:56). The mihomo key
+//     names are NOT cert-file/key-file — beware.
+//   - alpn: defaults to ["h3"] when caller didn't specify. Listener forces
+//     ["h3"] when the field is empty (server.go:83-87); we set the default
+//     explicitly so the emitted yaml matches the runtime behaviour.
+//   - congestion-controller: mihomo's parse-time default is "bbr" (injected
+//     by listener/parse.go:116 BEFORE the inbound struct decodes). v2raymg
+//     does not run through ParseListener — we emit the listener config as a
+//     yaml fragment for the top-level config — so we MUST write "bbr"
+//     explicitly when the caller didn't pick one. Skipping this would leave
+//     the field empty and mihomo would call common.SetCongestionController("")
+//     with undefined behaviour.
+//
+// Listener-side fields not exposed by v2raymg (left at mihomo defaults):
+//
+//   - max-idle-time / authentication-timeout / cwnd / max-udp-relay-packet-size
+//     / bbr-profile / mux-option / client-auth-* / ech-key
+//
+// Allow0RTT is unconditionally true at the listener (server.go:101) and
+// has no listener yaml key — `zero_rtt_handshake` rides exclusively on
+// the subscription path to surface as client `reduce-rtt`.
+//
+// HeartbeatInterval / UDPRelayMode are mihomo client-only fields and are
+// never written here. They reach the client via subscription Extensions.
+func fillTuicListener(m map[string]any, inb *MihomoInbound) error {
+	if inb.ProtocolParams == nil || inb.ProtocolParams.TUIC == nil {
+		return fmt.Errorf("%w: tuic inbound missing ProtocolParams.TUIC", ErrMissingCredential)
+	}
+	t := inb.ProtocolParams.TUIC
+
+	// v5 single-user mode: one inbound carries one (uuid, password); v2raymg
+	// distinguishes users at the forward layer. Multi-user expansion is the
+	// pending user-tracker refactor (see docs/inbound-user-tracker-refactor.md).
+	m["users"] = map[string]any{
+		t.UUID: t.Password,
+	}
+
+	sec := inb.ProtocolParams.Security
+	if sec == nil || sec.Kind != contracts.SecurityTLS || sec.TLS == nil {
+		return fmt.Errorf("%w: tuic requires tls security", ErrMissingCredential)
+	}
+	if sec.TLS.CertFile == "" || sec.TLS.KeyFile == "" {
+		return fmt.Errorf("%w: tuic requires cert_file and key_file", ErrMissingCredential)
+	}
+	m["certificate"] = sec.TLS.CertFile
+	m["private-key"] = sec.TLS.KeyFile
+
+	alpn := sec.TLS.ALPN
+	if len(alpn) == 0 {
+		alpn = []string{"h3"}
+	}
+	m["alpn"] = alpn
+
+	cc := t.CongestionController
+	if cc == "" {
+		// See doc above — mihomo's own default is parse-time only and we
+		// don't go through ParseListener. Mirror it explicitly.
+		cc = "bbr"
+	}
+	m["congestion-controller"] = cc
+
 	return nil
 }
 

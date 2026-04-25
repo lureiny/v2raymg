@@ -37,10 +37,10 @@ func TestParseUnknownProtocol(t *testing.T) {
 // per-protocol test file and be removed from this list.
 //
 // Stub list shrinks one entry per phase. VLESS flipped in Phase 1, VMess
-// in Phase 2, Trojan in Phase 3, Shadowsocks in Phase 4, Hysteria2 in Phase 5.
+// in Phase 2, Trojan in Phase 3, Shadowsocks in Phase 4, Hysteria2 in
+// Phase 5, TUIC in Phase 6.
 func TestParseKnownProtocolStub(t *testing.T) {
 	cases := []contracts.Protocol{
-		contracts.ProtocolTUIC,
 		contracts.ProtocolAnyTLS,
 	}
 	for _, proto := range cases {

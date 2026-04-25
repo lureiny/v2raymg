@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/params"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/params/protocolparams"
 )
@@ -180,9 +181,16 @@ func TestIntegrationFillDefaultsThenParseTUIC(t *testing.T) {
 	}
 
 	before := copyMap(raw)
-	_, err := protocolparams.Parse(raw)
-	if err == nil {
-		t.Fatal("Parse returned nil error for stubbed tuic branch")
+	pp, err := protocolparams.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse after FillDefaults: %v", err)
+	}
+	if pp.TUIC == nil || pp.TUIC.UUID == "" || pp.TUIC.Password == "" {
+		t.Fatalf("TUIC slot not populated: %+v", pp.TUIC)
+	}
+	if pp.Security == nil || pp.Security.Kind != contracts.SecurityTLS ||
+		pp.Security.TLS == nil || pp.Security.TLS.CertFile == "" || pp.Security.TLS.KeyFile == "" {
+		t.Fatalf("Security/TLS not propagated from self-signed cert resolution: %+v", pp.Security)
 	}
 	if !reflect.DeepEqual(raw, before) {
 		t.Errorf("Parse mutated raw map")

@@ -106,6 +106,7 @@ const (
 	KeyUDPRelayMode         = "udp_relay_mode"
 	KeyZeroRTTHandshake     = "zero_rtt_handshake"
 	KeyHeartbeatInterval    = "heartbeat_interval"
+	KeyDisableSNI           = "disable_sni"
 
 	// AnyTLS
 	KeyPaddingScheme            = "padding_scheme"

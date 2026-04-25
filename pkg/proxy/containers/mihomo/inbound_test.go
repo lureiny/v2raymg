@@ -88,11 +88,10 @@ func TestMihomoInbound_Validate(t *testing.T) {
 			wantErr: ErrMissingCredential,
 		},
 		{
-			// Phase 5 added hysteria2 support; pick another unimplemented
-			// protocol as the "unsupported" sentinel. Phase 6/7 will need
-			// to migrate this when TUIC/AnyTLS land.
+			// Phase 6 added tuic support; anytls is the next unimplemented
+			// protocol — it's the "unsupported" sentinel until Phase 7.
 			name:    "unsupported protocol",
-			inbound: NewMihomoInbound("t", contracts.ProtocolTUIC, 10001, MihomoSharedCred{Password: "pw"}),
+			inbound: NewMihomoInbound("t", contracts.ProtocolAnyTLS, 10001, MihomoSharedCred{Password: "pw"}),
 			wantErr: ErrProtocolNotSupported,
 		},
 	}
@@ -265,7 +264,7 @@ func TestFromNative_RejectsInvalid(t *testing.T) {
 		data string
 	}{
 		{"bad json", `{not json`},
-		{"unsupported protocol", `{"tag":"t","protocol":"tuic","port":10001,"shared_cred":{"password":"pw"}}`},
+		{"unsupported protocol", `{"tag":"t","protocol":"anytls","port":10001,"shared_cred":{"password":"pw"}}`},
 		{"missing credential", `{"tag":"t","protocol":"vmess","port":10001,"shared_cred":{}}`},
 	}
 	for _, tc := range tests {

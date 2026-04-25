@@ -14,8 +14,10 @@ source:
   - pkg/proxy/containers/mihomo/rest_client.go
   - pkg/proxy/core/params/protocolparams/params_ss.go
   - pkg/proxy/core/params/protocolparams/params_hysteria2.go
+  - pkg/proxy/core/params/protocolparams/params_tuic.go
   - pkg/proxy/core/params/defaults.go
   - pkg/proxy/core/subscription/codec/hysteria2.go
+  - pkg/proxy/core/subscription/codec/tuic.go
   - pkg/proxy/core/subscription/converter/clash.go
 changelog:
   - date: 2026-04-23
@@ -36,3 +38,6 @@ changelog:
   - date: 2026-04-25
     change: protocol expansion Phase 5 - hysteria2;首个 QUIC/UDP 协议接入,无 SharedCred legacy 路径;listener users:{default:<password>}、certificate/private-key、obfs salamander、up/down、ignore-client-bandwidth、masquerade(server-only);forward 层为 hy2 自动 UDP(forwardNetworkForProtocol);标准 hy2:// URI 不带 up/down/masquerade,只通过订阅 Extensions 透传到客户端 Clash 配置
     reason: Phase 5 实现 + 4-agent code review 修复 14 条 P1-P3 完成,wiki 同步当前协议状态;hysteria 容器仍保持 legacy 单 inbound 形态不动
+  - date: 2026-04-25
+    change: protocol expansion Phase 6 - TUIC v5;第二个 QUIC/UDP 协议;仅 v5(uuid+password),v4 token 显式拒绝;listener users:{<uuid>:<password>}(uuid 用 google/uuid.Parse 严格校验);certificate/private-key 同 hy2;congestion-controller 默认 bbr 由 profilegen 显式写;ZeroRTTHandshake/HeartbeatInterval/UDPRelayMode/DisableSNI 都是 client-only 字段(listener 强制 Allow0RTT=true 无对应 key);URI 用 dae 草案 + mihomo 修订(query 下划线),allow_insecure Decode 接收 Encode 不发;client yaml 用 reduce-rtt(不是 zero-rtt-handshake);convertTuic 的 heartbeat_interval 同时接受 duration string 和纯毫秒整数;forward 层 tuic 复用 hy2 的 UDP switch 分支
+    reason: Phase 6 实现 + agent review 修 P0(disable_sni 端到端断链)+ P1(heartbeat 数字 ms 兼容)+ P2(systemtest 加 cubic case)完成,wiki 同步当前协议状态

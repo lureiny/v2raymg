@@ -82,8 +82,10 @@ func TestFromParams_ErrorPaths(t *testing.T) {
 			wantSubstr: `"protocol" required`,
 		},
 		{
+			// Phase 6 wired TUIC; the next unimplemented protocol is anytls.
+			// Phase 7 will need to migrate this.
 			name:    "unknown protocol",
-			params:  map[string]any{"protocol": "tuic", "port": 10001, "uuid": "u"},
+			params:  map[string]any{"protocol": "anytls", "port": 10001, "password": "pw"},
 			wantErr: ErrProtocolNotSupported,
 		},
 		{

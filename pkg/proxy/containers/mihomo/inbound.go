@@ -130,10 +130,9 @@ func (i *MihomoInbound) cleanupCertFiles() []string {
 // status codes for "unknown protocol" vs "missing field").
 var (
 	// ErrProtocolNotSupported is returned when an inbound targets a protocol
-	// the mihomo container doesn't yet wire (currently TUIC and AnyTLS;
-	// Phase 6/7 will land them). See D4 in
-	// docs/mihomo-container-implementation-plan.md.
-	ErrProtocolNotSupported = errors.New("mihomo: protocol not supported (supported: vless/vmess/trojan/shadowsocks/hysteria2)")
+	// the mihomo container doesn't yet wire (currently AnyTLS; Phase 7 will
+	// land it). See D4 in docs/mihomo-container-implementation-plan.md.
+	ErrProtocolNotSupported = errors.New("mihomo: protocol not supported (supported: vless/vmess/trojan/shadowsocks/hysteria2/tuic)")
 
 	// ErrMissingCredential is returned when a required protocol-specific
 	// credential field is empty.
@@ -198,9 +197,61 @@ func (i *MihomoInbound) Validate() error {
 		return i.validateSS()
 	case contracts.ProtocolHysteria2:
 		return i.validateHysteria2()
+	case contracts.ProtocolTUIC:
+		return i.validateTuic()
 	default:
 		return fmt.Errorf("%w: %q", ErrProtocolNotSupported, i.Protocol())
 	}
+}
+
+// validateTuic enforces the Phase 6 invariants. TUIC has no legacy SharedCred
+// path — Phase 6 is its first appearance in the mihomo container, so
+// ProtocolParams.TUIC is mandatory.
+//
+// Several rules here overlap with parseTUIC (TLS-only, congestion-controller
+// whitelist, udp-relay-mode whitelist, valid uuid). The duplication is
+// deliberate — Validate is the single gate FromNative records cross when
+// reloaded from InboundStore, and a stored record may carry combinations
+// that never went through Parse (hand-edited or migration-intermediate).
+func (i *MihomoInbound) validateTuic() error {
+	if i.ProtocolParams == nil || i.ProtocolParams.TUIC == nil {
+		return fmt.Errorf("%w: tuic inbound missing ProtocolParams.TUIC", ErrMissingCredential)
+	}
+	t := i.ProtocolParams.TUIC
+	if t.UUID == "" {
+		return fmt.Errorf("%w: tuic requires uuid", ErrMissingCredential)
+	}
+	if t.Password == "" {
+		return fmt.Errorf("%w: tuic requires password", ErrMissingCredential)
+	}
+	sec := i.ProtocolParams.Security
+	if sec == nil {
+		return fmt.Errorf("%w: tuic requires tls security", ErrMissingCredential)
+	}
+	if sec.Kind != contracts.SecurityTLS {
+		return fmt.Errorf("%w: tuic security must be tls, got %q", ErrProtocolNotSupported, sec.Kind)
+	}
+	if sec.TLS == nil {
+		return fmt.Errorf("%w: tuic security=tls but TLS spec is nil", ErrMissingCredential)
+	}
+	if sec.TLS.CertFile == "" || sec.TLS.KeyFile == "" {
+		return fmt.Errorf("%w: tuic requires cert_file and key_file", ErrMissingCredential)
+	}
+	switch t.CongestionController {
+	case "", "bbr", "cubic", "new_reno":
+		// "" is acceptable here — fillTuicListener writes "bbr" as the default.
+	default:
+		return fmt.Errorf("%w: tuic congestion_controller %q not recognised",
+			ErrProtocolNotSupported, t.CongestionController)
+	}
+	switch t.UDPRelayMode {
+	case "", "native", "quic":
+		// ok
+	default:
+		return fmt.Errorf("%w: tuic udp_relay_mode %q not recognised",
+			ErrProtocolNotSupported, t.UDPRelayMode)
+	}
+	return nil
 }
 
 // validateHysteria2 enforces the Phase 5 invariants. Hysteria2 has no legacy
@@ -479,14 +530,12 @@ func (i *MihomoInbound) SetUserManager(um *usermanager.UserManager) {
 // so SS stays on the TCP default.
 //
 // Returning "" preserves the legacy default of TCP that pre-Phase-5 callers
-// (vless/vmess/trojan/ss) relied on. New UDP protocols (TUIC in Phase 6,
-// AnyTLS keeps TCP) extend the switch below.
+// (vless/vmess/trojan/ss) relied on. AnyTLS (Phase 7) is TCP-based and
+// stays on the default branch.
 func forwardNetworkForProtocol(p contracts.Protocol) string {
 	switch p {
-	case contracts.ProtocolHysteria2:
+	case contracts.ProtocolHysteria2, contracts.ProtocolTUIC:
 		return "udp"
-	// TODO(Phase 6): case contracts.ProtocolTUIC: return "udp"
-	// AnyTLS (Phase 7) is TCP-based and should fall through to "".
 	default:
 		return ""
 	}

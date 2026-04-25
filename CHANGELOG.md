@@ -1,5 +1,76 @@
 # CHANGELOG.md
 
+## 2026-04-25 — Mihomo Protocol Expansion Phase 6 (TUIC)
+
+Adds TUIC v5 support to the mihomo container's structured `ProtocolParams`
+path. TUIC is the second QUIC/UDP protocol after Hysteria2 — it reuses
+the same forward-layer UDP rule and `waitUDPListener` test pattern, so
+Phase 6 lands as a focused per-protocol addition rather than another
+infrastructure expansion. v4 (token-based) is intentionally unsupported;
+v2raymg targets v5 (uuid+password) for per-user attribution.
+
+### Highlights
+
+- New `parseTUIC`: required `uuid`+`password`, **strict
+  `uuid.Parse` validation** (mihomo Alpha silently zeros invalid uuids
+  via `FromStringOrNil`, which would collapse all users onto a single
+  zero-uuid key), Transport forced nil (QUIC fixed), Security forced
+  TLS (reality / none rejected). `congestion_controller` whitelist
+  `bbr|cubic|new_reno`; `udp_relay_mode` whitelist `native|quic`.
+- `MihomoInbound.AddUser` now picks UDP for TUIC via the same
+  `forwardNetworkForProtocol` hook hy2 introduced.
+- `fillTuicListener` emits `users: { <uuid>: <password> }` (v5 single-user;
+  v4 `token:` is mutually exclusive and never written),
+  `certificate`/`private-key`, `alpn: [h3]` default, plus
+  **explicit `congestion-controller: bbr` default**. Mihomo's
+  parse-time bbr default lives in `listener/parse.go:116` and runs only
+  through `parse.ParseListener`; emit the value explicitly so the
+  listener's wire-level behaviour is obvious from the yaml.
+- `ClashProxy` gains five TUIC client-only fields:
+  `congestion-controller`, `udp-relay-mode`, `reduce-rtt`,
+  `heartbeat-interval`, `disable-sni`. Note **`reduce-rtt`** (not
+  `zero-rtt-handshake`) — that's the actual mihomo client tag name;
+  `TestConvertTuic_ReduceRTT` locks a yaml-marshal assertion against
+  the wrong key name.
+- `convertTuic` reads from Extensions and converts
+  `heartbeat_interval` to integer milliseconds, accepting **both Go
+  duration strings ("10s")** and **raw ms ints ("10000")** so an
+  operator copying mihomo's literal default doesn't silently land on 0.
+- New codec `tuic.go` (dae-spec v5 only): query keys use underscores
+  (`congestion_control`, `udp_relay_mode`, `disable_sni`) per
+  mihomo's URI parser; v4 token form (userinfo without colon)
+  rejected loudly; `allow_insecure=1` honoured on Decode but never
+  Encoded (mihomo strips it; the clash path conveys
+  `skip-cert-verify` directly through `ClashProxy`).
+- HTTP handler gains five TUIC convenience fields:
+  `congestion_controller`, `udp_relay_mode`, `zero_rtt_handshake`,
+  `heartbeat_interval`, `disable_sni`.
+
+### Tests
+
+- 50+ new unit tests across `params_tuic_test.go`, `tuic_test.go`
+  (codec round-trip incl. IPv6 host, v4 rejection),
+  `profilegen_tuic_test.go` (golden yaml + listener-only / client-only
+  field separation), `subscription_tuic_test.go`, and
+  `clash_protocol_test.go` (incl. `disable_sni` end-to-end,
+  `heartbeat_interval` numeric/duration/negative).
+- Sentinel tests in five mihomo `*_test.go` files migrated from
+  TUIC → AnyTLS (anytls is the new "unsupported" sentinel until
+  Phase 7).
+- Integration test `pkg/proxy/systemtest/mihomo_tuic_matrix_test.go`:
+  three matrix cases (tls baseline / tls+bbr+reduce-rtt / tls+cubic)
+  plus a cross-cutting subscription-chain case walking
+  `GetUserSubscriptions → ConvertTuicForTest → spawnMihomoClient`.
+  UDP listener readiness reuses Phase 5's `waitUDPListener`.
+- `go test ./... -race -count=1` — 36 packages green.
+
+### Docs
+
+- README `Supported Proxy Kernels` table updated to include TUIC under
+  the mihomo row.
+- Wiki `wiki/knowledge/mihomo-container/{index,details,edge-cases}.md`
+  refreshed with TUIC schema facts and Phase 6 status.
+
 ## 2026-04-25 — Mihomo Protocol Expansion Phase 5 (Hysteria2)
 
 Adds Hysteria2 to the mihomo container's structured `ProtocolParams`

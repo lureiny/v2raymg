@@ -65,6 +65,7 @@ listener 模型仍是一条 inbound 一把共享凭据,但新协议扩展使用 
 | trojan | tcp/ws/grpc + tls/reality |
 | shadowsocks | tcp + 任意 cipher(默认 `2022-blake3-aes-256-gcm`)+ obfs/v2ray-plugin/shadow-tls 插件 |
 | hysteria2 | QUIC(固定,无 transport 选项)+ tls(强制,reality/none 拒绝)+ 可选 salamander obfs / up/down 带宽宣告 / ignore_client_bandwidth / 服务端 masquerade |
+| tuic | QUIC(固定)+ tls(强制)+ **仅 v5**(uuid+password;v4 token 不支持)+ 可选 congestion_controller(bbr/cubic/new_reno,默认 bbr)/ udp_relay_mode(native/quic)/ zero_rtt_handshake(客户端用 reduce-rtt)/ heartbeat_interval(客户端,duration string 或 ms int)/ disable_sni(客户端) |
 
 **trojan 必须带 TLS 或 Reality**(stage 11+ E2E 确认):mihomo Alpha 的 trojan listener 运行时拒绝没有 `certificate + private-key` / `reality-config` / ss config 的配置,报 `disallow using Trojan without both certificates/reality/ss config`。Phase 3 后 FastAdd 的 trojan 新记录走 ProtocolParams:`security=tls` 输出 `certificate` / `private-key`;`security=reality` 输出 `reality-config`;transport 支持 tcp/ws/grpc。未显式传 `security` 时 parseTrojan 默认 TLS,生产 RPC/HTTP 路径由 `FillDefaults` 物化 cert_file/key_file。
 
@@ -91,11 +92,27 @@ cipher 必须先于 password 落定,否则 `randomSSPassword` 拿不到正确 ci
 - `up`/`down` 是字符串(如 `"50 Mbps"`),`ignore-client-bandwidth` 是 bool,**两者不互斥**(parser 不做互斥校验,mihomo 运行时自决)
 - `masquerade` 是 server-only —— mihomo 客户端 outbound schema 没有该字段,convertHysteria2 故意不传到客户端 ClashProxy,只在订阅 Extensions 保留以便调试
 
-**Hysteria2 forward 转发(Phase 5)**:`MihomoInbound.AddUser` 调用 `userMgr.GetBindPort` 时通过 `forwardNetworkForProtocol(p)` 决定 Network:`ProtocolHysteria2 → "udp"`,其它协议返空字符串(走 GetBindPort TCP 默认)。Phase 6 TUIC 落地时该函数已留 TODO 钩点。SS 的 UDP 是协议内部 wrap,不在 forward 层切 Network,因此 SS 走 TCP 默认即可。
+**Hysteria2 forward 转发(Phase 5)**:`MihomoInbound.AddUser` 调用 `userMgr.GetBindPort` 时通过 `forwardNetworkForProtocol(p)` 决定 Network:`ProtocolHysteria2 → "udp"`,其它协议返空字符串(走 GetBindPort TCP 默认)。Phase 6 TUIC 复用同一 switch 分支(`ProtocolTUIC → "udp"`)。SS 的 UDP 是协议内部 wrap,不在 forward 层切 Network,因此 SS 走 TCP 默认即可。
 
 **Hysteria2 URI 与订阅(Phase 5)**:上游 `hysteria2://` URI spec 仅识别 `obfs` / `obfs-password` / `sni` / `insecure` / `pinSHA256` 五个 query key,因此 `codec.Hysteria2Node.Encode/Decode` 故意**不读不写** `Up`/`Down`/`Masquerade` 三字段(避免污染标准客户端兼容性,如 NekoBox / Hiddify)。这三字段只通过 `SubscriptionSpec.Extensions` 透传到 ClashConverter;`convertHysteria2` 从 Extensions 读 `up`/`down` 写入 `ClashProxy.Up`/`Down`,**不读 masquerade**(`TestConvertHysteria2_DropsMasquerade` 用 yaml.Marshal 反向断言锁住此契约)。
 
 **Hysteria2 Validate(Phase 5)**:`validateHysteria2` 与 `parseHysteria2` 在 obfs / TLS 必须 / cert 必须几条上**双重校验**,这是 FromNative 兜底设计 —— 一条记录从 InboundStore 重新加载时只过 Validate 不过 Parse,Parse 已校验过的规则在 Validate 里也得复制一份。Phase 5 是 hy2 在 mihomo 容器的首次出现,无 SharedCred legacy 路径。
+
+**TUIC listener schema(Phase 6,实证自 mihomo Alpha `listener/inbound/tuic.go::TuicOption`)**:
+- `users: map[string]string` —— **key 必须是 uuid 字符串**(不是 username),value 是 password。v2raymg 单用户固定写 `users: { <uuid>: <password> }`,uuid 来自共享 cred。多用户走上层转发实现(同 hy2 模式)
+- `parseTUIC` 用 `google/uuid.Parse` **严格校验** uuid 格式 —— mihomo Alpha 用 `FromStringOrNil` 静默零化非法 uuid(`server.go:170`),会让所有用户共享 zero-uuid key;v2raymg 在 parser 层挡住
+- `token: []string` 是 v4 鉴权方式,**与 v5 users 互斥**(server.go:109-112 按 `len(token)==0` 选 packet overhead)。v2raymg 仅做 v5,profilegen 永远不写 `token:`
+- cert 字段同 hy2:`certificate` + `private-key`,文件路径
+- `alpn` 默认 `["h3"]`(QUIC),与 hy2 同
+- **`congestion-controller` 默认 `"bbr"` 必须 profilegen 显式写**:mihomo 自身的默认在 `listener/parse.go:116` 注入(parse-time),v2raymg 直接生成 yaml 走 `executor.ApplyConfig` 路径会经过 ParseListener,但显式写出**自文档**且对未来重构(如某天我们绕过 ParseListener)鲁棒
+- `Allow0RTT=true` 在 `tuic/server.go:101` 强制开启,无 listener yaml key 关闭。v2raymg 的 `ZeroRTTHandshake` 字段是 client-only:不写 listener,只通过订阅传到客户端 `reduce-rtt`(注意:不是 zero-rtt-handshake!)
+- 客户端字段 `udp-relay-mode` / `heartbeat-interval` / `disable-sni` listener struct 都没有,只在订阅生效
+
+**TUIC URI 与订阅(Phase 6)**:dae 草案 + mihomo 修订(`common/convert/converter.go:106-147`)。query 用**下划线**,**不是连字符**:`congestion_control` / `udp_relay_mode` / `disable_sni`。**v4 格式**(userinfo 无冒号:`tuic://<token>@host:port`)v2raymg 显式拒绝 Decode。`allow_insecure=1` Decode 接收(NekoBox/Hiddify 兼容),Encode 永不发出(mihomo 自己 strip,clash 路径靠 ClashProxy.SkipCertVerify 字段直接传 `skip-cert-verify`)。`HeartbeatInterval` / `ZeroRTTHandshake` 不在 dae URI spec 里,只在 Extensions 透传到 ClashConverter,客户端 ClashProxy 字段是 `heartbeat-interval`(int ms)和 `reduce-rtt`(bool)。
+
+**TUIC heartbeat_interval 格式宽容**(Phase 6 review fix):converter 同时接受 Go 时长字符串(`"10s"` → 10000)和**纯毫秒整数**(`"10000"` → 10000)。后者匹配 mihomo 上游 yaml 字面值,避免操作员从 mihomo 文档复制 `heartbeat-interval: 10000` 字面值时被 `time.ParseDuration` 拒掉静默归零。Unparseable / 负数 → 0(mihomo 客户端 fallback 到 default 10000ms)。
+
+**TUIC Validate(Phase 6)**:`validateTuic` 与 `parseTUIC` 双重校验 uuid 必填、password 必填、TLS 强制、cert 必须、congestion_controller / udp_relay_mode 白名单 —— 同 hy2 的 FromNative 兜底设计。Phase 6 是 tuic 在 mihomo 容器的首次出现,无 SharedCred legacy 路径。
 
 **证书清理**:`RemoveInboundConfig` 会从 legacy SharedCred 或 ProtocolParams TLS block 读取 `cert_source`,仅清理 v2raymg 自己写入的 `pem` / `self_signed` 证书;`file` / `domain` 来源不动。
 
@@ -148,5 +165,7 @@ cipher 必须先于 password 落定,否则 `randomSSPassword` 拿不到正确 ci
    - vmess → `VMessNode{UUID, Port=forwardPort, Host=req.Host, ...}` → `Encode()`
    - trojan → `TrojanNode{Password, Port=forwardPort, ...}` → `Encode()`;Phase 3 会透传 `transport` / `security` / reality / skip-cert-verify 到 URI 和 Extensions
    - ss → `ShadowsocksNode{Method, Password, Plugin, PluginOpts, Port=forwardPort, ...}` → `Encode()`;Phase 4 同时把 `method` / `udp` / `plugin` / `plugin_mode` / `plugin_host` / `plugin_path` / `plugin_tls` / `plugin_password` / `plugin_version` 写入 Extensions,clash converter 据此组装 mihomo `plugin-opts`(shadow-tls 同样输出到 Extensions,即便 server listener 跳过)。cipher 为空时 fallback 到 `defaultSSMethod=2022-blake3-aes-256-gcm`(legacy SharedCred 路径才会触发),与 clash converter 的 `convertShadowsocks` 默认对齐
+   - hy2 → `Hysteria2Node{Password, Port=forwardPort, ...}` → `Encode()`(Phase 5);URI 仅含上游 5 query key(`obfs`/`obfs-password`/`sni`/`insecure`/`pinSHA256`),`up`/`down`/`masquerade` 通过 Extensions 透传给 ClashConverter
+   - tuic → `TuicNode{UUID, Password, Port=forwardPort, ...}` → `Encode()`(Phase 6,dae v5 格式);**uuid 单独写到 Extensions["uuid"]**(spec.Password 仍是 password 而非 uuid,跟 vless 不同),`congestion_controller` / `udp_relay_mode` / `zero_rtt_handshake` / `heartbeat_interval` / `disable_sni` 通过 Extensions 透传给 ClashConverter;ZeroRTTHandshake / HeartbeatInterval 不在 dae URI spec 里只 Extensions 透传
 
 URI 组装全部在 `core/subscription/codec` 层完成,本包零字符串拼接。协议 filter 不在本层处理(交给上层 HTTP handler 做)。

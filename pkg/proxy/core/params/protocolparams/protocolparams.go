@@ -204,8 +204,9 @@ type TUICParams struct {
 	Password             string `json:"password"`
 	CongestionController string `json:"congestion_controller,omitempty"` // "bbr" | "cubic" | "new_reno"
 	UDPRelayMode         string `json:"udp_relay_mode,omitempty"`        // "native" | "quic"
-	ZeroRTTHandshake     bool   `json:"zero_rtt_handshake,omitempty"`
-	HeartbeatInterval    string `json:"heartbeat_interval,omitempty"` // duration string, e.g. "10s"
+	ZeroRTTHandshake     bool   `json:"zero_rtt_handshake,omitempty"`    // client-only → reduce-rtt
+	HeartbeatInterval    string `json:"heartbeat_interval,omitempty"`    // duration string, e.g. "10s"
+	DisableSNI           bool   `json:"disable_sni,omitempty"`           // client-only; mihomo outbound disable-sni
 }
 
 type AnyTLSParams struct {

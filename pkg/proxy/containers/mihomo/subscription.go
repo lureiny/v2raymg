@@ -99,10 +99,10 @@ func (c *MihomoContainer) GetUserSubscriptions(req contracts.SubscriptionRequest
 //	trojan → fillTrojanSubscriptionSpec (Phase 3, ProtocolParams preferred + SharedCred legacy fallback)
 //	shadowsocks → fillSSSubscriptionSpec (Phase 4, ProtocolParams preferred + SharedCred legacy fallback)
 //	hysteria2 → fillHysteria2SubscriptionSpec (Phase 5, ProtocolParams only)
+//	tuic → fillTuicSubscriptionSpec (Phase 6, ProtocolParams only)
 //
-// Adding a protocol (tuic / anytls) means (a) extending
-// MihomoInbound.Validate + adapter, (b) adding a codec.<Proto>Node Encode
-// path here.
+// Adding a protocol (anytls) means (a) extending MihomoInbound.Validate +
+// adapter, (b) adding a codec.<Proto>Node Encode path here.
 func buildSubscriptionSpec(inb *MihomoInbound, req contracts.SubscriptionRequest, port uint32) (contracts.SubscriptionSpec, error) {
 	nodeName := req.NodeName
 	if nodeName == "" {
@@ -141,6 +141,11 @@ func buildSubscriptionSpec(inb *MihomoInbound, req contracts.SubscriptionRequest
 
 	case contracts.ProtocolHysteria2:
 		if err := fillHysteria2SubscriptionSpec(&spec, inb); err != nil {
+			return contracts.SubscriptionSpec{}, err
+		}
+
+	case contracts.ProtocolTUIC:
+		if err := fillTuicSubscriptionSpec(&spec, inb); err != nil {
 			return contracts.SubscriptionSpec{}, err
 		}
 
@@ -649,6 +654,100 @@ func fillHysteria2SubscriptionSpec(spec *contracts.SubscriptionSpec, inb *Mihomo
 	}
 	if hy2.Masquerade != "" {
 		spec.Extensions["masquerade"] = hy2.Masquerade
+	}
+
+	spec.URI = node.Encode()
+	return nil
+}
+
+// fillTuicSubscriptionSpec projects a TUIC inbound onto a SubscriptionSpec.
+// No legacy SharedCred path — Phase 6 is TUIC's first appearance in the
+// mihomo container, so ProtocolParams.TUIC is mandatory.
+//
+// Extensions populated for the clash converter (consumed by convertTuic in
+// pkg/proxy/core/subscription/converter/clash.go):
+//
+//	"uuid"                  — convertTuic uses extString(ext,"uuid") for
+//	                          ClashProxy.UUID; spec.Password carries the
+//	                          v5 password
+//	"server_name"           — TLS SNI
+//	"skip_cert_verify"      — true for self-signed or explicit override
+//	"congestion_controller" — passed through verbatim; profilegen wrote
+//	                          "bbr" by default on the listener side
+//	"udp_relay_mode"        — "" / "native" / "quic"; converter only emits
+//	                          when non-empty (mihomo client default native)
+//	"zero_rtt_handshake"    — bool; converter maps to client `reduce-rtt`.
+//	                          Listener forces Allow0RTT=true unconditionally
+//	                          so this is purely a client-side hint.
+//	"heartbeat_interval"    — duration string, e.g. "10s"; converter
+//	                          parses via time.ParseDuration to ms int.
+//	"disable_sni"           — bool; client-only knob (no listener field).
+//
+// ALPN: when the listener carries an explicit ALPN list it's passed onto
+// the TuicNode; mihomo client/listener both default to ["h3"] otherwise so
+// emitting nothing on the client side keeps the schemas in lockstep.
+func fillTuicSubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInbound) error {
+	if inb.ProtocolParams == nil || inb.ProtocolParams.TUIC == nil {
+		return fmt.Errorf("%w: tuic inbound %q has no ProtocolParams", ErrMissingCredential, inb.Tag())
+	}
+	t := inb.ProtocolParams.TUIC
+	if t.UUID == "" {
+		return fmt.Errorf("%w: tuic inbound %q has empty uuid", ErrMissingCredential, inb.Tag())
+	}
+	if t.Password == "" {
+		return fmt.Errorf("%w: tuic inbound %q has empty password", ErrMissingCredential, inb.Tag())
+	}
+
+	spec.Protocol = contracts.ProtocolTUIC
+	spec.Password = t.Password
+	spec.Extensions["uuid"] = t.UUID
+
+	node := &codec.TuicNode{
+		NodeName:          spec.NodeName,
+		Host:              spec.Host,
+		Port:              spec.Port,
+		UUID:              t.UUID,
+		Password:          t.Password,
+		CongestionControl: t.CongestionController,
+		UDPRelayMode:      t.UDPRelayMode,
+		ZeroRTTHandshake:  t.ZeroRTTHandshake,
+		HeartbeatInterval: t.HeartbeatInterval,
+	}
+
+	if sec := inb.ProtocolParams.Security; sec != nil && sec.Kind == contracts.SecurityTLS && sec.TLS != nil {
+		node.SNI = sec.TLS.SNI
+		if sec.TLS.SNI != "" {
+			spec.Extensions["server_name"] = sec.TLS.SNI
+		}
+		if len(sec.TLS.ALPN) > 0 {
+			node.ALPN = sec.TLS.ALPN
+		}
+		if sec.TLS.CertSource == "self_signed" || sec.TLS.SkipCertVerify {
+			// Codec Encode never emits allow_insecure; the clash subscription
+			// path delivers skip-cert-verify directly through Extensions.
+			spec.Extensions["skip_cert_verify"] = true
+		}
+	}
+
+	if t.CongestionController != "" {
+		spec.Extensions["congestion_controller"] = t.CongestionController
+	}
+	if t.UDPRelayMode != "" {
+		spec.Extensions["udp_relay_mode"] = t.UDPRelayMode
+	}
+	if t.ZeroRTTHandshake {
+		spec.Extensions["zero_rtt_handshake"] = true
+	}
+	if t.HeartbeatInterval != "" {
+		spec.Extensions["heartbeat_interval"] = t.HeartbeatInterval
+	}
+	if t.DisableSNI {
+		spec.Extensions["disable_sni"] = true
+		// codec TuicNode mirrors the listener-side server_name handling;
+		// disable_sni rides only on the converter path, not the URI (the
+		// dae spec emits disable_sni=1 in the URI but mihomo's URI parser
+		// already routes it through the same converter we drive here).
+		node.DisableSNI = true
 	}
 
 	spec.URI = node.Encode()

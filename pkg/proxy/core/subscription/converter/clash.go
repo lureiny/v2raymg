@@ -6,12 +6,41 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription"
 )
+
+// parseTuicHeartbeatMs accepts both Go duration strings ("10s", "500ms") and
+// raw integer milliseconds ("10000"). The latter matches mihomo's outbound
+// schema directly, so an operator copying upstream values literally won't
+// silently drop to 0. Returns 0 for unparseable input — mihomo client
+// applies its own default (10000 ms) when the field is absent or zero, so
+// the user-visible behaviour stays sane.
+func parseTuicHeartbeatMs(s string) int {
+	if s == "" {
+		return 0
+	}
+	// Try integer ms first — `time.ParseDuration("10000")` errors out, and
+	// emitting raw ms is the literal mihomo wire format.
+	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+		if n < 0 {
+			return 0
+		}
+		return n
+	}
+	if d, err := time.ParseDuration(s); err == nil {
+		ms := int(d / time.Millisecond)
+		if ms < 0 {
+			return 0
+		}
+		return ms
+	}
+	return 0
+}
 
 // subConverterURLs 是外部 Clash 模板服务的备用 URL 列表。
 // 用一个假节点触发，拉回完整的 Clash 配置骨架（包含 proxy-groups、rules 等）。
@@ -197,6 +226,12 @@ func ConvertHysteria2ForTest(spec contracts.SubscriptionSpec) *ClashProxy {
 	return (&ClashConverter{}).convertHysteria2(spec)
 }
 
+// ConvertTuicForTest exposes convertTuic to integration tests for the
+// cross-cutting subscription chain (TUIC matrix test).
+func ConvertTuicForTest(spec contracts.SubscriptionSpec) *ClashProxy {
+	return (&ClashConverter{}).convertTuic(spec)
+}
+
 // convertSpec returns nil if the protocol is unsupported by Clash/mihomo or
 // the node's transport/security combination is not expressible.
 func (c *ClashConverter) convertSpec(spec contracts.SubscriptionSpec) *ClashProxy {
@@ -214,6 +249,8 @@ func (c *ClashConverter) convertSpec(spec contracts.SubscriptionSpec) *ClashProx
 		return c.convertShadowsocks(spec)
 	case contracts.ProtocolHysteria2:
 		return c.convertHysteria2(spec)
+	case contracts.ProtocolTUIC:
+		return c.convertTuic(spec)
 	default:
 		return nil
 	}
@@ -532,6 +569,63 @@ func (c *ClashConverter) convertHysteria2(spec contracts.SubscriptionSpec) *Clas
 	return proxy
 }
 
+// convertTuic emits a mihomo TUIC v5 outbound proxy entry.
+//
+// Field mapping notes (see reference_tuic_protocol_facts.md for the full
+// table). The mihomo client schema deliberately uses different keys from
+// the listener — beware:
+//
+//   - ZeroRTTHandshake (ext "zero_rtt_handshake") → `reduce-rtt: true`
+//     (NOT "zero-rtt-handshake" — that's the wrong key name and would be
+//     ignored silently).
+//   - HeartbeatInterval (ext "heartbeat_interval", e.g. "10s") → integer
+//     milliseconds via time.ParseDuration. Unparseable values fall through
+//     as 0 so mihomo's own client default (10000ms) applies.
+//   - CongestionController (ext "congestion_controller") → mihomo client
+//     has no default for this; we emit it verbatim. Server-side parse-time
+//     default of "bbr" is enforced in profilegen, not here.
+//   - UDPRelayMode (ext "udp_relay_mode") → mihomo client default is
+//     "native"; emit only when explicitly "quic" (the case the operator
+//     bothered to set).
+//   - ALPN: mihomo client defaults to ["h3"], same as the listener forces.
+//     We don't propagate ALPN here — both sides agree on h3 by default,
+//     and an explicit override would only land via Extensions which is
+//     out of scope for Phase 6.
+func (c *ClashConverter) convertTuic(spec contracts.SubscriptionSpec) *ClashProxy {
+	ext := spec.Extensions
+	proxy := &ClashProxy{
+		Name:     c.nodeName(spec, "TUIC"),
+		Type:     "tuic",
+		Server:   spec.Host,
+		Port:     int(spec.Port),
+		UUID:     extString(ext, "uuid"),
+		Password: spec.Password,
+		UDP:      true,
+	}
+	if sni := extString(ext, "server_name"); sni != "" {
+		proxy.SNI = sni
+	}
+	if skipVerify, _ := ext["skip_cert_verify"].(bool); skipVerify || strings.Contains(spec.URI, "allow_insecure=1") {
+		proxy.SkipCertVerify = true
+	}
+	if cc := extString(ext, "congestion_controller"); cc != "" {
+		proxy.CongestionController = cc
+	}
+	if mode := extString(ext, "udp_relay_mode"); mode != "" {
+		proxy.UDPRelayMode = mode
+	}
+	if zr, _ := ext["zero_rtt_handshake"].(bool); zr {
+		proxy.ReduceRTT = true
+	}
+	if disable, _ := ext["disable_sni"].(bool); disable {
+		proxy.DisableSNI = true
+	}
+	if hb := extString(ext, "heartbeat_interval"); hb != "" {
+		proxy.HeartbeatInterval = parseTuicHeartbeatMs(hb)
+	}
+	return proxy
+}
+
 func (c *ClashConverter) nodeName(spec contracts.SubscriptionSpec, protoPrefix string) string {
 	if spec.NodeName != "" {
 		return fmt.Sprintf("🌿 %s_%s", protoPrefix, spec.NodeName)
@@ -709,6 +803,12 @@ type ClashProxy struct {
 	ObfsPassword      string       `yaml:"obfs-password,omitempty"` // Hysteria2: obfs password
 	Up                string       `yaml:"up,omitempty"`            // Hysteria2: client bandwidth advertise
 	Down              string       `yaml:"down,omitempty"`          // Hysteria2: client bandwidth advertise
+	// TUIC client-only fields (see convertTuic / reference_tuic_protocol_facts.md).
+	CongestionController string `yaml:"congestion-controller,omitempty"`
+	UDPRelayMode         string `yaml:"udp-relay-mode,omitempty"`
+	ReduceRTT            bool   `yaml:"reduce-rtt,omitempty"`
+	HeartbeatInterval    int    `yaml:"heartbeat-interval,omitempty"` // milliseconds; 0 lets mihomo apply its own default (10000)
+	DisableSNI           bool   `yaml:"disable-sni,omitempty"`
 }
 
 // PluginOpts obfs/v2ray-plugin/shadow-tls 选项。

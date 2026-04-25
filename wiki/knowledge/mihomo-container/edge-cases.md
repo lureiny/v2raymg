@@ -59,7 +59,23 @@ A: hysteria 容器是**单 inbound legacy**形态:`pkg/proxy/containers/hysteria
 
 **Q: hy2 inbound 的 forward 转发是 TCP 还是 UDP?哪里区分的?**
 
-A: UDP。`MihomoInbound.AddUser` 调用 `userMgr.GetBindPort` 时传 `Network: forwardNetworkForProtocol(protocol)`,该 helper 对 `ProtocolHysteria2` 返回 `"udp"`,其它协议返空(走 GetBindPort 默认 TCP)。Phase 6 TUIC 会扩到同一 switch。注意:**SS 的 UDP 是协议内部 wrap**(SS 协议帧自己携带 UDP payload),不在 forward 层切 Network,所以 SS 走 TCP 默认即可。
+A: UDP。`MihomoInbound.AddUser` 调用 `userMgr.GetBindPort` 时传 `Network: forwardNetworkForProtocol(protocol)`,该 helper 对 `ProtocolHysteria2` / `ProtocolTUIC` 都返回 `"udp"`(Phase 6 落地),其它协议返空(走 GetBindPort 默认 TCP)。注意:**SS 的 UDP 是协议内部 wrap**(SS 协议帧自己携带 UDP payload),不在 forward 层切 Network,所以 SS 走 TCP 默认即可。
+
+**Q: TUIC 为什么只做 v5 不做 v4?**
+
+A: v4 用 `token: []string`(预共享密钥列表)鉴权,**所有 token 在 mihomo 日志里不可区分**(没有用户名 / uuid 概念),无法做 per-user 计费 / 流量统计 / 端口轮转 —— v2raymg 的核心价值就是 per-user 隔离,v4 与之对立。v5 用 `users: map[uuid]password` 显式给每个用户独立 uuid。另:**v4 / v5 在 mihomo listener 中互斥**(`tuic/server.go:109-112` 按 `len(token)==0` 选 packet overhead),同时填两边会让 server 跑成 V4 模式,所以 profilegen 永远只写 `users:` 不写 `token:`。
+
+**Q: TUIC listener 的 `users` map key 必须是 uuid,跟 hy2 的 `default` 用户名有什么不同?**
+
+A: TUIC v5 的 `users: map[string]string` **key 是 uuid 字符串**(value 是 password),mihomo 用 `uuid.FromStringOrNil` 解析 —— 非法 uuid 会被静默零化,所有"用户"会塌缩到 zero-uuid 一个 key。v2raymg 的 `parseTUIC` 用 `google/uuid.Parse` 严格校验,FastAdd 阶段就拒掉非法 uuid。Hy2 的 `users: { default: <password> }` 只是把 `"default"` 当字符串 username,没有解析约束。两者都是单 key map(共享凭据 + forward 层做 user 隔离的同款模式),只是 key 类型语义不同。
+
+**Q: TUIC URI query 为什么是 `congestion_control` 不是 `congestion-controller`?**
+
+A: TUIC 没有 IETF 标准 share URI,事实标准是 [dae 草案](https://github.com/daeuniverse/dae/discussions/182) + mihomo 的修订(`common/convert/converter.go:106-147`)。mihomo 的 URI 解析器把 query key 用**下划线**:`congestion_control` / `udp_relay_mode` / `disable_sni` / `sni` / `alpn`。其中 `congestion_control` 映射到 mihomo client/server yaml 的 `congestion-controller` 字段(连字符)—— URI 用下划线、yaml 用连字符,是 mihomo 内部约定。`allow_insecure` 在 dae 标准里是 `skip-cert-verify` 的 URI 表达,但 **mihomo 显式 strip 掉这个字段不映射**,v2raymg 的 codec 在 Decode 时仍然兼容接收(NekoBox/Hiddify 互通),Encode 时**永不发出**。
+
+**Q: 为什么 ZeroRTTHandshake 在 listener yaml 里不出现,只在客户端订阅生效?**
+
+A: mihomo Alpha 的 TUIC server 在 `listener/tuic/server.go:101` 硬编码 `Allow0RTT: true`,**listener 没有对应 yaml key 关闭**。客户端 outbound `adapter/outbound/tuic.go::TuicOption` 有 `reduce-rtt bool` 字段(注意:**不是** `zero-rtt-handshake`!),控制客户端发起握手时是否复用之前的 0-RTT 票据。v2raymg 的 `TUICParams.ZeroRTTHandshake` 只在 `fillTuicSubscriptionSpec` 里被读取,写到 `Extensions["zero_rtt_handshake"]` 然后由 `convertTuic` 翻译成 ClashProxy.ReduceRTT(yaml tag `reduce-rtt`)。`profilegen.fillTuicListener` 完全忽略这个字段。同样的 client-only 处理还有 `HeartbeatInterval`(可写 `"10s"` 或纯毫秒数 `"10000"`)和 `DisableSNI`。`TestFillTuicListener_DropsClientOnlyKnobs` 用反向断言锁住这个契约:即使 FastAdd 传了这些字段,listener yaml 也绝不能有它们。
 
 **Q: hy2 mihomo 客户端配置为什么不写 masquerade?**
 

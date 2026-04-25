@@ -807,3 +807,198 @@ func TestConvertTrojan_TLS_NoFingerprintSet(t *testing.T) {
 		t.Errorf("client-fingerprint = %q, want empty for plain tls", p.ClientFingerprint)
 	}
 }
+
+// --- convertTuic tests (Phase 6) ---
+
+const tuicConvertTestUUID = "00112233-4455-6677-8899-aabbccddeeff"
+
+func tuicBaseSpec() contracts.SubscriptionSpec {
+	return contracts.SubscriptionSpec{
+		Protocol: contracts.ProtocolTUIC,
+		Host:     "tuic.example.com",
+		Port:     443,
+		Password: "tuic-pw",
+		Extensions: map[string]any{
+			"uuid": tuicConvertTestUUID,
+		},
+	}
+}
+
+func TestConvertTuic_BasicShape(t *testing.T) {
+	c := &ClashConverter{}
+	p := c.convertTuic(tuicBaseSpec())
+	if p == nil {
+		t.Fatal("expected non-nil proxy")
+	}
+	if p.Type != "tuic" {
+		t.Errorf("Type = %q, want tuic", p.Type)
+	}
+	if p.UUID != tuicConvertTestUUID {
+		t.Errorf("UUID = %q", p.UUID)
+	}
+	if p.Password != "tuic-pw" {
+		t.Errorf("Password = %q", p.Password)
+	}
+	if !p.UDP {
+		t.Error("UDP should be true (TUIC is QUIC, UDP transport)")
+	}
+}
+
+func TestConvertTuic_SNI(t *testing.T) {
+	c := &ClashConverter{}
+	spec := tuicBaseSpec()
+	spec.Extensions["server_name"] = "tuic.example.com"
+	p := c.convertTuic(spec)
+	if p.SNI != "tuic.example.com" {
+		t.Errorf("SNI = %q", p.SNI)
+	}
+}
+
+func TestConvertTuic_SkipCertVerify_FromExtension(t *testing.T) {
+	c := &ClashConverter{}
+	spec := tuicBaseSpec()
+	spec.Extensions["skip_cert_verify"] = true
+	p := c.convertTuic(spec)
+	if !p.SkipCertVerify {
+		t.Error("expected skip-cert-verify=true from extension")
+	}
+}
+
+func TestConvertTuic_SkipCertVerify_FromURI(t *testing.T) {
+	// URI fallback for specs constructed without going through codec.Decode
+	// (mirrors the hy2 insecure=1 fallback contract).
+	c := &ClashConverter{}
+	spec := tuicBaseSpec()
+	spec.URI = "tuic://" + tuicConvertTestUUID + ":pwd@host:443?allow_insecure=1"
+	p := c.convertTuic(spec)
+	if !p.SkipCertVerify {
+		t.Error("expected skip-cert-verify=true from URI allow_insecure=1 fallback")
+	}
+}
+
+func TestConvertTuic_CongestionController(t *testing.T) {
+	c := &ClashConverter{}
+	spec := tuicBaseSpec()
+	spec.Extensions["congestion_controller"] = "bbr"
+	p := c.convertTuic(spec)
+	if p.CongestionController != "bbr" {
+		t.Errorf("CongestionController = %q", p.CongestionController)
+	}
+}
+
+func TestConvertTuic_UDPRelayMode(t *testing.T) {
+	c := &ClashConverter{}
+	spec := tuicBaseSpec()
+	spec.Extensions["udp_relay_mode"] = "quic"
+	p := c.convertTuic(spec)
+	if p.UDPRelayMode != "quic" {
+		t.Errorf("UDPRelayMode = %q", p.UDPRelayMode)
+	}
+}
+
+// ZeroRTTHandshake → reduce-rtt key (NOT zero-rtt-handshake — that's the
+// wrong name and would be silently ignored by mihomo client).
+func TestConvertTuic_ReduceRTT(t *testing.T) {
+	c := &ClashConverter{}
+	spec := tuicBaseSpec()
+	spec.Extensions["zero_rtt_handshake"] = true
+	p := c.convertTuic(spec)
+	if !p.ReduceRTT {
+		t.Error("expected reduce-rtt=true from zero_rtt_handshake")
+	}
+	out, err := yaml.Marshal(p)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "reduce-rtt: true") {
+		t.Errorf("yaml must emit reduce-rtt: true; got:\n%s", got)
+	}
+	// Belt-and-braces: the wrong-name key must never leak into yaml.
+	if strings.Contains(got, "zero-rtt-handshake") {
+		t.Errorf("yaml must NOT emit zero-rtt-handshake (wrong key for mihomo); got:\n%s", got)
+	}
+}
+
+func TestConvertTuic_DisableSNI(t *testing.T) {
+	c := &ClashConverter{}
+	spec := tuicBaseSpec()
+	spec.Extensions["disable_sni"] = true
+	p := c.convertTuic(spec)
+	if !p.DisableSNI {
+		t.Error("expected disable-sni=true")
+	}
+}
+
+func TestConvertTuic_HeartbeatInterval(t *testing.T) {
+	c := &ClashConverter{}
+	spec := tuicBaseSpec()
+	spec.Extensions["heartbeat_interval"] = "10s"
+	p := c.convertTuic(spec)
+	if p.HeartbeatInterval != 10000 {
+		t.Errorf("HeartbeatInterval = %d ms, want 10000", p.HeartbeatInterval)
+	}
+}
+
+func TestConvertTuic_HeartbeatInterval_Unparseable(t *testing.T) {
+	// Unparseable duration falls through 0; mihomo client uses its default
+	// (10000ms) when the field is absent.
+	c := &ClashConverter{}
+	spec := tuicBaseSpec()
+	spec.Extensions["heartbeat_interval"] = "not-a-duration"
+	p := c.convertTuic(spec)
+	if p.HeartbeatInterval != 0 {
+		t.Errorf("HeartbeatInterval = %d, want 0 for unparseable input", p.HeartbeatInterval)
+	}
+}
+
+// Operators copying mihomo's literal outbound schema use raw ms ints
+// (e.g. "10000"). time.ParseDuration rejects those — but we accept them.
+func TestConvertTuic_HeartbeatInterval_RawMs(t *testing.T) {
+	c := &ClashConverter{}
+	spec := tuicBaseSpec()
+	spec.Extensions["heartbeat_interval"] = "10000"
+	p := c.convertTuic(spec)
+	if p.HeartbeatInterval != 10000 {
+		t.Errorf("HeartbeatInterval = %d, want 10000 (raw-ms input)", p.HeartbeatInterval)
+	}
+}
+
+func TestConvertTuic_HeartbeatInterval_NegativeRejected(t *testing.T) {
+	c := &ClashConverter{}
+	spec := tuicBaseSpec()
+	spec.Extensions["heartbeat_interval"] = "-500"
+	p := c.convertTuic(spec)
+	if p.HeartbeatInterval != 0 {
+		t.Errorf("HeartbeatInterval = %d, want 0 (negative rejected)", p.HeartbeatInterval)
+	}
+}
+
+// Listener-side fields (max-idle-time, authentication-timeout, mux-option,
+// client-auth-cert, ech-key) must NOT appear in the client outbound yaml —
+// they're server-only knobs. Marshal-and-grep ensures we don't accidentally
+// add them to ClashProxy and write them out.
+func TestConvertTuic_DropsListenerOnlyFields(t *testing.T) {
+	c := &ClashConverter{}
+	spec := tuicBaseSpec()
+	spec.Extensions["server_name"] = "tuic.example.com"
+	spec.Extensions["congestion_controller"] = "bbr"
+	spec.Extensions["zero_rtt_handshake"] = true
+	p := c.convertTuic(spec)
+	out, err := yaml.Marshal(p)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+	got := string(out)
+	for _, forbidden := range []string{
+		"max-idle-time",
+		"authentication-timeout",
+		"client-auth-cert",
+		"client-auth-type",
+		"ech-key",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("yaml must NOT contain server-only field %q; got:\n%s", forbidden, got)
+		}
+	}
+}

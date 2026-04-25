@@ -1,7 +1,7 @@
 // Package codec provides typed Encode/Decode for proxy subscription URIs.
 //
-// Each supported protocol (VLESS, VMess, Trojan, Shadowsocks, Hysteria2, Snell)
-// has a concrete Node struct that implements the Node interface.
+// Each supported protocol (VLESS, VMess, Trojan, Shadowsocks, Hysteria2,
+// TUIC, Snell) has a concrete Node struct that implements the Node interface.
 // Callers Decode a raw URI once to get a typed struct, then access its fields
 // directly or Encode it back to a URI for another client format.
 //
@@ -60,6 +60,7 @@ var decoders = map[string]func(string) (Node, error){
 	"ss":        func(u string) (Node, error) { return DecodeShadowsocks(u) },
 	"hysteria2": func(u string) (Node, error) { return DecodeHysteria2(u) },
 	"hy2":       func(u string) (Node, error) { return DecodeHysteria2(u) },
+	"tuic":      func(u string) (Node, error) { return DecodeTuic(u) },
 	"snell":     func(u string) (Node, error) { return DecodeSnell(u) },
 }
 
