@@ -82,10 +82,12 @@ func TestFromParams_ErrorPaths(t *testing.T) {
 			wantSubstr: `"protocol" required`,
 		},
 		{
-			// Phase 6 wired TUIC; the next unimplemented protocol is anytls.
-			// Phase 7 will need to migrate this.
+			// Phase 7 wired AnyTLS — every contracts.Protocol now has a
+			// container path, so there's no remaining built-in protocol
+			// that triggers ErrProtocolNotSupported. Use an unrecognised
+			// scheme string instead.
 			name:    "unknown protocol",
-			params:  map[string]any{"protocol": "anytls", "port": 10001, "password": "pw"},
+			params:  map[string]any{"protocol": "nonesuch", "port": 10001, "password": "pw"},
 			wantErr: ErrProtocolNotSupported,
 		},
 		{

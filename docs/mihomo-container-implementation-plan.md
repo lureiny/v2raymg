@@ -1,5 +1,12 @@
 # Mihomo Container 实施计划
 
+> **状态(2026-04-25)**:Stage 1-10 落地 + Phase 1-7 协议扩展全部完成。MVP 三协议(vmess/trojan/shadowsocks)+ VLESS / VMess+ / Trojan+ / Shadowsocks+ / Hysteria2 / TUIC / AnyTLS 已全部接入并系统测试覆盖。本文档保留作为**历史规划记录**;反映当前架构状态请优先看:
+> - `docs/mihomo-container-design.md` § 协议与字段扩展(模式矩阵)
+> - `wiki/knowledge/mihomo-container/` 三层 wiki 页
+> - 用户级 memory `project_protocol_expansion_status.md`(各 Phase 进度与设计决策)
+>
+> 下面"扩展协议作为独立后续任务"等措辞反映的是规划阶段的初始决策,**当前已不再准确**(扩展协议已全部完成)。
+
 ## 目标
 
 按 `docs/mihomo-container-design.md` 落地 mihomo container 到 `pkg/proxy/containers/mihomo/`,遵循 `docs/container-design-principles.md`(模式 B + per-user listener 变种)。

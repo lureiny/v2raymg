@@ -110,7 +110,7 @@ const (
 
 	// AnyTLS
 	KeyPaddingScheme            = "padding_scheme"
-	KeyIdleSessionCheckInterval = "idle_session_check_interval"
-	KeyIdleSessionTimeout       = "idle_session_timeout"
+	KeyIdleSessionCheckInterval = "idle_session_check_interval_seconds" // int seconds, mihomo outbound `idle-session-check-interval`
+	KeyIdleSessionTimeout       = "idle_session_timeout_seconds"        // int seconds, mihomo outbound `idle-session-timeout`
 	KeyMinIdleSession           = "min_idle_session"
 )

@@ -227,3 +227,34 @@ func TestParseHysteria2_TLSExtras(t *testing.T) {
 		t.Errorf("ALPN = %+v", pp.Security.TLS.ALPN)
 	}
 }
+
+// TestParseHysteria2_IsReadOnly mirrors the per-protocol read-only check
+// added in Phase 7 (params_anytls_test.go). Backfilled here so the
+// "Parse mutates raw" trap is caught at the Phase 5 entry point too,
+// not just when the integration test happens to exercise hy2 with full
+// flag coverage.
+func TestParseHysteria2_IsReadOnly(t *testing.T) {
+	raw := hy2BaseRaw()
+	raw["obfs"] = "salamander"
+	raw["obfs_password"] = "obf"
+	raw["up"] = "50 Mbps"
+	raw["down"] = "100 Mbps"
+	raw["masquerade"] = "https://example.com"
+	raw["ignore_client_bandwidth"] = true
+
+	before := make(map[string]any, len(raw))
+	for k, v := range raw {
+		before[k] = v
+	}
+	if _, err := Parse(raw); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(raw) != len(before) {
+		t.Errorf("Parse mutated raw map (size changed): %v -> %v", before, raw)
+	}
+	for k, want := range before {
+		if got := raw[k]; got != want {
+			t.Errorf("Parse mutated raw[%q]: %v -> %v", k, want, got)
+		}
+	}
+}

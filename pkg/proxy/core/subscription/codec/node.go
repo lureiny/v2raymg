@@ -61,6 +61,7 @@ var decoders = map[string]func(string) (Node, error){
 	"hysteria2": func(u string) (Node, error) { return DecodeHysteria2(u) },
 	"hy2":       func(u string) (Node, error) { return DecodeHysteria2(u) },
 	"tuic":      func(u string) (Node, error) { return DecodeTuic(u) },
+	"anytls":    func(u string) (Node, error) { return DecodeAnyTLS(u) },
 	"snell":     func(u string) (Node, error) { return DecodeSnell(u) },
 }
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/params/protocolparams"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription/codec"
 )
 
@@ -100,9 +101,7 @@ func (c *MihomoContainer) GetUserSubscriptions(req contracts.SubscriptionRequest
 //	shadowsocks → fillSSSubscriptionSpec (Phase 4, ProtocolParams preferred + SharedCred legacy fallback)
 //	hysteria2 → fillHysteria2SubscriptionSpec (Phase 5, ProtocolParams only)
 //	tuic → fillTuicSubscriptionSpec (Phase 6, ProtocolParams only)
-//
-// Adding a protocol (anytls) means (a) extending MihomoInbound.Validate +
-// adapter, (b) adding a codec.<Proto>Node Encode path here.
+//	anytls → fillAnyTLSSubscriptionSpec (Phase 7, ProtocolParams only)
 func buildSubscriptionSpec(inb *MihomoInbound, req contracts.SubscriptionRequest, port uint32) (contracts.SubscriptionSpec, error) {
 	nodeName := req.NodeName
 	if nodeName == "" {
@@ -149,11 +148,36 @@ func buildSubscriptionSpec(inb *MihomoInbound, req contracts.SubscriptionRequest
 			return contracts.SubscriptionSpec{}, err
 		}
 
+	case contracts.ProtocolAnyTLS:
+		if err := fillAnyTLSSubscriptionSpec(&spec, inb); err != nil {
+			return contracts.SubscriptionSpec{}, err
+		}
+
 	default:
 		return contracts.SubscriptionSpec{}, fmt.Errorf("%w: %q", ErrProtocolNotSupported, inb.Protocol())
 	}
 
 	return spec, nil
+}
+
+// shouldSkipCertVerifyForClient is the canonical gate every fillXxxSubscriptionSpec
+// uses to decide whether the generated client config should set skip-cert-verify.
+// Two triggers:
+//
+//   - CertSource == "self_signed" (operator generated a one-shot cert; clients
+//     can't validate the chain).
+//   - SkipCertVerify explicit override (operator wants to ship a real-CA cert
+//     whose chain the client can't or shouldn't validate).
+//
+// The check used to be inlined at 6 call sites (vless / vmess / trojan / hy2 /
+// tuic / anytls); centralising prevents drift if cert_source values ever
+// expand (e.g. "self_signed_ecc"). Returns false when sec or sec.TLS is nil
+// so callers can treat "no security" the same as "no skip required".
+func shouldSkipCertVerifyForClient(sec *protocolparams.SecuritySpec) bool {
+	if sec == nil || sec.TLS == nil {
+		return false
+	}
+	return sec.TLS.CertSource == "self_signed" || sec.TLS.SkipCertVerify
 }
 
 // fillVLESSSubscriptionSpec projects the inbound's ProtocolParams onto the
@@ -207,7 +231,7 @@ func fillVLESSSubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInbo
 				//     reach a matching root), or
 				//   - the caller explicitly asked for the override
 				//     (e.g. real-CA cert the client cannot validate).
-				if sec.TLS.CertSource == "self_signed" || sec.TLS.SkipCertVerify {
+				if shouldSkipCertVerifyForClient(sec) {
 					node.SkipCertVerify = true
 					spec.Extensions["skip_cert_verify"] = true
 				}
@@ -352,7 +376,7 @@ func fillVMessSubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInbo
 					// convertVMess reads "server_name" for TLS SNI.
 					spec.Extensions["server_name"] = sec.TLS.SNI
 				}
-				if sec.TLS.CertSource == "self_signed" || sec.TLS.SkipCertVerify {
+				if shouldSkipCertVerifyForClient(sec) {
 					spec.Extensions["skip_cert_verify"] = true
 				}
 				if sec.TLS.UTLSFingerprint != "" {
@@ -453,7 +477,7 @@ func fillTrojanSubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInb
 				if sec.TLS.SNI != "" {
 					spec.Extensions["server_name"] = sec.TLS.SNI
 				}
-				if sec.TLS.CertSource == "self_signed" || sec.TLS.SkipCertVerify {
+				if shouldSkipCertVerifyForClient(sec) {
 					node.SkipCertVerify = true
 					spec.Extensions["skip_cert_verify"] = true
 				}
@@ -634,7 +658,7 @@ func fillHysteria2SubscriptionSpec(spec *contracts.SubscriptionSpec, inb *Mihomo
 		if len(sec.TLS.ALPN) > 0 {
 			node.ALPN = sec.TLS.ALPN
 		}
-		if sec.TLS.CertSource == "self_signed" || sec.TLS.SkipCertVerify {
+		if shouldSkipCertVerifyForClient(sec) {
 			node.SkipCertVerify = true
 			spec.Extensions["skip_cert_verify"] = true
 		}
@@ -722,7 +746,7 @@ func fillTuicSubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInbou
 		if len(sec.TLS.ALPN) > 0 {
 			node.ALPN = sec.TLS.ALPN
 		}
-		if sec.TLS.CertSource == "self_signed" || sec.TLS.SkipCertVerify {
+		if shouldSkipCertVerifyForClient(sec) {
 			// Codec Encode never emits allow_insecure; the clash subscription
 			// path delivers skip-cert-verify directly through Extensions.
 			spec.Extensions["skip_cert_verify"] = true
@@ -748,6 +772,81 @@ func fillTuicSubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInbou
 		// dae spec emits disable_sni=1 in the URI but mihomo's URI parser
 		// already routes it through the same converter we drive here).
 		node.DisableSNI = true
+	}
+
+	spec.URI = node.Encode()
+	return nil
+}
+
+// fillAnyTLSSubscriptionSpec projects an AnyTLS inbound onto a SubscriptionSpec.
+// No legacy SharedCred path — Phase 7 is AnyTLS's first appearance in the
+// mihomo container, so ProtocolParams.AnyTLS is mandatory.
+//
+// Extensions populated for the clash converter (consumed by convertAnyTLS in
+// pkg/proxy/core/subscription/converter/clash.go):
+//
+//	"server_name"                        — TLS SNI (mirrors hy2/tuic key)
+//	"skip_cert_verify"                   — true for self-signed or override
+//	"idle_session_check_interval_seconds" — int seconds; client-only
+//	"idle_session_timeout_seconds"        — int seconds; client-only
+//	"min_idle_session"                   — int; client-only
+//
+// Server-only fields (padding_scheme / client-auth-* / ech-key) are NOT
+// propagated — mihomo's outbound schema has no client-side counterpart and
+// our converter explicitly drops them.
+//
+// Cert-pin fingerprint (URI hpkp=) is intentionally NOT surfaced. mihomo's
+// outbound schema accepts a `fingerprint:` field but v2raymg has no
+// TLSSpec.Fingerprint to source it from today; if/when that's added, plumb
+// it through Extensions["fingerprint"] and the convertAnyTLS read.
+//
+// ALPN: AnyTLS has no ALPN default ([h3] is hy2/tuic specific). The listener
+// lets Go TLS auto-negotiate; we mirror that by emitting nothing client-side.
+func fillAnyTLSSubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInbound) error {
+	if inb.ProtocolParams == nil || inb.ProtocolParams.AnyTLS == nil {
+		return fmt.Errorf("%w: anytls inbound %q has no ProtocolParams", ErrMissingCredential, inb.Tag())
+	}
+	a := inb.ProtocolParams.AnyTLS
+	if a.Password == "" {
+		return fmt.Errorf("%w: anytls inbound %q has empty password", ErrMissingCredential, inb.Tag())
+	}
+
+	spec.Protocol = contracts.ProtocolAnyTLS
+	spec.Password = a.Password
+
+	node := &codec.AnyTLSNode{
+		NodeName:                 spec.NodeName,
+		Host:                     spec.Host,
+		Port:                     spec.Port,
+		Password:                 a.Password,
+		PaddingScheme:            a.PaddingScheme,
+		IdleSessionCheckInterval: a.IdleSessionCheckInterval,
+		IdleSessionTimeout:       a.IdleSessionTimeout,
+		MinIdleSession:           a.MinIdleSession,
+	}
+
+	if sec := inb.ProtocolParams.Security; sec != nil && sec.Kind == contracts.SecurityTLS && sec.TLS != nil {
+		node.SNI = sec.TLS.SNI
+		if sec.TLS.SNI != "" {
+			spec.Extensions["server_name"] = sec.TLS.SNI
+		}
+		if len(sec.TLS.ALPN) > 0 {
+			node.ALPN = sec.TLS.ALPN
+		}
+		if shouldSkipCertVerifyForClient(sec) {
+			node.SkipCertVerify = true
+			spec.Extensions["skip_cert_verify"] = true
+		}
+	}
+
+	if a.IdleSessionCheckInterval > 0 {
+		spec.Extensions["idle_session_check_interval_seconds"] = a.IdleSessionCheckInterval
+	}
+	if a.IdleSessionTimeout > 0 {
+		spec.Extensions["idle_session_timeout_seconds"] = a.IdleSessionTimeout
+	}
+	if a.MinIdleSession > 0 {
+		spec.Extensions["min_idle_session"] = a.MinIdleSession
 	}
 
 	spec.URI = node.Encode()

@@ -7,8 +7,7 @@ aliases:
   - mihomo-container
 answers:
   - mihomo 容器是什么模式的?为什么 listener 数量和用户数解耦?
-  - 当前支持哪些协议?vless/vmess/trojan/ss/hy2/tuic 各自支持哪些 transport 和 security?
-  - anytls 为什么还不支持?
+  - 当前支持哪些协议?vless/vmess/trojan/ss/hy2/tuic/anytls 各自支持哪些 transport 和 security?
   - 用户怎么接入 mihomo,为什么 listener 配置里没有用户?
   - mihomo 二进制从哪里下载,默认拉哪个 release?
   - Updater 怎么校验二进制的 SHA256?为什么 stable 不校验?
@@ -27,6 +26,10 @@ answers:
   - tuic listener 的 `users` map key 必须是 uuid,跟 hy2 的 `default` 用户名有什么不同?
   - tuic URI query 为什么是 `congestion_control` 不是 `congestion-controller`?
   - 为什么 ZeroRTTHandshake 在 listener yaml 里不出现,只在客户端订阅生效?
+  - AnyTLS 是 TCP 协议但 udp:true 是怎么回事?
+  - anytls 的 padding-scheme 为什么只在 listener 写,客户端不下发?
+  - idle-session-* 为什么用 int 秒(`_seconds` 后缀)而不是 duration string?
+  - mihomo runtime 在 idle ≤5s 时会强制升 30s — v2raymg parser 为什么不替它兜底?
 tags:
   - module
   - proxy
@@ -41,15 +44,15 @@ layer: index
 
 mihomo 容器是 v2raymg 对 MetaCubeX/mihomo(原 Clash.Meta)内核的适配层,位于 `pkg/proxy/containers/mihomo/`。采用 `docs/container-design-principles.md` 的**模式 B**(进程外 + REST API 热更),listener 仍是**共享凭据模型**:每个 inbound 对应一条 mihomo listener,所有绑到这个 inbound 的用户共享同一把协议凭据,用户级隔离完全由 forward 层的端口分配提供。这意味着 listener 数量 = inbound 数量(典型 1~10),与用户规模解耦。
 
-当前协议状态:原 MVP 的 vmess / trojan / shadowsocks 已可用;协议扩展任务已完成 VLESS(Phase 1)、VMess 高级特性(Phase 2)、Trojan 高级特性(Phase 3)、Shadowsocks 增强(Phase 4)、Hysteria2(Phase 5)和 TUIC(Phase 6)。VLESS/VMess/Trojan/Shadowsocks/Hysteria2/TUIC 新增配置全部走 `ProtocolParams` 结构化路径,其中 Trojan 支持 tcp/ws/grpc × tls/reality,Shadowsocks 默认 cipher 升级为 `2022-blake3-aes-256-gcm` 并支持 obfs / v2ray-plugin / shadow-tls 三种插件(shadow-tls 仅落入订阅供客户端使用,服务端 listener 跑 plain SS),Hysteria2 是首个 QUIC/UDP 协议、强制 TLS、可选 salamander obfs / 带宽宣告 / 服务端 masquerade 伪装,TUIC 是第二个 QUIC/UDP 协议、**仅 v5**(uuid+password,v4 token 不支持)、强制 TLS、`congestion-controller` 默认 bbr 由 profilegen 显式写出。Hysteria2 / TUIC 都是 Phase 5/6 在 mihomo 容器的**首次出现**,无 legacy SharedCred 路径;forward 层为 hy2 / tuic 自动用 UDP 规则,其它协议保持 TCP 默认。历史持久化记录仍可通过 legacy SharedCred 兼容读取(vless/hy2/tuic 除外,因为是新引入)。anytls 尚未实现 parser/profilegen/subscription 分支。
+当前协议状态:原 MVP 的 vmess / trojan / shadowsocks 已可用;协议扩展 Phase 1-7 全部完成 —— VLESS(Phase 1)、VMess 高级特性(Phase 2)、Trojan 高级特性(Phase 3)、Shadowsocks 增强(Phase 4)、Hysteria2(Phase 5)、TUIC(Phase 6)、AnyTLS(Phase 7)。所有 7 个协议的新增配置全部走 `ProtocolParams` 结构化路径:Trojan 支持 tcp/ws/grpc × tls/reality;Shadowsocks 默认 cipher 升级为 `2022-blake3-aes-256-gcm` 并支持 obfs / v2ray-plugin / shadow-tls 三种插件(shadow-tls 仅落入订阅供客户端使用,服务端 listener 跑 plain SS);Hysteria2 是首个 QUIC/UDP 协议、强制 TLS、可选 salamander obfs / 带宽宣告 / 服务端 masquerade 伪装;TUIC 是第二个 QUIC/UDP 协议、**仅 v5**(uuid+password,v4 token 不支持)、强制 TLS、`congestion-controller` 默认 bbr 由 profilegen 显式写出;**AnyTLS 是 TCP-over-TLS 协议**(UDP 走 UoT 透明)、强制 TLS、可选 server-only `padding-scheme` inline 文本(空时 mihomo runtime fallback DefaultPaddingScheme),client-only `idle-session-check-interval`/`idle-session-timeout`/`min-idle-session` 是 **int 秒**类型(JSON tag `_seconds` 后缀),mihomo runtime 在 ≤5s 时强制升 30s 但 v2raymg parser **不**替它兜底(操作员看到的是自己输入的数字)。Hysteria2 / TUIC / AnyTLS 都是各自 Phase 在 mihomo 容器的**首次出现**,无 legacy SharedCred 路径;forward 层为 hy2 / tuic 自动用 UDP 规则,AnyTLS / 其它协议保持 TCP 默认。历史持久化记录仍可通过 legacy SharedCred 兼容读取(vless/hy2/tuic/anytls 除外,因为是新引入)。
 
 ## 关键事实
 
 - **upstream**: github.com/MetaCubeX/mihomo
 - **architecture-mode**: 模式 B(外部进程 + REST 热更)+ 共享凭据 listener
 - **mvp-protocols**: vmess / trojan / shadowsocks
-- **protocolparams-done**: vless / vmess / trojan / shadowsocks / hysteria2 / tuic
-- **legacy-sharedcred**: 历史 vmess/trojan/ss 持久化记录的兼容读取(Phase 1-4 前的旧记录仍可加载;新 FastAdd 全部走 ProtocolParams)。**vless / hysteria2 / tuic 不存在 legacy SharedCred 路径**(Phase 1 / 5 / 6 首次引入)
+- **protocolparams-done**: vless / vmess / trojan / shadowsocks / hysteria2 / tuic / anytls
+- **legacy-sharedcred**: 历史 vmess/trojan/ss 持久化记录的兼容读取(Phase 1-4 前的旧记录仍可加载;新 FastAdd 全部走 ProtocolParams)。**vless / hysteria2 / tuic / anytls 不存在 legacy SharedCred 路径**(Phase 1 / 5 / 6 / 7 首次引入)
 - **ss-default-cipher**: `2022-blake3-aes-256-gcm`(SIP022;`FillDefaults` 自动生成 base64(32 bytes) 密钥;非 2022 系列继续用 hex 字符串)
 - **ss-plugins-supported**: obfs / v2ray-plugin(下发到 mihomo listener 的 `plugin` + `plugin-opts`)、shadow-tls(仅订阅 Extensions,服务端 listener 不下发,因 shadow-tls 是网络层 wrapper 而非 mihomo SS 原生 plugin)
 - **trojan-tls-requirement**: 必须带 cert_file + key_file(mihomo Alpha runtime 硬约束)
@@ -67,6 +70,13 @@ mihomo 容器是 v2raymg 对 MetaCubeX/mihomo(原 Clash.Meta)内核的适配层,
 - **tuic-client-only-fields**: `ZeroRTTHandshake` / `HeartbeatInterval` / `UDPRelayMode` / `DisableSNI` 都是**客户端字段**(mihomo listener struct 没有对应键,Allow0RTT=true 在 server.go:101 强制),只在订阅生成时写入 ClashProxy 的 `reduce-rtt`(注意不是 zero-rtt-handshake!) / `heartbeat-interval`(int ms)/ `udp-relay-mode` / `disable-sni`
 - **tuic-heartbeat-format**: `convertTuic` 同时接受 Go 时长字符串(`"10s"`)和**纯毫秒整数**(`"10000"`)—— 后者匹配 mihomo 上游 yaml 字面值,避免操作员复制 default 时静默归零
 - **tuic-forward-network**: forward 层用 UDPRelay(`forwardNetworkForProtocol(ProtocolTUIC) → "udp"`,与 hy2 共用同一个 switch 分支)
+- **anytls-transport-policy**: TCP-over-TLS,UDP 走 UoT(UDP-over-TCP)透明。client outbound `udp:true` 由 converter 强写,但 forward 层走 TCP 规则(`forwardNetworkForProtocol(ProtocolAnyTLS) → ""` 即 default tcp,**不**走 hy2/tuic 的 UDP 分支)
+- **anytls-listener-schema**: `users: map[string]string`(单用户用 `default` 作 username,与 hy2 同模式;mihomo 按 sha256(password) 匹配,username 仅观察标签)、`certificate`/`private-key`(同 hy2/tuic,文件路径)、`padding-scheme` 可选 inline 文本(空时 mihomo `transport/anytls/padding.DefaultPaddingScheme` 接管)、**无 alpn 配置**(AnyTLS 不强制 ALPN,Go TLS 自由协商;不像 hy2/tuic 默认 `["h3"]`)、`client-auth-*`/`ech-key` 不暴露
+- **anytls-uri-spec-keys**: 上游 `anytls://[user:]password@host:port?...#name`,query 仅识别 **`sni`**(plain 命名,不带连字符或下划线)/ **`insecure`**(=="1" → SkipCertVerify)/ **`hpkp`**(cert 公钥 pin sha256);padding/idle/min 不在标准里,仅通过订阅 Extensions 透传(client schema 也只接受其中一部分)
+- **anytls-padding-scheme-server-only**: mihomo `adapter/outbound/anytls.go` AnyTLSOption 没有 `padding-scheme` 字段(client 用 `transport/anytls/padding.DefaultPaddingScheme` + session 协商接收 server 下发);v2raymg subscription/converter 都不向客户端 yaml 写 padding-scheme
+- **anytls-idle-int-seconds**: mihomo `adapter/outbound/anytls.go` 的 `idle-session-check-interval` / `idle-session-timeout` 是 **int 秒**(`time.Duration(option.IdleSessionCheckInterval) * time.Second`),不是 duration string;v2raymg `AnyTLSParams` 用 int + JSON tag `_seconds` 后缀对齐(区别于 TUIC HeartbeatInterval 是 ms int)
+- **anytls-low-idle-runtime-bump**: mihomo `transport/anytls/session/client.go:46-51` 在 idle ≤5s 时静默升 30s — v2raymg parser **不**替 mihomo 兜底(只校验 ≥0),操作员看到的是自己输入的数字;`TestParseAnyTLS_LowIdleNotBumped` 锁住此契约
+- **anytls-fingerprint-not-plumbed**: codec/anytls.go `AnyTLSNode.Fingerprint` 从 URI `hpkp=` 解析得到,但**没有路径下发到 client outbound**(`TLSSpec` 当前没有 cert-pin Fingerprint 字段;UTLSFingerprint 是 utls 不同概念)。如未来要支持,补 `TLSSpec.Fingerprint` + Extensions["fingerprint"] + convertAnyTLS 读
 - **default-release-tag**: latest(GitHub /releases/latest,即最新 stable)
 - **alpha-release-tag**: Prerelease-Alpha(需显式设置)
 - **auto-download-default**: true
@@ -108,6 +118,6 @@ listener 只持一把共享凭据;把"哪个用户"的区分下推到 forward �
   - `inbound.go` / `adapter.go` / `profilegen.go` — InboundSpec 与 mihomo yaml 的双向映射
   - `rest_client.go` — GET /version / PUT /configs 等 REST 访问
   - `updater.go` — 下载 + SHA256 + 原子 swap + Start + WaitReady + rollback
-  - `subscription.go` — 用户订阅生成(vless/vmess/trojan/ss/hy2/tuic 全部走 ProtocolParams,vmess/trojan/ss 旧记录走 SharedCred 兼容路径;URI 复用 codec 层。hy2 的 up/down/masquerade 通过 Extensions 透传,不入 URI;tuic 的 ZeroRTTHandshake/HeartbeatInterval/DisableSNI 客户端专用,以 Extensions 透传)
+  - `subscription.go` — 用户订阅生成(vless/vmess/trojan/ss/hy2/tuic/anytls 全部走 ProtocolParams,vmess/trojan/ss 旧记录走 SharedCred 兼容路径;URI 复用 codec 层。hy2 的 up/down/masquerade 通过 Extensions 透传,不入 URI;tuic 的 ZeroRTTHandshake/HeartbeatInterval/DisableSNI 客户端专用,以 Extensions 透传;anytls 的 idle-session-*-seconds/min-idle-session 透传到客户端 outbound,padding-scheme 仅 server-only)
 
 深入实现细节见 details.md;FAQ 和反例见 edge-cases.md;关联概念见 related.md。

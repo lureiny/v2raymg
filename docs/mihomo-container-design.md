@@ -232,19 +232,31 @@ proxies:
 
 ## 协议与字段扩展
 
-MVP 覆盖 vmess / trojan / shadowsocks(D4)。扩展协议(vless / hysteria2 / tuic / anytls)作为独立后续任务:
+**当前状态(2026-04-25)**:Phase 1-7 全部完成。MVP 的 vmess / trojan / shadowsocks 之外,VLESS / Hysteria2 / TUIC / AnyTLS 已全部提为 `contracts.Protocol` 一等公民,新增配置走 `pkg/proxy/core/params/protocolparams/` 结构化路径。
 
-- `contracts.Protocol` 不加常量,mihomo 特有协议走 `InboundSpec.Extensions["mihomo"]`
-- `contracts.ContainerType` 已加 `ContainerMihomo`
-- `contracts.Transport` 不动
+按 `docs/container-design-principles.md` 的"模式矩阵",所有 7 个协议在 mihomo 容器都属于**模式 B**(单进程外部 + REST 热更 + 共享凭据 listener),listener 数量 = inbound 数量,与用户规模解耦。差异只在 forward 层 Network(TCP vs UDP)和 listener yaml schema:
 
-若后续要把 TUIC / anytls 提为 `contracts.Protocol` 一等公民:
+| 协议 | Phase | forward Network | listener users key | TLS 强制 | 备注 |
+|------|-------|-----------------|---------------------|----------|------|
+| vless | 1 | tcp | n/a(单凭据 client) | 否(可 plain/tls/reality) | 支持 ws/grpc/h2/httpupgrade/xhttp |
+| vmess | 2 | tcp | n/a | 否 | AlterID=0 默认 AEAD-only |
+| trojan | 3 | tcp | `password`(数组形式) | 是 | 支持 tcp/ws/grpc × tls/reality |
+| shadowsocks | 4 | tcp | n/a | n/a | 默认 cipher `2022-blake3-aes-256-gcm`;支持 obfs/v2ray-plugin/shadow-tls(后者仅订阅) |
+| hysteria2 | 5 | **udp** | username(单用户用 `default`) | 是 | QUIC,可选 salamander obfs / 带宽宣告 / masquerade |
+| tuic | 6 | **udp** | uuid(单用户) | 是 | QUIC v5;`congestion-controller` 默认 bbr profilegen 显式写 |
+| anytls | 7 | tcp(UDP 走 UoT 透明) | username(单用户用 `default`) | 是 | TCP-over-TLS;可选 server-only `padding-scheme` inline 文本;client-only `idle-session-*-seconds` int 秒 |
 
-- 加 `ProtocolTUIC / ProtocolAnyTLS` 常量
-- 相应扩展 clash converter
-- HTTP API `/inbound/fast_add` 增协议分支
+**契约要点**(所有 Phase 1+ 协议共同遵守):
 
-MVP 落地后再议。
+- `contracts.Protocol` 加常量(`ProtocolVLess` / `ProtocolHysteria2` / `ProtocolTUIC` / `ProtocolAnyTLS`)
+- `pkg/proxy/core/params/protocolparams/` 加 `XxxParams` struct + `params_xxx.go` 解析 + `parser.go` 分派
+- `pkg/proxy/core/subscription/codec/` 加 `xxx.go` URI Encode/Decode + `node.go` 注册
+- `pkg/proxy/core/subscription/converter/clash.go` 给 ClashProxy 加协议特异字段 + `convertXxx` + `ConvertXxxForTest`
+- `pkg/proxy/containers/mihomo/{adapter,inbound,profilegen,subscription}.go` switch 加 case + `validateXxx` + `fillXxxListener` + `fillXxxSubscriptionSpec`
+- `pkg/http/fastAddInbound_handler.go` 加便捷字段 + help 文本;`pkg/rpc/server/end_node_inbound.go` BuilderType switch 加 case
+- 系统测试(`pkg/proxy/systemtest/mihomo_xxx_matrix_test.go`,integration tag):矩阵 case ≥2 + 至少 1 条 cross-cutting 走 GetUserSubscriptions → Convert → spawnMihomoClient(memory feedback `feedback_systemtest_subscription_chain.md` 强制)
+
+**`InboundSpec.Extensions["mihomo"]` 当前不再使用** —— Phase 1-7 都走 `ProtocolParams` 结构化字段,Extensions 只用于 codec/subscription 之间的弱类型 map 传递(`server_name` / `skip_cert_verify` / `idle_session_*_seconds` 等)。
 
 ## 开发步骤
 

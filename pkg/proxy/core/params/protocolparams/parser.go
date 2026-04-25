@@ -89,7 +89,10 @@ func Parse(raw map[string]any) (*ProtocolParams, error) {
 		}
 		return pp, nil
 	case contracts.ProtocolAnyTLS:
-		return nil, fmt.Errorf("%w: anytls parser not yet implemented", ErrProtocolNotSupported)
+		if err := parseAnyTLS(raw, pp); err != nil {
+			return nil, err
+		}
+		return pp, nil
 	default:
 		// SOCKS5 / HTTP / Snell: not handled through FastAddInbound's
 		// ProtocolParams path (they have their own container-specific flows).

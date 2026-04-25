@@ -125,6 +125,14 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		ZeroRTTHandshake     bool   `json:"zero_rtt_handshake,omitempty"`    // client-only → reduce-rtt
 		HeartbeatInterval    string `json:"heartbeat_interval,omitempty"`    // client-only; e.g. "10s"
 		DisableSNI           bool   `json:"disable_sni,omitempty"`           // client-only
+		// AnyTLS convenience fields. PaddingScheme is server-only inline
+		// text; IdleSessionCheckIntervalSeconds / IdleSessionTimeoutSeconds /
+		// MinIdleSession are client-only knobs that reach the subscriber via
+		// Extensions. Empty / zero defers to mihomo runtime defaults.
+		PaddingScheme                   string `json:"padding_scheme,omitempty"`
+		IdleSessionCheckIntervalSeconds int    `json:"idle_session_check_interval_seconds,omitempty"`
+		IdleSessionTimeoutSeconds       int    `json:"idle_session_timeout_seconds,omitempty"`
+		MinIdleSession                  int    `json:"min_idle_session,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
@@ -198,6 +206,8 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		"congestion_controller": req.CongestionController,
 		"udp_relay_mode":        req.UDPRelayMode,
 		"heartbeat_interval":    req.HeartbeatInterval,
+		// AnyTLS (string fields only — int fields handled below)
+		"padding_scheme": req.PaddingScheme,
 	}
 	for k, v := range convFields {
 		if v != "" {
@@ -237,6 +247,23 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 			extra["disable_sni"] = "true"
 		}
 	}
+	// AnyTLS int convenience fields. Skip zeros so mihomo's runtime fallback
+	// (≤5s → 30s, see session/client.go:46-51) can take over.
+	if req.IdleSessionCheckIntervalSeconds > 0 {
+		if _, exists := extra["idle_session_check_interval_seconds"]; !exists {
+			extra["idle_session_check_interval_seconds"] = fmt.Sprintf("%d", req.IdleSessionCheckIntervalSeconds)
+		}
+	}
+	if req.IdleSessionTimeoutSeconds > 0 {
+		if _, exists := extra["idle_session_timeout_seconds"]; !exists {
+			extra["idle_session_timeout_seconds"] = fmt.Sprintf("%d", req.IdleSessionTimeoutSeconds)
+		}
+	}
+	if req.MinIdleSession > 0 {
+		if _, exists := extra["min_idle_session"]; !exists {
+			extra["min_idle_session"] = fmt.Sprintf("%d", req.MinIdleSession)
+		}
+	}
 
 	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
 	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.FastAddInboundType, &proto.FastAddInboundReq{
@@ -273,7 +300,7 @@ func (handler *FastAddInboundHandler) help() string {
 	return `POST /api/inbound/fast
 	快速添加指定配置的inbound
 	body: {"target":"", "tag":"", "protocol":"vless", "transport":"tcp", "domain":"", "security":"tls", "port":0, ...}
-	protocol: vless, vmess, trojan, shadowsocks, hysteria2, tuic (hysteria2/tuic 仅 container=mihomo; anytls 计划下一阶段接入)
+	protocol: vless, vmess, trojan, shadowsocks, hysteria2, tuic, anytls (hysteria2/tuic/anytls 仅 container=mihomo)
 	transport: tcp, ws, h2(http), grpc, httpupgrade, xhttp, splithttp (也可用 stream 字段, 向后兼容)
 	security: tls(默认), reality
 	domain: 证书域名 (tls 时使用); 为空则自签
@@ -282,5 +309,6 @@ func (handler *FastAddInboundHandler) help() string {
 	convenience fields: ws_path, grpc_service_name, http_path, http_host(逗号分隔), httpupgrade_path, xhttp_path, xhttp_mode, alpn, flow, sniffing_enabled
 	hysteria2 (container=mihomo): obfs, obfs_password, up, down, masquerade, ignore_client_bandwidth
 	tuic (container=mihomo): congestion_controller, udp_relay_mode, zero_rtt_handshake, heartbeat_interval(支持 "10s" / 纯毫秒数), disable_sni
+	anytls (container=mihomo): padding_scheme(server-only inline 文本), idle_session_check_interval_seconds(int, 客户端), idle_session_timeout_seconds(int, 客户端), min_idle_session(int, 客户端)
 	extra_params: map[string]string, 透传任意参数到 Executor (如 tls_min_version, tls_reject_unknown_sni, uuid, 以及尚未提升为便捷字段的协议参数)`
 }

@@ -259,10 +259,12 @@ func TestFastAddInbound_DuplicateTag(t *testing.T) {
 }
 
 func TestFastAddInbound_UnknownProtocolRejected(t *testing.T) {
-	// Phase 6 wired tuic; anytls is the unsupported sentinel until Phase 7.
+	// Phase 7 wired anytls. Every contracts.Protocol now has a container
+	// branch; use an unrecognised scheme string to exercise the
+	// ErrProtocolNotSupported path.
 	c := newTestContainer(t)
 	err := c.FastAddInbound("x", map[string]any{
-		"protocol": "anytls",
+		"protocol": "nonesuch",
 		"port":     10001,
 		"password": "p",
 	})

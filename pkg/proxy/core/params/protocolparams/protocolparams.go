@@ -209,12 +209,24 @@ type TUICParams struct {
 	DisableSNI           bool   `json:"disable_sni,omitempty"`           // client-only; mihomo outbound disable-sni
 }
 
+// AnyTLSParams carries the AnyTLS-specific knobs.
+//
+// Schema fact-check (mihomo Alpha):
+//   - Listener (`listener/inbound/anytls.go:12-21`) consumes only
+//     password (via users map) + padding-scheme; the idle-session and
+//     min-idle-session fields exist solely on the outbound side
+//     (`adapter/outbound/anytls.go:25-43`).
+//   - Outbound idle-session-check-interval / idle-session-timeout are
+//     `int` seconds (NOT a duration string), so the JSON tag carries the
+//     `_seconds` suffix to make the unit explicit on the wire.
+//   - PaddingScheme is server-only inline text; empty defers to mihomo's
+//     `transport/anytls/padding.DefaultPaddingScheme`.
 type AnyTLSParams struct {
 	Password                 string `json:"password"`
 	PaddingScheme            string `json:"padding_scheme,omitempty"`
-	IdleSessionCheckInterval string `json:"idle_session_check_interval,omitempty"` // duration string
-	IdleSessionTimeout       string `json:"idle_session_timeout,omitempty"`        // duration string
-	MinIdleSession           int    `json:"min_idle_session,omitempty"`
+	IdleSessionCheckInterval int    `json:"idle_session_check_interval_seconds,omitempty"` // client-only; ≤5 → mihomo fallback to 30s
+	IdleSessionTimeout       int    `json:"idle_session_timeout_seconds,omitempty"`        // client-only; ≤5 → mihomo fallback to 30s
+	MinIdleSession           int    `json:"min_idle_session,omitempty"`                    // client-only
 }
 
 // ---- Errors ----

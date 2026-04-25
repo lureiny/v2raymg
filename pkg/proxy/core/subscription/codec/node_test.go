@@ -90,6 +90,19 @@ func TestDecode_DispatchHy2Alias(t *testing.T) {
 	}
 }
 
+func TestDecode_DispatchAnyTLS(t *testing.T) {
+	n, err := Decode("anytls://pwd@host:443?sni=host#N")
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if _, ok := n.(*AnyTLSNode); !ok {
+		t.Errorf("expected *AnyTLSNode, got %T", n)
+	}
+	if n.Protocol() != contracts.ProtocolAnyTLS {
+		t.Errorf("Protocol() = %q, want anytls", n.Protocol())
+	}
+}
+
 func TestDecode_DispatchSnell(t *testing.T) {
 	n, err := Decode("snell://psk@host:443?version=5#N")
 	if err != nil {
@@ -153,6 +166,8 @@ func TestDecode_EncodeRoundTrip_AllProtocols(t *testing.T) {
 		"trojan://pass@host.com:443?sni=host.com#T",
 		"ss://" + userinfo + "@host.com:443#S",
 		"hysteria2://pwd@host.com:443?sni=host.com&insecure=1#H",
+		"tuic://00112233-4455-6677-8899-aabbccddeeff:pwd@host.com:443?sni=host.com#TUIC",
+		"anytls://pwd@host.com:443?sni=host.com&insecure=1#A",
 		"snell://psk@host.com:443?version=5#N",
 	}
 	for _, uri := range cases {

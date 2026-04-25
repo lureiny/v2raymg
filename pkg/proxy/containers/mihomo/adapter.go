@@ -212,7 +212,7 @@ func fastAddBuildInbound(tag string, params map[string]any) (*MihomoInbound, err
 	switch contracts.Protocol(protoStr) {
 	case contracts.ProtocolVLess, contracts.ProtocolVMess, contracts.ProtocolTrojan,
 		contracts.ProtocolShadowsocks, contracts.ProtocolHysteria2,
-		contracts.ProtocolTUIC:
+		contracts.ProtocolTUIC, contracts.ProtocolAnyTLS:
 		// Parse reads KeyTag from params if present; we overwrite with
 		// the canonical FastAdd tag afterwards — that's the authoritative
 		// identifier, and it preserves Parse's read-only contract on

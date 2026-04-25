@@ -31,28 +31,50 @@ func TestParseUnknownProtocol(t *testing.T) {
 	}
 }
 
-// TestParseKnownProtocolStub confirms the still-stubbed protocol branches
-// return "not yet implemented" rather than a zero value. Protocols whose
-// branch has landed (Phase 1+ flips them over) should move to their own
-// per-protocol test file and be removed from this list.
+// TestParseAllContractsProtocolsHaveBranch is the safety net for "added a
+// new contracts.Protocol constant but forgot to wire it into Parse".
+// Every protocol that the FastAdd/ProtocolParams layer is expected to
+// handle MUST be enumerated here; calling Parse with that protocol
+// (and minimal credentials) MUST NOT return ErrProtocolNotSupported.
 //
-// Stub list shrinks one entry per phase. VLESS flipped in Phase 1, VMess
-// in Phase 2, Trojan in Phase 3, Shadowsocks in Phase 4, Hysteria2 in
-// Phase 5, TUIC in Phase 6.
-func TestParseKnownProtocolStub(t *testing.T) {
-	cases := []contracts.Protocol{
+// History: Phase 0 stubbed every branch; Phases 1-7 flipped them one by
+// one. Earlier this test was named TestParseKnownProtocolStub and tracked
+// the *un*-implemented set, which became an empty slice after Phase 7
+// (and silently passed for any future additions). Inverting the contract
+// means the test stays meaningful: a future ProtocolXxx that lacks a
+// parser branch is caught immediately.
+//
+// Protocols intentionally NOT routed through this layer (snell / socks5 /
+// http / direct) live elsewhere and aren't exercised here.
+func TestParseAllContractsProtocolsHaveBranch(t *testing.T) {
+	expected := []contracts.Protocol{
+		contracts.ProtocolVLess,
+		contracts.ProtocolVMess,
+		contracts.ProtocolTrojan,
+		contracts.ProtocolShadowsocks,
+		contracts.ProtocolHysteria2,
+		contracts.ProtocolTUIC,
 		contracts.ProtocolAnyTLS,
 	}
-	for _, proto := range cases {
+	// Per-protocol minimal raw maps. Some parsers still require structural
+	// fields (uuid / cipher) — supply them so the call surfaces only
+	// ErrProtocolNotSupported when the dispatch is missing, rather than a
+	// downstream domain error.
+	for _, proto := range expected {
 		t.Run(string(proto), func(t *testing.T) {
 			raw := map[string]any{
 				KeyProtocol: string(proto),
 				KeyPort:     uint32(1080),
+				KeyUUID:     "00112233-4455-6677-8899-aabbccddeeff",
+				KeyPassword: "p",
+				KeyCipher:   "aes-256-gcm",
 			}
 			_, err := Parse(raw)
-			if !errors.Is(err, ErrProtocolNotSupported) {
-				t.Errorf("%s Parse err = %v, want ErrProtocolNotSupported", proto, err)
+			if errors.Is(err, ErrProtocolNotSupported) {
+				t.Errorf("%s: Parse returned ErrProtocolNotSupported — switch case missing in parser.go?", proto)
 			}
+			// Any other error (missing TLS material, invalid combination,
+			// etc.) is fine — this test only catches dispatch gaps.
 		})
 	}
 }

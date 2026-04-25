@@ -88,10 +88,11 @@ func TestMihomoInbound_Validate(t *testing.T) {
 			wantErr: ErrMissingCredential,
 		},
 		{
-			// Phase 6 added tuic support; anytls is the next unimplemented
-			// protocol — it's the "unsupported" sentinel until Phase 7.
+			// Phase 7 wired AnyTLS — every contracts.Protocol now has a
+			// validate branch. Synthesise an unknown protocol value so the
+			// Validate switch's default branch fires.
 			name:    "unsupported protocol",
-			inbound: NewMihomoInbound("t", contracts.ProtocolAnyTLS, 10001, MihomoSharedCred{Password: "pw"}),
+			inbound: NewMihomoInbound("t", contracts.Protocol("nonesuch"), 10001, MihomoSharedCred{Password: "pw"}),
 			wantErr: ErrProtocolNotSupported,
 		},
 	}
@@ -264,7 +265,11 @@ func TestFromNative_RejectsInvalid(t *testing.T) {
 		data string
 	}{
 		{"bad json", `{not json`},
-		{"unsupported protocol", `{"tag":"t","protocol":"anytls","port":10001,"shared_cred":{"password":"pw"}}`},
+		// Phase 7 wired anytls — synthesise an unrecognised protocol value
+		// to exercise the "unsupported protocol" path; the previous fixture
+		// (anytls + SharedCred) now reaches validateAnyTLS and fails on
+		// missing ProtocolParams instead of failing at the dispatch switch.
+		{"unsupported protocol", `{"tag":"t","protocol":"nonesuch","port":10001,"shared_cred":{"password":"pw"}}`},
 		{"missing credential", `{"tag":"t","protocol":"vmess","port":10001,"shared_cred":{}}`},
 	}
 	for _, tc := range tests {

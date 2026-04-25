@@ -212,9 +212,21 @@ func TestIntegrationFillDefaultsThenParseAnyTLS(t *testing.T) {
 	}
 
 	before := copyMap(raw)
-	_, err := protocolparams.Parse(raw)
-	if err == nil {
-		t.Fatal("Parse returned nil error for stubbed anytls branch")
+	pp, err := protocolparams.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if pp.AnyTLS == nil {
+		t.Fatalf("Parse: AnyTLS slot is nil")
+	}
+	if pp.AnyTLS.Password == "" {
+		t.Fatalf("Parse: AnyTLS.Password lost")
+	}
+	if pp.Transport != nil {
+		t.Errorf("Parse: AnyTLS must have nil Transport (TCP-native), got %+v", pp.Transport)
+	}
+	if pp.Security == nil || pp.Security.Kind != contracts.SecurityTLS {
+		t.Errorf("Parse: AnyTLS requires Security.Kind=tls, got %+v", pp.Security)
 	}
 	if !reflect.DeepEqual(raw, before) {
 		t.Errorf("Parse mutated raw map")

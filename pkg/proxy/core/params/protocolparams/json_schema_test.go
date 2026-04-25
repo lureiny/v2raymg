@@ -74,7 +74,7 @@ func TestProtocolParamsJSONTagSchema(t *testing.T) {
 		SS:        &SSParams{Password: "p", Cipher: "aes-256-gcm", UDP: true, Plugin: "x", PluginOpts: map[string]string{"a": "b"}},
 		Hysteria2: &Hysteria2Params{Password: "p", Obfs: "salamander", ObfsPassword: "op", Up: "50 Mbps", Down: "100 Mbps", Masquerade: "https://example.com", IgnoreClientBandwidth: true},
 		TUIC:      &TUICParams{UUID: "u", Password: "p", CongestionController: "bbr", UDPRelayMode: "native", ZeroRTTHandshake: true, HeartbeatInterval: "10s"},
-		AnyTLS:    &AnyTLSParams{Password: "p", PaddingScheme: "scheme", IdleSessionCheckInterval: "30s", IdleSessionTimeout: "60s", MinIdleSession: 3},
+		AnyTLS:    &AnyTLSParams{Password: "p", PaddingScheme: "scheme", IdleSessionCheckInterval: 30, IdleSessionTimeout: 60, MinIdleSession: 3},
 	}
 
 	data, err := json.Marshal(pp)
@@ -148,7 +148,7 @@ func TestProtocolParamsJSONTagSchema(t *testing.T) {
 		"uuid", "password", "congestion_controller", "udp_relay_mode", "zero_rtt_handshake", "heartbeat_interval",
 	})
 	assertNestedKeys(t, top["anytls"], "AnyTLSParams", []string{
-		"password", "padding_scheme", "idle_session_check_interval", "idle_session_timeout", "min_idle_session",
+		"password", "padding_scheme", "idle_session_check_interval_seconds", "idle_session_timeout_seconds", "min_idle_session",
 	})
 }
 

@@ -1002,3 +1002,170 @@ func TestConvertTuic_DropsListenerOnlyFields(t *testing.T) {
 		}
 	}
 }
+
+// --- convertAnyTLS tests (Phase 7) ---
+
+func anytlsBaseSpec() contracts.SubscriptionSpec {
+	return contracts.SubscriptionSpec{
+		Protocol:   contracts.ProtocolAnyTLS,
+		Host:       "anytls.example.com",
+		Port:       443,
+		Password:   "anytls-pw",
+		Extensions: map[string]any{},
+	}
+}
+
+func TestConvertAnyTLS_BasicShape(t *testing.T) {
+	c := &ClashConverter{}
+	p := c.convertAnyTLS(anytlsBaseSpec())
+	if p == nil {
+		t.Fatal("expected non-nil proxy")
+	}
+	if p.Type != "anytls" {
+		t.Errorf("Type = %q, want anytls", p.Type)
+	}
+	if p.Password != "anytls-pw" {
+		t.Errorf("Password = %q", p.Password)
+	}
+	if !p.UDP {
+		t.Error("UDP should be true (UoT-over-TCP)")
+	}
+}
+
+func TestConvertAnyTLS_SNI(t *testing.T) {
+	c := &ClashConverter{}
+	spec := anytlsBaseSpec()
+	spec.Extensions["server_name"] = "anytls.example.com"
+	p := c.convertAnyTLS(spec)
+	if p.SNI != "anytls.example.com" {
+		t.Errorf("SNI = %q", p.SNI)
+	}
+}
+
+func TestConvertAnyTLS_SkipCertVerify_FromExtension(t *testing.T) {
+	c := &ClashConverter{}
+	spec := anytlsBaseSpec()
+	spec.Extensions["skip_cert_verify"] = true
+	p := c.convertAnyTLS(spec)
+	if !p.SkipCertVerify {
+		t.Error("expected skip-cert-verify=true from extension")
+	}
+}
+
+func TestConvertAnyTLS_SkipCertVerify_FromURI(t *testing.T) {
+	// URI fallback (anytls:// uses `insecure=1` per upstream spec).
+	c := &ClashConverter{}
+	spec := anytlsBaseSpec()
+	spec.URI = "anytls://pwd@host:443?insecure=1"
+	p := c.convertAnyTLS(spec)
+	if !p.SkipCertVerify {
+		t.Error("expected skip-cert-verify=true from URI insecure=1 fallback")
+	}
+}
+
+// TestConvertAnyTLS_DropsFingerprintExtension locks the deliberate
+// non-propagation of cert-pin fingerprint to the client outbound. mihomo's
+// outbound schema accepts a `fingerprint:` field, but v2raymg has no
+// TLSSpec.Fingerprint source today, so any caller that puts "fingerprint"
+// into Extensions (e.g. by hand) MUST be ignored — the alternative is to
+// emit an unsourced/half-wired field into client configs.
+func TestConvertAnyTLS_DropsFingerprintExtension(t *testing.T) {
+	c := &ClashConverter{}
+	spec := anytlsBaseSpec()
+	spec.Extensions["fingerprint"] = "deadbeef1234"
+	p := c.convertAnyTLS(spec)
+	out, err := yaml.Marshal(p)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+	if strings.Contains(string(out), "fingerprint") {
+		t.Errorf("yaml must NOT emit fingerprint (cert-pin not plumbed); got:\n%s", string(out))
+	}
+}
+
+func TestConvertAnyTLS_IdleSessionFields(t *testing.T) {
+	c := &ClashConverter{}
+	spec := anytlsBaseSpec()
+	spec.Extensions["idle_session_check_interval_seconds"] = 30
+	spec.Extensions["idle_session_timeout_seconds"] = 60
+	spec.Extensions["min_idle_session"] = 3
+	p := c.convertAnyTLS(spec)
+	if p.IdleSessionCheckInterval != 30 {
+		t.Errorf("IdleSessionCheckInterval = %d, want 30", p.IdleSessionCheckInterval)
+	}
+	if p.IdleSessionTimeout != 60 {
+		t.Errorf("IdleSessionTimeout = %d, want 60", p.IdleSessionTimeout)
+	}
+	if p.MinIdleSession != 3 {
+		t.Errorf("MinIdleSession = %d, want 3", p.MinIdleSession)
+	}
+
+	// yaml.Marshal must emit kebab-case keys mihomo expects.
+	out, err := yaml.Marshal(p)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"idle-session-check-interval: 30",
+		"idle-session-timeout: 60",
+		"min-idle-session: 3",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("yaml missing %q; got:\n%s", want, got)
+		}
+	}
+}
+
+// 0 (or absence) defers to mihomo's runtime default — emit nothing rather
+// than an explicit zero, which would override mihomo's >5s fallback.
+func TestConvertAnyTLS_IdleZeroOmitted(t *testing.T) {
+	c := &ClashConverter{}
+	spec := anytlsBaseSpec()
+	spec.Extensions["idle_session_check_interval_seconds"] = 0
+	spec.Extensions["idle_session_timeout_seconds"] = 0
+	spec.Extensions["min_idle_session"] = 0
+	p := c.convertAnyTLS(spec)
+	out, err := yaml.Marshal(p)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+	got := string(out)
+	for _, banned := range []string{
+		"idle-session-check-interval",
+		"idle-session-timeout",
+		"min-idle-session",
+	} {
+		if strings.Contains(got, banned) {
+			t.Errorf("yaml must NOT contain %q when value is zero; got:\n%s", banned, got)
+		}
+	}
+}
+
+// padding-scheme is server-only (mihomo `adapter/outbound/anytls.go` has no
+// such field). Marshal-and-grep guards against accidental wire-up.
+func TestConvertAnyTLS_DropsServerOnlyFields(t *testing.T) {
+	c := &ClashConverter{}
+	spec := anytlsBaseSpec()
+	spec.Extensions["server_name"] = "anytls.example.com"
+	spec.Extensions["padding_scheme"] = "stop=4\n0=30-30"
+	spec.Extensions["client-auth-type"] = "RequireAnyClientCert"
+	spec.Extensions["ech-key"] = "PEM-DATA"
+	p := c.convertAnyTLS(spec)
+	out, err := yaml.Marshal(p)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+	got := string(out)
+	for _, forbidden := range []string{
+		"padding-scheme",
+		"padding_scheme",
+		"client-auth-type",
+		"client-auth-cert",
+		"ech-key",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("yaml must NOT contain server-only field %q; got:\n%s", forbidden, got)
+		}
+	}
+}

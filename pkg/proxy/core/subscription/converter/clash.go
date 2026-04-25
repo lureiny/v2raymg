@@ -232,6 +232,13 @@ func ConvertTuicForTest(spec contracts.SubscriptionSpec) *ClashProxy {
 	return (&ClashConverter{}).convertTuic(spec)
 }
 
+// ConvertAnyTLSForTest exposes convertAnyTLS to integration tests for
+// the AnyTLS subscription chain. Used by mihomo_anytls_matrix_test to
+// drive the real GetUserSubscriptions → convertAnyTLS chain.
+func ConvertAnyTLSForTest(spec contracts.SubscriptionSpec) *ClashProxy {
+	return (&ClashConverter{}).convertAnyTLS(spec)
+}
+
 // convertSpec returns nil if the protocol is unsupported by Clash/mihomo or
 // the node's transport/security combination is not expressible.
 func (c *ClashConverter) convertSpec(spec contracts.SubscriptionSpec) *ClashProxy {
@@ -251,6 +258,8 @@ func (c *ClashConverter) convertSpec(spec contracts.SubscriptionSpec) *ClashProx
 		return c.convertHysteria2(spec)
 	case contracts.ProtocolTUIC:
 		return c.convertTuic(spec)
+	case contracts.ProtocolAnyTLS:
+		return c.convertAnyTLS(spec)
 	default:
 		return nil
 	}
@@ -626,6 +635,54 @@ func (c *ClashConverter) convertTuic(spec contracts.SubscriptionSpec) *ClashProx
 	return proxy
 }
 
+// convertAnyTLS emits a mihomo AnyTLS outbound proxy entry.
+//
+// Schema parity (see project_protocol_expansion_status.md Phase 7
+// section + reference_anytls_protocol_facts):
+//
+//   - Required fields: server / port / password (plus name/type).
+//   - sni / skip-cert-verify follow the standard TLS-required pattern,
+//     read from Extensions ("server_name" / "skip_cert_verify") just
+//     like hy2 and tuic.
+//   - idle-session-check-interval / idle-session-timeout / min-idle-session
+//     are int seconds in mihomo's outbound schema; we read them from
+//     the matching `_seconds` Extensions keys (or `min_idle_session`
+//     for the int-typed knob). Zero defers to mihomo runtime defaults
+//     (≤5s gets bumped to 30s by `session/client.go:46-51`), so omit
+//     here when zero rather than send 0 explicitly.
+//   - PaddingScheme is server-only (mihomo client takes no
+//     padding-scheme yaml) and ALPN is unspecified by the URI, so
+//     neither is propagated client-side.
+//   - udp:true is hardcoded — mihomo wraps UDP in UoT-over-TCP
+//     transparently, matching how other TCP-tunnel converters set udp.
+func (c *ClashConverter) convertAnyTLS(spec contracts.SubscriptionSpec) *ClashProxy {
+	ext := spec.Extensions
+	proxy := &ClashProxy{
+		Name:     c.nodeName(spec, "AnyTLS"),
+		Type:     "anytls",
+		Server:   spec.Host,
+		Port:     int(spec.Port),
+		Password: spec.Password,
+		UDP:      true,
+	}
+	if sni := extString(ext, "server_name"); sni != "" {
+		proxy.SNI = sni
+	}
+	if skipVerify, _ := ext["skip_cert_verify"].(bool); skipVerify || strings.Contains(spec.URI, "insecure=1") {
+		proxy.SkipCertVerify = true
+	}
+	if v := extInt(ext, "idle_session_check_interval_seconds"); v > 0 {
+		proxy.IdleSessionCheckInterval = v
+	}
+	if v := extInt(ext, "idle_session_timeout_seconds"); v > 0 {
+		proxy.IdleSessionTimeout = v
+	}
+	if v := extInt(ext, "min_idle_session"); v > 0 {
+		proxy.MinIdleSession = v
+	}
+	return proxy
+}
+
 func (c *ClashConverter) nodeName(spec contracts.SubscriptionSpec, protoPrefix string) string {
 	if spec.NodeName != "" {
 		return fmt.Sprintf("🌿 %s_%s", protoPrefix, spec.NodeName)
@@ -809,6 +866,16 @@ type ClashProxy struct {
 	ReduceRTT            bool   `yaml:"reduce-rtt,omitempty"`
 	HeartbeatInterval    int    `yaml:"heartbeat-interval,omitempty"` // milliseconds; 0 lets mihomo apply its own default (10000)
 	DisableSNI           bool   `yaml:"disable-sni,omitempty"`
+	// AnyTLS client-only fields (see convertAnyTLS). Idle/min are integer
+	// seconds in mihomo's outbound schema; 0 defers to mihomo runtime
+	// defaults (~30s), so we leave them omitempty rather than emit zeros.
+	// Cert-pin fingerprint is intentionally not surfaced here — see the
+	// codec/anytls.go AnyTLSNode.Fingerprint comment for the URI
+	// hpkp= path; piping it through to the client outbound config would
+	// require a TLSSpec field for cert-pin which we do not have today.
+	IdleSessionCheckInterval int `yaml:"idle-session-check-interval,omitempty"`
+	IdleSessionTimeout       int `yaml:"idle-session-timeout,omitempty"`
+	MinIdleSession           int `yaml:"min-idle-session,omitempty"`
 }
 
 // PluginOpts obfs/v2ray-plugin/shadow-tls 选项。

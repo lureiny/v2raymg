@@ -69,6 +69,10 @@ func BuildListener(inb *MihomoInbound) (map[string]any, error) {
 		if err := fillTuicListener(m, inb); err != nil {
 			return nil, err
 		}
+	case contracts.ProtocolAnyTLS:
+		if err := fillAnyTLSListener(m, inb); err != nil {
+			return nil, err
+		}
 	default:
 		// Unreachable under correctly-validated inbound, but keeps the
 		// switch exhaustive in the face of future protocol additions
@@ -491,6 +495,64 @@ func fillTuicListener(m map[string]any, inb *MihomoInbound) error {
 		cc = "bbr"
 	}
 	m["congestion-controller"] = cc
+
+	return nil
+}
+
+// fillAnyTLSListener maps AnyTLS ProtocolParams onto mihomo Alpha listener
+// yaml. AnyTLS has no legacy SharedCred path — Phase 7 is its first
+// appearance in this container.
+//
+// Sources (mihomo Alpha listener/inbound/anytls.go::AnyTLSOption +
+// listener/anytls/server.go):
+//
+//   - users: map[string]string. Single-user model uses "default" as the
+//     username, mirroring fillHysteria2Listener. mihomo matches incoming
+//     connections by sha256(password) so the username is purely a label
+//     for log/observability; per-user routing is handled at the forward
+//     layer like every other Phase 1+ protocol.
+//   - certificate / private-key: absolute PEM file paths, kebab-case key
+//     names (NOT cert-file/key-file). Server.go:116 hard-fails without
+//     a certificate, so empty paths must be rejected by Validate before
+//     reaching this point.
+//   - padding-scheme: optional inline text. Empty defers to mihomo's
+//     transport/anytls/padding.DefaultPaddingScheme; we never inject a
+//     placeholder default ourselves so an explicit empty caller intent
+//     and "use mihomo default" are indistinguishable on the wire (which
+//     is the desired behaviour — both produce the same listener).
+//
+// Listener-side fields not exposed by v2raymg (left at mihomo defaults
+// or unsupported):
+//
+//   - client-auth-type / client-auth-cert (mTLS) / ech-key (ECH)
+//   - alpn (no listener key — anytls server lets Go TLS auto-negotiate)
+//
+// idle-session-check-interval / idle-session-timeout / min-idle-session
+// are mihomo client-only outbound fields and are never written here. They
+// reach the client via subscription Extensions.
+func fillAnyTLSListener(m map[string]any, inb *MihomoInbound) error {
+	if inb.ProtocolParams == nil || inb.ProtocolParams.AnyTLS == nil {
+		return fmt.Errorf("%w: anytls inbound missing ProtocolParams.AnyTLS", ErrMissingCredential)
+	}
+	a := inb.ProtocolParams.AnyTLS
+
+	m["users"] = map[string]any{
+		"default": a.Password,
+	}
+
+	sec := inb.ProtocolParams.Security
+	if sec == nil || sec.Kind != contracts.SecurityTLS || sec.TLS == nil {
+		return fmt.Errorf("%w: anytls requires tls security", ErrMissingCredential)
+	}
+	if sec.TLS.CertFile == "" || sec.TLS.KeyFile == "" {
+		return fmt.Errorf("%w: anytls requires cert_file and key_file", ErrMissingCredential)
+	}
+	m["certificate"] = sec.TLS.CertFile
+	m["private-key"] = sec.TLS.KeyFile
+
+	if a.PaddingScheme != "" {
+		m["padding-scheme"] = a.PaddingScheme
+	}
 
 	return nil
 }

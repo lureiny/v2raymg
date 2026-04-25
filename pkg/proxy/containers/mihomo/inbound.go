@@ -130,9 +130,11 @@ func (i *MihomoInbound) cleanupCertFiles() []string {
 // status codes for "unknown protocol" vs "missing field").
 var (
 	// ErrProtocolNotSupported is returned when an inbound targets a protocol
-	// the mihomo container doesn't yet wire (currently AnyTLS; Phase 7 will
-	// land it). See D4 in docs/mihomo-container-implementation-plan.md.
-	ErrProtocolNotSupported = errors.New("mihomo: protocol not supported (supported: vless/vmess/trojan/shadowsocks/hysteria2/tuic)")
+	// outside the contracts.Protocol set the mihomo container has wired.
+	// As of Phase 7 (AnyTLS) every contracts.Protocol has a container
+	// branch, so this surfaces only for unknown / future protocol strings.
+	// See D4 in docs/mihomo-container-implementation-plan.md.
+	ErrProtocolNotSupported = errors.New("mihomo: protocol not supported (supported: vless/vmess/trojan/shadowsocks/hysteria2/tuic/anytls)")
 
 	// ErrMissingCredential is returned when a required protocol-specific
 	// credential field is empty.
@@ -199,9 +201,60 @@ func (i *MihomoInbound) Validate() error {
 		return i.validateHysteria2()
 	case contracts.ProtocolTUIC:
 		return i.validateTuic()
+	case contracts.ProtocolAnyTLS:
+		return i.validateAnyTLS()
 	default:
 		return fmt.Errorf("%w: %q", ErrProtocolNotSupported, i.Protocol())
 	}
+}
+
+// validateAnyTLS enforces the Phase 7 invariants. AnyTLS has no legacy
+// SharedCred path — Phase 7 is its first appearance in this container,
+// so ProtocolParams.AnyTLS is mandatory.
+//
+// Rules overlap with parseAnyTLS (TLS-only, password required, idle/min
+// non-negative). The duplication is intentional: Validate is the single
+// gate FromNative records cross when reloaded from InboundStore, and a
+// stored record may carry combinations that never went through Parse.
+//
+// Sentinel choice notes (mirrors validateHysteria2 / validateTuic): this
+// package only exposes ErrMissingCredential and ErrProtocolNotSupported.
+// "Negative idle" is logically an invalid value (parser uses
+// ErrInvalidCombination) but at this layer it folds into
+// ErrProtocolNotSupported — the asymmetry is inherited project-wide; if
+// you ever introduce ErrInvalidConfig it should be applied to all three
+// validateXxx functions in one pass, not to AnyTLS in isolation.
+func (i *MihomoInbound) validateAnyTLS() error {
+	if i.ProtocolParams == nil || i.ProtocolParams.AnyTLS == nil {
+		return fmt.Errorf("%w: anytls inbound missing ProtocolParams.AnyTLS", ErrMissingCredential)
+	}
+	a := i.ProtocolParams.AnyTLS
+	if a.Password == "" {
+		return fmt.Errorf("%w: anytls requires password", ErrMissingCredential)
+	}
+	sec := i.ProtocolParams.Security
+	if sec == nil {
+		return fmt.Errorf("%w: anytls requires tls security", ErrMissingCredential)
+	}
+	if sec.Kind != contracts.SecurityTLS {
+		return fmt.Errorf("%w: anytls security must be tls, got %q", ErrProtocolNotSupported, sec.Kind)
+	}
+	if sec.TLS == nil {
+		return fmt.Errorf("%w: anytls security=tls but TLS spec is nil", ErrMissingCredential)
+	}
+	if sec.TLS.CertFile == "" || sec.TLS.KeyFile == "" {
+		return fmt.Errorf("%w: anytls requires cert_file and key_file", ErrMissingCredential)
+	}
+	if a.IdleSessionCheckInterval < 0 {
+		return fmt.Errorf("%w: anytls idle_session_check_interval_seconds must be >= 0", ErrProtocolNotSupported)
+	}
+	if a.IdleSessionTimeout < 0 {
+		return fmt.Errorf("%w: anytls idle_session_timeout_seconds must be >= 0", ErrProtocolNotSupported)
+	}
+	if a.MinIdleSession < 0 {
+		return fmt.Errorf("%w: anytls min_idle_session must be >= 0", ErrProtocolNotSupported)
+	}
+	return nil
 }
 
 // validateTuic enforces the Phase 6 invariants. TUIC has no legacy SharedCred

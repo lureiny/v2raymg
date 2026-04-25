@@ -404,9 +404,9 @@ func TestBuildSubscriptionSpec_UnsupportedProtocolErrors(t *testing.T) {
 	// Construct a MihomoInbound with an unsupported protocol directly —
 	// NewMihomoInbound + Validate would reject it, but buildSubscriptionSpec
 	// is the defense-in-depth guard for a record that slipped through.
-	// Phase 6 added tuic; anytls is the unsupported-protocol sentinel until
-	// Phase 7 lands.
-	base := NewMihomoInbound("exotic", contracts.ProtocolAnyTLS, 10001, MihomoSharedCred{Password: "p"})
+	// Phase 7 wired anytls — synthesise an unknown protocol value so the
+	// switch's default branch fires.
+	base := NewMihomoInbound("exotic", contracts.Protocol("nonesuch"), 10001, MihomoSharedCred{Password: "p"})
 
 	req := contracts.SubscriptionRequest{
 		User: contracts.UserSpec{Username: "alice"},
