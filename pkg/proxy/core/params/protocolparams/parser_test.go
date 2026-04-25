@@ -36,11 +36,10 @@ func TestParseUnknownProtocol(t *testing.T) {
 // branch has landed (Phase 1+ flips them over) should move to their own
 // per-protocol test file and be removed from this list.
 //
-// Stub list shrinks one entry per phase. VLESS flipped in Phase 1. VMess
-// flipped in Phase 2.
+// Stub list shrinks one entry per phase. VLESS flipped in Phase 1, VMess
+// in Phase 2, and Trojan in Phase 3.
 func TestParseKnownProtocolStub(t *testing.T) {
 	cases := []contracts.Protocol{
-		contracts.ProtocolTrojan,
 		contracts.ProtocolShadowsocks,
 		contracts.ProtocolHysteria2,
 		contracts.ProtocolTUIC,

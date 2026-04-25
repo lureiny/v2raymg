@@ -69,7 +69,10 @@ func Parse(raw map[string]any) (*ProtocolParams, error) {
 		}
 		return pp, nil
 	case contracts.ProtocolTrojan:
-		return nil, fmt.Errorf("%w: trojan parser not yet implemented", ErrProtocolNotSupported)
+		if err := parseTrojan(raw, pp); err != nil {
+			return nil, err
+		}
+		return pp, nil
 	case contracts.ProtocolShadowsocks:
 		return nil, fmt.Errorf("%w: shadowsocks parser not yet implemented", ErrProtocolNotSupported)
 	case contracts.ProtocolHysteria2:

@@ -678,19 +678,26 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 | `flow` | string | VLESS flow，如 `xtls-rprx-vision` |
 | `method` | string | Shadowsocks 加密方式 |
 | `password` | string | Trojan/Shadowsocks 密码 |
+| `utls_fingerprint` | string | Reality 客户端 fingerprint，如 `chrome` |
+| `skip_cert_verify` | "true"/"false" | 订阅侧跳过证书校验提示 |
 
 **Protocol:** `vless` | `vmess` | `trojan` | `ss` / `shadowsocks`
 
 **Transport:** `tcp` | `ws` | `h2`（`http` 自动 normalize 为 `h2`）| `grpc` | `httpupgrade` | `xhttp` | `splithttp`
 
+> 注意:mihomo container 的 FastAdd 支持范围按协议收窄。HTTP 层接受的 transport 是跨 container 的全集,具体组合以表格为准。
+
 **支持的协议组合:**
 
 | 协议 | 传输 | 安全 |
 |------|------|------|
-| VLESS | tcp, ws, grpc, httpupgrade, xhttp, splithttp | tls, reality |
-| VMess | tcp, ws, h2 | tls |
-| Trojan | tcp, grpc | tls |
-| Shadowsocks | tcp, ws, grpc | none, tls, reality |
+| VLESS(mihomo) | tcp, ws, grpc, xhttp/splithttp | none, tls, reality |
+| VMess(mihomo) | tcp, ws, grpc | none, tls, reality |
+| Trojan(mihomo) | tcp, ws, grpc | tls, reality |
+| Shadowsocks(mihomo) | tcp | none |
+| Xray | 见 xray 协议矩阵 | 见 xray 协议矩阵 |
+
+Trojan+TLS 需要提供证书来源(`cert_file/key_file`、`certificate/key`、`domain` 或 `self_signed`)；Trojan+Reality 使用 `reality-config`，不需要也不会由 `FillDefaults` 强制补 TLS 证书。
 
 **示例 - VLESS+XHTTP+Reality:**
 ```json
@@ -719,16 +726,19 @@ X-Token 持有者自动被视为 admin 角色，但 **没有用户上下文**（
 }
 ```
 
-**示例 - VMess+h2+TLS:**
+**示例 - Trojan+gRPC+Reality:**
 ```json
 {
-  "tag": "vmess-h2",
-  "protocol": "vmess",
-  "transport": "h2",
-  "security": "tls",
-  "domain": "example.com",
-  "http_path": "/api",
-  "http_host": "example.com"
+  "tag": "trojan-grpc-reality",
+  "protocol": "trojan",
+  "transport": "grpc",
+  "security": "reality",
+  "password": "optional-password",
+  "grpc_service_name": "TrojanTunnel",
+  "reality_target": "www.microsoft.com:443",
+  "reality_server_names": ["www.microsoft.com"],
+  "reality_short_ids": ["aabbccddeeff0011"],
+  "utls_fingerprint": "chrome"
 }
 ```
 

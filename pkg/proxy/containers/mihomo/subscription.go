@@ -40,9 +40,9 @@ const defaultSSMethod = "aes-256-gcm"
 // treats an empty slice as "this container produced nothing for this user",
 // not as an error.
 //
-// Supported protocols today: vless / vmess (Phase 1+ structured-params
-// path) and trojan / shadowsocks (legacy SharedCred path). Phase 3/4
-// migrations will move trojan/ss onto ProtocolParams as well; this list
+// Supported protocols today: vless / vmess / trojan (Phase 1+ structured-
+// params path) and shadowsocks (legacy SharedCred path). Phase 4
+// migration will move ss onto ProtocolParams as well; this list
 // must be updated when each phase lands. Unsupported protocols are
 // logged and skipped rather than surfaced as hard errors — a mihomo
 // container should never hold such an inbound (adapter rejects them
@@ -98,13 +98,13 @@ func (c *MihomoContainer) GetUserSubscriptions(req contracts.SubscriptionRequest
 //
 //	vless → fillVLESSSubscriptionSpec (Phase 1, ProtocolParams; falls back to nothing — VLESS only ever lived on the new path)
 //	vmess → fillVMessSubscriptionSpec (Phase 2, ProtocolParams preferred + SharedCred legacy fallback for pre-Phase-2 records)
-//	trojan → SharedCred.Password (legacy; will migrate in Phase 3)
+//	trojan → fillTrojanSubscriptionSpec (Phase 3, ProtocolParams preferred + SharedCred legacy fallback for pre-Phase-3 records)
 //	shadowsocks → SharedCred.Password + (Cipher || default) (legacy; will migrate in Phase 4)
 //
 // Adding a protocol (hysteria2 / tuic / anytls) means (a) extending
 // MihomoInbound.Validate + adapter, (b) adding a codec.<Proto>Node Encode
-// path here. Phase 3/4 will collapse the trojan / ss SharedCred branches
-// onto ProtocolParams; update this list at each landing.
+// path here. Phase 4 will collapse the ss SharedCred branch onto
+// ProtocolParams; update this list at landing.
 func buildSubscriptionSpec(inb *MihomoInbound, req contracts.SubscriptionRequest, port uint32) (contracts.SubscriptionSpec, error) {
 	nodeName := req.NodeName
 	if nodeName == "" {
@@ -132,18 +132,9 @@ func buildSubscriptionSpec(inb *MihomoInbound, req contracts.SubscriptionRequest
 		}
 
 	case contracts.ProtocolTrojan:
-		if inb.SharedCred.Password == "" {
-			return contracts.SubscriptionSpec{}, fmt.Errorf("%w: trojan inbound %q has empty password", ErrMissingCredential, inb.Tag())
+		if err := fillTrojanSubscriptionSpec(&spec, inb); err != nil {
+			return contracts.SubscriptionSpec{}, err
 		}
-		spec.Protocol = contracts.ProtocolTrojan
-		spec.Password = inb.SharedCred.Password
-		node := &codec.TrojanNode{
-			NodeName: nodeName,
-			Host:     req.Host,
-			Port:     port,
-			Password: inb.SharedCred.Password,
-		}
-		spec.URI = node.Encode()
 
 	case contracts.ProtocolShadowsocks:
 		if inb.SharedCred.Password == "" {
@@ -402,6 +393,107 @@ func fillVMessSubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInbo
 	}
 
 	// Transport → codec fields + Extensions echo.
+	if t := inb.ProtocolParams.Transport; t != nil {
+		switch t.Kind {
+		case contracts.TransportWS:
+			node.Transport = "ws"
+			node.WSPath = t.WSPath
+			node.WSHost = t.WSHost
+			spec.Extensions["transport"] = "ws"
+			if t.WSPath != "" {
+				spec.Extensions["ws_path"] = t.WSPath
+			}
+			if t.WSHost != "" {
+				spec.Extensions["ws_host"] = t.WSHost
+			}
+		case contracts.TransportGRPC:
+			node.Transport = "grpc"
+			node.GRPCServiceName = t.GRPCServiceName
+			spec.Extensions["transport"] = "grpc"
+			if t.GRPCServiceName != "" {
+				spec.Extensions["grpc_service_name"] = t.GRPCServiceName
+			}
+		case contracts.TransportTCP, "":
+			// canonical default; emit nothing
+		}
+	}
+
+	spec.URI = node.Encode()
+	return nil
+}
+
+// fillTrojanSubscriptionSpec projects a Trojan inbound onto SubscriptionSpec,
+// preferring ProtocolParams for Phase 3+ records and preserving the legacy
+// SharedCred-only shape for pre-Phase-3 records.
+func fillTrojanSubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInbound) error {
+	spec.Protocol = contracts.ProtocolTrojan
+
+	if inb.ProtocolParams == nil || inb.ProtocolParams.Trojan == nil {
+		if inb.SharedCred.Password == "" {
+			return fmt.Errorf("%w: trojan inbound %q has empty password", ErrMissingCredential, inb.Tag())
+		}
+		spec.Password = inb.SharedCred.Password
+		node := &codec.TrojanNode{
+			NodeName: spec.NodeName,
+			Host:     spec.Host,
+			Port:     spec.Port,
+			Password: inb.SharedCred.Password,
+		}
+		spec.URI = node.Encode()
+		return nil
+	}
+
+	trojan := inb.ProtocolParams.Trojan
+	if trojan.Password == "" {
+		return fmt.Errorf("%w: trojan inbound %q has empty password", ErrMissingCredential, inb.Tag())
+	}
+	spec.Password = trojan.Password
+	node := &codec.TrojanNode{
+		NodeName: spec.NodeName,
+		Host:     spec.Host,
+		Port:     spec.Port,
+		Password: trojan.Password,
+	}
+
+	if sec := inb.ProtocolParams.Security; sec != nil {
+		switch sec.Kind {
+		case contracts.SecurityTLS:
+			if sec.TLS != nil {
+				node.SNI = sec.TLS.SNI
+				if sec.TLS.SNI != "" {
+					spec.Extensions["server_name"] = sec.TLS.SNI
+				}
+				if sec.TLS.CertSource == "self_signed" || sec.TLS.SkipCertVerify {
+					node.SkipCertVerify = true
+					spec.Extensions["skip_cert_verify"] = true
+				}
+				if sec.TLS.UTLSFingerprint != "" {
+					node.Fingerprint = sec.TLS.UTLSFingerprint
+					spec.Extensions["utls_fingerprint"] = sec.TLS.UTLSFingerprint
+				}
+			}
+			// TLS is implicit in trojan:// URIs and Clash trojan proxies.
+			spec.Extensions["security"] = "tls"
+		case contracts.SecurityReality:
+			node.Security = "reality"
+			spec.Extensions["security"] = "reality"
+			if rc := sec.Reality; rc != nil {
+				if rc.PublicKey != "" {
+					node.RealityPublicKey = rc.PublicKey
+					spec.Extensions["reality_public_key"] = rc.PublicKey
+				}
+				if len(rc.ShortIDs) > 0 {
+					node.RealityShortID = rc.ShortIDs[0]
+					spec.Extensions["reality_short_ids"] = rc.ShortIDs
+				}
+				if len(rc.ServerNames) > 0 {
+					node.SNI = rc.ServerNames[0]
+					spec.Extensions["server_name"] = rc.ServerNames[0]
+				}
+			}
+		}
+	}
+
 	if t := inb.ProtocolParams.Transport; t != nil {
 		switch t.Kind {
 		case contracts.TransportWS:

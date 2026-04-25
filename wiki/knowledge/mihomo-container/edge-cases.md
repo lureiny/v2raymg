@@ -19,7 +19,11 @@ A: 当二进制是生产流水线外部管理(DEB/RPM 包、容器镜像预装)�
 
 **Q: trojan 能否跑在 plain TCP 上(无 TLS)?**
 
-A: **不能**。stage 11+ 的真实 E2E 测试(`TestMihomoE2E_RealInternet`)确认了 P2-9:mihomo Alpha 的 trojan listener 运行时拒绝启动,报 `disallow using Trojan without both certificates/reality/ss config`。adapter 现在支持 `cert_file` / `key_file` 可选参数(stage 11+ 扩展),生产 trojan inbound 必须提供一对 PEM cert + key,且文件路径必须在 `MihomoConfig.DataDir` 下(SAFE_PATHS 约束)。
+A: **不能**。stage 11+ 的真实 E2E 测试(`TestMihomoE2E_RealInternet`)确认了 P2-9:mihomo Alpha 的 trojan listener 运行时拒绝启动,报 `disallow using Trojan without both certificates/reality/ss config`。Phase 3 后 trojan 新 FastAdd 走 ProtocolParams,必须是 `security=tls` 或 `security=reality`;TLS 模式需要 cert/key,Reality 模式需要 reality target/serverNames/key/shortId。生产 trojan TLS inbound 的 cert 文件路径必须在 `MihomoConfig.DataDir` 下或被 SAFE_PATHS 接受。
+
+**Q: trojan+ws+reality 能跑吗?**
+
+A: 当前 mihomo Alpha 上不能稳定通过。`TestMihomoTrojanMatrix` 实测 tcp/grpc reality 通过,ws+reality 客户端连接报 `unexpected status: 200 OK`,与 VLESS/VMess ws+reality 的已知栈顺序限制同类。系统测试保留该 case 但 skip,等 upstream 修复后再解封。
 
 **Q: 进程 crash 后 v2raymg 会自动拉起吗?**
 

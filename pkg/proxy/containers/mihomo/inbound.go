@@ -101,6 +101,30 @@ func (c MihomoSharedCred) shouldCleanupCerts() bool {
 	return c.CertSource == "pem" || c.CertSource == "self_signed"
 }
 
+func shouldCleanupCertSource(src string) bool {
+	return src == "pem" || src == "self_signed"
+}
+
+// cleanupCertFiles returns cert files owned by v2raymg. ProtocolParams and
+// SharedCred are mutually exclusive for normal records; the priority order is
+// defensive for hand-built or migration-intermediate values.
+func (i *MihomoInbound) cleanupCertFiles() []string {
+	if i.ProtocolParams != nil &&
+		i.ProtocolParams.Security != nil &&
+		i.ProtocolParams.Security.Kind == contracts.SecurityTLS &&
+		i.ProtocolParams.Security.TLS != nil &&
+		shouldCleanupCertSource(i.ProtocolParams.Security.TLS.CertSource) {
+		return []string{
+			i.ProtocolParams.Security.TLS.CertFile,
+			i.ProtocolParams.Security.TLS.KeyFile,
+		}
+	}
+	if i.SharedCred.shouldCleanupCerts() {
+		return []string{i.SharedCred.CertFile, i.SharedCred.KeyFile}
+	}
+	return nil
+}
+
 // Errors surfaced by the mihomo inbound layer. Callers can use errors.Is to
 // branch on these when they need to (e.g. HTTP handlers returning distinct
 // status codes for "unknown protocol" vs "missing field").
@@ -168,16 +192,7 @@ func (i *MihomoInbound) Validate() error {
 	case contracts.ProtocolVMess:
 		return i.validateVMess()
 	case contracts.ProtocolTrojan:
-		if i.SharedCred.Password == "" {
-			return fmt.Errorf("%w: trojan requires password", ErrMissingCredential)
-		}
-		// Cert + key must be paired. mihomo itself will reject a trojan
-		// listener with no cert at all (see MihomoSharedCred.CertFile
-		// doc), but the mismatched-pair case is a v2raymg-layer bug we
-		// can catch earlier with a clearer error.
-		if (i.SharedCred.CertFile == "") != (i.SharedCred.KeyFile == "") {
-			return fmt.Errorf("%w: trojan cert_file and key_file must be set together", ErrMissingCredential)
-		}
+		return i.validateTrojan()
 	case contracts.ProtocolShadowsocks:
 		if i.SharedCred.Password == "" {
 			return fmt.Errorf("%w: shadowsocks requires password", ErrMissingCredential)
@@ -187,6 +202,50 @@ func (i *MihomoInbound) Validate() error {
 		}
 	default:
 		return fmt.Errorf("%w: %q", ErrProtocolNotSupported, i.Protocol())
+	}
+	return nil
+}
+
+// validateTrojan dispatches between the Phase 3 ProtocolParams path and the
+// legacy SharedCred path. Legacy records may omit certs (mihomo runtime will
+// reject such listeners); the structured path keeps the same pair-check while
+// allowing TLS material to come from SecuritySpec.
+func (i *MihomoInbound) validateTrojan() error {
+	if i.ProtocolParams != nil && i.ProtocolParams.Trojan != nil {
+		if i.ProtocolParams.Trojan.Password == "" {
+			return fmt.Errorf("%w: trojan requires password", ErrMissingCredential)
+		}
+		if i.ProtocolParams.Security == nil {
+			return fmt.Errorf("%w: trojan requires tls or reality security", ErrMissingCredential)
+		}
+		switch sec := i.ProtocolParams.Security; sec.Kind {
+		case contracts.SecurityTLS:
+			if sec.TLS == nil {
+				return fmt.Errorf("%w: trojan security=tls but TLS spec is nil", ErrMissingCredential)
+			}
+			if (sec.TLS.CertFile == "") != (sec.TLS.KeyFile == "") {
+				return fmt.Errorf("%w: trojan cert_file and key_file must be set together", ErrMissingCredential)
+			}
+		case contracts.SecurityReality:
+			if sec.Reality == nil {
+				return fmt.Errorf("%w: trojan security=reality but Reality spec is nil", ErrMissingCredential)
+			}
+			if sec.Reality.Target == "" {
+				return fmt.Errorf("%w: trojan reality target required", ErrMissingCredential)
+			}
+			if len(sec.Reality.ServerNames) == 0 {
+				return fmt.Errorf("%w: trojan reality server_names required", ErrMissingCredential)
+			}
+		default:
+			return fmt.Errorf("%w: trojan security %q not supported", ErrProtocolNotSupported, sec.Kind)
+		}
+		return nil
+	}
+	if i.SharedCred.Password == "" {
+		return fmt.Errorf("%w: trojan requires password", ErrMissingCredential)
+	}
+	if (i.SharedCred.CertFile == "") != (i.SharedCred.KeyFile == "") {
+		return fmt.Errorf("%w: trojan cert_file and key_file must be set together", ErrMissingCredential)
 	}
 	return nil
 }

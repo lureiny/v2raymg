@@ -64,10 +64,10 @@ type MihomoContainer struct {
 	// User event + reconcile plumbing. All populated by WithUserManager at
 	// construction time; nil if no user manager is provided (unit tests
 	// that exercise only inbound CRUD).
-	userMgr         *usermanager.UserManager
-	userEventCh     chan usermanager.UserEvent
-	userMgrSubCh    <-chan usermanager.UserEvent // kept for Unsubscribe on Close
-	forwardStopCh   chan struct{}                // closed on Close to drain forwardUserEvents
+	userMgr       *usermanager.UserManager
+	userEventCh   chan usermanager.UserEvent
+	userMgrSubCh  <-chan usermanager.UserEvent // kept for Unsubscribe on Close
+	forwardStopCh chan struct{}                // closed on Close to drain forwardUserEvents
 
 	reconcileStopCh chan struct{}
 	reconcileWg     sync.WaitGroup
@@ -574,21 +574,20 @@ func (c *MihomoContainer) RemoveInboundConfig(tag string) error {
 	delete(c.inbounds, tag)
 
 	// Phase 5: Clean up cert material v2raymg itself wrote to the scratch
-	// dir. We never delete externally-managed cert files (CertSource =
-	// "file"/"domain"), only the ones we created from caller-supplied PEM
-	// content or generated on demand ("pem"/"self_signed"). Failures here
-	// are logged but non-fatal — the inbound is already fully removed
-	// from mihomo and the store; a leftover cert file is a leak, not a
-	// correctness issue. Phase ordering puts cleanup after map delete so
-	// a retry caused by an earlier phase never touches cert files twice.
-	if inb.SharedCred.shouldCleanupCerts() {
-		for _, p := range []string{inb.SharedCred.CertFile, inb.SharedCred.KeyFile} {
-			if p == "" {
-				continue
-			}
-			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-				log.Warnf("mihomo: cleanup cert file %q for inbound %q: %v", p, tag, err)
-			}
+	// dir. The cert source may live on legacy SharedCred or on the Phase
+	// 1+ ProtocolParams TLS block. We never delete externally-managed cert
+	// files (CertSource = "file"/"domain"), only the ones we created from
+	// caller-supplied PEM content or generated on demand ("pem"/"self_signed").
+	// Failures here are logged but non-fatal — the inbound is already fully
+	// removed from mihomo and the store; a leftover cert file is a leak, not a
+	// correctness issue. Phase ordering puts cleanup after map delete so a
+	// retry caused by an earlier phase never touches cert files twice.
+	for _, p := range inb.cleanupCertFiles() {
+		if p == "" {
+			continue
+		}
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			log.Warnf("mihomo: cleanup cert file %q for inbound %q: %v", p, tag, err)
 		}
 	}
 	return nil

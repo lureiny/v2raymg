@@ -46,17 +46,29 @@ layer: details
 
 ## 共享凭据 listener 布局
 
-`MihomoInbound.SharedCred` 是一个 struct,按协议填不同字段:
+listener 模型仍是一条 inbound 一把共享凭据,但新协议扩展使用 `ProtocolParams` 保存协议/传输/安全层的结构化配置。旧 `SharedCred` 继续用于 shadowsocks 以及历史 vmess/trojan 持久化记录的兼容读取。
+
+`MihomoInbound.SharedCred` legacy 字段按协议填不同字段:
 
 | 协议 | 字段 |
 |------|------|
-| vmess | UUID |
-| trojan | Password + CertFile + KeyFile |
+| vmess | UUID(历史记录兼容;Phase 2+ 新记录走 ProtocolParams.VMess) |
+| trojan | Password + CertFile + KeyFile(历史记录兼容;Phase 3+ 新记录走 ProtocolParams.Trojan + SecuritySpec) |
 | shadowsocks | Password + Cipher |
 
-**trojan 必须带 cert**(stage 11+ E2E 确认):mihomo Alpha 的 trojan listener 运行时拒绝没有 `certificate + private-key` 的配置,报 `disallow using Trojan without both certificates/reality/ss config`。adapter 接受可选的 `cert_file` / `key_file` 参数(都为空时 adapter 层不报错,留给 mihomo 启动时失败 + Validate 层的 "pair" 成对校验),profilegen 在两者都设时输出 `certificate` / `private-key` yaml 字段。
+`ProtocolParams` 当前已落地:
+
+| 协议 | 支持范围 |
+|------|----------|
+| vless | tcp/ws/grpc/xhttp/splithttp + tls/reality |
+| vmess | tcp/ws/grpc + none/tls/reality |
+| trojan | tcp/ws/grpc + tls/reality |
+
+**trojan 必须带 TLS 或 Reality**(stage 11+ E2E 确认):mihomo Alpha 的 trojan listener 运行时拒绝没有 `certificate + private-key` / `reality-config` / ss config 的配置,报 `disallow using Trojan without both certificates/reality/ss config`。Phase 3 后 FastAdd 的 trojan 新记录走 ProtocolParams:`security=tls` 输出 `certificate` / `private-key`;`security=reality` 输出 `reality-config`;transport 支持 tcp/ws/grpc。未显式传 `security` 时 parseTrojan 默认 TLS,生产 RPC/HTTP 路径由 `FillDefaults` 物化 cert_file/key_file。
 
 **SAFE_PATHS 约束**:mihomo 对 config 里引用的文件路径做安全检查 —— 路径必须位于 `-d` 参数指定的 home directory(即 `MihomoConfig.DataDir`)之下,否则报 `path is not subpath of home directory`。生产部署要把 trojan cert 写到 `DataDir` 或其子目录。
+
+**证书清理**:`RemoveInboundConfig` 会从 legacy SharedCred 或 ProtocolParams TLS block 读取 `cert_source`,仅清理 v2raymg 自己写入的 `pem` / `self_signed` 证书;`file` / `domain` 来源不动。
 
 `BuildListener(inb)` 输出的 map 字段严格匹配 mihomo Alpha `listener/inbound/*.go` 的 `inbound:"..."` struct tag。`name=inb.Tag()`,`type=string(inb.Protocol())`,`listen=inb.ListenAddr()`(默认 127.0.0.1),`port=strconv.FormatUint(inb.Port(),10)`(mihomo `BaseOption.Port` 是字符串,支持范围)。
 
@@ -103,8 +115,9 @@ layer: details
 1. `snapshotInbounds()` 取所有 inbound 的浅拷贝
 2. 对每个 inbound 查 `userMgr.GetUserPortByDst(req.Username, inb.Port())`,没映射则跳过(debug log)
 3. `buildSubscriptionSpec(inb, req, port)` 构造 `SubscriptionSpec`:
-   - vmess → `VMessNode{UUID, Port=forwardPort, Host=req.Host}` → `Encode()`
-   - trojan → `TrojanNode{Password, Port=forwardPort, ...}` → `Encode()`
+   - vless → `VLessNode{UUID, Port=forwardPort, Host=req.Host, ...}` → `Encode()`
+   - vmess → `VMessNode{UUID, Port=forwardPort, Host=req.Host, ...}` → `Encode()`
+   - trojan → `TrojanNode{Password, Port=forwardPort, ...}` → `Encode()`;Phase 3 会透传 `transport` / `security` / reality / skip-cert-verify 到 URI 和 Extensions
    - ss → `ShadowsocksNode{Method, Password, Port=forwardPort, ...}`;cipher 为空时 fallback `aes-256-gcm`(与 clash converter 的 `defaultSSMethod` 对齐)→ `Encode()`
 
 URI 组装全部在 `core/subscription/codec` 层完成,本包零字符串拼接。协议 filter 不在本层处理(交给上层 HTTP handler 做)。

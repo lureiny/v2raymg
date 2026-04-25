@@ -21,15 +21,15 @@ import (
 //
 // Optional:
 //   - listen_addr: string; defaults to 127.0.0.1. Non-loopback values are
-//                  accepted but strongly discouraged — the forward layer is
-//                  the only sanctioned ingress path (see principle 3).
+//     accepted but strongly discouraged — the forward layer is
+//     the only sanctioned ingress path (see principle 3).
 //   - cert_file / key_file: trojan only. Absolute paths to PEM cert and
-//                  private key files. Mihomo refuses to start a trojan
-//                  listener without them. Both must be set together or
-//                  both omitted (omitting is allowed at adapter layer for
-//                  legacy/unit-test configurations, but a production
-//                  trojan inbound without them will fail at mihomo
-//                  startup).
+//     private key files. Mihomo refuses to start a trojan
+//     listener without them. Both must be set together or
+//     both omitted (omitting is allowed at adapter layer for
+//     legacy/unit-test configurations, but a production
+//     trojan inbound without them will fail at mihomo
+//     startup).
 //
 // Errors wrap ErrProtocolNotSupported or ErrMissingCredential from inbound.go
 // so HTTP handlers can map them to appropriate status codes.
@@ -210,7 +210,7 @@ func isLoopbackListen(addr string) bool {
 func fastAddBuildInbound(tag string, params map[string]any) (*MihomoInbound, error) {
 	protoStr, _ := params["protocol"].(string)
 	switch contracts.Protocol(protoStr) {
-	case contracts.ProtocolVLess, contracts.ProtocolVMess:
+	case contracts.ProtocolVLess, contracts.ProtocolVMess, contracts.ProtocolTrojan:
 		// Parse reads KeyTag from params if present; we overwrite with
 		// the canonical FastAdd tag afterwards — that's the authoritative
 		// identifier, and it preserves Parse's read-only contract on

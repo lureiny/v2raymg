@@ -170,6 +170,13 @@ func ConvertVMessForTest(spec contracts.SubscriptionSpec) *ClashProxy {
 	return (&ClashConverter{}).convertVMess(spec)
 }
 
+// ConvertTrojanForTest exposes convertTrojan to integration tests for the
+// same reason as ConvertVMessForTest: system tests can exercise the real
+// subscription→converter chain without fetching the external Clash template.
+func ConvertTrojanForTest(spec contracts.SubscriptionSpec) *ClashProxy {
+	return (&ClashConverter{}).convertTrojan(spec)
+}
+
 // convertSpec returns nil if the protocol is unsupported by Clash/mihomo or
 // the node's transport/security combination is not expressible.
 func (c *ClashConverter) convertSpec(spec contracts.SubscriptionSpec) *ClashProxy {

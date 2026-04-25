@@ -114,6 +114,32 @@ func TestFillDefaults_Trojan_NoCertSource_Rejected(t *testing.T) {
 	}
 }
 
+func TestFillDefaults_TrojanReality_DoesNotRequireCertSource(t *testing.T) {
+	p := map[string]any{
+		"protocol":              "trojan",
+		"security":              "reality",
+		"password":              "p",
+		"reality_target":        "www.microsoft.com:443",
+		"reality_server_names":  []string{"www.microsoft.com"},
+		"reality_private_key":   "priv",
+		"reality_public_key":    "pub",
+		"reality_short_ids":     []string{"aabbccddeeff0011"},
+		"grpc_service_name":     "TrojanTunnel",
+		"utls_fingerprint":      "chrome",
+		"skip_cert_verify":      true,
+		"unrelated_passthrough": "kept",
+	}
+	if err := FillDefaults(p, "trojan", nil, t.TempDir()); err != nil {
+		t.Fatalf("trojan+reality must not require cert source: %v", err)
+	}
+	if _, ok := p["cert_file"]; ok {
+		t.Fatalf("trojan+reality should not materialise cert_file: %+v", p)
+	}
+	if p["password"] != "p" {
+		t.Fatalf("existing password overwritten: %v", p["password"])
+	}
+}
+
 // ---------- cert source 1: explicit paths ----------
 
 func TestFillDefaults_Trojan_CertFileKeyFile_PassThrough(t *testing.T) {

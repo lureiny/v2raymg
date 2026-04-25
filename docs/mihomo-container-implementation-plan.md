@@ -967,6 +967,36 @@ stage 1 的单测 `TestMihomoFactoryLoadable` 在 mihomo 包内部(`init` 被同
 - CLI `FastAddInbound` 的 `extra_params` JSON 字段:用户明确 scope 不加,trojan cert 路径场景由 HTTP/API 直接传
 - E2E 的 `domain` 源路径(需要 mock certmgr + 写 cert):FillDefaults 单测已覆盖,mihomo 的 SAFE_PATHS 对 DataDir 之外路径的运行时接纳靠 env var 语义保证。留作独立任务
 
+### 协议扩展 Phase 3:Trojan 高级特性(2026-04-25 完成)
+
+**范围**:对应 `/home/node/.claude/plans/cosmic-leaping-moon.md` 的 Phase 3(T-M-P3-30 ~ P3-33)。目标是把 Trojan 从 legacy SharedCred FastAdd 路径迁到 ProtocolParams 结构化路径,补齐 mihomo 支持的 transport/security 组合。
+
+**交付**:
+
+- `pkg/proxy/core/params/protocolparams/params_trojan.go`:新增 `parseTrojan`,required `password`,transport 默认 tcp 且仅允许 tcp/ws/grpc,security 默认 tls 且仅允许 tls/reality;显式 `security=none` 和 httpupgrade/xhttp/splithttp/h2 均提前 `ErrInvalidCombination`
+- `pkg/proxy/containers/mihomo/adapter.go`:FastAdd dispatch 将 `ProtocolTrojan` 纳入 `protocolparams.Parse → FromProtocolParams`
+- `pkg/proxy/containers/mihomo/inbound.go`:新增 `validateTrojan` dual-rail;新记录读 `ProtocolParams.Trojan + SecuritySpec`,旧记录继续读 `SharedCred`
+- `pkg/proxy/containers/mihomo/profilegen.go`:新增 `fillTrojanListener`,支持 `ws-path` / `grpc-service-name` / `certificate` + `private-key` / `reality-config`
+- `pkg/proxy/containers/mihomo/subscription.go`:新增 `fillTrojanSubscriptionSpec`,通过 `codec.TrojanNode` 输出 URI,并给 clash converter 透传 `transport` / `security` / `server_name` / `reality_public_key` / `reality_short_ids` / `skip_cert_verify` / `utls_fingerprint`
+- `pkg/proxy/core/params/defaults.go`:修正 RPC `FillDefaults` 的 Trojan+Reality 路径;`security=reality` 不再被 Trojan 的 TLS 必需性检查强制要求 `cert_file/key_file`
+- `pkg/proxy/core/subscription/converter/clash.go`:新增 `ConvertTrojanForTest`,供 mihomo matrix 走订阅转换链路验证 converter parity
+- `RemoveInboundConfig` 证书清理扩展到 ProtocolParams TLS block:legacy SharedCred 和新路径均按 `cert_source=pem/self_signed` 清理,file/domain 不动
+- 新增 parser/profilegen/subscription 单测和 `pkg/proxy/systemtest/mihomo_trojan_matrix_test.go`
+
+**真实 integration 结论**:
+
+- `TestMihomoTrojanMatrix`:tcp-tls / ws-tls / grpc-tls / tcp-reality / grpc-reality 全绿
+- `TestMihomoTrojanMatrix` 同时覆盖 subscription chain: `subscription_chain_tcp_tls` 和 `subscription_chain_grpc_reality` 走 `GetUserSubscriptions → ConvertTrojanForTest → spawnMihomoClient`,锁住 `fillTrojanSubscriptionSpec` 与 converter 的字段一致性
+- `ws-reality` 保留但 skip:mihomo Alpha 客户端连接报 `unexpected status: 200 OK`,与 VLESS/VMess ws+reality 的已知 stack-order 限制同类
+
+**验证**:
+
+- `go test ./...`:全绿
+- `go test -tags=integration ./pkg/proxy/systemtest -run '^$'`:integration 编译通过
+- `go test -tags=integration ./pkg/proxy/systemtest -run TestMihomoTrojanMatrix -v -timeout 180s`:7 PASS + 1 SKIP
+
+详细开发记录见 `tmp/phase3-dev-report.md`。
+
 ## 参考
 
 - `docs/mihomo-container-design.md` — 本计划的设计依据

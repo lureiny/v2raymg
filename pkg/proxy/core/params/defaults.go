@@ -10,10 +10,10 @@
 //  2. TLS cert-source normalisation for protocols where TLS is mandatory
 //     (currently trojan). Callers can present the cert in any of four forms:
 //
-//       - cert_file + key_file  absolute paths on disk, caller-managed
-//       - certificate + key     PEM content; materialised under scratchDir
-//       - domain                looked up via CertManager
-//       - self_signed: true     generated here; materialised under scratchDir
+//     - cert_file + key_file  absolute paths on disk, caller-managed
+//     - certificate + key     PEM content; materialised under scratchDir
+//     - domain                looked up via CertManager
+//     - self_signed: true     generated here; materialised under scratchDir
 //
 //     On success, params["cert_file"] and params["key_file"] both hold
 //     absolute paths. Every downstream container consumes a single shape.
@@ -70,7 +70,7 @@ func FillDefaults(params map[string]any, protocol string, certMgr CertManager, s
 		return fmt.Errorf("params: nil params map")
 	}
 	fillCredentials(params, protocol)
-	if needsTLS(protocol) {
+	if needsTLS(protocol, params) {
 		if err := resolveCertSource(params, certMgr, scratchDir); err != nil {
 			return err
 		}
@@ -78,20 +78,26 @@ func FillDefaults(params map[string]any, protocol string, certMgr CertManager, s
 	return nil
 }
 
-// needsTLS reports whether the protocol is one that always requires TLS
-// material to be present after FillDefaults.
+// needsTLS reports whether the protocol is one that requires ordinary TLS
+// certificate material to be present after FillDefaults.
 //
 //   - trojan: mihomo's trojan listener refuses to start without
-//     cert/reality/ss (observed in mihomo stage 11+ E2E). Protocol-level
-//     convention regardless of kernel.
+//     cert/reality/ss (observed in mihomo stage 11+ E2E). Trojan+Reality
+//     carries its server auth in reality-config, so it must not be forced
+//     through cert_file/key_file normalisation.
 //   - hysteria2 / tuic / anytls: QUIC-over-TLS protocols that can't
 //     bootstrap a session without a server certificate. mihomo's Alpha
 //     struct tags for these listeners mark `certificate`/`private-key` as
 //     required (non-omitempty) — see
 //     pkg/proxy/core/params/protocolparams notes.
-func needsTLS(protocol string) bool {
+func needsTLS(protocol string, params map[string]any) bool {
 	switch strings.ToLower(protocol) {
-	case "trojan", "hysteria2", "tuic", "anytls":
+	case "trojan":
+		if security, _ := params["security"].(string); strings.EqualFold(strings.TrimSpace(security), "reality") {
+			return false
+		}
+		return true
+	case "hysteria2", "tuic", "anytls":
 		return true
 	}
 	return false

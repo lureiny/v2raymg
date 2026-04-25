@@ -54,19 +54,8 @@ func BuildListener(inb *MihomoInbound) (map[string]any, error) {
 			return nil, err
 		}
 	case contracts.ProtocolTrojan:
-		m["users"] = []map[string]any{
-			{"password": inb.SharedCred.Password},
-		}
-		// certificate / private-key: mihomo Alpha's TrojanOption fields
-		// (see listener/inbound/trojan.go, inbound tags "certificate" and
-		// "private-key"). Omitted when CertFile/KeyFile are empty — that
-		// path exists mainly for unit tests; production callers must set
-		// both or mihomo refuses to boot the listener with
-		// "disallow using Trojan without both certificates/reality/ss
-		// config". Validate already ensures the pair is consistent.
-		if inb.SharedCred.CertFile != "" && inb.SharedCred.KeyFile != "" {
-			m["certificate"] = inb.SharedCred.CertFile
-			m["private-key"] = inb.SharedCred.KeyFile
+		if err := fillTrojanListener(m, inb); err != nil {
+			return nil, err
 		}
 	case contracts.ProtocolShadowsocks:
 		// shadowsocks has no users array; credentials are top-level
@@ -80,6 +69,61 @@ func BuildListener(inb *MihomoInbound) (map[string]any, error) {
 		return nil, fmt.Errorf("%w: %q", ErrProtocolNotSupported, inb.Protocol())
 	}
 	return m, nil
+}
+
+// fillTrojanListener maps Trojan ProtocolParams onto mihomo Alpha listener
+// yaml. The legacy SharedCred branch preserves pre-Phase-3 records exactly.
+func fillTrojanListener(m map[string]any, inb *MihomoInbound) error {
+	if inb.ProtocolParams == nil || inb.ProtocolParams.Trojan == nil {
+		m["users"] = []map[string]any{
+			{"password": inb.SharedCred.Password},
+		}
+		if inb.SharedCred.CertFile != "" && inb.SharedCred.KeyFile != "" {
+			m["certificate"] = inb.SharedCred.CertFile
+			m["private-key"] = inb.SharedCred.KeyFile
+		}
+		return nil
+	}
+
+	trojan := inb.ProtocolParams.Trojan
+	m["users"] = []map[string]any{
+		{"password": trojan.Password},
+	}
+
+	if t := inb.ProtocolParams.Transport; t != nil {
+		switch t.Kind {
+		case contracts.TransportTCP, "":
+			// default; emit nothing
+		case contracts.TransportWS:
+			if t.WSPath != "" {
+				m["ws-path"] = t.WSPath
+			}
+		case contracts.TransportGRPC:
+			if t.GRPCServiceName != "" {
+				m["grpc-service-name"] = t.GRPCServiceName
+			}
+		default:
+			return fmt.Errorf("%w: trojan transport %q not wired in mihomo profilegen",
+				ErrProtocolNotSupported, t.Kind)
+		}
+	}
+
+	if s := inb.ProtocolParams.Security; s != nil {
+		switch s.Kind {
+		case contracts.SecurityTLS:
+			if s.TLS != nil && s.TLS.CertFile != "" && s.TLS.KeyFile != "" {
+				m["certificate"] = s.TLS.CertFile
+				m["private-key"] = s.TLS.KeyFile
+			}
+		case contracts.SecurityReality:
+			if rc := s.Reality; rc != nil {
+				m["reality-config"] = buildRealityConfig(rc)
+			}
+		default:
+			return fmt.Errorf("%w: trojan security %q not supported", ErrProtocolNotSupported, s.Kind)
+		}
+	}
+	return nil
 }
 
 // fillVLESSListener maps the VLESS protocol params onto the mihomo Alpha

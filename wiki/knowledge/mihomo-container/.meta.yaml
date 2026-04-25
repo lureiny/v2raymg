@@ -1,6 +1,6 @@
 schema_version: 1
 status: draft
-last_verified: 2026-04-24
+last_verified: 2026-04-25
 owner: v2raymg-core
 source:
   - docs/mihomo-container-design.md
@@ -21,3 +21,6 @@ changelog:
   - date: 2026-04-24
     change: stage 11+ E2E: trojan cert_file/key_file 支持 + SAFE_PATHS 约束
     reason: 真实 E2E 测试证实 P2-9 CERTAIN,扩 adapter/profilegen 支持 trojan cert,wiki 同步
+  - date: 2026-04-25
+    change: protocol expansion Phase 3: trojan 迁移到 ProtocolParams,支持 tcp/ws/grpc + tls/reality;记录 ws+reality upstream skip
+    reason: Phase 3 实现和 TestMihomoTrojanMatrix 验证完成,wiki 同步当前协议状态

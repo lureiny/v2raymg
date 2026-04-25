@@ -48,6 +48,74 @@ func TestIntegrationFillDefaultsThenParseVMess(t *testing.T) {
 	}
 }
 
+func TestIntegrationFillDefaultsThenParseTrojan(t *testing.T) {
+	dir := t.TempDir()
+	raw := map[string]any{
+		"protocol":    "trojan",
+		"port":        uint32(443),
+		"tag":         "trojan-inbound",
+		"self_signed": true,
+		"server_name": "trojan.test",
+	}
+	if err := params.FillDefaults(raw, "trojan", nil, dir); err != nil {
+		t.Fatalf("FillDefaults: %v", err)
+	}
+	if raw["password"] == nil || raw["password"] == "" {
+		t.Fatalf("FillDefaults should have filled trojan password")
+	}
+	if raw["cert_file"] == nil || raw["key_file"] == nil {
+		t.Fatalf("FillDefaults should have materialised cert_file/key_file for trojan")
+	}
+
+	before := copyMap(raw)
+	pp, err := protocolparams.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if pp.Trojan == nil || pp.Trojan.Password == "" {
+		t.Fatalf("Trojan sub-spec not populated: %+v", pp)
+	}
+	if pp.Security == nil || pp.Security.TLS == nil {
+		t.Fatalf("Trojan TLS spec not populated: %+v", pp.Security)
+	}
+	if !reflect.DeepEqual(raw, before) {
+		t.Errorf("Parse mutated raw map.\n before: %+v\n after:  %+v", before, raw)
+	}
+}
+
+func TestIntegrationFillDefaultsThenParseTrojanReality(t *testing.T) {
+	raw := map[string]any{
+		"protocol":              "trojan",
+		"port":                  uint32(443),
+		"tag":                   "trojan-reality",
+		"password":              "p",
+		"security":              "reality",
+		"reality_target":        "www.microsoft.com:443",
+		"reality_server_names":  []string{"www.microsoft.com"},
+		"reality_short_ids":     []string{"aabbccddeeff0011"},
+		"grpc_service_name":     "TrojanTunnel",
+		"utls_fingerprint":      "chrome",
+		"unrelated_passthrough": "kept",
+	}
+	if err := params.FillDefaults(raw, "trojan", nil, t.TempDir()); err != nil {
+		t.Fatalf("FillDefaults should not require cert source for trojan+reality: %v", err)
+	}
+	if _, ok := raw["cert_file"]; ok {
+		t.Fatalf("FillDefaults materialised cert_file for trojan+reality: %+v", raw)
+	}
+	before := copyMap(raw)
+	pp, err := protocolparams.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if pp.Trojan == nil || pp.Security == nil || pp.Security.Reality == nil {
+		t.Fatalf("Trojan reality sub-spec not populated: %+v", pp)
+	}
+	if !reflect.DeepEqual(raw, before) {
+		t.Errorf("Parse mutated raw map.\n before: %+v\n after:  %+v", before, raw)
+	}
+}
+
 func TestIntegrationFillDefaultsThenParseHysteria2(t *testing.T) {
 	dir := t.TempDir()
 	raw := map[string]any{
