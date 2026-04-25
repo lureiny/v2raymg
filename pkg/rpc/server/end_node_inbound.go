@@ -182,6 +182,12 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		protocol = "trojan"
 	case proto.BuilderType_SSSettingBuilderType:
 		protocol = "shadowsocks"
+	case proto.BuilderType_Hysteria2SettingBuilderType:
+		protocol = "hysteria2"
+	case proto.BuilderType_TUICSettingBuilderType:
+		protocol = "tuic"
+	case proto.BuilderType_AnyTLSSettingBuilderType:
+		protocol = "anytls"
 	default:
 		fastAddInboundRsp.Code = 1020
 		fastAddInboundRsp.Msg = "unsupport protocol"
@@ -251,7 +257,7 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 	// String values are passed as-is; special keys are converted to appropriate types.
 	for k, v := range fastAddInboundReq.GetExtraParams() {
 		switch k {
-		case "sniffing_enabled", "sniffing_route_only", "tls_reject_unknown_sni", "self_signed":
+		case "sniffing_enabled", "sniffing_route_only", "tls_reject_unknown_sni", "self_signed", "skip_cert_verify":
 			reqParams[k] = v == "true"
 		case "ocsp_stapling":
 			var n int

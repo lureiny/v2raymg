@@ -30,9 +30,18 @@ enum BuilderType {
 	VMESSSettingBuilderType = 11;
 	TrojanSettingBuilderType = 12;
 	SSSettingBuilderType = 13;
+	// 14-16 added for mihomo-side protocol expansion (plan T-M-P0-06).
+	// Old end-nodes that don't know these values fall through
+	// end_node_inbound.go's default branch and return "unsupport protocol",
+	// which is the intended behaviour — a legacy peer must refuse to
+	// handle a protocol it cannot render. Rolling new protocols requires
+	// all relevant end-nodes to be upgraded.
+	Hysteria2SettingBuilderType = 14;
+	TUICSettingBuilderType = 15;
+	AnyTLSSettingBuilderType = 16;
 	TCPBuilderType = 20;
-	WSBuilderType = 21; 
-	QuicBuilderType = 22; 
+	WSBuilderType = 21;
+	QuicBuilderType = 22;
 	MkcpBuilderType = 23;
 	GrpcBuilderType = 24;
 	HttpBuilderType = 25;

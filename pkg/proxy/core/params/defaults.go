@@ -79,17 +79,30 @@ func FillDefaults(params map[string]any, protocol string, certMgr CertManager, s
 }
 
 // needsTLS reports whether the protocol is one that always requires TLS
-// material to be present after FillDefaults. Trojan is the current case
-// (mihomo's trojan listener refuses to start without cert/reality/ss —
-// see docs/mihomo-container-implementation-plan.md stage 11+; trojan
-// also requires TLS as a protocol-level convention regardless of kernel).
+// material to be present after FillDefaults.
+//
+//   - trojan: mihomo's trojan listener refuses to start without
+//     cert/reality/ss (observed in mihomo stage 11+ E2E). Protocol-level
+//     convention regardless of kernel.
+//   - hysteria2 / tuic / anytls: QUIC-over-TLS protocols that can't
+//     bootstrap a session without a server certificate. mihomo's Alpha
+//     struct tags for these listeners mark `certificate`/`private-key` as
+//     required (non-omitempty) — see
+//     pkg/proxy/core/params/protocolparams notes.
 func needsTLS(protocol string) bool {
-	return strings.ToLower(protocol) == "trojan"
+	switch strings.ToLower(protocol) {
+	case "trojan", "hysteria2", "tuic", "anytls":
+		return true
+	}
+	return false
 }
 
 func fillCredentials(params map[string]any, protocol string) {
 	switch strings.ToLower(protocol) {
-	case "vmess":
+	case "vmess", "vless":
+		// Both vmess and vless are uuid-based. xray's inbound_adapter
+		// and mihomo's adapter both expect a UUID string; generating one
+		// when the caller omits it matches the existing vmess UX.
 		if isEmpty(params, "uuid") {
 			params["uuid"] = uuid.NewString()
 		}
@@ -107,6 +120,30 @@ func fillCredentials(params map[string]any, protocol string) {
 			// convertShadowsocks, so listener and client-side subscription
 			// agree on the same cipher when the caller didn't pick one.
 			params["cipher"] = "aes-256-gcm"
+		}
+	case "hysteria2":
+		// Hysteria2 auth is a single password (mihomo Alpha
+		// Hysteria2Option.Users is map[string]string but v2raymg uses the
+		// shared-credential model — one inbound carries one listener
+		// password and all users are distinguished at the forward layer,
+		// mirroring the trojan / ss model).
+		if isEmpty(params, "password") {
+			params["password"] = randomHex(16)
+		}
+	case "tuic":
+		// TUIC v5 identifies a client by (uuid, password); v4 uses token
+		// only. FillDefaults seeds both so the caller's choice of v5 vs
+		// v4 doesn't need to gate the default path. Adapters that speak
+		// v4 ignore the password.
+		if isEmpty(params, "uuid") {
+			params["uuid"] = uuid.NewString()
+		}
+		if isEmpty(params, "password") {
+			params["password"] = randomHex(16)
+		}
+	case "anytls":
+		if isEmpty(params, "password") {
+			params["password"] = randomHex(16)
 		}
 	}
 }

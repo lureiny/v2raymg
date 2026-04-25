@@ -458,7 +458,7 @@ func (c *MihomoContainer) refreshCachedVersionAfterRestart() {
 // store record and map entry are both rolled back so a subsequent Start
 // replay doesn't resurrect a listener mihomo rejected.
 func (c *MihomoContainer) FastAddInbound(tag string, params map[string]any) error {
-	inb, err := FromParams(tag, params)
+	inb, err := fastAddBuildInbound(tag, params)
 	if err != nil {
 		return err
 	}

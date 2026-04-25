@@ -8,6 +8,7 @@ import (
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/inbound"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/params/protocolparams"
 	"github.com/lureiny/v2raymg/pkg/proxy/usermanager"
 )
 
@@ -27,7 +28,21 @@ type MihomoInbound struct {
 	//   vmess:        UUID
 	//   trojan:       Password
 	//   shadowsocks:  Password, Cipher
+	//
+	// MVP three protocols (vmess/trojan/ss) continue to use this field.
+	// Phase 1+ new protocols (vless/hy2/tuic/anytls) use ProtocolParams
+	// below; SharedCred stays empty for them. As each MVP protocol gets
+	// its advanced-feature upgrade (Phase 2/3/4), the struct migrates to
+	// the ProtocolParams form; SharedCred can be retired once all branches
+	// are moved.
 	SharedCred MihomoSharedCred `json:"shared_cred"`
+
+	// ProtocolParams carries the structured protocol/transport/security
+	// configuration for protocols wired through the new protocolparams
+	// layer. nil for MVP three protocols that still go through
+	// FromParams → SharedCred. profilegen / subscription inspect Protocol()
+	// and pull from either SharedCred or ProtocolParams accordingly.
+	ProtocolParams *protocolparams.ProtocolParams `json:"protocol_params,omitempty"`
 
 	// userMgr is injected by the container for AddUser / RemoveUser /
 	// ReleaseAllUserPorts. nil is tolerated for unit tests that only
@@ -100,7 +115,10 @@ var (
 	ErrMissingCredential = errors.New("mihomo: required credential missing")
 )
 
-// NewMihomoInbound creates a MihomoInbound with the loopback listen address.
+// NewMihomoInbound creates a MihomoInbound with the loopback listen address
+// for the MVP three protocols (vmess/trojan/shadowsocks) whose credential
+// material fits into MihomoSharedCred.
+//
 // listen is hardcoded to 127.0.0.1 because external ingress is handled by
 // the forward layer; the mihomo process itself must not be reachable from
 // the public interface.
@@ -114,18 +132,41 @@ func NewMihomoInbound(tag string, protocol contracts.Protocol, port uint32, cred
 	}
 }
 
+// NewMihomoInboundFromProtocolParams is the Phase 1+ entry point — creates
+// a MihomoInbound whose protocol-specific shape is carried in
+// *ProtocolParams instead of SharedCred. Used by vless / hy2 / tuic /
+// anytls and, eventually, the migrated forms of vmess / trojan / ss.
+func NewMihomoInboundFromProtocolParams(pp *protocolparams.ProtocolParams) *MihomoInbound {
+	base := inbound.NewDefaultInbound(pp.Tag, pp.Protocol, pp.Port)
+	listen := pp.ListenAddr
+	if listen == "" {
+		listen = "127.0.0.1"
+	}
+	base.SetListenAddr(listen)
+	return &MihomoInbound{
+		DefaultInbound: base,
+		ProtocolParams: pp,
+		addedUsers:     make(map[string]struct{}),
+	}
+}
+
 // Validate performs structural validation plus per-protocol credential checks.
 // Returns ErrProtocolNotSupported or ErrMissingCredential (wrapped with
 // field-level context) on failure.
+//
+// MVP three protocols (vmess/trojan/ss) validate their SharedCred. Phase 1+
+// protocols (vless first) validate ProtocolParams; when both happen to be
+// populated, the ProtocolParams route takes precedence (future migrations
+// will drop SharedCred but the coexistence is intentional until then).
 func (i *MihomoInbound) Validate() error {
 	if err := i.DefaultInbound.Validate(); err != nil {
 		return err
 	}
 	switch i.Protocol() {
+	case contracts.ProtocolVLess:
+		return i.validateVLESS()
 	case contracts.ProtocolVMess:
-		if i.SharedCred.UUID == "" {
-			return fmt.Errorf("%w: vmess requires uuid", ErrMissingCredential)
-		}
+		return i.validateVMess()
 	case contracts.ProtocolTrojan:
 		if i.SharedCred.Password == "" {
 			return fmt.Errorf("%w: trojan requires password", ErrMissingCredential)
@@ -150,27 +191,109 @@ func (i *MihomoInbound) Validate() error {
 	return nil
 }
 
+// validateVMess dispatches between the new ProtocolParams path (Phase 2+)
+// and the legacy SharedCred path. Records written before Phase 2 have
+// ProtocolParams=nil and fall through to the SharedCred.UUID check —
+// same rule that shipped in Phase 0, minus the inline style. Phase 2
+// records and later carry pp.VMess; those validate via the structured
+// security/transport slots.
+func (i *MihomoInbound) validateVMess() error {
+	if i.ProtocolParams != nil && i.ProtocolParams.VMess != nil {
+		if i.ProtocolParams.VMess.UUID == "" {
+			return fmt.Errorf("%w: vmess requires uuid", ErrMissingCredential)
+		}
+		if sec := i.ProtocolParams.Security; sec != nil {
+			switch sec.Kind {
+			case contracts.SecurityTLS:
+				if sec.TLS == nil {
+					return fmt.Errorf("%w: vmess security=tls but TLS spec is nil", ErrMissingCredential)
+				}
+				if (sec.TLS.CertFile == "") != (sec.TLS.KeyFile == "") {
+					return fmt.Errorf("%w: vmess cert_file and key_file must be set together", ErrMissingCredential)
+				}
+			case contracts.SecurityReality:
+				if sec.Reality == nil {
+					return fmt.Errorf("%w: vmess security=reality but Reality spec is nil", ErrMissingCredential)
+				}
+				if sec.Reality.Target == "" {
+					return fmt.Errorf("%w: vmess reality target required", ErrMissingCredential)
+				}
+				if len(sec.Reality.ServerNames) == 0 {
+					return fmt.Errorf("%w: vmess reality server_names required", ErrMissingCredential)
+				}
+			}
+		}
+		return nil
+	}
+	// Legacy SharedCred path — pre-Phase-2 records.
+	if i.SharedCred.UUID == "" {
+		return fmt.Errorf("%w: vmess requires uuid", ErrMissingCredential)
+	}
+	return nil
+}
+
+// validateVLESS checks the ProtocolParams-carried configuration that vless
+// inbounds need. Split out of Validate to keep the top-level switch
+// readable; the logic is exclusively concerned with VLESS-specific
+// invariants.
+func (i *MihomoInbound) validateVLESS() error {
+	if i.ProtocolParams == nil || i.ProtocolParams.VLESS == nil {
+		return fmt.Errorf("%w: vless inbound missing ProtocolParams.VLESS", ErrMissingCredential)
+	}
+	if i.ProtocolParams.VLESS.UUID == "" {
+		return fmt.Errorf("%w: vless requires uuid", ErrMissingCredential)
+	}
+	if sec := i.ProtocolParams.Security; sec != nil {
+		switch sec.Kind {
+		case contracts.SecurityTLS:
+			if sec.TLS == nil {
+				return fmt.Errorf("%w: vless security=tls but TLS spec is nil", ErrMissingCredential)
+			}
+			if (sec.TLS.CertFile == "") != (sec.TLS.KeyFile == "") {
+				return fmt.Errorf("%w: vless cert_file and key_file must be set together", ErrMissingCredential)
+			}
+		case contracts.SecurityReality:
+			if sec.Reality == nil {
+				return fmt.Errorf("%w: vless security=reality but Reality spec is nil", ErrMissingCredential)
+			}
+			if sec.Reality.Target == "" {
+				return fmt.Errorf("%w: vless reality target required", ErrMissingCredential)
+			}
+			if len(sec.Reality.ServerNames) == 0 {
+				return fmt.Errorf("%w: vless reality server_names required", ErrMissingCredential)
+			}
+		}
+	}
+	return nil
+}
+
 // mihomoInboundJSON is the on-disk representation written to InboundStore.
-// Keep the shape backward-compatible across stages: SharedCred's omitempty
-// tags already skip irrelevant fields per protocol, so vmess records don't
-// carry cipher, etc.
+// Backward-compatible shape:
+//   - SharedCred's omitempty tags keep vmess records from carrying cipher, etc.
+//   - ProtocolParams is new in Phase 1; old records (MVP three protocols)
+//     reload with ProtocolParams=nil and fall through Validate's
+//     SharedCred branches.
+//   - A record may carry both (future migration intermediate state); the
+//     Validate switch picks SharedCred or ProtocolParams based on Protocol().
 type mihomoInboundJSON struct {
-	Tag        string           `json:"tag"`
-	Protocol   string           `json:"protocol"`
-	Port       uint32           `json:"port"`
-	ListenAddr string           `json:"listen_addr"`
-	SharedCred MihomoSharedCred `json:"shared_cred"`
+	Tag            string                         `json:"tag"`
+	Protocol       string                         `json:"protocol"`
+	Port           uint32                         `json:"port"`
+	ListenAddr     string                         `json:"listen_addr"`
+	SharedCred     MihomoSharedCred               `json:"shared_cred"`
+	ProtocolParams *protocolparams.ProtocolParams `json:"protocol_params,omitempty"`
 }
 
 // ToNative serialises the inbound for InboundStore.NativeJSON. Overrides
 // DefaultInbound.ToNative (which returns ErrInboundToNativeNotImplemented).
 func (i *MihomoInbound) ToNative() ([]byte, error) {
 	return json.Marshal(&mihomoInboundJSON{
-		Tag:        i.Tag(),
-		Protocol:   string(i.Protocol()),
-		Port:       i.Port(),
-		ListenAddr: i.ListenAddr(),
-		SharedCred: i.SharedCred,
+		Tag:            i.Tag(),
+		Protocol:       string(i.Protocol()),
+		Port:           i.Port(),
+		ListenAddr:     i.ListenAddr(),
+		SharedCred:     i.SharedCred,
+		ProtocolParams: i.ProtocolParams,
 	})
 }
 
@@ -183,9 +306,32 @@ func FromNative(data []byte) (*MihomoInbound, error) {
 	if err := json.Unmarshal(data, &j); err != nil {
 		return nil, fmt.Errorf("mihomo: unmarshal inbound record: %w", err)
 	}
-	inb := NewMihomoInbound(j.Tag, contracts.Protocol(j.Protocol), j.Port, j.SharedCred)
-	if j.ListenAddr != "" {
-		inb.DefaultInbound.SetListenAddr(j.ListenAddr)
+	var inb *MihomoInbound
+	if j.ProtocolParams != nil {
+		// Phase 1+ record. Prefer ProtocolParams; honour the record's
+		// Tag/Protocol/Port over pp's since those are the authoritative
+		// identifiers on disk and pp is recomputed on FastAdd but persisted
+		// lazily.
+		pp := j.ProtocolParams
+		pp.Tag = j.Tag
+		pp.Protocol = contracts.Protocol(j.Protocol)
+		pp.Port = j.Port
+		if j.ListenAddr != "" {
+			pp.ListenAddr = j.ListenAddr
+		}
+		inb = NewMihomoInboundFromProtocolParams(pp)
+		// Deliberately do NOT copy j.SharedCred onto the new-path
+		// inbound: a legacy migration artefact (Protocol=vless with
+		// SharedCred lingering from a previous serialisation) would
+		// slip past validateVLESS and pollute subsequent ToNative
+		// calls. SharedCred only belongs to the MVP three-protocol
+		// path; new-path records leave it zero.
+	} else {
+		// Legacy (MVP three) record.
+		inb = NewMihomoInbound(j.Tag, contracts.Protocol(j.Protocol), j.Port, j.SharedCred)
+		if j.ListenAddr != "" {
+			inb.DefaultInbound.SetListenAddr(j.ListenAddr)
+		}
 	}
 	if err := inb.Validate(); err != nil {
 		return nil, err

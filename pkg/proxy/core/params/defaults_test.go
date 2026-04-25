@@ -70,14 +70,28 @@ func TestFillDefaults_Shadowsocks_SS_Alias(t *testing.T) {
 	}
 }
 
-func TestFillDefaults_VLess_NoFill(t *testing.T) {
-	// vless is not in the MVP — fillCredentials must no-op, no error.
+func TestFillDefaults_VLess_FillsMissingUUID(t *testing.T) {
+	// Phase 1 (plan T-M-P1-10): vless now shares vmess's credential path
+	// so parseVLESS's "uuid required" contract holds even when the caller
+	// only supplies {protocol: vless, port: N}.
 	p := map[string]any{}
 	if err := FillDefaults(p, "vless", nil, ""); err != nil {
 		t.Fatalf("FillDefaults: %v", err)
 	}
-	if _, ok := p["uuid"]; ok {
-		t.Fatalf("vless should not get an auto-filled uuid in this layer")
+	got, _ := p["uuid"].(string)
+	if _, err := uuid.Parse(got); err != nil {
+		t.Fatalf("vless uuid not a valid UUIDv4 (%q): %v", got, err)
+	}
+}
+
+func TestFillDefaults_VLess_KeepsExistingUUID(t *testing.T) {
+	existing := uuid.NewString()
+	p := map[string]any{"uuid": existing}
+	if err := FillDefaults(p, "vless", nil, ""); err != nil {
+		t.Fatalf("FillDefaults: %v", err)
+	}
+	if p["uuid"] != existing {
+		t.Fatalf("existing uuid overwritten: got %q want %q", p["uuid"], existing)
 	}
 }
 
@@ -307,5 +321,96 @@ func TestFillDefaults_Shadowsocks_NoCertRequired(t *testing.T) {
 func TestFillDefaults_NilParamsRejected(t *testing.T) {
 	if err := FillDefaults(nil, "vmess", nil, ""); err == nil {
 		t.Fatalf("nil params must error")
+	}
+}
+
+// ---------- new protocol credential fill (plan T-M-P0-04) ----------
+
+func TestFillDefaults_Hysteria2_FillsPassword(t *testing.T) {
+	// Hy2 also requires TLS, so give it a cert source to exercise the
+	// credential path in isolation.
+	dir := t.TempDir()
+	p := map[string]any{"self_signed": true, "server_name": "hy2.example"}
+	if err := FillDefaults(p, "hysteria2", nil, dir); err != nil {
+		t.Fatalf("FillDefaults: %v", err)
+	}
+	pw, _ := p["password"].(string)
+	if pw == "" {
+		t.Fatalf("hy2 password not filled")
+	}
+}
+
+func TestFillDefaults_Hysteria2_KeepsExistingPassword(t *testing.T) {
+	dir := t.TempDir()
+	p := map[string]any{"password": "caller-secret", "self_signed": true}
+	if err := FillDefaults(p, "hysteria2", nil, dir); err != nil {
+		t.Fatalf("FillDefaults: %v", err)
+	}
+	if p["password"] != "caller-secret" {
+		t.Fatalf("password overwritten: %v", p["password"])
+	}
+}
+
+func TestFillDefaults_Hysteria2_TLSRequired(t *testing.T) {
+	// No cert source → must error via needsTLS → resolveCertSource gate.
+	p := map[string]any{}
+	if err := FillDefaults(p, "hysteria2", nil, ""); err == nil {
+		t.Fatalf("hy2 without cert source must error (needsTLS)")
+	}
+}
+
+func TestFillDefaults_TUIC_FillsUUIDAndPassword(t *testing.T) {
+	dir := t.TempDir()
+	p := map[string]any{"self_signed": true, "server_name": "tuic.example"}
+	if err := FillDefaults(p, "tuic", nil, dir); err != nil {
+		t.Fatalf("FillDefaults: %v", err)
+	}
+	id, _ := p["uuid"].(string)
+	if _, err := uuid.Parse(id); err != nil {
+		t.Fatalf("tuic uuid not a valid UUID: %q (%v)", id, err)
+	}
+	pw, _ := p["password"].(string)
+	if pw == "" {
+		t.Fatalf("tuic password not filled")
+	}
+}
+
+func TestFillDefaults_TUIC_KeepsCallerValues(t *testing.T) {
+	dir := t.TempDir()
+	existing := uuid.NewString()
+	p := map[string]any{
+		"uuid":        existing,
+		"password":    "caller-pw",
+		"self_signed": true,
+	}
+	if err := FillDefaults(p, "tuic", nil, dir); err != nil {
+		t.Fatalf("FillDefaults: %v", err)
+	}
+	if p["uuid"] != existing || p["password"] != "caller-pw" {
+		t.Fatalf("caller values overwritten: %+v", p)
+	}
+}
+
+func TestFillDefaults_TUIC_TLSRequired(t *testing.T) {
+	if err := FillDefaults(map[string]any{}, "tuic", nil, ""); err == nil {
+		t.Fatalf("tuic without cert source must error (needsTLS)")
+	}
+}
+
+func TestFillDefaults_AnyTLS_FillsPassword(t *testing.T) {
+	dir := t.TempDir()
+	p := map[string]any{"self_signed": true, "server_name": "anytls.example"}
+	if err := FillDefaults(p, "anytls", nil, dir); err != nil {
+		t.Fatalf("FillDefaults: %v", err)
+	}
+	pw, _ := p["password"].(string)
+	if pw == "" {
+		t.Fatalf("anytls password not filled")
+	}
+}
+
+func TestFillDefaults_AnyTLS_TLSRequired(t *testing.T) {
+	if err := FillDefaults(map[string]any{}, "anytls", nil, ""); err == nil {
+		t.Fatalf("anytls without cert source must error (needsTLS)")
 	}
 }

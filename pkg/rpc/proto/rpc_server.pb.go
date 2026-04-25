@@ -29,12 +29,21 @@ const (
 	BuilderType_VMESSSettingBuilderType  BuilderType = 11
 	BuilderType_TrojanSettingBuilderType BuilderType = 12
 	BuilderType_SSSettingBuilderType     BuilderType = 13
-	BuilderType_TCPBuilderType           BuilderType = 20
-	BuilderType_WSBuilderType            BuilderType = 21
-	BuilderType_QuicBuilderType          BuilderType = 22
-	BuilderType_MkcpBuilderType          BuilderType = 23
-	BuilderType_GrpcBuilderType          BuilderType = 24
-	BuilderType_HttpBuilderType          BuilderType = 25
+	// 14-16 added for mihomo-side protocol expansion (plan T-M-P0-06).
+	// Old end-nodes that don't know these values fall through
+	// end_node_inbound.go's default branch and return "unsupport protocol",
+	// which is the intended behaviour — a legacy peer must refuse to
+	// handle a protocol it cannot render. Rolling new protocols requires
+	// all relevant end-nodes to be upgraded.
+	BuilderType_Hysteria2SettingBuilderType BuilderType = 14
+	BuilderType_TUICSettingBuilderType      BuilderType = 15
+	BuilderType_AnyTLSSettingBuilderType    BuilderType = 16
+	BuilderType_TCPBuilderType              BuilderType = 20
+	BuilderType_WSBuilderType               BuilderType = 21
+	BuilderType_QuicBuilderType             BuilderType = 22
+	BuilderType_MkcpBuilderType             BuilderType = 23
+	BuilderType_GrpcBuilderType             BuilderType = 24
+	BuilderType_HttpBuilderType             BuilderType = 25
 )
 
 // Enum value maps for BuilderType.
@@ -45,6 +54,9 @@ var (
 		11: "VMESSSettingBuilderType",
 		12: "TrojanSettingBuilderType",
 		13: "SSSettingBuilderType",
+		14: "Hysteria2SettingBuilderType",
+		15: "TUICSettingBuilderType",
+		16: "AnyTLSSettingBuilderType",
 		20: "TCPBuilderType",
 		21: "WSBuilderType",
 		22: "QuicBuilderType",
@@ -53,17 +65,20 @@ var (
 		25: "HttpBuilderType",
 	}
 	BuilderType_value = map[string]int32{
-		"UnknowBuilderType":        0,
-		"VLESSSettingBuilderType":  10,
-		"VMESSSettingBuilderType":  11,
-		"TrojanSettingBuilderType": 12,
-		"SSSettingBuilderType":     13,
-		"TCPBuilderType":           20,
-		"WSBuilderType":            21,
-		"QuicBuilderType":          22,
-		"MkcpBuilderType":          23,
-		"GrpcBuilderType":          24,
-		"HttpBuilderType":          25,
+		"UnknowBuilderType":           0,
+		"VLESSSettingBuilderType":     10,
+		"VMESSSettingBuilderType":     11,
+		"TrojanSettingBuilderType":    12,
+		"SSSettingBuilderType":        13,
+		"Hysteria2SettingBuilderType": 14,
+		"TUICSettingBuilderType":      15,
+		"AnyTLSSettingBuilderType":    16,
+		"TCPBuilderType":              20,
+		"WSBuilderType":               21,
+		"QuicBuilderType":             22,
+		"MkcpBuilderType":             23,
+		"GrpcBuilderType":             24,
+		"HttpBuilderType":             25,
 	}
 )
 
@@ -5460,14 +5475,17 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\bnodesMap\x18\x02 \x03(\v2 .proto.GetNodesRsp.NodesMapEntryR\bnodesMap\x1aH\n" +
 	"\rNodesMapEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12!\n" +
-	"\x05value\x18\x02 \x01(\v2\v.proto.NodeR\x05value:\x028\x01*\x91\x02\n" +
+	"\x05value\x18\x02 \x01(\v2\v.proto.NodeR\x05value:\x028\x01*\xec\x02\n" +
 	"\vBuilderType\x12\x15\n" +
 	"\x11UnknowBuilderType\x10\x00\x12\x1b\n" +
 	"\x17VLESSSettingBuilderType\x10\n" +
 	"\x12\x1b\n" +
 	"\x17VMESSSettingBuilderType\x10\v\x12\x1c\n" +
 	"\x18TrojanSettingBuilderType\x10\f\x12\x18\n" +
-	"\x14SSSettingBuilderType\x10\r\x12\x12\n" +
+	"\x14SSSettingBuilderType\x10\r\x12\x1f\n" +
+	"\x1bHysteria2SettingBuilderType\x10\x0e\x12\x1a\n" +
+	"\x16TUICSettingBuilderType\x10\x0f\x12\x1c\n" +
+	"\x18AnyTLSSettingBuilderType\x10\x10\x12\x12\n" +
 	"\x0eTCPBuilderType\x10\x14\x12\x11\n" +
 	"\rWSBuilderType\x10\x15\x12\x13\n" +
 	"\x0fQuicBuilderType\x10\x16\x12\x13\n" +

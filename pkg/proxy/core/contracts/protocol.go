@@ -21,17 +21,28 @@ const (
 	ProtocolHTTP        Protocol = "http"
 	ProtocolSnell       Protocol = "snell"
 	ProtocolHysteria2   Protocol = "hysteria2"
+	ProtocolTUIC        Protocol = "tuic"
+	ProtocolAnyTLS      Protocol = "anytls"
 )
 
-// AllProtocols returns all supported protocols.
+// AllProtocols returns every protocol the system recognises. Kept in lockstep
+// with IsValid — TestProtocolAllProtocolsMatchesIsValid enforces that both
+// sides define the same set, so adding a new protocol constant that forgets
+// either site fails at test time.
 func AllProtocols() []Protocol {
-	return []Protocol{ProtocolVMess, ProtocolVLess, ProtocolTrojan, ProtocolShadowsocks}
+	return []Protocol{
+		ProtocolVMess, ProtocolVLess, ProtocolTrojan, ProtocolShadowsocks,
+		ProtocolSOCKS5, ProtocolHTTP, ProtocolSnell, ProtocolHysteria2,
+		ProtocolTUIC, ProtocolAnyTLS,
+	}
 }
 
 // IsValid checks whether the protocol is a known value.
 func (p Protocol) IsValid() bool {
 	switch p {
-	case ProtocolVMess, ProtocolVLess, ProtocolTrojan, ProtocolShadowsocks, ProtocolSOCKS5, ProtocolHTTP, ProtocolSnell, ProtocolHysteria2:
+	case ProtocolVMess, ProtocolVLess, ProtocolTrojan, ProtocolShadowsocks,
+		ProtocolSOCKS5, ProtocolHTTP, ProtocolSnell, ProtocolHysteria2,
+		ProtocolTUIC, ProtocolAnyTLS:
 		return true
 	}
 	return false

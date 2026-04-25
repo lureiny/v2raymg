@@ -5,6 +5,7 @@ import (
 
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/params/protocolparams"
 )
 
 // FromParams builds a MihomoInbound from a FastAddInbound params map.
@@ -200,4 +201,59 @@ func isLoopbackListen(addr string) bool {
 		return true
 	}
 	return false
+}
+
+// fastAddBuildInbound dispatches on protocol: Phase 1+ go via
+// protocolparams.Parse → FromProtocolParams; unmigrated protocols stay on
+// FromParams + SharedCred. Collapses to a single Parse call once every
+// phase has landed.
+func fastAddBuildInbound(tag string, params map[string]any) (*MihomoInbound, error) {
+	protoStr, _ := params["protocol"].(string)
+	switch contracts.Protocol(protoStr) {
+	case contracts.ProtocolVLess, contracts.ProtocolVMess:
+		// Parse reads KeyTag from params if present; we overwrite with
+		// the canonical FastAdd tag afterwards — that's the authoritative
+		// identifier, and it preserves Parse's read-only contract on
+		// the raw map (no write-before-parse).
+		pp, err := protocolparams.Parse(params)
+		if err != nil {
+			return nil, err
+		}
+		pp.Tag = tag
+		return FromProtocolParams(pp)
+	default:
+		return FromParams(tag, params)
+	}
+}
+
+// FromProtocolParams is the Phase 1+ entry point: it consumes a typed
+// *ProtocolParams produced by protocolparams.Parse(raw) and returns a
+// ready-to-use MihomoInbound.
+//
+// Caller contract:
+//   - pp.Tag, pp.Port, pp.Protocol must already be set (Parse guarantees this).
+//   - pp.ListenAddr may be empty — NewMihomoInboundFromProtocolParams
+//     substitutes "127.0.0.1".
+//   - Per-protocol sub-spec (pp.VLESS, pp.Hysteria2, …) must be populated for
+//     the declared Protocol. Validate catches mismatched states.
+//
+// Non-loopback listen_addr is warn-logged, matching FromParams. Plan
+// constraint: the forward layer is the only sanctioned external ingress.
+func FromProtocolParams(pp *protocolparams.ProtocolParams) (*MihomoInbound, error) {
+	if pp == nil {
+		return nil, fmt.Errorf("mihomo: nil ProtocolParams")
+	}
+	if pp.Tag == "" {
+		return nil, fmt.Errorf("mihomo: tag required")
+	}
+	inb := NewMihomoInboundFromProtocolParams(pp)
+
+	if pp.ListenAddr != "" && !isLoopbackListen(pp.ListenAddr) {
+		log.Warnf("mihomo: inbound %q listen_addr=%q is non-loopback; forward layer is the sanctioned external ingress path (see docs/container-design-principles.md principle 3)", pp.Tag, pp.ListenAddr)
+	}
+
+	if err := inb.Validate(); err != nil {
+		return nil, err
+	}
+	return inb, nil
 }

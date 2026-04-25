@@ -12,6 +12,25 @@ import (
 
 type FastAddInboundHandler struct{ HttpHandlerImp }
 
+// fastAddValidProtocols is the canonical whitelist for POST /api/inbound/fast's
+// protocol field. Must stay in lockstep with getBuilderType below and with
+// end_node_inbound.go's InboundBuilderType switch — any protocol listed here
+// needs a builder mapping and a downstream case, or the request 500s at the
+// RPC layer; any protocol the downstream recognises that is missing here gets
+// 400'd by the handler before ever reaching the RPC. Exported at package level
+// so tests can assert the three-layer alignment directly (see
+// TestFastAddValidProtocolsMatchesGetBuilderType).
+var fastAddValidProtocols = map[string]bool{
+	"vless":       true,
+	"vmess":       true,
+	"trojan":      true,
+	"ss":          true,
+	"shadowsocks": true,
+	"hysteria2":   true,
+	"tuic":        true,
+	"anytls":      true,
+}
+
 func getBuilderType(key string) proto.BuilderType {
 	switch strings.ToLower(key) {
 	case "vless":
@@ -22,6 +41,12 @@ func getBuilderType(key string) proto.BuilderType {
 		return proto.BuilderType_TrojanSettingBuilderType
 	case "ss", "shadowsocks":
 		return proto.BuilderType_SSSettingBuilderType
+	case "hysteria2":
+		return proto.BuilderType_Hysteria2SettingBuilderType
+	case "tuic":
+		return proto.BuilderType_TUICSettingBuilderType
+	case "anytls":
+		return proto.BuilderType_AnyTLSSettingBuilderType
 	case "tcp":
 		return proto.BuilderType_TCPBuilderType
 	case "ws":
@@ -67,7 +92,11 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		XHTTPMode       string   `json:"xhttp_mode,omitempty"`
 		XHTTPHost       string   `json:"xhttp_host,omitempty"`
 		ALPN            string   `json:"alpn,omitempty"` // comma-separated, e.g. "h2,http/1.1"
+		Flow            string   `json:"flow,omitempty"` // vless flow, e.g. "xtls-rprx-vision"
 		SniffingEnabled bool     `json:"sniffing_enabled,omitempty"`
+		// SkipCertVerify:subscription-side override. true emits
+		// skip-cert-verify on the client config regardless of cert source.
+		SkipCertVerify bool `json:"skip_cert_verify,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
@@ -86,11 +115,7 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		transport = "tcp"
 	}
 
-	// Validate protocol
-	validProtocols := map[string]bool{
-		"vless": true, "vmess": true, "trojan": true, "ss": true, "shadowsocks": true,
-	}
-	if !validProtocols[strings.ToLower(req.Protocol)] {
+	if !fastAddValidProtocols[strings.ToLower(req.Protocol)] {
 		jsonErr(c, 400, fmt.Sprintf("unsupported protocol: %s", req.Protocol))
 		return
 	}
@@ -132,6 +157,7 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		"httpupgrade_path": req.HTTPUpgradePath, "httpupgrade_host": req.HTTPUpgradeHost,
 		"xhttp_path": req.XHTTPPath, "xhttp_mode": req.XHTTPMode, "xhttp_host": req.XHTTPHost,
 		"alpn": req.ALPN,
+		"flow": req.Flow,
 	}
 	for k, v := range convFields {
 		if v != "" {
@@ -148,6 +174,11 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 	if req.SelfSigned {
 		if _, exists := extra["self_signed"]; !exists {
 			extra["self_signed"] = "true"
+		}
+	}
+	if req.SkipCertVerify {
+		if _, exists := extra["skip_cert_verify"]; !exists {
+			extra["skip_cert_verify"] = "true"
 		}
 	}
 
@@ -186,11 +217,12 @@ func (handler *FastAddInboundHandler) help() string {
 	return `POST /api/inbound/fast
 	快速添加指定配置的inbound
 	body: {"target":"", "tag":"", "protocol":"vless", "transport":"tcp", "domain":"", "security":"tls", "port":0, ...}
-	protocol: vless, vmess, trojan, shadowsocks
+	protocol: vless, vmess, trojan, shadowsocks (hysteria2/tuic/anytls 仅 container=mihomo 支持, 计划分阶段接入)
 	transport: tcp, ws, h2(http), grpc, httpupgrade, xhttp, splithttp (也可用 stream 字段, 向后兼容)
 	security: tls(默认), reality
 	domain: 证书域名 (tls 时使用); 为空则自签
 	reality_target, reality_server_names, reality_short_ids: Reality 参数
-	convenience fields: ws_path, grpc_service_name, http_path, http_host(逗号分隔), httpupgrade_path, xhttp_path, xhttp_mode, alpn, sniffing_enabled
-	extra_params: map[string]string, 透传任意参数到 Executor (如 tls_min_version, tls_reject_unknown_sni, flow, uuid 等)`
+	flow: VLESS flow, 一般为 "xtls-rprx-vision" (配合 reality 使用)
+	convenience fields: ws_path, grpc_service_name, http_path, http_host(逗号分隔), httpupgrade_path, xhttp_path, xhttp_mode, alpn, flow, sniffing_enabled
+	extra_params: map[string]string, 透传任意参数到 Executor (如 tls_min_version, tls_reject_unknown_sni, uuid, 以及尚未提升为便捷字段的协议参数)`
 }
