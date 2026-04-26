@@ -59,9 +59,11 @@ func parseAnyTLS(raw map[string]any, pp *ProtocolParams) error {
 		return fmt.Errorf("anytls: %w", err)
 	}
 
-	if _, hasTransport := raw[KeyTransport]; hasTransport {
-		return fmt.Errorf("%w: anytls has no pluggable transport (TCP-native); drop %q",
-			ErrInvalidCombination, KeyTransport)
+	if t, hasTransport := raw[KeyTransport]; hasTransport {
+		if s, _ := t.(string); s != "" && strings.ToLower(s) != string(contracts.TransportTCP) {
+			return fmt.Errorf("%w: anytls only supports TCP transport, got %q",
+				ErrInvalidCombination, s)
+		}
 	}
 
 	security, err := parseSecurity(raw)

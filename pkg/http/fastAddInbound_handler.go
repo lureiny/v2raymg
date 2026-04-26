@@ -163,7 +163,18 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 		jsonErr(c, 400, fmt.Sprintf("unsupported protocol: %s", req.Protocol))
 		return
 	}
-	// Normalize transport alias: http -> h2
+	// Normalize transport aliases.
+	// "quic" is the native transport for hysteria2/tuic — equivalent to leaving it empty.
+	// "tcp" is the native transport for anytls — also equivalent to leaving it empty.
+	if transport == "quic" {
+		switch strings.ToLower(req.Protocol) {
+		case "hysteria2", "tuic":
+			transport = ""
+		}
+	}
+	if transport == "tcp" && strings.ToLower(req.Protocol) == "anytls" {
+		transport = ""
+	}
 	if transport == "http" {
 		transport = "h2"
 	}

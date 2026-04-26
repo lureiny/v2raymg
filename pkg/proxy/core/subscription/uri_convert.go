@@ -190,6 +190,10 @@ func nodeToSpec(node codec.Node, raw string) contracts.SubscriptionSpec {
 		return ssNodeToSpec(n, raw)
 	case *codec.Hysteria2Node:
 		return hysteria2NodeToSpec(n, raw)
+	case *codec.TuicNode:
+		return tuicNodeToSpec(n, raw)
+	case *codec.AnyTLSNode:
+		return anytlsNodeToSpec(n, raw)
 	case *codec.SnellNode:
 		return snellNodeToSpec(n, raw)
 	default:
@@ -405,6 +409,73 @@ func hysteria2NodeToSpec(n *codec.Hysteria2Node, raw string) contracts.Subscript
 	return contracts.SubscriptionSpec{
 		URI:        raw,
 		Protocol:   contracts.ProtocolHysteria2,
+		Host:       n.Host,
+		Port:       n.Port,
+		Password:   n.Password,
+		NodeName:   n.NodeName,
+		Extensions: ext,
+	}
+}
+
+func tuicNodeToSpec(n *codec.TuicNode, raw string) contracts.SubscriptionSpec {
+	ext := map[string]any{
+		"uuid": n.UUID,
+	}
+	if n.SNI != "" {
+		ext["server_name"] = n.SNI
+	}
+	if n.SkipCertVerify {
+		ext["skip_cert_verify"] = true
+	}
+	if len(n.ALPN) > 0 {
+		ext["alpn"] = n.ALPN
+	}
+	if n.CongestionControl != "" {
+		ext["congestion_controller"] = n.CongestionControl
+	}
+	if n.UDPRelayMode != "" {
+		ext["udp_relay_mode"] = n.UDPRelayMode
+	}
+	if n.DisableSNI {
+		ext["disable_sni"] = true
+	}
+	if n.ZeroRTTHandshake {
+		ext["zero_rtt_handshake"] = true
+	}
+	if n.HeartbeatInterval != "" {
+		ext["heartbeat_interval"] = n.HeartbeatInterval
+	}
+	return contracts.SubscriptionSpec{
+		URI:        raw,
+		Protocol:   contracts.ProtocolTUIC,
+		Host:       n.Host,
+		Port:       n.Port,
+		Password:   n.Password,
+		NodeName:   n.NodeName,
+		Extensions: ext,
+	}
+}
+
+func anytlsNodeToSpec(n *codec.AnyTLSNode, raw string) contracts.SubscriptionSpec {
+	ext := map[string]any{}
+	if n.SNI != "" {
+		ext["server_name"] = n.SNI
+	}
+	if n.SkipCertVerify {
+		ext["skip_cert_verify"] = true
+	}
+	if n.IdleSessionCheckInterval > 0 {
+		ext["idle_session_check_interval_seconds"] = n.IdleSessionCheckInterval
+	}
+	if n.IdleSessionTimeout > 0 {
+		ext["idle_session_timeout_seconds"] = n.IdleSessionTimeout
+	}
+	if n.MinIdleSession > 0 {
+		ext["min_idle_session"] = n.MinIdleSession
+	}
+	return contracts.SubscriptionSpec{
+		URI:        raw,
+		Protocol:   contracts.ProtocolAnyTLS,
 		Host:       n.Host,
 		Port:       n.Port,
 		Password:   n.Password,

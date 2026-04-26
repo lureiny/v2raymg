@@ -2,6 +2,7 @@ package protocolparams
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 )
@@ -34,9 +35,11 @@ func parseHysteria2(raw map[string]any, pp *ProtocolParams) error {
 		return fmt.Errorf("hysteria2: %w", err)
 	}
 
-	if _, hasTransport := raw[KeyTransport]; hasTransport {
-		return fmt.Errorf("%w: hysteria2 has no pluggable transport (QUIC-native); drop %q",
-			ErrInvalidCombination, KeyTransport)
+	if t, hasTransport := raw[KeyTransport]; hasTransport {
+		if s, _ := t.(string); s != "" && strings.ToLower(s) != string(contracts.TransportQUIC) {
+			return fmt.Errorf("%w: hysteria2 only supports QUIC transport, got %q",
+				ErrInvalidCombination, s)
+		}
 	}
 
 	security, err := parseSecurity(raw)

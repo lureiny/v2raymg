@@ -55,9 +55,11 @@ func parseTUIC(raw map[string]any, pp *ProtocolParams) error {
 		return fmt.Errorf("tuic: %w", err)
 	}
 
-	if _, hasTransport := raw[KeyTransport]; hasTransport {
-		return fmt.Errorf("%w: tuic has no pluggable transport (QUIC-native); drop %q",
-			ErrInvalidCombination, KeyTransport)
+	if t, hasTransport := raw[KeyTransport]; hasTransport {
+		if s, _ := t.(string); s != "" && strings.ToLower(s) != string(contracts.TransportQUIC) {
+			return fmt.Errorf("%w: tuic only supports QUIC transport, got %q",
+				ErrInvalidCombination, s)
+		}
 	}
 
 	security, err := parseSecurity(raw)

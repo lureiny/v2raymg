@@ -1105,6 +1105,9 @@ Trojan+TLS 需要提供证书来源(`cert_file/key_file`、`certificate/key`、`
 | `proxy_group` | []string | 否 | Clash 自定义代理组 |
 | `rule_provider` | []string | 否 | Clash 规则提供者 |
 | `rule` | []string | 否 | Clash 自定义规则 |
+| `proxy_groups_url` | string | 否 | 外部 Clash 代理组配置 URL（远程拉取后合并） |
+| `rule_providers_url` | string | 否 | 外部 Clash 规则提供者配置 URL |
+| `rules_url` | string | 否 | 外部 Clash 规则配置 URL |
 
 **Response:** 根据 User-Agent 或 `client` 参数自动转换格式：
 - Clash → YAML 配置

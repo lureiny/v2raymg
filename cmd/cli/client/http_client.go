@@ -145,7 +145,53 @@ func ApplyCert(host, token, target, domain string) (string, error) {
 	return result, err
 }
 
-func FastAddInbound(host, token, target, tag, protocol, stream, domain, container, security, realityTarget string, realityServerNames, realityShortIDs []string, isXtls bool, port int) (string, error) {
+// FastAddInboundRequest holds all parameters for the FastAddInbound API call.
+type FastAddInboundRequest struct {
+	Target             string
+	Tag                string
+	Protocol           string
+	Stream             string
+	Domain             string
+	IsXtls             bool
+	Port               int
+	Container          string
+	Security           string
+	RealityTarget      string
+	RealityServerNames []string
+	RealityShortIDs    []string
+	// Generic
+	SkipCertVerify  bool
+	SelfSigned      bool
+	SniffingEnabled bool
+	// Shadowsocks plugin
+	Plugin         string
+	PluginMode     string
+	PluginHost     string
+	PluginPath     string
+	PluginPassword string
+	PluginVersion  string
+	PluginTLS      bool
+	// Hysteria2
+	Obfs                  string
+	ObfsPassword          string
+	Up                    string
+	Down                  string
+	Masquerade            string
+	IgnoreClientBandwidth bool
+	// TUIC
+	CongestionController string
+	UDPRelayMode         string
+	ZeroRTTHandshake     bool
+	HeartbeatInterval    string
+	DisableSNI           bool
+	// AnyTLS
+	PaddingScheme                   string
+	IdleSessionCheckIntervalSeconds int
+	IdleSessionTimeoutSeconds       int
+	MinIdleSession                  int
+}
+
+func FastAddInbound(host, token string, req *FastAddInboundRequest) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {
 		d, err := readBody(resp)
@@ -158,18 +204,74 @@ func FastAddInbound(host, token, target, tag, protocol, stream, domain, containe
 
 	reqUrl := fmt.Sprintf("%s/%s", host, common.FastAddInbound)
 	body := map[string]interface{}{
-		"target":               target,
-		"tag":                  tag,
-		"protocol":             protocol,
-		"stream":               stream,
-		"domain":               domain,
-		"is_xtls":              isXtls,
-		"port":                 port,
-		"container":            container,
-		"security":             security,
-		"reality_target":       realityTarget,
-		"reality_server_names": realityServerNames,
-		"reality_short_ids":    realityShortIDs,
+		"target":               req.Target,
+		"tag":                  req.Tag,
+		"protocol":             req.Protocol,
+		"stream":               req.Stream,
+		"domain":               req.Domain,
+		"is_xtls":              req.IsXtls,
+		"port":                 req.Port,
+		"container":            req.Container,
+		"security":             req.Security,
+		"reality_target":       req.RealityTarget,
+		"reality_server_names": req.RealityServerNames,
+		"reality_short_ids":    req.RealityShortIDs,
+		"skip_cert_verify":     req.SkipCertVerify,
+		"self_signed":          req.SelfSigned,
+		"sniffing_enabled":     req.SniffingEnabled,
+		"plugin_tls":           req.PluginTLS,
+		"ignore_client_bandwidth": req.IgnoreClientBandwidth,
+		"zero_rtt_handshake":   req.ZeroRTTHandshake,
+		"disable_sni":          req.DisableSNI,
+		"idle_session_check_interval_seconds": req.IdleSessionCheckIntervalSeconds,
+		"idle_session_timeout_seconds":        req.IdleSessionTimeoutSeconds,
+		"min_idle_session":                    req.MinIdleSession,
+	}
+	// Only include string/int fields when non-empty/non-zero to keep request clean.
+	if req.Plugin != "" {
+		body["plugin"] = req.Plugin
+	}
+	if req.PluginMode != "" {
+		body["plugin_mode"] = req.PluginMode
+	}
+	if req.PluginHost != "" {
+		body["plugin_host"] = req.PluginHost
+	}
+	if req.PluginPath != "" {
+		body["plugin_path"] = req.PluginPath
+	}
+	if req.PluginPassword != "" {
+		body["plugin_password"] = req.PluginPassword
+	}
+	if req.PluginVersion != "" {
+		body["plugin_version"] = req.PluginVersion
+	}
+	if req.Obfs != "" {
+		body["obfs"] = req.Obfs
+	}
+	if req.ObfsPassword != "" {
+		body["obfs_password"] = req.ObfsPassword
+	}
+	if req.Up != "" {
+		body["up"] = req.Up
+	}
+	if req.Down != "" {
+		body["down"] = req.Down
+	}
+	if req.Masquerade != "" {
+		body["masquerade"] = req.Masquerade
+	}
+	if req.CongestionController != "" {
+		body["congestion_controller"] = req.CongestionController
+	}
+	if req.UDPRelayMode != "" {
+		body["udp_relay_mode"] = req.UDPRelayMode
+	}
+	if req.HeartbeatInterval != "" {
+		body["heartbeat_interval"] = req.HeartbeatInterval
+	}
+	if req.PaddingScheme != "" {
+		body["padding_scheme"] = req.PaddingScheme
 	}
 	err := DoPostRequest(reqUrl, token, body, getCallBackFunc(cb))
 	return result, err

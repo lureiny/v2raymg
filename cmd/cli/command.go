@@ -67,6 +67,36 @@ func InitPromptAndRegister() *prompt.Prompt {
 			realityShortIDsSuggest,
 			isXtlsSuggest,
 			portSuggest,
+			// Generic
+			skipCertVerifySuggest,
+			selfSignedSuggest,
+			sniffingEnabledSuggest,
+			// Shadowsocks plugin
+			pluginSuggest,
+			pluginModeSuggest,
+			pluginHostSuggest,
+			pluginPathSuggest,
+			pluginPasswordSuggest,
+			pluginVersionSuggest,
+			pluginTLSSuggest,
+			// Hysteria2
+			obfsSuggest,
+			obfsPasswordSuggest,
+			upSuggest,
+			downSuggest,
+			masqueradeSuggest,
+			ignoreClientBandwidthSuggest,
+			// TUIC
+			congestionControllerSuggest,
+			udpRelayModeSuggest,
+			zeroRTTHandshakeSuggest,
+			heartbeatIntervalSuggest,
+			disableSNISuggest,
+			// AnyTLS
+			paddingSchemeSuggest,
+			idleSessionCheckIntervalSecondsSuggest,
+			idleSessionTimeoutSecondsSuggest,
+			minIdleSessionSuggest,
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
@@ -341,7 +371,27 @@ func applyCert(target, domain string) error {
 
 // ---- Inbound ----
 
-func fastAddInbound(target, tag, protocol, stream, domain, container, security, realityTarget, realityServerNames, realityShortIDs string, isXtls bool, port int) error {
+func fastAddInbound(
+	target, tag, protocol, stream, domain, container, security,
+	realityTarget, realityServerNames, realityShortIDs string,
+	isXtls bool, port int,
+	// Generic
+	skipCertVerify, selfSigned, sniffingEnabled bool,
+	// Shadowsocks plugin
+	plugin, pluginMode, pluginHost, pluginPath, pluginPassword, pluginVersion string,
+	pluginTLS bool,
+	// Hysteria2
+	obfs, obfsPassword, up, down, masquerade string,
+	ignoreClientBandwidth bool,
+	// TUIC
+	congestionController, udpRelayMode string,
+	zeroRTTHandshake bool,
+	heartbeatInterval string,
+	disableSNI bool,
+	// AnyTLS
+	paddingScheme string,
+	idleSessionCheckIntervalSeconds, idleSessionTimeoutSeconds, minIdleSession int,
+) error {
 	node := getNode(target)
 	if domain == "" && node != nil {
 		domain = node.GetHost()
@@ -372,7 +422,45 @@ func fastAddInbound(target, tag, protocol, stream, domain, container, security, 
 		}
 	}
 
-	result, err := client.FastAddInbound(getHost(), getAuthToken(), target, tag, protocol, stream, domain, container, security, realityTarget, serverNames, shortIDs, isXtls, port)
+	result, err := client.FastAddInbound(getHost(), getAuthToken(), &client.FastAddInboundRequest{
+		Target:             target,
+		Tag:                tag,
+		Protocol:           protocol,
+		Stream:             stream,
+		Domain:             domain,
+		IsXtls:             isXtls,
+		Port:               port,
+		Container:          container,
+		Security:           security,
+		RealityTarget:      realityTarget,
+		RealityServerNames: serverNames,
+		RealityShortIDs:    shortIDs,
+		SkipCertVerify:     skipCertVerify,
+		SelfSigned:         selfSigned,
+		SniffingEnabled:    sniffingEnabled,
+		Plugin:             plugin,
+		PluginMode:         pluginMode,
+		PluginHost:         pluginHost,
+		PluginPath:         pluginPath,
+		PluginPassword:     pluginPassword,
+		PluginVersion:      pluginVersion,
+		PluginTLS:          pluginTLS,
+		Obfs:               obfs,
+		ObfsPassword:       obfsPassword,
+		Up:                 up,
+		Down:               down,
+		Masquerade:         masquerade,
+		IgnoreClientBandwidth: ignoreClientBandwidth,
+		CongestionController: congestionController,
+		UDPRelayMode:       udpRelayMode,
+		ZeroRTTHandshake:   zeroRTTHandshake,
+		HeartbeatInterval:  heartbeatInterval,
+		DisableSNI:         disableSNI,
+		PaddingScheme:      paddingScheme,
+		IdleSessionCheckIntervalSeconds: idleSessionCheckIntervalSeconds,
+		IdleSessionTimeoutSeconds:       idleSessionTimeoutSeconds,
+		MinIdleSession:     minIdleSession,
+	})
 	if err != nil {
 		return err
 	}

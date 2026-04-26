@@ -10,7 +10,7 @@ import (
 )
 
 // SurgeConverter emits one proxy per line in Surge's native format.
-// Supported: vmess, trojan, shadowsocks, snell, hysteria2. VLESS is skipped.
+// Supported: vmess, trojan, shadowsocks, snell, hysteria2, tuic, anytls. VLESS is skipped.
 type SurgeConverter struct{}
 
 func (c *SurgeConverter) Format() subscription.ClientFormat {
@@ -51,6 +51,10 @@ func (c *SurgeConverter) convertSpec(spec contracts.SubscriptionSpec) (string, b
 		return c.convertSnell(spec), true
 	case contracts.ProtocolHysteria2:
 		return c.convertHysteria2(spec), true
+	case contracts.ProtocolTUIC:
+		return c.convertTuic(spec), true
+	case contracts.ProtocolAnyTLS:
+		return c.convertAnyTLS(spec), true
 	default:
 		// Pre-refactor data may lack spec.Protocol but still have a hysteria2:// URI.
 		if strings.HasPrefix(spec.URI, "hysteria2://") {
@@ -100,6 +104,10 @@ func (c *SurgeConverter) convertVMess(spec contracts.SubscriptionSpec) string {
 		parts = append(parts, "vmess-aead=true")
 	}
 
+	if skip, _ := ext["skip_cert_verify"].(bool); skip {
+		parts = append(parts, "skip-cert-verify=true")
+	}
+
 	return strings.Join(parts, ", ")
 }
 
@@ -110,7 +118,6 @@ func (c *SurgeConverter) convertTrojan(spec contracts.SubscriptionSpec) string {
 		spec.Host,
 		strconv.FormatUint(uint64(spec.Port), 10),
 		fmt.Sprintf("password=%s", spec.Password),
-		"tfo=true",
 		"tls=true",
 	}
 
@@ -133,12 +140,17 @@ func (c *SurgeConverter) convertTrojan(spec contracts.SubscriptionSpec) string {
 		parts = append(parts, fmt.Sprintf("sni=%s", sni))
 	}
 
+	if skip, _ := ext["skip_cert_verify"].(bool); skip {
+		parts = append(parts, "skip-cert-verify=true")
+	}
+
 	return strings.Join(parts, ", ")
 }
 
 func (c *SurgeConverter) convertShadowsocks(spec contracts.SubscriptionSpec) string {
 	name := c.nodeName(spec, "SS")
-	method := extString(spec.Extensions, "method")
+	ext := spec.Extensions
+	method := extString(ext, "method")
 	if method == "" {
 		method = "aes-256-gcm"
 	}
@@ -149,6 +161,16 @@ func (c *SurgeConverter) convertShadowsocks(spec contracts.SubscriptionSpec) str
 		strconv.FormatUint(uint64(spec.Port), 10),
 		fmt.Sprintf("encrypt-method=%s", method),
 		fmt.Sprintf("password=%s", spec.Password),
+	}
+
+	// obfs-local plugin → Surge obfs parameters
+	if extString(ext, "plugin") == "obfs-local" {
+		if mode := extString(ext, "plugin_mode"); mode != "" {
+			parts = append(parts, fmt.Sprintf("obfs=%s", mode))
+		}
+		if host := extString(ext, "plugin_host"); host != "" {
+			parts = append(parts, fmt.Sprintf("obfs-host=%s", host))
+		}
 	}
 
 	return strings.Join(parts, ", ")
@@ -162,7 +184,6 @@ func (c *SurgeConverter) convertHysteria2(spec contracts.SubscriptionSpec) strin
 		strconv.FormatUint(uint64(spec.Port), 10),
 		fmt.Sprintf("password=%s", spec.Password),
 		"download-bandwidth=1000",
-		"ecn=true",
 	}
 
 	ext := spec.Extensions
@@ -179,6 +200,48 @@ func (c *SurgeConverter) convertHysteria2(spec contracts.SubscriptionSpec) strin
 	}
 	if pwd := extString(ext, "obfs_password"); pwd != "" {
 		parts = append(parts, fmt.Sprintf("obfs-password=%s", pwd))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// convertTuic emits a Surge TUIC v5 proxy line.
+// Format: name=tuic-v5, host, port[, skip-cert-verify=true][, sni=...], password=..., uuid=..., alpn=h3, version=5
+func (c *SurgeConverter) convertTuic(spec contracts.SubscriptionSpec) string {
+	name := c.nodeName(spec, "TUIC")
+	ext := spec.Extensions
+	parts := []string{
+		fmt.Sprintf("%s=tuic-v5", name),
+		spec.Host,
+		strconv.FormatUint(uint64(spec.Port), 10),
+	}
+	if skip, _ := ext["skip_cert_verify"].(bool); skip {
+		parts = append(parts, "skip-cert-verify=true")
+	}
+	if sni := extString(ext, "server_name"); sni != "" {
+		parts = append(parts, fmt.Sprintf("sni=%s", sni))
+	}
+	parts = append(parts,
+		fmt.Sprintf("password=%s", spec.Password),
+		fmt.Sprintf("uuid=%s", extString(ext, "uuid")),
+		"alpn=h3",
+	)
+	return strings.Join(parts, ", ")
+}
+
+func (c *SurgeConverter) convertAnyTLS(spec contracts.SubscriptionSpec) string {
+	name := c.nodeName(spec, "ANYTLS")
+	parts := []string{
+		fmt.Sprintf("%s=anytls", name),
+		spec.Host,
+		strconv.FormatUint(uint64(spec.Port), 10),
+		fmt.Sprintf("password=%s", spec.Password),
+	}
+	ext := spec.Extensions
+	if sni := extString(ext, "server_name"); sni != "" {
+		parts = append(parts, fmt.Sprintf("sni=%s", sni))
+	}
+	if skip, _ := ext["skip_cert_verify"].(bool); skip {
+		parts = append(parts, "skip-cert-verify=true")
 	}
 	return strings.Join(parts, ", ")
 }

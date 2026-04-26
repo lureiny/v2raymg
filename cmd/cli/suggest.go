@@ -36,7 +36,7 @@ var (
 
 	protocolSuggest = prompt.Suggest{
 		Text:        "protocol",
-		Description: "vless, vmess or trojan",
+		Description: "vless, vmess, trojan, ss, hysteria2, tuic, anytls",
 		Default:     "trojan",
 	}
 
@@ -91,6 +91,141 @@ var (
 	portSuggest = prompt.Suggest{
 		Text:        "port",
 		Description: "inbound port, if port == 0, will generate a random port in 10000-50000",
+		Default:     int(0),
+	}
+
+	// Generic TLS / sniffing
+	skipCertVerifySuggest = prompt.Suggest{
+		Text:        "skip_cert_verify",
+		Description: "override skip-cert-verify on client subscription (TLS protocols)",
+		Default:     false,
+	}
+	selfSignedSuggest = prompt.Suggest{
+		Text:        "self_signed",
+		Description: "use self-signed certificate (TLS only)",
+		Default:     false,
+	}
+	sniffingEnabledSuggest = prompt.Suggest{
+		Text:        "sniffing_enabled",
+		Description: "enable traffic sniffing (xray only)",
+		Default:     false,
+	}
+
+	// Shadowsocks plugin
+	pluginSuggest = prompt.Suggest{
+		Text:        "plugin",
+		Description: "SS plugin: obfs | v2ray-plugin | shadow-tls",
+		Default:     "",
+	}
+	pluginModeSuggest = prompt.Suggest{
+		Text:        "plugin_mode",
+		Description: "obfs: http|tls; v2ray-plugin: websocket|quic",
+		Default:     "",
+	}
+	pluginHostSuggest = prompt.Suggest{
+		Text:        "plugin_host",
+		Description: "obfs/shadow-tls target host",
+		Default:     "",
+	}
+	pluginPathSuggest = prompt.Suggest{
+		Text:        "plugin_path",
+		Description: "v2ray-plugin path",
+		Default:     "",
+	}
+	pluginPasswordSuggest = prompt.Suggest{
+		Text:        "plugin_password",
+		Description: "shadow-tls password",
+		Default:     "",
+	}
+	pluginVersionSuggest = prompt.Suggest{
+		Text:        "plugin_version",
+		Description: "shadow-tls version: 2 or 3",
+		Default:     "",
+	}
+	pluginTLSSuggest = prompt.Suggest{
+		Text:        "plugin_tls",
+		Description: "v2ray-plugin TLS flag",
+		Default:     false,
+	}
+
+	// Hysteria2
+	obfsSuggest = prompt.Suggest{
+		Text:        "obfs",
+		Description: "hy2 obfs type: salamander",
+		Default:     "",
+	}
+	obfsPasswordSuggest = prompt.Suggest{
+		Text:        "obfs_password",
+		Description: "hy2 obfs password (required when obfs is set)",
+		Default:     "",
+	}
+	upSuggest = prompt.Suggest{
+		Text:        "up",
+		Description: "hy2 upload bandwidth, e.g. 50 Mbps",
+		Default:     "",
+	}
+	downSuggest = prompt.Suggest{
+		Text:        "down",
+		Description: "hy2 download bandwidth, e.g. 100 Mbps",
+		Default:     "",
+	}
+	masqueradeSuggest = prompt.Suggest{
+		Text:        "masquerade",
+		Description: "hy2 server-side masquerade URL/proxy/file",
+		Default:     "",
+	}
+	ignoreClientBandwidthSuggest = prompt.Suggest{
+		Text:        "ignore_client_bandwidth",
+		Description: "hy2: ignore client bandwidth advertisement",
+		Default:     false,
+	}
+
+	// TUIC
+	congestionControllerSuggest = prompt.Suggest{
+		Text:        "congestion_controller",
+		Description: "TUIC congestion controller: bbr | cubic | new_reno",
+		Default:     "",
+	}
+	udpRelayModeSuggest = prompt.Suggest{
+		Text:        "udp_relay_mode",
+		Description: "TUIC UDP relay mode: native | quic",
+		Default:     "",
+	}
+	zeroRTTHandshakeSuggest = prompt.Suggest{
+		Text:        "zero_rtt_handshake",
+		Description: "TUIC client 0-RTT handshake (maps to reduce-rtt)",
+		Default:     false,
+	}
+	heartbeatIntervalSuggest = prompt.Suggest{
+		Text:        "heartbeat_interval",
+		Description: "TUIC client heartbeat interval, e.g. 10s",
+		Default:     "",
+	}
+	disableSNISuggest = prompt.Suggest{
+		Text:        "disable_sni",
+		Description: "TUIC client disable SNI",
+		Default:     false,
+	}
+
+	// AnyTLS
+	paddingSchemeSuggest = prompt.Suggest{
+		Text:        "padding_scheme",
+		Description: "AnyTLS server padding scheme inline text (empty = runtime default)",
+		Default:     "",
+	}
+	idleSessionCheckIntervalSecondsSuggest = prompt.Suggest{
+		Text:        "idle_session_check_interval_seconds",
+		Description: "AnyTLS client idle check interval (seconds, 0 = default)",
+		Default:     int(0),
+	}
+	idleSessionTimeoutSecondsSuggest = prompt.Suggest{
+		Text:        "idle_session_timeout_seconds",
+		Description: "AnyTLS client idle session timeout (seconds, 0 = default)",
+		Default:     int(0),
+	}
+	minIdleSessionSuggest = prompt.Suggest{
+		Text:        "min_idle_session",
+		Description: "AnyTLS client minimum idle sessions (0 = default)",
 		Default:     int(0),
 	}
 
