@@ -72,10 +72,10 @@ func TestGetUserSubscriptions_Tuic_Baseline_Pp(t *testing.T) {
 	if node.SNI != "tuic.example.com" {
 		t.Errorf("URI SNI = %q", node.SNI)
 	}
-	// Codec Encode never emits allow_insecure (mihomo strips it on parse)
-	// — the SkipCertVerify hint reaches the client through Extensions only.
-	if node.SkipCertVerify {
-		t.Errorf("URI must not carry allow_insecure even when self_signed; got SkipCertVerify=true")
+	// self_signed=true → SkipCertVerify=true must round-trip through the URI
+	// (allow_insecure=1) so the common-URI subscription path also delivers it.
+	if !node.SkipCertVerify {
+		t.Errorf("URI must carry allow_insecure=1 when self_signed; got SkipCertVerify=false")
 	}
 }
 

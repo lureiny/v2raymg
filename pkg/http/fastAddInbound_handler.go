@@ -147,8 +147,16 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 	if transport == "" {
 		transport = req.Stream
 	}
+	// Only default to tcp for protocols that actually use a pluggable transport.
+	// hysteria2 and tuic are QUIC-native; anytls is TCP-native with no
+	// selectable transport — passing "tcp" triggers a validation error downstream.
 	if transport == "" {
-		transport = "tcp"
+		switch strings.ToLower(req.Protocol) {
+		case "hysteria2", "tuic", "anytls":
+			// leave transport empty
+		default:
+			transport = "tcp"
+		}
 	}
 
 	if !fastAddValidProtocols[strings.ToLower(req.Protocol)] {
@@ -159,12 +167,12 @@ func (handler *FastAddInboundHandler) handlerFunc(c *gin.Context) {
 	if transport == "http" {
 		transport = "h2"
 	}
-	// Validate transport
+	// Validate transport (skip for empty, which signals "protocol-native, no transport layer")
 	validTransports := map[string]bool{
 		"tcp": true, "ws": true, "grpc": true, "httpupgrade": true,
 		"xhttp": true, "splithttp": true, "h2": true,
 	}
-	if !validTransports[transport] {
+	if transport != "" && !validTransports[transport] {
 		if transport == "h3" {
 			jsonErr(c, 400, fmt.Sprintf("transport %q is not supported; use xhttp or splithttp instead", transport))
 		} else {

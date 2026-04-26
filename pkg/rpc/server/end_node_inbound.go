@@ -194,20 +194,28 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		return fastAddInboundRsp, nil
 	}
 
-	// Resolve transport: prefer new string field, fall back to legacy enum
+	// Resolve transport: prefer new string field, fall back to legacy enum.
+	// QUIC-native (hysteria2, tuic) and TCP-native (anytls) have no pluggable
+	// transport — leave transport empty so downstream protocolparams can
+	// validate correctly instead of rejecting "tcp" as an invalid combination.
 	transport := fastAddInboundReq.GetTransport()
 	if transport == "" {
-		switch fastAddInboundReq.GetStreamBuilderType() {
-		case proto.BuilderType_TCPBuilderType:
-			transport = "tcp"
-		case proto.BuilderType_WSBuilderType:
-			transport = "ws"
-		case proto.BuilderType_GrpcBuilderType:
-			transport = "grpc"
-		case proto.BuilderType_HttpBuilderType:
-			transport = "h2"
+		switch protocol {
+		case "hysteria2", "tuic", "anytls":
+			// protocol-native; no transport layer
 		default:
-			transport = "tcp"
+			switch fastAddInboundReq.GetStreamBuilderType() {
+			case proto.BuilderType_TCPBuilderType:
+				transport = "tcp"
+			case proto.BuilderType_WSBuilderType:
+				transport = "ws"
+			case proto.BuilderType_GrpcBuilderType:
+				transport = "grpc"
+			case proto.BuilderType_HttpBuilderType:
+				transport = "h2"
+			default:
+				transport = "tcp"
+			}
 		}
 	}
 
@@ -232,12 +240,14 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 	}
 
 	reqParams := map[string]any{
-		"protocol":  protocol,
-		"port":      fastAddInboundReq.GetPort(),
-		"domain":    domain,
-		"security":  security,
-		"transport": transport,
-		"tag":       fastAddInboundReq.GetTag(),
+		"protocol": protocol,
+		"port":     fastAddInboundReq.GetPort(),
+		"domain":   domain,
+		"security": security,
+		"tag":      fastAddInboundReq.GetTag(),
+	}
+	if transport != "" {
+		reqParams["transport"] = transport
 	}
 	// If no domain is provided and security requires TLS, use self-signed cert
 	if fastAddInboundReq.GetDomain() == "" && (security == "tls" || security == "xtls") {

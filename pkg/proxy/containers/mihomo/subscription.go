@@ -377,6 +377,7 @@ func fillVMessSubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInbo
 					spec.Extensions["server_name"] = sec.TLS.SNI
 				}
 				if shouldSkipCertVerifyForClient(sec) {
+					node.SkipCertVerify = true
 					spec.Extensions["skip_cert_verify"] = true
 				}
 				if sec.TLS.UTLSFingerprint != "" {
@@ -747,8 +748,7 @@ func fillTuicSubscriptionSpec(spec *contracts.SubscriptionSpec, inb *MihomoInbou
 			node.ALPN = sec.TLS.ALPN
 		}
 		if shouldSkipCertVerifyForClient(sec) {
-			// Codec Encode never emits allow_insecure; the clash subscription
-			// path delivers skip-cert-verify directly through Extensions.
+			node.SkipCertVerify = true
 			spec.Extensions["skip_cert_verify"] = true
 		}
 	}

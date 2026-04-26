@@ -93,6 +93,9 @@ func FillDefaults(params map[string]any, protocol string, certMgr CertManager, s
 //     pkg/proxy/core/params/protocolparams notes.
 func needsTLS(protocol string, params map[string]any) bool {
 	switch strings.ToLower(protocol) {
+	case "vless", "vmess":
+		security, _ := params["security"].(string)
+		return strings.EqualFold(strings.TrimSpace(security), "tls")
 	case "trojan":
 		if security, _ := params["security"].(string); strings.EqualFold(strings.TrimSpace(security), "reality") {
 			return false

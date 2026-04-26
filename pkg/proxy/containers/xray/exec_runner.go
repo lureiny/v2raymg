@@ -1545,6 +1545,8 @@ func (in *XrayInbound) buildSubscriptionExtensions(user contracts.UserSpec) map[
 			"reality_public_key", "reality_short_ids", "reality_server_names",
 			// Cert source for SNI logic
 			"cert_source",
+			// Client cert-verification hint — propagates insecure=1 into URI
+			"skip_cert_verify",
 		}
 		for _, key := range copyKeys {
 			if v, ok := in.extra[key]; ok {
@@ -1917,6 +1919,14 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 			spec.Extensions = make(map[string]any)
 		}
 		spec.Extensions["cert_source"] = certSource
+	}
+	// Propagate skip_cert_verify from caller params into extensions so the
+	// subscription URI can emit insecure=1 (self-signed cert hint for clients).
+	if fastGetBool(params, "skip_cert_verify") {
+		if spec.Extensions == nil {
+			spec.Extensions = make(map[string]any)
+		}
+		spec.Extensions["skip_cert_verify"] = true
 	}
 
 	xrayInbound := &XrayInbound{

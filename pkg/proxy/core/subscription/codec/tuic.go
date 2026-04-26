@@ -21,12 +21,10 @@ import (
 //     `disable_sni`), matching mihomo's URI parser at
 //     `common/convert/converter.go:106-147`. Don't slip into kebab-case
 //     here — that's the yaml shape, not the URI shape.
-//   - dae's `allow_insecure=1` is silently stripped by mihomo's URI
-//     parser. We honour it on Decode for interop with URIs produced by
-//     other tools (NekoBox / Hiddify) but never emit it — the clash
-//     subscription path conveys skip-cert-verify directly via
-//     ClashProxy, which is more reliable than relying on optional URI
-//     query keys.
+//   - dae's `allow_insecure=1` is emitted by Encode when SkipCertVerify
+//     is true and honoured on Decode. Note that mihomo's built-in URI
+//     parser strips this key — but v2raymg's own URI→clash pipeline
+//     (DecodeTuic → tuicNodeToProxy) handles it correctly.
 //   - TUIC v4 (token-based, userinfo without colon) is intentionally
 //     unsupported; v2raymg targets v5 only for per-user attribution.
 //   - HeartbeatInterval / ZeroRTTHandshake are mihomo client-only
@@ -42,7 +40,7 @@ type TuicNode struct {
 	Password string
 
 	SNI            string
-	SkipCertVerify bool // Decode-only from allow_insecure=1; never Encoded
+	SkipCertVerify bool // Encode: emits allow_insecure=1; Decode: set from allow_insecure=1
 	ALPN           []string
 
 	CongestionControl string // mihomo URI key "congestion_control"; maps to listener/outbound `congestion-controller`
@@ -72,6 +70,9 @@ func (n *TuicNode) Encode() string {
 	}
 	if n.DisableSNI {
 		q.Set("disable_sni", "1")
+	}
+	if n.SkipCertVerify {
+		q.Set("allow_insecure", "1")
 	}
 
 	u := url.URL{

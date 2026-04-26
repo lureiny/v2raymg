@@ -29,9 +29,10 @@ type VMessNode struct {
 	UUID     string
 	AlterId  int // 0 for AEAD; non-zero for legacy mode
 
-	Security    string
-	SNI         string
-	Fingerprint string // uTLS fingerprint (not TLS cert pinning)
+	Security       string
+	SNI            string
+	Fingerprint    string // uTLS fingerprint (not TLS cert pinning)
+	SkipCertVerify bool
 
 	HeaderType string
 
@@ -52,19 +53,20 @@ type VMessNode struct {
 func (n *VMessNode) Protocol() contracts.Protocol { return contracts.ProtocolVMess }
 
 type vmessEncodeBody struct {
-	V    string `json:"v"`
-	PS   string `json:"ps"`
-	Add  string `json:"add"`
-	Port string `json:"port"`
-	ID   string `json:"id"`
-	Aid  string `json:"aid"`
-	Net  string `json:"net"`
-	Type string `json:"type"`
-	Host string `json:"host,omitempty"`
-	Path string `json:"path,omitempty"`
-	TLS  string `json:"tls,omitempty"`
-	SNI  string `json:"sni,omitempty"`
-	FP   string `json:"fp,omitempty"`
+	V            string `json:"v"`
+	PS           string `json:"ps"`
+	Add          string `json:"add"`
+	Port         string `json:"port"`
+	ID           string `json:"id"`
+	Aid          string `json:"aid"`
+	Net          string `json:"net"`
+	Type         string `json:"type"`
+	Host         string `json:"host,omitempty"`
+	Path         string `json:"path,omitempty"`
+	TLS          string `json:"tls,omitempty"`
+	SNI          string `json:"sni,omitempty"`
+	FP           string `json:"fp,omitempty"`
+	AllowInsecure bool  `json:"allowInsecure,omitempty"`
 }
 
 func (n *VMessNode) Encode() string {
@@ -87,6 +89,7 @@ func (n *VMessNode) Encode() string {
 	}
 	if n.Security == "tls" {
 		b.TLS = "tls"
+		b.AllowInsecure = n.SkipCertVerify
 	}
 
 	// VMess wire format requires a non-empty `net`. We keep "" as the internal
@@ -121,18 +124,19 @@ func (n *VMessNode) Encode() string {
 
 // vmessDecodeBody tolerates port/aid being either a JSON number or string.
 type vmessDecodeBody struct {
-	PS   string `json:"ps"`
-	Add  string `json:"add"`
-	Port any    `json:"port"`
-	ID   string `json:"id"`
-	Aid  any    `json:"aid"`
-	Net  string `json:"net"`
-	Type string `json:"type"`
-	Host string `json:"host"`
-	Path string `json:"path"`
-	TLS  string `json:"tls"`
-	SNI  string `json:"sni"`
-	FP   string `json:"fp"`
+	PS            string `json:"ps"`
+	Add           string `json:"add"`
+	Port          any    `json:"port"`
+	ID            string `json:"id"`
+	Aid           any    `json:"aid"`
+	Net           string `json:"net"`
+	Type          string `json:"type"`
+	Host          string `json:"host"`
+	Path          string `json:"path"`
+	TLS           string `json:"tls"`
+	SNI           string `json:"sni"`
+	FP            string `json:"fp"`
+	AllowInsecure bool   `json:"allowInsecure"`
 }
 
 func DecodeVMess(uri string) (*VMessNode, error) {
@@ -198,6 +202,7 @@ func DecodeVMess(uri string) (*VMessNode, error) {
 	}
 	if b.TLS == "tls" {
 		n.Security = "tls"
+		n.SkipCertVerify = b.AllowInsecure
 	}
 
 	switch transport {

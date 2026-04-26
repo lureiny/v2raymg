@@ -208,6 +208,9 @@ func buildSubscriptionExtensions(in *XrayInbound, user contracts.UserSpec) map[s
 			"reality_public_key", "reality_short_ids", "reality_server_names",
 			// Cert source for SNI logic
 			"cert_source",
+			// Client cert-verification hint — propagates insecure=1 into the URI
+			// so subscribers using self-signed certs don't get TLS failures.
+			"skip_cert_verify",
 		}
 		for _, key := range copyKeys {
 			if v, ok := in.extra[key]; ok {
@@ -324,6 +327,11 @@ func generateVMessURI(spec contracts.SubscriptionSpec) (string, error) {
 		"type":       "none",
 		"encryption": "auto",
 		"tls":        security,
+	}
+
+	// Cert-verification skip for TLS VMess.
+	if (security == "tls" || security == "xtls") && extBool(spec.Extensions, "skip_cert_verify") {
+		cfg["allowInsecure"] = true
 	}
 
 	// Issue #91: Only include aid when explicitly set (deprecated)
@@ -535,6 +543,13 @@ func buildShareLinkParams(spec contracts.SubscriptionSpec) []string {
 		}
 	}
 
+	// Cert-verification skip: emit insecure=1 so clients built from this URI
+	// (mihomo, xray, etc.) know they should accept the self-signed cert.
+	// Only applies to TLS (not reality — reality never uses a real CA cert).
+	if (security == "tls" || security == "xtls") && extBool(spec.Extensions, "skip_cert_verify") {
+		params = append(params, "insecure=1")
+	}
+
 	// TLS/Reality params (include legacy "xtls" for backward compat with stored data)
 	if security == "tls" || security == "xtls" || security == "reality" {
 		sni := extString(spec.Extensions, "server_name")
@@ -585,6 +600,21 @@ func extString(m map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+func extBool(m map[string]any, key string) bool {
+	if m == nil {
+		return false
+	}
+	if v, ok := m[key]; ok {
+		switch b := v.(type) {
+		case bool:
+			return b
+		case string:
+			return b == "true" || b == "1"
+		}
+	}
+	return false
 }
 
 func extStringSlice(m map[string]any, key string) []string {

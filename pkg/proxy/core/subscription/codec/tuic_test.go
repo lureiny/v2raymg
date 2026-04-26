@@ -146,14 +146,20 @@ func TestEncodeTuic_OmitsEmptyOptionals(t *testing.T) {
 	}
 }
 
-// SkipCertVerify (Decode-only field) must NEVER be Encoded — that flag is
-// the v2raymg convention because mihomo strips it and the clash path
-// already conveys it through ClashProxy.
-func TestEncodeTuic_OmitsAllowInsecureWhenSkipCertVerifyTrue(t *testing.T) {
+// SkipCertVerify=true must round-trip: Encode emits allow_insecure=1,
+// Decode restores SkipCertVerify=true.
+func TestEncodeTuic_EmitsAllowInsecureWhenSkipCertVerifyTrue(t *testing.T) {
 	n := &TuicNode{Host: "h", Port: 443, UUID: tuicCodecUUID, Password: "p", SkipCertVerify: true}
 	s := n.Encode()
-	if strings.Contains(s, "allow_insecure") {
-		t.Errorf("Encode must not emit allow_insecure even when SkipCertVerify=true; got %s", s)
+	if !strings.Contains(s, "allow_insecure=1") {
+		t.Errorf("Encode must emit allow_insecure=1 when SkipCertVerify=true; got %s", s)
+	}
+	decoded, err := DecodeTuic(s)
+	if err != nil {
+		t.Fatalf("DecodeTuic failed: %v", err)
+	}
+	if !decoded.SkipCertVerify {
+		t.Errorf("SkipCertVerify did not round-trip through allow_insecure=1")
 	}
 }
 
