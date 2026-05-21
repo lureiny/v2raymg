@@ -139,6 +139,7 @@ func defaultAppConfig() *AppConfig {
 	cfg.EndNode.Ping.TCPPingTimeout = 1
 	cfg.EndNode.JWTExpireHours = 24
 	cfg.ClusterUser = DefaultClusterUserConfig()
+	cfg.Subscription.EnableUserInfoHeader = true
 	return cfg
 }
 

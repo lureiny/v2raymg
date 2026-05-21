@@ -1108,11 +1108,66 @@ Trojan+TLS 需要提供证书来源(`cert_file/key_file`、`certificate/key`、`
 | `proxy_groups_url` | string | 否 | 外部 Clash 代理组配置 URL（远程拉取后合并） |
 | `rule_providers_url` | string | 否 | 外部 Clash 规则提供者配置 URL |
 | `rules_url` | string | 否 | 外部 Clash 规则配置 URL |
+| `sub_userinfo` | bool | 否 | 是否返回 `Subscription-Userinfo` 响应头；省略时回退到节点配置 `subscription.enable_userinfo_header`（默认 `true`） |
+| `sub_userinfo_format` | string | 否 | 自定义 `Subscription-Userinfo` 内容的 schema（`${var}` 占位符）；省略时回退到节点配置 `subscription.userinfo_header_format`，再为空时使用内置默认 |
 
 **Response:** 根据 User-Agent 或 `client` 参数自动转换格式：
 - Clash → YAML 配置
 - Surge → Surge 配置
 - 其他 → base64 编码 URI 列表
+
+**Response Header `Subscription-Userinfo`:**
+
+当 `sub_userinfo=true`（或省略 + 节点配置开启）时，响应附带按 schema 渲染后的 `Subscription-Userinfo` header。
+
+**Schema 解析顺序（优先级递减）:**
+1. 请求 `?sub_userinfo_format=...` query 参数
+2. 节点配置 `subscription.userinfo_header_format`
+3. 内置默认：`upload=${upload}; download=${download}; total=${total}; expire=${expire}`（流量值为原始字节数，匹配 Clash / sing-box 等主流客户端解析约定）
+
+> `expire` 与 `total` 都使用 `-1` 作为 "无值 / 无限制" 哨兵：`expire <= 0` 或 `total <= 0` 都渲染为 `-1`，其余渲染原值。`expire` 如需可读形式请使用 `${expire_string}`；`total` 的单位变体（`total_kb` 等）保留计算值，不应用哨兵。
+>
+> **Clash 客户端特例**：当 User-Agent 或 `client=` 参数匹配 `clash`（不区分大小写,子串匹配,覆盖 Clash/ClashX/Clash.Meta/mihomo 等）时，渲染后的 header 中若包含标准键名 `total=-1` 或 `expire=-1` 的分号分隔段，会被整段移除（即客户端看到的是"无该字段"，而非 `=-1`）。仅作用于字面键名 `total` / `expire`；自定义 schema 中使用其他键名（例如 `quota=${total}`）的段不会被剥离。
+
+**数据来源:**
+- `upload` / `download`：跨 `target` 指定的所有节点聚合的累计上下行字节数（拉取失败的节点在该值中被忽略，仅记日志）。
+- `total` / `expire`：仅来自访问节点本地的 `TrafficLimit` / `ExpiryTime`。因为当前项目没有全局流量统计与配额一致性层，不同节点对同一用户的配额可能不一致，访问节点的快照仅供参考。
+
+**支持的内置变量:**
+
+| 分类 | 变量 | 说明 |
+|------|------|------|
+| 流量 | `upload`, `download`, `total` | 原始字节数（整数）；`total <= 0`（如用户无配额）渲染为 `-1`，符合 Clash / sing-box "无限流量" 约定。`upload` / `download` 即使为 0 也照常输出 |
+| 流量 | `upload_kb`, `download_kb`, `total_kb` | 字节 / 1024，最多 2 位小数（去尾 0） |
+| 流量 | `upload_mb`, `download_mb`, `total_mb` | 字节 / 1024²，最多 2 位小数（去尾 0） |
+| 流量 | `upload_gb`, `download_gb`, `total_gb` | 字节 / 1024³，最多 2 位小数（去尾 0） |
+| 流量 | `upload_auto`, `download_auto`, `total_auto` | 自动选单位并带后缀：`<1KB` 用整数 `B`，`<1MB` 用 `KB`，`<1GB` 用 `MB`，`≥1GB` 用 `GB`（同样最多 2 位小数去尾 0） |
+| 时间 | `expire` | 过期 Unix 秒；无过期（或任何 `<=0` 值）= `-1` |
+| 时间 | `expire_string` | 本地时区可读时间 `YYYY-MM-DD hh:mm:ss`；无过期 = `never` |
+| 标识 | `username` | 当前用户名 |
+
+未知变量替换为空字符串，并在服务端日志 `WARN` 一次。
+
+**示例:**
+
+```
+GET /sub?user=alice&pwd=...&sub_userinfo_format=upload=${upload_auto}; expire=${expire_string}
+```
+
+响应可能附带：
+
+```
+Subscription-Userinfo: upload=1.53 GB; expire=2026-09-15 14:32:22
+```
+
+`sub_userinfo` 取值规则：
+
+| 输入 | 行为 |
+|------|------|
+| 省略 / 空字符串 | 回退到节点配置 `subscription.enable_userinfo_header` |
+| `true` / `1` | 强制返回 header |
+| `false` / `0` | 强制不返回 header |
+| 其他 | 回退到节点配置（不报错） |
 
 ---
 

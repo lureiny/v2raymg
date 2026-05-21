@@ -16,6 +16,15 @@ type HttpServerConfig struct {
 	Name           string
 	JWTSecret      string
 	JWTExpireHours int
+	// EnableSubUserInfoHeader controls whether /sub responses carry the
+	// Subscription-Userinfo header. See SubHandler for the upload/download
+	// aggregation behaviour.
+	EnableSubUserInfoHeader bool
+	// SubUserInfoHeaderFormat is the node-config override of the
+	// Subscription-Userinfo header schema. Empty falls back to the built-in
+	// DefaultSubUserInfoFormat. Per-request ?sub_userinfo_format= overrides
+	// this value.
+	SubUserInfoHeaderFormat string
 }
 
 // ClusterNodes provides node lookup for routing HTTP requests to cluster members.
@@ -36,19 +45,21 @@ type CertReader interface {
 var GlobalHttpServer = &HttpServer{}
 
 type HttpServer struct {
-	RestfulServer      *gin.Engine
-	Host               string
-	Port               int
-	Name               string
-	token              string
-	jwtSecret          string
-	jwtExpireHours     int
-	handlersMap        map[string]HttpHandlerInterface
-	certReader         CertReader
-	clusterNodes       ClusterNodes
-	localNode          *cluster.LocalNode
-	userLister         UserLister
-	clusterEnabled     bool
+	RestfulServer           *gin.Engine
+	Host                    string
+	Port                    int
+	Name                    string
+	token                   string
+	jwtSecret               string
+	jwtExpireHours          int
+	handlersMap             map[string]HttpHandlerInterface
+	certReader              CertReader
+	clusterNodes            ClusterNodes
+	localNode               *cluster.LocalNode
+	userLister              UserLister
+	clusterEnabled          bool
+	enableSubUserInfoHeader bool
+	subUserInfoHeaderFormat string
 }
 
 // Init initializes the HttpServer with config and dependencies.
@@ -64,6 +75,8 @@ func (s *HttpServer) Init(cfg HttpServerConfig, localNode *cluster.LocalNode, cl
 	s.certReader = certReader
 	s.userLister = userLister
 	s.clusterEnabled = clusterEnabled
+	s.enableSubUserInfoHeader = cfg.EnableSubUserInfoHeader
+	s.subUserInfoHeaderFormat = cfg.SubUserInfoHeaderFormat
 	s.registerRoutes()
 }
 

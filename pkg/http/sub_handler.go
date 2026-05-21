@@ -4,15 +4,17 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lureiny/v2raymg/pkg/cluster"
 	"github.com/lureiny/v2raymg/pkg/http/auth"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
-	"github.com/lureiny/v2raymg/pkg/rpc/client"
-	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription"
 	_ "github.com/lureiny/v2raymg/pkg/proxy/core/subscription/converter" // register converters
+	"github.com/lureiny/v2raymg/pkg/rpc/client"
+	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
 type SubHandler struct{ HttpHandlerImp }
@@ -30,6 +32,13 @@ func (handler *SubHandler) parseParam(c *gin.Context) map[string]string {
 	parasMap["proxy_groups_url"] = c.Query("proxy_groups_url")
 	parasMap["rule_providers_url"] = c.Query("rule_providers_url")
 	parasMap["rules_url"] = c.Query("rules_url")
+	// sub_userinfo controls whether the Subscription-Userinfo header is sent.
+	// Empty string (the default) means "use the node config" — see handlerFunc.
+	parasMap["sub_userinfo"] = c.Query("sub_userinfo")
+	// sub_userinfo_format overrides the header schema for one request. Empty
+	// falls back to the node config; node config empty falls back to the
+	// built-in DefaultSubUserInfoFormat.
+	parasMap["sub_userinfo_format"] = c.Query("sub_userinfo_format")
 	return parasMap
 }
 
@@ -58,6 +67,9 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 	// RPC GetSub only receives username — no auth logic downstream.
 	token := parasMap["token"]
 	var username string
+	// localUser is the access-node copy of the user. Used later to fill
+	// total/expire in the Subscription-Userinfo header (see below).
+	var localUser *contracts.User
 
 	ul := handler.getHttpServer().userLister
 	if token != "" {
@@ -78,6 +90,7 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 			return
 		}
 		username = user.Username
+		localUser = user
 	} else {
 		// User+pwd auth: verify password locally.
 		name, pwd := parasMap["user"], parasMap["pwd"]
@@ -98,6 +111,7 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 			return
 		}
 		username = name
+		localUser = user
 	}
 
 	nodes := handler.getHttpServer().GetTargetNodes(parasMap["target"])
@@ -158,7 +172,7 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 
 	// 构建 ConvertOptions（仅 Clash 格式需要）
 	var opts *subscription.ConvertOptions
-	if strings.ToLower(formatHint) == "clash" || strings.Contains(strings.ToLower(formatHint), "clash") {
+	if isClashClient(formatHint) {
 		opts = subscription.BuildConvertOptions(
 			proxyGroups,
 			ruleProviders,
@@ -175,7 +189,109 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 		c.String(500, err.Error())
 		return
 	}
+
+	// Subscription-Userinfo header (RFC-style: upload/download/total/expire).
+	// Per-request override via ?sub_userinfo=true|false; empty falls back to the
+	// node config (subscription.enable_userinfo_header). The extra GetProfile
+	// fan-out only runs when the header is actually going to be sent.
+	if shouldEmitSubUserInfo(parasMap["sub_userinfo"], handler.getHttpServer().enableSubUserInfoHeader) {
+		format := resolveSubUserInfoFormat(parasMap["sub_userinfo_format"], handler.getHttpServer().subUserInfoHeaderFormat)
+		handler.writeSubUserInfoHeader(c, username, localUser, nodes, format, isClashClient(formatHint))
+	}
+
 	c.String(200, result)
+}
+
+// writeSubUserInfoHeader populates the Subscription-Userinfo response header.
+//
+// upload/download are summed across all `nodes` via a parallel GetProfile RPC
+// — this is the only field set we can meaningfully aggregate, since per-user
+// traffic counters live on each end node.
+//
+// total (TrafficLimit) and expire (ExpiryTime) are read from the access node's
+// local user record only. We deliberately do NOT aggregate these across nodes:
+// the project has no global traffic-accounting layer today, so each node
+// independently holds its own copy of a user's limits. Cluster sync only
+// propagates user identity/credentials, not enforcement state. The access
+// node's view is therefore one valid snapshot, but it may diverge from what
+// other nodes record for the same user (e.g. if limits were updated on one
+// node and have not yet been mirrored elsewhere) — the value reported here
+// may not match the user's actual cluster-wide quota. Treat it as advisory.
+func (handler *SubHandler) writeSubUserInfoHeader(c *gin.Context, username string, localUser *contracts.User, nodes []*cluster.Node, format string, clashClient bool) {
+	var upload, download int64
+	if len(nodes) > 0 {
+		rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
+		profileSucc, profileFailed, _ := rpcClient.ReqToMultiEndNodeServer(
+			c.Request.Context(),
+			client.GetProfileReqType,
+			&proto.GetProfileReq{Username: username},
+			handler.getHttpServer().GetClusterToken(),
+		)
+		if len(profileFailed) != 0 {
+			log.Warn("sub: get profile partially failed; userinfo upload/download may be undercounted",
+				"err", joinFailedList(profileFailed), "user", username)
+		}
+		for n, v := range profileSucc {
+			rsp, ok := v.(*proto.GetProfileRsp)
+			if !ok {
+				log.Warn("sub: unexpected GetProfile response type", "node", n, "type", fmt.Sprintf("%T", v))
+				continue
+			}
+			upload += rsp.GetUplink()
+			download += rsp.GetDownlink()
+		}
+	}
+
+	var (
+		total      int64
+		expireUnix int64
+		expiryTime time.Time
+	)
+	if localUser != nil {
+		total = localUser.TrafficLimit
+		expiryTime = localUser.ExpiryTime
+		if !expiryTime.IsZero() {
+			expireUnix = expiryTime.Unix()
+		}
+	}
+
+	vars := buildSubUserInfoVarMap(subUserInfoVars{
+		Username:   username,
+		Upload:     upload,
+		Download:   download,
+		Total:      total,
+		ExpireUnix: expireUnix,
+		ExpiryTime: expiryTime,
+	})
+	header := renderSubUserInfoFormat(format, vars)
+	// Clash-family clients prefer the standardized `total` / `expire` fields
+	// to be absent when unset, rather than carrying the `-1` sentinel that
+	// other clients tolerate. Only the conventional field names are stripped;
+	// custom keys in user-defined schemas are left intact.
+	if clashClient {
+		header = stripClashEmptyFields(header, total <= 0, expireUnix <= 0)
+	}
+	c.Header("Subscription-Userinfo", header)
+}
+
+// shouldEmitSubUserInfo decides whether to emit the Subscription-Userinfo
+// header for a request.
+//
+// queryVal is the raw ?sub_userinfo= query value. Empty (the user did not
+// specify it) means defer to the node config (configDefault). Otherwise
+// "true"/"1" → enabled, "false"/"0" → disabled. Anything else falls back
+// to configDefault — we do not surface a parse error to the client.
+func shouldEmitSubUserInfo(queryVal string, configDefault bool) bool {
+	switch strings.ToLower(strings.TrimSpace(queryVal)) {
+	case "":
+		return configDefault
+	case "true", "1":
+		return true
+	case "false", "0":
+		return false
+	default:
+		return configDefault
+	}
 }
 
 func (handler *SubHandler) getHandlers() []gin.HandlerFunc {
@@ -189,6 +305,30 @@ func (handler *SubHandler) help() string {
 	获取订阅
 	基础参数:
 	  /sub?target={target}&user={user}&pwd={pwd}&exclude_protocols={exclude_protocols}&use_sni={use_sni}&fake={fake}
+
+	Subscription-Userinfo 响应头:
+	  sub_userinfo=true|false (可选)
+	  - 控制是否返回 Subscription-Userinfo
+	  - 未指定时回退到节点配置 subscription.enable_userinfo_header (默认 true)
+	  - upload/download 从 target 指定的所有节点聚合, total/expire 仅来自访问节点
+
+	  sub_userinfo_format=<schema> (可选)
+	  - 自定义 header 的内容,使用 ${var} 占位符,未知变量替换为空串
+	  - 未指定时回退到节点配置 subscription.userinfo_header_format
+	  - 节点配置也为空时使用内置默认:
+	      upload=${upload}; download=${download}; total=${total}; expire=${expire}
+	  - 支持的变量:
+	      流量类:    upload, upload_kb, upload_mb, upload_gb, upload_auto
+	                 download, download_kb, download_mb, download_gb, download_auto
+	                 total,    total_kb,    total_mb,    total_gb,    total_auto
+	                 (total <= 0 时, ${total} 渲染为 -1 表示 "无限制";
+	                  单位变体不应用此哨兵)
+	      时间类:    expire (unix; 无过期或非正值统一为 -1)
+	                 expire_string (本地时区 "YYYY-MM-DD hh:mm:ss"; 无过期为 "never")
+	      标识类:    username
+	  - 进制 1024;_kb/_mb/_gb/_auto 数值最多 2 位小数,去尾 0;_auto 自动选单位 (<1KB 整数 B)
+	  - Clash 客户端特例: 当 User-Agent / client 命中 "clash" 时, 渲染结果中标准字段
+	    "total=-1" / "expire=-1" 整段会被剥离 (自定义键名不受影响)
 
 	扩展订阅:
 	  ext_sub=URL

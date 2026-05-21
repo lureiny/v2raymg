@@ -74,6 +74,18 @@ type SubscriptionConfig struct {
 	// RemoteURLs is a list of remote subscription URLs to fetch and merge.
 	// Each URL should return a base64-encoded list of proxy URIs (common format).
 	RemoteURLs []string `yaml:"remote_urls" json:"remote_urls"`
+	// EnableUserInfoHeader controls whether the /sub response carries the
+	// Subscription-Userinfo header (upload/download/total/expire). Default: true.
+	// When enabled, upload/download are aggregated from all target nodes; total
+	// and expire are read from the access node only (see sub_handler.go for the
+	// caveat about per-node config divergence).
+	EnableUserInfoHeader bool `yaml:"enable_userinfo_header" json:"enable_userinfo_header"`
+
+	// UserinfoHeaderFormat customises the Subscription-Userinfo header schema.
+	// ${var} placeholders are expanded against a fixed variable set; see the
+	// http handler (sub_userinfo_format.go) for the catalogue. When empty the
+	// handler falls back to its built-in default.
+	UserinfoHeaderFormat string `yaml:"userinfo_header_format" json:"userinfo_header_format"`
 }
 
 // StaticNodeConfig is a statically configured peer node used for initial cluster discovery.

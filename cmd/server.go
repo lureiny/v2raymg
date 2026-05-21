@@ -229,12 +229,14 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	httpServer := http.NewHttpServer()
 	httpServer.Init(
 		http.HttpServerConfig{
-			Listen:         httpListen,
-			Port:           cfg.EndNode.HttpPort,
-			Token:          cfg.EndNode.HttpToken,
-			Name:           cfg.EndNode.Name,
-			JWTSecret:      cfg.EndNode.JWTSecret,
-			JWTExpireHours: cfg.EndNode.JWTExpireHours,
+			Listen:                  httpListen,
+			Port:                    cfg.EndNode.HttpPort,
+			Token:                   cfg.EndNode.HttpToken,
+			Name:                    cfg.EndNode.Name,
+			JWTSecret:               cfg.EndNode.JWTSecret,
+			JWTExpireHours:          cfg.EndNode.JWTExpireHours,
+			EnableSubUserInfoHeader: cfg.Subscription.EnableUserInfoHeader,
+			SubUserInfoHeaderFormat: cfg.Subscription.UserinfoHeaderFormat,
 		},
 		localNode,
 		clusterMgr,

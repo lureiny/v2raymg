@@ -40,6 +40,17 @@ cert_mgmt:
 
 subscription:
   remote_urls: []
+  # When true (default), /sub responses include the Subscription-Userinfo header.
+  # upload/download are aggregated from all target nodes; total/expire come from
+  # the access node only (no global usage stats today, so they may diverge from
+  # what other nodes record for the same user).
+  enable_userinfo_header: true
+  # Custom schema for the Subscription-Userinfo header.
+  # ${var} placeholders supported — full list in docs/http-api-reference.md.
+  # Empty value falls back to the built-in default:
+  #   upload=${upload}; download=${download}; total=${total}; expire=${expire}
+  # The per-request ?sub_userinfo_format= query parameter overrides this value.
+  userinfo_header_format: ""
 
 containers:
   containers:
