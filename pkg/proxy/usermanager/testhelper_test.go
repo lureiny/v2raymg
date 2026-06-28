@@ -16,6 +16,10 @@ func newTestManagerWithForward(t *testing.T) (*UserManager, *forward.DefaultForw
 	if err != nil {
 		t.Fatalf("NewDefaultForwardManager: %v", err)
 	}
+	// Close on cleanup so relays are stopped and their ports released between
+	// tests; otherwise leaked listeners stay bound and a later test's random
+	// allocation can re-pick a still-bound port (EADDRINUSE).
+	t.Cleanup(func() { _ = fwdMgr.Close() })
 	mgr := NewUserManager(fwdMgr, "test-node")
 	return mgr, fwdMgr
 }

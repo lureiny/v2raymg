@@ -183,7 +183,11 @@ func TestMihomoFactoryLoadable(t *testing.T) {
 			{
 				Type:    contracts.ContainerMihomo,
 				Enabled: true,
-				Config:  map[string]any{},
+				// data_dir must be writable: with AutoDownload defaulting on, the
+				// factory builds the updater which MkdirAll's the download dir.
+				// Use a temp dir so the test doesn't depend on /var/lib being
+				// writable (it isn't for a non-root CI runner).
+				Config: map[string]any{"data_dir": t.TempDir()},
 			},
 		},
 	}

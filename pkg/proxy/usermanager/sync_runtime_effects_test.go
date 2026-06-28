@@ -21,6 +21,7 @@ func newSyncRuntimeTestManager(t *testing.T) (*UserManager, *forward.DefaultForw
 	if err != nil {
 		t.Fatalf("NewDefaultForwardManager: %v", err)
 	}
+	t.Cleanup(func() { _ = fwdMgr.Close() })
 	return NewUserManager(fwdMgr, "test-node"), fwdMgr
 }
 
@@ -317,6 +318,7 @@ func TestNewUserManagerWithStore_RehydratesRuntimeSideEffects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDefaultForwardManager: %v", err)
 	}
+	t.Cleanup(func() { _ = fwdMgr.Close() })
 
 	if _, err := NewUserManagerWithStore(fwdMgr, storeMgr, "test-node"); err != nil {
 		t.Fatalf("NewUserManagerWithStore: %v", err)
