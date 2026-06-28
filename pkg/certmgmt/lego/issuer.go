@@ -105,11 +105,7 @@ func (li *LegoIssuer) Issue(ctx context.Context, req domain.IssueRequest) (*doma
 // Renew renews an existing certificate if it is close to expiry.
 // Returns nil, nil if renewal is not yet needed.
 func (li *LegoIssuer) Renew(ctx context.Context, record *domain.CertificateRecord, req domain.IssueRequest) (*domain.CertificateRecord, error) {
-	renewBefore := req.RenewBeforeDays
-	if renewBefore <= 0 {
-		renewBefore = 30
-	}
-	if time.Until(record.NotAfter) > time.Duration(renewBefore)*24*time.Hour {
+	if time.Until(record.NotAfter) > renewBeforeDuration(req) {
 		return nil, nil // not yet due
 	}
 
@@ -240,6 +236,20 @@ func (li *LegoIssuer) Revoke(ctx context.Context, record *domain.CertificateReco
 
 // --- helpers ---
 
+// renewBeforeDuration resolves the renewal lead time for a request.
+// Precedence: req.RenewBefore (>0) wins; else RenewBeforeDays*24h (>0); else 30 days.
+// This mirrors the service-layer gate so a window expressed in hours (or one
+// larger than 30 days) is honored here too rather than capped at the legacy default.
+func renewBeforeDuration(req domain.IssueRequest) time.Duration {
+	if req.RenewBefore > 0 {
+		return req.RenewBefore
+	}
+	if req.RenewBeforeDays > 0 {
+		return time.Duration(req.RenewBeforeDays) * 24 * time.Hour
+	}
+	return 30 * 24 * time.Hour
+}
+
 func effectiveCAURL(caURL string) string {
 	if caURL == "" {
 		return lego.LEDirectoryProduction
@@ -303,6 +313,13 @@ func (li *LegoIssuer) saveCertResult(certRes *certificate.Resource, req domain.I
 		return nil, err
 	}
 	return record, nil
+}
+
+// ParseCertNotAfter returns the NotAfter timestamp of the leaf certificate in a
+// PEM bundle. Exported for callers that import an externally-provided certificate
+// and need to record its expiry (e.g. the service AddCertificates path).
+func ParseCertNotAfter(certPEM []byte) (time.Time, error) {
+	return parseCertNotAfter(certPEM)
 }
 
 // parseCertNotAfter parses the NotAfter timestamp from the first certificate in a PEM bundle.

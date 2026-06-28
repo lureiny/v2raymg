@@ -155,8 +155,15 @@ func runEndNode(cfg *appconfig.AppConfig) {
 		os.Exit(1)
 	}
 
-	// 7. Cert Manager
+	// 7. Cert Manager + lifecycle context for background tasks
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	certMgr := certmgmtservice.NewManager(cfg.CertMgmt)
+	// Start auto-renew: scans every minute and renews certs inside the renewal
+	// window (RenewBeforeHours, default 24h) in place. Proxy cores hot-reload the
+	// renewed cert files from disk on their own (xray ~1h ticker / mihomo fswatch /
+	// hysteria per-handshake), so no container restart is issued here by design.
+	certMgr.StartAutoRenew(ctx, 0)
 
 	// 4 (cont). Container Manager — needs certMgr and HTTPPort
 	containerMgr := container.NewContainerMgr(storeMgr, container.BuildOptions{
@@ -254,7 +261,7 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	userMgr.StartMaintenance(0)
 
 	// 12. Start containers
-	if err := containerMgr.StartAll(context.Background()); err != nil {
+	if err := containerMgr.StartAll(ctx); err != nil {
 		log.Error("start containers failed", "err", err)
 	}
 
@@ -264,6 +271,7 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	sig := <-sigCh
 	log.Info("shutting down", "signal", sig.String())
 
+	cancel() // stop auto-renew and other ctx-bound background tasks
 	containerMgr.StopAll()
 }
 

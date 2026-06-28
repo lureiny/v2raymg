@@ -48,9 +48,10 @@ type IssueRequest struct {
 	Challenge      ChallengeConfig
 	KeyType        string // "ec256" (default) | "rsa2048" | "rsa4096" | "rsa8192" | "ec384"
 	PreferredChain string
-	Bundle         bool // default true
-	RenewBeforeDays int // default 30
-	CAURL          string // default lego.LEDirectoryProduction
+	Bundle          bool          // default true
+	RenewBeforeDays int           // legacy lead time in days, default 30; superseded by RenewBefore when set
+	RenewBefore     time.Duration // authoritative renewal lead time; falls back to RenewBeforeDays*24h then 30d when zero
+	CAURL           string        // default lego.LEDirectoryProduction
 }
 
 // CertificateRecord is the public certificate metadata stored and returned to callers.

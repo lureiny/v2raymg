@@ -13,10 +13,33 @@ import (
 
 // Config holds all configuration for the Manager.
 type Config struct {
-	Email           string        `yaml:"email"             json:"email"`
-	Path            string        `yaml:"path"              json:"path"`
-	RenewBeforeDays int           `yaml:"renew_before_days" json:"renew_before_days"`
-	Challenge       ChallengeConfig `yaml:"challenge"         json:"challenge"`
+	Email string `yaml:"email" json:"email"`
+	Path  string `yaml:"path"  json:"path"`
+	// RenewBeforeDays is the legacy renewal lead time in DAYS. Kept for backward
+	// compatibility and still propagated into IssueRequest; RenewBeforeHours takes
+	// precedence when set. See renewBeforeDuration.
+	RenewBeforeDays int `yaml:"renew_before_days" json:"renew_before_days"`
+	// RenewBeforeHours is how long before expiry auto-renew starts attempting,
+	// expressed in HOURS. Takes precedence over RenewBeforeDays. Defaults to 24h
+	// when neither field is set (see renewBeforeDuration).
+	RenewBeforeHours int             `yaml:"renew_before_hours" json:"renew_before_hours"`
+	Challenge        ChallengeConfig `yaml:"challenge"          json:"challenge"`
+}
+
+// defaultRenewBefore is the renewal lead time used when neither RenewBeforeHours
+// nor RenewBeforeDays is configured.
+const defaultRenewBefore = 24 * time.Hour
+
+// renewBeforeDuration returns the effective "renew this long before expiry" window.
+// Precedence: RenewBeforeHours (>0) wins; else RenewBeforeDays*24h (>0); else 24h.
+func (c Config) renewBeforeDuration() time.Duration {
+	if c.RenewBeforeHours > 0 {
+		return time.Duration(c.RenewBeforeHours) * time.Hour
+	}
+	if c.RenewBeforeDays > 0 {
+		return time.Duration(c.RenewBeforeDays) * 24 * time.Hour
+	}
+	return defaultRenewBefore
 }
 
 // ChallengeConfig mirrors domain.ChallengeConfig but uses plain strings for easier unmarshalling.
@@ -111,11 +134,7 @@ func (m *Manager) RenewDomain(ctx context.Context, d string) (*domain.Certificat
 	}
 
 	// Check renewal threshold before delegating to the issuer.
-	renewBefore := m.cfg.RenewBeforeDays
-	if renewBefore <= 0 {
-		renewBefore = 30
-	}
-	if time.Until(record.NotAfter) > time.Duration(renewBefore)*24*time.Hour {
+	if time.Until(record.NotAfter) > m.cfg.renewBeforeDuration() {
 		return nil, nil // not yet due
 	}
 
@@ -154,6 +173,9 @@ func (m *Manager) buildIssueRequest(domains []string) domain.IssueRequest {
 		Email:           m.cfg.Email,
 		Bundle:          true,
 		RenewBeforeDays: m.cfg.RenewBeforeDays,
+		// RenewBefore is the authoritative renewal lead time (honors hours);
+		// the issuer gate uses it so a window > 30 days is not silently capped.
+		RenewBefore: m.cfg.renewBeforeDuration(),
 		Challenge: domain.ChallengeConfig{
 			Type: domain.ChallengeType(m.cfg.Challenge.Type),
 		},

@@ -258,8 +258,12 @@ type Store interface {
 ### 6.2 续签（Renew）
 
 ```
-1. 检查触发条件：time.Until(record.NotAfter) ≤ RenewBeforeDays * 24h
+1. 检查触发条件：time.Until(record.NotAfter) ≤ 续期窗口
+   └── 续期窗口 = renewBeforeDuration()：RenewBeforeHours(>0,单位小时) 优先
+       → 否则 RenewBeforeDays*24h → 否则默认 24h
    └── 未到期且剩余充足 → 直接返回，不续签
+   └── service 层(manager.RenewDomain)与 lego 层(issuer.Renew)用同一套
+       优先级,避免窗口 > 30 天时被旧的 30 天默认网误杀
 2. 从 store 加载 LegoResource（含 CertURL + Certificate PEM）
 3. 构建 lego.Client（同签发流程，同样需要 challenge provider）
 4. client.Certificate.Renew(certRes, bundle, mustStaple, preferredChain)
@@ -278,6 +282,37 @@ domain_mutex[domain]   ← 防止同一域名并发签发
      +
 dns_global_mutex       ← DNS challenge 独占，防止 env 竞争（仅 DNS-01 时加）
 ```
+
+### 6.4 自动续期调度与各核热重载（已接线）
+
+**调度入口**:`Manager.StartAutoRenew(ctx, cycleSeconds)` 在 `cmd/server.go`
+`runEndNode` 的 cert manager 初始化处启动(随服务生命周期 `ctx` 启停)。
+此前该方法已实现但**全仓无人调用**,导致证书过期从不自动更新 —— 本次修复的根因。
+
+- **巡检间隔**:硬编码 `renewCheckInterval = 1 * time.Minute`,**不可配置**。
+  过期判断纯本地(读 `NotAfter` 比对),开销极低;`cycleSeconds>0` 仅供测试覆盖。
+- **续期窗口**:见 6.2,配置项 `renew_before_hours`(小时,默认 24h)。
+- **导入证书跳过**:`ObtainedBy=="imported"` 的证书由外部管理(无 ACME
+  resource/account),`runRenewCycle` 直接跳过,不会每分钟尝试 ACME 续期。
+- **原地替换**:续期走 `SaveCert` 的 temp+rename 原子覆盖,路径稳定为
+  `<certPath>/certificates/<domain>.crt|.key`,文件内容变、路径不变。
+
+**各代理核对续期后的证书"零重启"热重载**(已核对上游源码):
+
+| 核 | 续期后动作 | 机制 | 前提 |
+|----|-----------|------|------|
+| xray | 无 | `transport/internet/tls/config.go`:`OneTimeLoading=false`+双路径时,默认 ~1h ticker 重读文件、比对字节、有变即换。内联字节仅作初始基线 | xray-core 较新版;v2raymg 始终传 `CertificatePath`+`KeyPath` 且不设 `OneTimeLoading` |
+| mihomo | 无 | `component/ca` 用 `fswatch`(fsnotify)监听证书文件父目录,改动即重载 | mihomo **≥ v1.19.18**;证书以文件路径下发(非内联) |
+| hysteria | 无 | `GetCertificate` 回调每次握手比 ModTime,变了重读 | hysteria2 v2.x |
+| snell | 不涉及 | 无 TLS(纯 PSK) | — |
+
+> **设计取舍**:certmgmt 续期后**不**主动重启/重载任何 container —— 各核自身按文件
+> 热重载即可,主动重启反而会瞬断连接(尤其 hysteria 的 UDP 会话)。v2raymg 自己的
+> `Reload()`/同路径 `PUT /configs` 对证书更新是 no-op,但**无需**它们生效。
+>
+> **部署前提**:上述"零重启"依赖部署的二进制足够新(项目有二进制自动升级,通常已满足)。
+> 线上可用 `xray version` / `mihomo -v` / hysteria 版本确认;并确认续期写入的是
+> `certificates/<domain>` 原路径(就地覆盖)。xray 传播延迟最多 ~1h,续期默认提前 24h,余量充足。
 
 ---
 

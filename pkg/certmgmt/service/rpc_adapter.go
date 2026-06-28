@@ -3,8 +3,6 @@ package certmgmtservice
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	certmgmtlego "github.com/lureiny/v2raymg/pkg/certmgmt/lego"
@@ -30,40 +28,35 @@ func (m *Manager) ObtainNewCert(d string) error {
 }
 
 // AddCertificates imports an externally provided certificate and key for the given domain.
-// The cert and key are written to the configured cert path and registered in the store.
+// The cert and key are persisted through SaveCert to the canonical per-domain paths under
+// {Path}/certificates/ — the same on-disk layout as ACME-issued certs — so GetCertFiles
+// returns those paths and a re-import overwrites in place. The expiry is parsed from the
+// certificate so the record carries a real NotAfter (imported certs are skipped by
+// auto-renew, but NotAfter keeps GetAllCert/expiry reporting accurate).
 // Implements pkg/rpc/server.CertManager.
 func (m *Manager) AddCertificates(d string, keyData, certData []byte) error {
 	if len(certData) == 0 || len(keyData) == 0 {
 		return fmt.Errorf("certmgmt: AddCertificates: empty cert or key data")
 	}
 
-	certDir := filepath.Join(m.cfg.Path, d)
-	if err := os.MkdirAll(certDir, 0700); err != nil {
-		return fmt.Errorf("certmgmt: AddCertificates: mkdir %s: %w", certDir, err)
-	}
-
-	certFile := filepath.Join(certDir, "cert.pem")
-	keyFile := filepath.Join(certDir, "key.pem")
-
-	if err := os.WriteFile(certFile, certData, 0600); err != nil {
-		return fmt.Errorf("certmgmt: AddCertificates: write cert: %w", err)
-	}
-	if err := os.WriteFile(keyFile, keyData, 0600); err != nil {
-		return fmt.Errorf("certmgmt: AddCertificates: write key: %w", err)
+	notAfter, err := certmgmtlego.ParseCertNotAfter(certData)
+	if err != nil {
+		return fmt.Errorf("certmgmt: AddCertificates: parse cert: %w", err)
 	}
 
 	record := &domain.CertificateRecord{
-		Domain:      d,
-		CertFile:    certFile,
-		KeyFile:     keyFile,
-		ObtainedBy:  "imported",
-		ObtainedAt:  time.Now(),
+		Domain:     d,
+		NotAfter:   notAfter,
+		ObtainedBy: "imported",
+		ObtainedAt: time.Now(),
 	}
 	resource := &domain.LegoResource{
 		Domain:         d,
 		CertificatePEM: certData,
 		PrivateKeyPEM:  keyData,
 	}
+	// SaveCert writes cert/key/resource/meta and stamps record.CertFile/KeyFile to
+	// the canonical {Path}/certificates/{domain}.crt|.key locations.
 	return certmgmtlego.SaveCert(m.cfg.Path, record, resource)
 }
 

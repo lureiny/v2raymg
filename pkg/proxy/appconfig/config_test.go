@@ -36,6 +36,7 @@ cert_mgmt:
   email: admin@example.com
   path: /etc/certs
   renew_before_days: 30
+  renew_before_hours: 12
 containers:
   containers:
     - type: xray
@@ -57,6 +58,7 @@ containers:
 	assert.Equal(t, "admin@example.com", cfg.CertMgmt.Email)
 	assert.Equal(t, "/etc/certs", cfg.CertMgmt.Path)
 	assert.Equal(t, 30, cfg.CertMgmt.RenewBeforeDays)
+	assert.Equal(t, 12, cfg.CertMgmt.RenewBeforeHours)
 	require.Len(t, cfg.Containers.Containers, 1)
 	assert.Equal(t, contracts.ContainerXray, cfg.Containers.Containers[0].Type)
 	assert.True(t, cfg.Containers.Containers[0].Enabled)
@@ -99,6 +101,7 @@ func TestLoadFromFile_JSON(t *testing.T) {
 			"email":              "admin@example.com",
 			"path":               "/etc/certs",
 			"renew_before_days":  float64(30),
+			"renew_before_hours": float64(12),
 		},
 		// ContainerMgrConfig and ContainerEntry have json:"..." tags.
 		"containers": map[string]interface{}{
@@ -127,6 +130,7 @@ func TestLoadFromFile_JSON(t *testing.T) {
 	assert.Equal(t, "admin@example.com", cfg.CertMgmt.Email)
 	assert.Equal(t, "/etc/certs", cfg.CertMgmt.Path)
 	assert.Equal(t, 30, cfg.CertMgmt.RenewBeforeDays)
+	assert.Equal(t, 12, cfg.CertMgmt.RenewBeforeHours)
 	require.Len(t, cfg.Containers.Containers, 1)
 	assert.Equal(t, contracts.ContainerXray, cfg.Containers.Containers[0].Type)
 	assert.True(t, cfg.Containers.Containers[0].Enabled)

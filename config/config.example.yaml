@@ -22,21 +22,27 @@ forward:
 cert_mgmt:
   email: ""
   path: /etc/v2raymg/certs
-  renewbeforedays: 30
+  # Renewal lead time: how long BEFORE expiry auto-renew starts attempting.
+  # renew_before_hours (HOURS) takes precedence; falls back to renew_before_days
+  # (DAYS); if neither is set, defaults to 24h. The expiry scan itself runs every
+  # 1 minute (hardcoded, not configurable). Renewed certs are written in place and
+  # the proxy cores hot-reload them from disk — no container restart.
+  renew_before_hours: 24
+  renew_before_days: 30
   challenge:
-    type: ""           # dns / http / leave empty to skip
+    type: ""           # dns01 / http01 (also accepts dns / http) / leave empty to skip
     dns:
-      providername: ""
-      credentials: {}
+      provider_name: ""
+      credentials: {}                  # provider env vars, e.g. {CF_DNS_API_TOKEN: "..."}
       resolvers: []
-      disablecompletepropagation: false
-      timeoutsec: 0
+      disable_complete_propagation: false
+      timeout_sec: 0
     http:
-      mode: ""             # webroot / standalone / memcached
-      listenaddr: ""       # listen address for standalone mode
-      webroot: ""          # webroot directory path
-      memcachedhosts: []   # memcached server addresses
-      proxyheader: ""      # proxy header for reverse proxy setups
+      mode: ""                  # server (default) / webroot / memcached
+      listen_addr: ""           # listen address for server mode, e.g. ":80"
+      web_root: ""              # webroot directory path
+      memcached_hosts: []       # memcached server addresses
+      proxy_header: ""          # reverse-proxy header, default "Host"
 
 subscription:
   remote_urls: []
