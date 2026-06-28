@@ -1,0 +1,32 @@
+# Continuous integration: build + test on master pushes, PRs, and manual runs.
+# Release packaging on v* tags is handled separately by build.yml; branch and
+# tag push events don't overlap, so the two workflows never double-run.
+
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch: {}
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Build slim version
+        run: make build
+
+      - name: Build full version
+        run: make build-full
+
+      - name: Test
+        run: go test ./... -count=1
