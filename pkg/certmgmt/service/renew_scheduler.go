@@ -2,8 +2,9 @@ package certmgmtservice
 
 import (
 	"context"
-	"log"
 	"time"
+
+	"github.com/lureiny/v2raymg/pkg/log"
 )
 
 // renewCheckInterval is how often auto-renew scans stored certificates for
@@ -21,6 +22,9 @@ func (m *Manager) StartAutoRenew(ctx context.Context, cycleSeconds int64) {
 	if cycleSeconds > 0 {
 		interval = time.Duration(cycleSeconds) * time.Second
 	}
+	// Startup heartbeat so the running process visibly confirms auto-renew is
+	// alive, on which interval, and with what renewal lead time.
+	log.Info("certmgmt: auto-renew started", "interval", interval, "lead", m.cfg.renewBeforeDuration())
 	go func() {
 		for {
 			select {
@@ -59,7 +63,7 @@ func (m *Manager) runRenewCycle(ctx context.Context) {
 		}
 		renewed, err := m.RenewDomain(ctx, record.Domain)
 		if err != nil {
-			log.Printf("certmgmt: auto-renew %q: %v", record.Domain, err)
+			log.Error("certmgmt: auto-renew failed", "domain", record.Domain, "err", err)
 			continue
 		}
 		// renewed != nil only when a certificate was actually replaced this cycle
@@ -67,8 +71,9 @@ func (m *Manager) runRenewCycle(ctx context.Context) {
 		// path, so proxy cores pick up the new cert via their own file hot-reload;
 		// no container restart is issued here by design.
 		if renewed != nil {
-			log.Printf("certmgmt: auto-renew %q: renewed in place, valid until %s",
-				renewed.Domain, renewed.NotAfter.Format(time.RFC3339))
+			log.Info("certmgmt: auto-renew renewed in place",
+				"domain", renewed.Domain,
+				"notAfter", renewed.NotAfter.Format(time.RFC3339))
 		}
 	}
 }

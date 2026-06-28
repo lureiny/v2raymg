@@ -3,12 +3,12 @@ package certmgmtservice
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
-	certmgmtlego "github.com/lureiny/v2raymg/pkg/certmgmt/lego"
 	"github.com/lureiny/v2raymg/pkg/certmgmt/domain"
+	certmgmtlego "github.com/lureiny/v2raymg/pkg/certmgmt/lego"
+	"github.com/lureiny/v2raymg/pkg/log"
 )
 
 // Config holds all configuration for the Manager.
@@ -44,8 +44,8 @@ func (c Config) renewBeforeDuration() time.Duration {
 
 // ChallengeConfig mirrors domain.ChallengeConfig but uses plain strings for easier unmarshalling.
 type ChallengeConfig struct {
-	Type string    `yaml:"type" json:"type"`
-	DNS  DNSConfig `yaml:"dns"  json:"dns"`
+	Type string     `yaml:"type" json:"type"`
+	DNS  DNSConfig  `yaml:"dns"  json:"dns"`
 	HTTP HTTPConfig `yaml:"http" json:"http"`
 }
 
@@ -146,7 +146,7 @@ func (m *Manager) RenewDomain(ctx context.Context, d string) (*domain.Certificat
 func (m *Manager) GetCert(d string) *domain.CertificateRecord {
 	record, _, err := certmgmtlego.LoadCert(m.cfg.Path, d)
 	if err != nil {
-		log.Printf("certmgmt: GetCert(%q): %v", d, err)
+		log.Error("certmgmt: GetCert failed", "domain", d, "err", err)
 		return nil
 	}
 	return record
@@ -156,7 +156,7 @@ func (m *Manager) GetCert(d string) *domain.CertificateRecord {
 func (m *Manager) ListCerts() []*domain.CertificateRecord {
 	records, err := certmgmtlego.ListCerts(m.cfg.Path)
 	if err != nil {
-		log.Printf("certmgmt: ListCerts: %v", err)
+		log.Error("certmgmt: ListCerts failed", "err", err)
 		return nil
 	}
 	return records
