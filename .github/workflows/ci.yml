@@ -28,5 +28,25 @@ jobs:
       - name: Build full version
         run: make build-full
 
+      # Package + upload BEFORE tests so a compiled binary is always
+      # downloadable from the run page (push / PR / manual dispatch),
+      # even if the test step later fails. This is for ad-hoc testing,
+      # not releases — v* tag releases stay in build.yml.
+      - name: Package binaries
+        run: |
+          cd bin
+          tar czf ../v2raymg-slim.tar.gz v2raymg
+          tar czf ../v2raymg-full.tar.gz v2raymg-full
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2raymg-binaries-${{ github.sha }}
+          path: |
+            v2raymg-slim.tar.gz
+            v2raymg-full.tar.gz
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Test
         run: go test ./... -count=1
