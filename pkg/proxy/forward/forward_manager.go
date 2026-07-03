@@ -298,7 +298,7 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 			idle := time.Duration(rule.UDPSessionIdleSec) * time.Second
 			return NewUDPRelay(UDPRelayConfig{
 				ListenAddr:         ep.address,
-				V6Only:             ep.v6only,
+				Family:             ep.family,
 				TargetAddr:         rule.TargetAddr,
 				Counter:            counter,
 				LimiterUp:          limiterUp,
@@ -310,7 +310,7 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 		default:
 			return NewTCPRelay(TCPRelayConfig{
 				ListenAddr:    ep.address,
-				V6Only:        ep.v6only,
+				Family:        ep.family,
 				TargetAddr:    rule.TargetAddr,
 				Counter:       counter,
 				LimiterUp:     limiterUp,
