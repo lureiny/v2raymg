@@ -18,6 +18,10 @@ forward:
   maxport: 60000
   userandom: true
   reserved: []
+  # 转发监听默认使用的 IP 协议栈:dual(默认,同时监听 IPv4+IPv6)/ ipv4 / ipv6。
+  # 未设置时按 dual 处理;单条转发规则可通过 listen_addr / listen_stack 覆盖。
+  # 注意 key 必须带下划线(loader 按结构体 yaml tag 解析)。
+  listen_stack: dual
 
 cert_mgmt:
   email: ""

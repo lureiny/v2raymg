@@ -30,6 +30,12 @@ type PortAllocatorConfig struct {
 	// UseRandom enables random port allocation instead of round-robin.
 	// Random allocation is recommended to avoid predictable port patterns.
 	UseRandom bool `yaml:"use_random" json:"use_random"`
+	// ListenStack is the default IP stack for wildcard forward listeners:
+	// "dual" (default, IPv4+IPv6), "ipv4", or "ipv6". This is carried in the
+	// forward config section and consumed by the ForwardManager; the port
+	// allocator itself ignores it. Individual rules override via
+	// ForwardRule.ListenStack.
+	ListenStack string `yaml:"listen_stack" json:"listen_stack"`
 }
 
 // NewPortAllocator creates a new PortAllocator.

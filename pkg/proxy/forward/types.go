@@ -11,6 +11,8 @@ package forward
 
 import (
 	"fmt"
+	"net"
+	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 )
@@ -34,8 +36,18 @@ type ForwardRule struct {
 	// Protocol is the proxy protocol (e.g., "vless", "vmess", "trojan").
 	Protocol contracts.Protocol `json:"protocol"`
 
-	// ListenAddr is the address the relay listens on (default "0.0.0.0").
+	// ListenAddr is a SPECIFIC IP literal the relay binds to (IPv4 or IPv6).
+	// When set, exactly one socket is bound to that address and ListenStack is
+	// ignored (the address family decides the stack). When empty, a wildcard
+	// listener is bound according to ListenStack.
 	ListenAddr string `json:"listen_addr"`
+
+	// ListenStack selects which IP stack the WILDCARD listener binds when
+	// ListenAddr is empty: "ipv4" (0.0.0.0 only), "ipv6" ([::] only), or
+	// "dual" (both 0.0.0.0 and [::]). Empty inherits the ForwardManager's
+	// global default (which itself defaults to "dual"). Ignored when
+	// ListenAddr is a specific IP literal.
+	ListenStack string `json:"listen_stack,omitempty"`
 
 	// ListenPort is the port the relay listens on (assigned by PortAllocator).
 	// If 0, a port will be auto-allocated.
@@ -84,6 +96,17 @@ const (
 	NetworkUDP NetworkKind = "udp"
 )
 
+// Listen stack selectors for a wildcard forward listener.
+const (
+	// ListenStackDual binds both the IPv4 (0.0.0.0) and IPv6 ([::]) wildcard.
+	// This is the default when nothing is configured.
+	ListenStackDual = "dual"
+	// ListenStackIPv4 binds only the IPv4 wildcard (0.0.0.0).
+	ListenStackIPv4 = "ipv4"
+	// ListenStackIPv6 binds only the IPv6 wildcard ([::], IPV6_V6ONLY).
+	ListenStackIPv6 = "ipv6"
+)
+
 // ResolvedNetwork returns the transport for this rule, mapping the empty
 // string to TCP for backward compatibility.
 func (r *ForwardRule) ResolvedNetwork() NetworkKind {
@@ -107,6 +130,16 @@ func (r *ForwardRule) Validate() error {
 	}
 	if r.ListenPort != 0 && (r.ListenPort < 100 || r.ListenPort > 65535) {
 		return fmt.Errorf("forward rule: listen_port %d out of range [100, 65535]", r.ListenPort)
+	}
+	if r.ListenAddr != "" && net.ParseIP(r.ListenAddr) == nil {
+		return fmt.Errorf("forward rule: listen_addr %q must be a valid IP literal", r.ListenAddr)
+	}
+	switch strings.ToLower(strings.TrimSpace(r.ListenStack)) {
+	case "", ListenStackDual, ListenStackIPv4, ListenStackIPv6:
+		// ok
+	default:
+		return fmt.Errorf("forward rule: unsupported listen_stack %q (want %q, %q, or %q)",
+			r.ListenStack, ListenStackIPv4, ListenStackIPv6, ListenStackDual)
 	}
 	switch r.Network {
 	case "", string(NetworkTCP), string(NetworkUDP):

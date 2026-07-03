@@ -27,6 +27,17 @@ func WithPortRange(minPort, maxPort uint32) ForwardManagerOption {
 	}
 }
 
+// WithListenStack sets the default IP stack for wildcard forward listeners:
+// "dual" (default), "ipv4", or "ipv6". Unrecognized values are ignored.
+// Individual rules may override via ForwardRule.ListenStack.
+func WithListenStack(stack string) ForwardManagerOption {
+	return func(m *DefaultForwardManager) {
+		if s := normalizeListenStack(stack); s != "" {
+			m.defaultListenStack = s
+		}
+	}
+}
+
 // NewForwardManager creates a new ForwardManager with options.
 // If no options are provided, default port range is 10000-65535 with random allocation.
 func NewForwardManager(opts ...ForwardManagerOption) (*DefaultForwardManager, error) {
@@ -48,6 +59,7 @@ func NewForwardManager(opts ...ForwardManagerOption) (*DefaultForwardManager, er
 		userBandwidth:          make(map[string]*userBandwidthLimiter),
 		userClientLimiters:     make(map[string]ClientLimiter),
 		userClientLimitConfigs: make(map[string]ClientLimitConfig),
+		defaultListenStack:     ListenStackDual,
 	}
 
 	// Apply options
@@ -88,6 +100,9 @@ type DefaultForwardManager struct {
 	userBandwidth         map[string]*userBandwidthLimiter // key = username
 	userClientLimiters    map[string]ClientLimiter       // key = username, active limiter instances
 	userClientLimitConfigs map[string]ClientLimitConfig  // key = username, stored config (may have no active limiter)
+	// defaultListenStack is the fallback IP stack for wildcard listeners when a
+	// rule does not set ForwardRule.ListenStack: "dual" (default), "ipv4", or "ipv6".
+	defaultListenStack string
 }
 
 // NewDefaultForwardManager creates a new ForwardManager with the given port allocator config.
@@ -109,6 +124,11 @@ func NewDefaultForwardManager(allocCfg PortAllocatorConfig) (*DefaultForwardMana
 		return nil, fmt.Errorf("forward_manager: %w", err)
 	}
 
+	listenStack := normalizeListenStack(allocCfg.ListenStack)
+	if listenStack == "" {
+		listenStack = ListenStackDual
+	}
+
 	return &DefaultForwardManager{
 		allocator:              alloc,
 		traffic:                NewTrafficRegistry(),
@@ -116,6 +136,7 @@ func NewDefaultForwardManager(allocCfg PortAllocatorConfig) (*DefaultForwardMana
 		userBandwidth:          make(map[string]*userBandwidthLimiter),
 		userClientLimiters:     make(map[string]ClientLimiter),
 		userClientLimitConfigs: make(map[string]ClientLimitConfig),
+		defaultListenStack:     listenStack,
 	}, nil
 }
 
@@ -187,12 +208,16 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 	limiterUp = userLimiter.UploadLimiter()
 	limiterDown = userLimiter.DownloadLimiter()
 
-	// Determine listen address
-	listenAddr := rule.ListenAddr
-	if listenAddr == "" {
-		listenAddr = "0.0.0.0"
+	// Resolve the set of sockets to bind for this rule. A specific ListenAddr or
+	// a single-stack wildcard yields one endpoint; the default dual-stack yields
+	// two (IPv4 wildcard + best-effort IPv6 wildcard).
+	endpoints, err := resolveListenEndpoints(rule.ListenAddr, rule.ListenStack, m.defaultListenStack, port)
+	if err != nil {
+		m.allocator.Release(port)
+		m.traffic.Remove(key)
+		return nil, fmt.Errorf("forward_manager: %w", err)
 	}
-	fullListenAddr := fmt.Sprintf("%s:%d", listenAddr, port)
+	listenDesc := describeEndpoints(endpoints)
 
 	// Determine effective client limit config with priority: rule > stored config > default
 	var effectiveMaxClients int
@@ -264,37 +289,56 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 		}
 	}
 
-	// Create and start relay, dispatched by network kind.
+	// buildRelay constructs a relay for one bind endpoint. All endpoints of the
+	// same rule share the counter and user-level limiters, so traffic counting
+	// and client limits treat the (possibly dual-stack) rule as one unit.
+	buildRelay := func(ep listenEndpoint) Relay {
+		switch rule.ResolvedNetwork() {
+		case NetworkUDP:
+			idle := time.Duration(rule.UDPSessionIdleSec) * time.Second
+			return NewUDPRelay(UDPRelayConfig{
+				ListenAddr:         ep.address,
+				V6Only:             ep.v6only,
+				TargetAddr:         rule.TargetAddr,
+				Counter:            counter,
+				LimiterUp:          limiterUp,
+				LimiterDown:        limiterDown,
+				MaxSessions:        rule.MaxConnections,
+				ClientLimiter:      clientLimiter,
+				SessionIdleTimeout: idle,
+			})
+		default:
+			return NewTCPRelay(TCPRelayConfig{
+				ListenAddr:    ep.address,
+				V6Only:        ep.v6only,
+				TargetAddr:    rule.TargetAddr,
+				Counter:       counter,
+				LimiterUp:     limiterUp,
+				LimiterDown:   limiterDown,
+				MaxConns:      rule.MaxConnections,
+				ClientLimiter: clientLimiter,
+			})
+		}
+	}
+
+	// A single endpoint uses a plain relay (bind failure is fatal). Multiple
+	// endpoints (dual-stack) use a multiRelay so the best-effort IPv6 half can
+	// be skipped on IPv6-disabled hosts without failing the rule.
 	var relay Relay
-	switch rule.ResolvedNetwork() {
-	case NetworkUDP:
-		idle := time.Duration(rule.UDPSessionIdleSec) * time.Second
-		relay = NewUDPRelay(UDPRelayConfig{
-			ListenAddr:         fullListenAddr,
-			TargetAddr:         rule.TargetAddr,
-			Counter:            counter,
-			LimiterUp:          limiterUp,
-			LimiterDown:        limiterDown,
-			MaxSessions:        rule.MaxConnections,
-			ClientLimiter:      clientLimiter,
-			SessionIdleTimeout: idle,
-		})
-	default:
-		relay = NewTCPRelay(TCPRelayConfig{
-			ListenAddr:    fullListenAddr,
-			TargetAddr:    rule.TargetAddr,
-			Counter:       counter,
-			LimiterUp:     limiterUp,
-			LimiterDown:   limiterDown,
-			MaxConns:      rule.MaxConnections,
-			ClientLimiter: clientLimiter,
-		})
+	if len(endpoints) == 1 {
+		relay = buildRelay(endpoints[0])
+	} else {
+		children := make([]relayChild, 0, len(endpoints))
+		for _, ep := range endpoints {
+			children = append(children, relayChild{relay: buildRelay(ep), optional: ep.optional})
+		}
+		relay = newMultiRelay(children)
 	}
 
 	if err := relay.Start(); err != nil {
 		m.allocator.Release(port)
 		m.traffic.Remove(key)
-		log.Debug("[ForwardManager] relay start failed", "key", key, "listen", fullListenAddr, "target", rule.TargetAddr, "network", rule.ResolvedNetwork(), "err", err)
+		log.Debug("[ForwardManager] relay start failed", "key", key, "listen", listenDesc, "target", rule.TargetAddr, "network", rule.ResolvedNetwork(), "err", err)
 		return nil, fmt.Errorf("forward_manager: relay start: %w", err)
 	}
 
@@ -306,7 +350,7 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 		clientLimiter:     clientLimiter,
 	}
 
-	log.Info("[ForwardManager] rule added", "key", key, "listen", fullListenAddr, "target", rule.TargetAddr, "user", rule.Username)
+	log.Info("[ForwardManager] rule added", "key", key, "listen", relay.ListenAddr(), "target", rule.TargetAddr, "user", rule.Username)
 
 	result := rule // copy
 	return &result, nil
