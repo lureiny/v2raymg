@@ -628,16 +628,16 @@ func TestForwardManager_AddRule_UDPDispatch(t *testing.T) {
 		t.Fatalf("AddRule udp: %v", err)
 	}
 
-	// The managed relay must be a UDPRelay, not a TCPRelay.
+	// The managed relay must be UDP, not TCP. Under the default dual-stack
+	// listener the relay is a *multiRelay wrapping one UDPRelay per bound
+	// socket, so unwrap before asserting the concrete transport type.
 	m.mu.RLock()
 	mr := m.rules[created.RuleKey()]
 	m.mu.RUnlock()
 	if mr == nil {
 		t.Fatal("managedRule missing")
 	}
-	if _, ok := mr.relay.(*UDPRelay); !ok {
-		t.Fatalf("expected *UDPRelay, got %T", mr.relay)
-	}
+	assertUDPRelay(t, mr.relay)
 
 	// Round-trip a datagram via the allocated port.
 	client := dialUDP(t, fmt.Sprintf("127.0.0.1:%d", created.ListenPort))

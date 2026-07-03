@@ -11,6 +11,7 @@ import (
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+	"github.com/lureiny/v2raymg/pkg/proxy/forward"
 	"gopkg.in/yaml.v3"
 )
 
@@ -131,6 +132,7 @@ func defaultAppConfig() *AppConfig {
 	cfg.Store.DSN = "./v2raymg.db"
 	cfg.Forward.MinPort = 10000
 	cfg.Forward.MaxPort = 60000
+	cfg.Forward.ListenStack = forward.ListenStackDual
 	cfg.EndNode.Ping.EnableICMPPing = true
 	cfg.EndNode.Ping.ICMPPingInterval = 5
 	cfg.EndNode.Ping.ICMPPingTimeout = 1
@@ -292,6 +294,14 @@ func Validate(cfg *AppConfig) error {
 	if cfg.Forward.MinPort >= cfg.Forward.MaxPort {
 		return fmt.Errorf("appconfig: forward.min_port (%d) must be less than forward.max_port (%d)",
 			cfg.Forward.MinPort, cfg.Forward.MaxPort)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Forward.ListenStack)) {
+	case "", forward.ListenStackDual, forward.ListenStackIPv4, forward.ListenStackIPv6:
+		// ok
+	default:
+		return fmt.Errorf("appconfig: forward.listen_stack %q is invalid; valid values are %q, %q, %q",
+			cfg.Forward.ListenStack, forward.ListenStackDual, forward.ListenStackIPv4, forward.ListenStackIPv6)
 	}
 
 	if cfg.CertMgmt.Email != "" && !strings.Contains(cfg.CertMgmt.Email, "@") {
