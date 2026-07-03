@@ -1,20 +1,11 @@
 package forward
 
 import (
-	"fmt"
 	"net"
 	"reflect"
 	"strings"
 	"testing"
 )
-
-// relayServesPort reports whether the relay's bound address(es) include port.
-// The wildcard IP form (0.0.0.0 vs [::]) is host-dependent — some namespaces
-// collapse an IPv4 wildcard bind onto a dual-stack IPv6 socket — so tests assert
-// on the port and relay type rather than the exact wildcard address string.
-func relayServesPort(r Relay, port uint32) bool {
-	return strings.Contains(r.ListenAddr(), fmt.Sprintf(":%d", port))
-}
 
 // assertUDPRelay asserts that r forwards over UDP, transparently unwrapping the
 // dual-stack *multiRelay (each child must itself be a *UDPRelay).
@@ -108,37 +99,49 @@ func TestResolveListenEndpoints(t *testing.T) {
 			want:       []listenEndpoint{{address: "[2001:db8::1]:8080"}},
 		},
 		{
+			name:       "explicit v4 wildcard literal is pinned to family 4",
+			listenAddr: "0.0.0.0",
+			port:       8080,
+			want:       []listenEndpoint{{address: "0.0.0.0:8080", family: "4"}},
+		},
+		{
+			name:       "explicit v6 wildcard literal is pinned to family 6",
+			listenAddr: "::",
+			port:       8080,
+			want:       []listenEndpoint{{address: "[::]:8080", family: "6"}},
+		},
+		{
 			name: "empty inherits default dual, both best-effort",
 			port: 9000,
 			want: []listenEndpoint{
-				{address: "0.0.0.0:9000", optional: true},
-				{address: "[::]:9000", v6only: true, optional: true},
+				{address: "0.0.0.0:9000", family: "4", optional: true},
+				{address: "[::]:9000", family: "6", optional: true},
 			},
 		},
 		{
 			name:      "rule ipv4 only",
 			ruleStack: ListenStackIPv4,
 			port:      9000,
-			want:      []listenEndpoint{{address: "0.0.0.0:9000"}},
+			want:      []listenEndpoint{{address: "0.0.0.0:9000", family: "4"}},
 		},
 		{
-			name:      "rule ipv6 only is v6only",
+			name:      "rule ipv6 only is family 6",
 			ruleStack: ListenStackIPv6,
 			port:      9000,
-			want:      []listenEndpoint{{address: "[::]:9000", v6only: true}},
+			want:      []listenEndpoint{{address: "[::]:9000", family: "6"}},
 		},
 		{
 			name:         "default ipv4 applies when rule unset",
 			defaultStack: ListenStackIPv4,
 			port:         9000,
-			want:         []listenEndpoint{{address: "0.0.0.0:9000"}},
+			want:         []listenEndpoint{{address: "0.0.0.0:9000", family: "4"}},
 		},
 		{
 			name:         "rule overrides default",
 			ruleStack:    ListenStackIPv6,
 			defaultStack: ListenStackIPv4,
 			port:         9000,
-			want:         []listenEndpoint{{address: "[::]:9000", v6only: true}},
+			want:         []listenEndpoint{{address: "[::]:9000", family: "6"}},
 		},
 		{
 			name:       "specific address ignores stack",
@@ -223,14 +226,16 @@ func TestAddRule_IPv4Only_SingleRelay(t *testing.T) {
 	if _, ok := mr.relay.(*TCPRelay); !ok {
 		t.Fatalf("expected *TCPRelay, got %T", mr.relay)
 	}
-	if !relayServesPort(mr.relay, created.ListenPort) {
-		t.Errorf("listen addr = %q, want it to serve port %d", mr.relay.ListenAddr(), created.ListenPort)
+	// tcp4 forces a real AF_INET socket, so the bound address is 0.0.0.0
+	// (NOT promoted to a dual-stack [::] socket the way a bare "tcp" listen is).
+	if !strings.HasPrefix(mr.relay.ListenAddr(), "0.0.0.0:") {
+		t.Errorf("listen addr = %q, want 0.0.0.0:* (real AF_INET, not dual-stack)", mr.relay.ListenAddr())
 	}
 }
 
 // TestAddRule_Dual_Default_MultiRelay verifies the default (unset) rule uses a
-// dual-stack multiRelay and that the IPv4 half is always up regardless of
-// whether the host can bind IPv6.
+// dual-stack multiRelay whose IPv4 half is always up; on IPv6-capable hosts the
+// IPv6 half comes up too, as a separate socket.
 func TestAddRule_Dual_Default_MultiRelay(t *testing.T) {
 	m := newTestManager(t)
 	defer m.Close()
@@ -246,8 +251,12 @@ func TestAddRule_Dual_Default_MultiRelay(t *testing.T) {
 	if _, ok := mr.relay.(*multiRelay); !ok {
 		t.Fatalf("expected *multiRelay, got %T", mr.relay)
 	}
-	if !relayServesPort(mr.relay, created.ListenPort) {
-		t.Errorf("dual listen addr = %q, want it to serve port %d", mr.relay.ListenAddr(), created.ListenPort)
+	addr := mr.relay.ListenAddr()
+	if !strings.Contains(addr, "0.0.0.0:") {
+		t.Errorf("dual listen addr = %q, want it to include the IPv4 wildcard", addr)
+	}
+	if ipv6WildcardBindable() && !strings.Contains(addr, "[::]:") {
+		t.Errorf("dual listen addr = %q, want it to include the IPv6 wildcard on an IPv6-capable host", addr)
 	}
 }
 
@@ -272,7 +281,7 @@ func TestAddRule_IPv6Only(t *testing.T) {
 	if _, ok := mr.relay.(*TCPRelay); !ok {
 		t.Fatalf("expected *TCPRelay, got %T", mr.relay)
 	}
-	if !relayServesPort(mr.relay, created.ListenPort) {
-		t.Errorf("listen addr = %q, want it to serve port %d", mr.relay.ListenAddr(), created.ListenPort)
+	if !strings.HasPrefix(mr.relay.ListenAddr(), "[::]:") {
+		t.Errorf("listen addr = %q, want [::]:* (tcp6, IPV6_V6ONLY)", mr.relay.ListenAddr())
 	}
 }

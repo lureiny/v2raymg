@@ -15,11 +15,15 @@ type listenEndpoint struct {
 	// address is a "host:port" string, already bracketed for IPv6 literals
 	// (produced by net.JoinHostPort), suitable for net.Listen / net.ListenPacket.
 	address string
-	// v6only requests IPV6_V6ONLY on the socket. Set for the "[::]" wildcard so
-	// it can coexist with a sibling "0.0.0.0" socket on the same port without an
-	// address-in-use conflict, and so IPv4 clients keep their real (non
-	// v4-mapped) source addresses.
-	v6only bool
+	// family pins the socket's address family via the network suffix:
+	// "" -> "tcp"/"udp" (family inferred from a specific IP literal),
+	// "4" -> "tcp4"/"udp4" (real AF_INET), "6" -> "tcp6"/"udp6" (AF_INET6, which
+	// Go binds with IPV6_V6ONLY=1). Pinning matters for wildcards: a bare
+	// net.Listen("tcp","0.0.0.0:p") is promoted by Go to a dual-stack AF_INET6
+	// socket, so "ipv4" would wrongly also accept IPv6 and would collide with a
+	// sibling "[::]" bind. "4"+"6" give two clean, non-overlapping sockets with
+	// real (non v4-mapped) client addresses on each.
+	family string
 	// optional marks a best-effort endpoint: if binding fails (e.g. the host
 	// lacks one IP family), the failure is logged and the endpoint skipped
 	// instead of failing the whole rule. BOTH halves of a dual-stack listener
@@ -59,34 +63,48 @@ func firstListenStack(candidates ...string) string {
 // resolveListenEndpoints computes the set of sockets to bind for a rule.
 //
 //   - A non-empty listenAddr (a specific IP literal) yields exactly one socket
-//     bound to that address; ruleStack/defaultStack are ignored.
+//     bound to that address; ruleStack/defaultStack are ignored. A wildcard
+//     literal ("0.0.0.0" / "::") is family-pinned so it stays single-stack.
 //   - An empty listenAddr yields a wildcard listener governed by the effective
 //     stack (rule override, else manager default, else dual):
-//     "ipv4" -> [0.0.0.0], "ipv6" -> [[::] v6only],
-//     "dual" -> [0.0.0.0, [::] v6only] with BOTH best-effort (a host missing
+//     "ipv4" -> [0.0.0.0 tcp4], "ipv6" -> [[::] tcp6],
+//     "dual" -> [0.0.0.0 tcp4, [::] tcp6] with BOTH best-effort (a host missing
 //     either family skips that half; the rule fails only if neither binds).
 func resolveListenEndpoints(listenAddr, ruleStack, defaultStack string, port uint32) ([]listenEndpoint, error) {
 	p := strconv.Itoa(int(port))
 
 	if addr := strings.TrimSpace(listenAddr); addr != "" {
-		if net.ParseIP(addr) == nil {
+		ip := net.ParseIP(addr)
+		if ip == nil {
 			return nil, fmt.Errorf("listen_addr %q is not a valid IP literal", addr)
 		}
-		return []listenEndpoint{{address: net.JoinHostPort(addr, p)}}, nil
+		// A specific (non-wildcard) address is bound as-is with an inferred
+		// family. An explicit wildcard literal is pinned so it does not get
+		// promoted to a dual-stack socket by net.Listen.
+		family := ""
+		if ip.IsUnspecified() {
+			if ip.To4() != nil {
+				family = "4"
+			} else {
+				family = "6"
+			}
+		}
+		return []listenEndpoint{{address: net.JoinHostPort(addr, p), family: family}}, nil
 	}
 
 	switch firstListenStack(ruleStack, defaultStack) {
 	case ListenStackIPv4:
-		return []listenEndpoint{{address: net.JoinHostPort("0.0.0.0", p)}}, nil
+		return []listenEndpoint{{address: net.JoinHostPort("0.0.0.0", p), family: "4"}}, nil
 	case ListenStackIPv6:
-		return []listenEndpoint{{address: net.JoinHostPort("::", p), v6only: true}}, nil
+		return []listenEndpoint{{address: net.JoinHostPort("::", p), family: "6"}}, nil
 	default: // dual
-		// Both halves are best-effort: a host with only IPv4 skips the [::]
-		// bind, a host with only IPv6 skips the 0.0.0.0 bind. multiRelay.Start
-		// still fails the rule if NEITHER family binds.
+		// Two clean sockets (real AF_INET + AF_INET6/V6ONLY). Both are
+		// best-effort: a host with only IPv4 skips the [::] bind, a host with
+		// only IPv6 skips the 0.0.0.0 bind. multiRelay.Start still fails the
+		// rule if NEITHER family binds.
 		return []listenEndpoint{
-			{address: net.JoinHostPort("0.0.0.0", p), optional: true},
-			{address: net.JoinHostPort("::", p), v6only: true, optional: true},
+			{address: net.JoinHostPort("0.0.0.0", p), family: "4", optional: true},
+			{address: net.JoinHostPort("::", p), family: "6", optional: true},
 		}, nil
 	}
 }
@@ -101,24 +119,15 @@ func describeEndpoints(eps []listenEndpoint) string {
 	return strings.Join(parts, ",")
 }
 
-// listenTCP binds a TCP listener on address. When v6only is true it uses the
-// "tcp6" network so Go sets IPV6_V6ONLY on the socket; this lets an IPv6
-// wildcard ("[::]") coexist with a sibling IPv4 wildcard ("0.0.0.0") on the
-// same port and keeps IPv4 clients' real (non v4-mapped) source addresses.
-func listenTCP(address string, v6only bool) (net.Listener, error) {
-	network := "tcp"
-	if v6only {
-		network = "tcp6"
-	}
-	return net.Listen(network, address)
+// listenTCP binds a TCP listener on address using the "tcp"+family network
+// ("tcp", "tcp4", or "tcp6"). See listenEndpoint.family for why the family is
+// pinned for wildcard binds.
+func listenTCP(address, family string) (net.Listener, error) {
+	return net.Listen("tcp"+family, address)
 }
 
-// listenUDP binds a UDP packet connection on address, using "udp6" (IPV6_V6ONLY)
-// when v6only is requested. See listenTCP for the rationale.
-func listenUDP(address string, v6only bool) (net.PacketConn, error) {
-	network := "udp"
-	if v6only {
-		network = "udp6"
-	}
-	return net.ListenPacket(network, address)
+// listenUDP binds a UDP packet connection on address using the "udp"+family
+// network ("udp", "udp4", or "udp6").
+func listenUDP(address, family string) (net.PacketConn, error) {
+	return net.ListenPacket("udp"+family, address)
 }

@@ -28,7 +28,7 @@ const (
 type TCPRelay struct {
 	listenAddr string
 	targetAddr string
-	v6only     bool // set IPV6_V6ONLY on the listen socket
+	family     string // address-family network suffix: "" | "4" | "6"
 
 	counter     *TrafficCounter
 	limiterUp   Limiter // upload (client → target), nil = unlimited
@@ -48,12 +48,12 @@ type TCPRelay struct {
 // TCPRelayConfig configures a TCPRelay.
 type TCPRelayConfig struct {
 	ListenAddr    string
-	V6Only        bool // set IPV6_V6ONLY on the listen socket (IPv6 wildcard only)
+	Family        string // address-family network suffix: "" (tcp) | "4" (tcp4) | "6" (tcp6)
 	TargetAddr    string
 	Counter       *TrafficCounter
-	LimiterUp     Limiter // nil = no limit
-	LimiterDown   Limiter // nil = no limit
-	MaxConns      int     // 0 = unlimited
+	LimiterUp     Limiter       // nil = no limit
+	LimiterDown   Limiter       // nil = no limit
+	MaxConns      int           // 0 = unlimited
 	ClientLimiter ClientLimiter // nil = no client-level limit
 }
 
@@ -62,7 +62,7 @@ func NewTCPRelay(cfg TCPRelayConfig) *TCPRelay {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &TCPRelay{
 		listenAddr:    cfg.ListenAddr,
-		v6only:        cfg.V6Only,
+		family:        cfg.Family,
 		targetAddr:    cfg.TargetAddr,
 		counter:       cfg.Counter,
 		limiterUp:     cfg.LimiterUp,
@@ -76,7 +76,7 @@ func NewTCPRelay(cfg TCPRelayConfig) *TCPRelay {
 
 // Start begins listening and accepting connections.
 func (r *TCPRelay) Start() error {
-	ln, err := listenTCP(r.listenAddr, r.v6only)
+	ln, err := listenTCP(r.listenAddr, r.family)
 	if err != nil {
 		return fmt.Errorf("relay listen %s: %w", r.listenAddr, err)
 	}

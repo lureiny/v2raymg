@@ -40,7 +40,7 @@ const (
 type UDPRelay struct {
 	listenAddr string
 	targetAddr string
-	v6only     bool // set IPV6_V6ONLY on the listen socket
+	family     string // address-family network suffix: "" | "4" | "6"
 
 	counter       *TrafficCounter
 	limiterUp     Limiter
@@ -64,7 +64,7 @@ type UDPRelay struct {
 // UDPRelayConfig configures a UDPRelay.
 type UDPRelayConfig struct {
 	ListenAddr         string
-	V6Only             bool // set IPV6_V6ONLY on the listen socket (IPv6 wildcard only)
+	Family             string // address-family network suffix: "" (udp) | "4" (udp4) | "6" (udp6)
 	TargetAddr         string
 	Counter            *TrafficCounter
 	LimiterUp          Limiter
@@ -83,7 +83,7 @@ func NewUDPRelay(cfg UDPRelayConfig) *UDPRelay {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &UDPRelay{
 		listenAddr:         cfg.ListenAddr,
-		v6only:             cfg.V6Only,
+		family:             cfg.Family,
 		targetAddr:         cfg.TargetAddr,
 		counter:            cfg.Counter,
 		limiterUp:          cfg.LimiterUp,
@@ -119,7 +119,7 @@ type udpSession struct {
 // Calling Start twice will fail the second call at ListenPacket (address
 // already in use), matching TCPRelay's failure semantics.
 func (r *UDPRelay) Start() error {
-	pc, err := listenUDP(r.listenAddr, r.v6only)
+	pc, err := listenUDP(r.listenAddr, r.family)
 	if err != nil {
 		return fmt.Errorf("udp relay listen %s: %w", r.listenAddr, err)
 	}
