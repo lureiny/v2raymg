@@ -85,7 +85,7 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 		}
 		user := finder.FindUserByToken(token)
 		if user == nil {
-			log.Error("sub: invalid token", "target", parasMap["target"])
+			log.Error("sub: invalid token", "token", maskToken(token), "target", parasMap["target"])
 			c.String(200, "invalid user")
 			return
 		}
@@ -113,6 +113,19 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 		username = name
 		localUser = user
 	}
+
+	// Audit which credential resolved to which user. Emitted at debug level so
+	// it is off by default and can be switched on only while diagnosing (e.g.
+	// "the old token still works" reports). Tokens are proxy credentials, so
+	// only a masked prefix is logged — enough to tell an old (reset) token apart
+	// from the current one.
+	authMethod := "password"
+	if token != "" {
+		authMethod = "token"
+	}
+	log.Debug("[SubHandler] sub request authenticated",
+		"user", username, "auth", authMethod, "token", maskToken(token),
+		"target", parasMap["target"], "node", handler.getHttpServer().Name)
 
 	nodes := handler.getHttpServer().GetTargetNodes(parasMap["target"])
 	if nodes == nil {
@@ -292,6 +305,19 @@ func shouldEmitSubUserInfo(queryVal string, configDefault bool) bool {
 	default:
 		return configDefault
 	}
+}
+
+// maskToken returns a log-safe form of an auth token: a short prefix that lets
+// operators correlate requests (and tell a reset token apart from the current
+// one) without writing the full credential to logs. Empty in → empty out.
+func maskToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	if len(token) <= 8 {
+		return "****"
+	}
+	return token[:8] + "..."
 }
 
 func (handler *SubHandler) getHandlers() []gin.HandlerFunc {
