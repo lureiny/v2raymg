@@ -42,7 +42,14 @@
 
 ## 4. P1 跨层主题（57 条，按复现模式归并）
 
-> **状态更新（2026-07-12）**：P1 按主题成簇修复已基本完成，落在分支 `fix/p0-concurrency`（共 12 个 commit，含 2 P0）。每簇都走 scout→design→红队对抗验证 + "修前必炸/修后必绿" 的 -race 回归。**唯一未落地：B1 集群 RPC 加密/鉴权（#1 encrypt_codec KDF、#2 crypto AAD/重放、#3 CenterNodeServer 明文无鉴权）—— 属线格式破坏性变更，混合版本集群无回退路径，需用户定部署方式，见 `B1-rpc-crypto-DECISION-NEEDED.md`。** 各簇 commit：A1 集群节点并发 `7a5ffbe`；A2 容器状态机+snell `13e5c25`；B2 SSRF/模板 `e0e0170`；B3 xray security=none `c425504`；C 转发数据面 `a2c3c08`；D 证书原子性 `571a7dd`；E 集群同步一致性 `ddffbe7`；F 资源泄漏/僵尸进程 `77106f6`；G 启动/降级静默失败 `3851c81`；H 探测/采集 `a93f985`。CI 已加 targeted `-race`。各簇明确划出的残留/未修项见对应 commit message（如 snell reconcile 跨代 race、drainEnd map 慢泄漏、SetPingCheck 重启路径缺失、集群 Node 字段外的 gRPC 连接泄漏等）。
+> **状态更新（2026-07-13，按 finding 逐条核对后修正）**：P0 **2/2 全修**；P1 **43/52 已修**，落在分支 `fix/p0-concurrency`（13 个 `fix(` commit）。此前"P1 全部 8 簇完成"的表述是**按簇报、非按 finding 报，过度乐观**——8 个主题簇各有 commit，但簇内仍有 9 条 P1 未逐条闭合（2 deferred 降 P2/P3 + 7 未处理）。**仍为真 P1、必须补修（usermanager 计费并发子簇，本属最大并发簇但被 E 提交漏掉）**：
+> - `usermanager.go:2239` **GetStats 共享 map 并发崩溃（P0 级 fatal）**——bandwidth 采集 goroutine 在锁外 range `ByUser`，与 collect ticker 写并发 → `concurrent map iteration and map write` 整进程 panic。
+> - `usermanager.go:2237` GetAllDeltaTraffic 两段锁丢流量（GetStats 释放锁后再单独 reset，中间 collect 增量被清零不返回 → 计费少算）。
+> - `usermanager.go:2233` 上述两函数零回归测试。
+>
+> **其余未闭合（非回归/已降级）**：VLESS 缺 subscription_chain 测试（P1 测试缺口）、CI `-race` 仅覆盖 `pkg/cluster`+hysteria 两包（应扩面）、HC `run()` 假 Running（降 P2）、drainEnd map 慢泄漏（降 P3）、clash 外部 sub-converter 依赖（遗留/外部设计）、`pkg/rpc/client` 整目录零测试、rotate 测试泄漏 listener。
+>
+> **B1 集群 RPC 加密/鉴权** 用户选**方案 A（一步到位协调式破坏升级，多 cluster 共 center 拓扑）**已实施于 commit `61adb83`（HKDF KDF + 消息类型 AAD + ts/nonce/dest 防重放 + center app 层多 token 鉴权）；部署硬要求（全集群同时升级、center 配全 cluster_tokens、NTP 依赖扩面、无密钥轮换）见 `B1-rpc-crypto-DECISION-NEEDED.md`。 各簇 commit：A1 集群节点并发 `7a5ffbe`；A2 容器状态机+snell `13e5c25`；B2 SSRF/模板 `e0e0170`；B3 xray security=none `c425504`；C 转发数据面 `a2c3c08`；D 证书原子性 `571a7dd`；E 集群同步一致性 `ddffbe7`；F 资源泄漏/僵尸进程 `77106f6`；G 启动/降级静默失败 `3851c81`；H 探测/采集 `a93f985`。
 
 处理时**按主题成簇修**比逐条修更省事——同一根因在多处复现：
 

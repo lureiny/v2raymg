@@ -1,7 +1,9 @@
-# P1-B1 集群 RPC 加密 + 鉴权 —— 需要部署决策（未自动修复）
+# P1-B1 集群 RPC 加密 + 鉴权 —— 已实施（方案 A，commit `61adb83`）
 
-**状态**：3 条 finding 全部核实为真，但修复是**集群线格式破坏性变更**，无向后兼容路径。
-因此**未随 P1-B 一起落地**，需用户就部署方式拍板后再实施。
+**状态（2026-07-12 更新）**：用户选 **方案 A（一步到位协调式破坏性升级）**，已实施并测试。
+下面保留原始决策分析供参考；**实际落地方案见文末「已实施」一节**。
+
+**原始状态**：3 条 finding 全部核实为真，但修复是**集群线格式破坏性变更**，无向后兼容路径。
 
 设计 agent 因 API 中断未产出完整方案，但侦察 + 红队均已完成并给出一致结论（见
 `docs/review-2026-07-10/L0-foundation.md` / `L4-cluster.md` 对应条目，及本轮 workflow 记录）。
@@ -48,3 +50,21 @@
 **当前建议**：先落地 C（低风险缓解 #1 最严重面），#2/#3 的完整加固按 A 或 B 排期，由用户
 定部署窗口。P1-B 的其余两单元（SSRF/模板注入、xray security=none）已在
 `e0e0170` / `c425504` 落地，与本条无部署耦合。
+
+---
+
+## 已实施（方案 A，commit `61adb83`）
+
+用户确认部署拓扑为 **多 cluster 共用一个 center（不同 token）**，据此调整了 center 侧设计。
+
+- **#1 KDF**：`GetRpcKeyByToken` 改 HKDF-SHA256（`golang.org/x/crypto/hkdf`），任意 token → 32 字节强密钥，空/短 token 不再退化为常量。`appconfig.Validate` 要求 cluster token ≥ 16 字符（end 开 RPC 时 / center 每个 cluster_token）。
+- **#2a AAD**：GCM 加 AAD = `协议版本 | proto 消息类型名`（跨类型重放被 GCM 拒）。
+- **#2b 重放**：`NodeAuthInfo` 加 `timestamp_us / nonce / dest_node`（proto regen）；新增 end 拦截器 `checkReplay`（拒过期时间戳、重复 nonce〔进程级 TTL 缓存〕、发往其它节点的帧〔dest 绑定挡跨节点重放〕）；所有 ~5 个构造点统一走 `NewNodeAuthInfo`（每调用新 nonce，含修掉 upsert 复用 heartbeat nonce 的自伤断连）。
+- **#3 center**：因多 cluster，改**app 层多 token 鉴权**——`CenterNodeConfig.cluster_tokens`（cluster→token）；heartbeat 仅当 cluster 已配置且 token 常量时间相等才接受；end→center 心跳改带 cluster token + 防重放戳。center 通道保持明文（多 cluster，只传节点目录不含用户凭据）。token 比对是**承重主鉴权**（gRPC 默认 proto codec 无法注销，明文旁路真实存在）。
+
+**部署硬要求 / 残留（务必知会运维）**：
+1. **全集群 + center 必须同时升级**并配强 token；混合版本互不解密即断连（预期，无回退）。
+2. center 的 `cluster_tokens` 必须列全所有它服务的 cluster；未列的 cluster 其 end 会被拒（这是修复本身，非回归）。
+3. 所有写方法现在都要带 ±30s 内的时间戳 → **时钟偏移 >30s 的节点会被隔离**（NTP 依赖从"仅心跳"扩到全链路）。
+4. token 静态、**无密钥轮换路径**（后续可加）。
+5. codec 层真·方法名绑定未做（5 个 UserOp 方法共享同一 proto 类型，仅做到消息类型绑定）——后续。
