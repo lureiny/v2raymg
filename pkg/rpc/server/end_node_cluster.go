@@ -174,10 +174,7 @@ func (s *EndNodeServer) registerToEndNode(node *cluster.Node, wg *sync.WaitGroup
 	}
 
 	c := proto.NewEndNodeAccessClient(conn)
-	nodeAuthInfo := &proto.NodeAuthInfo{
-		Token: s.clusterState.GetClusterToken(),
-		Node:  &localNode.Node,
-	}
+	nodeAuthInfo := rpcClient.NewNodeAuthInfo(s.clusterState.GetClusterToken(), &localNode.Node, node.GetName())
 	var registerNodeReq interface{} = &proto.RegisterNodeReq{}
 	reqData, _ := pb.Marshal(registerNodeReq.(pb.Message))
 	rsp, err := rpcClient.ReqRegisterNode(rpcClient.NewContext(), reqData, c, nodeAuthInfo, s.clusterState.GetClusterToken())
@@ -227,10 +224,7 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 	}
 
 	c := proto.NewEndNodeAccessClient(conn)
-	nodeAuthInfo := &proto.NodeAuthInfo{
-		Token: node.GetOutToken(),
-		Node:  &localNode.Node,
-	}
+	nodeAuthInfo := rpcClient.NewNodeAuthInfo(node.GetOutToken(), &localNode.Node, node.GetName())
 	heartBeatMsg := &proto.HeartBeatReq{
 		TimestampUs: time.Now().UnixMicro(),
 	}
@@ -289,7 +283,10 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 				}
 				if len(toSend) > 0 {
 					upsertData, _ := pb.Marshal(&proto.UpsertClusterUsersReq{Users: toSend})
-					if _, err := rpcClient.ReqUpsertClusterUsers(rpcClient.NewContext(), upsertData, c, nodeAuthInfo, s.clusterState.GetClusterToken()); err != nil {
+					// Fresh NodeAuthInfo (new nonce) — reusing the heartbeat's
+					// would look like a replay and be rejected by the server.
+					upsertAuth := rpcClient.NewNodeAuthInfo(node.GetOutToken(), &localNode.Node, node.GetName())
+					if _, err := rpcClient.ReqUpsertClusterUsers(rpcClient.NewContext(), upsertData, c, upsertAuth, s.clusterState.GetClusterToken()); err != nil {
 						log.Error("heartbeat: push cluster users failed", "dst_name", node.Name, "count", len(toSend), "err", err)
 					} else {
 						log.Debug("heartbeat: pushed cluster users", "dst_name", node.Name, "requested", len(needUsers), "pushed", len(toSend))
@@ -343,12 +340,13 @@ func (s *EndNodeServer) heartbeatToCenterNode() {
 		return
 	}
 	c := proto.NewCenterNodeAccessClient(conn)
+	// Authenticate to the center with the cluster token (was empty = anyone
+	// could forge a heartbeat). The center validates it against its configured
+	// per-cluster tokens. dest_node is "" since the center has no node name
+	// known to the end. This channel stays plaintext (center may serve multiple
+	// clusters and carries only the node directory, not user credentials).
 	heartBeatReq := &proto.HeartBeatReq{
-		NodeAuthInfo: &proto.NodeAuthInfo{
-			Token: "",
-			Node:  &localNode.Node,
-		},
-		TimestampUs: time.Now().UnixMicro(),
+		NodeAuthInfo: rpcClient.NewNodeAuthInfo(s.clusterState.GetClusterToken(), &localNode.Node, ""),
 	}
 	rsp, err := c.HeartBeat(rpcClient.NewContext(), heartBeatReq)
 	if err != nil {

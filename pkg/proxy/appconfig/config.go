@@ -189,6 +189,11 @@ type EndNodeConfig struct {
 // CenterNodeConfig holds Center Node specific configuration.
 type CenterNodeConfig struct {
 	NodeConfig `yaml:",inline"`
+	// ClusterTokens maps cluster name -> shared token. A center may serve
+	// multiple clusters with different tokens; a heartbeat is accepted only if
+	// its cluster name is listed here and its token matches. An empty map means
+	// no cluster is authorized (all heartbeats rejected).
+	ClusterTokens map[string]string `yaml:"cluster_tokens" json:"cluster_tokens"`
 }
 
 // ClusterUserConfig controls the ClusterUser sync layer and placement controller behaviour.

@@ -282,7 +282,17 @@ func Validate(cfg *AppConfig) error {
 		}
 	}
 
-	if !strings.EqualFold(cfg.NodeType, "center") {
+	// Cluster tokens are the RPC encryption key (via HKDF) and the center's
+	// auth secret. A short token derives a low-entropy key; require a floor.
+	// (Length is not entropy — operators must still use a random token.)
+	const minClusterTokenLen = 16
+	if strings.EqualFold(cfg.NodeType, "center") {
+		for cn, tok := range cfg.CenterNode.ClusterTokens {
+			if len(tok) < minClusterTokenLen {
+				return fmt.Errorf("appconfig: center_node.cluster_tokens[%q] must be >= %d chars", cn, minClusterTokenLen)
+			}
+		}
+	} else {
 		enabledCount := 0
 		for _, c := range cfg.Containers.Containers {
 			if c.Enabled {
@@ -291,6 +301,10 @@ func Validate(cfg *AppConfig) error {
 		}
 		if enabledCount == 0 {
 			return fmt.Errorf("appconfig: at least one container entry must be enabled")
+		}
+		// When the RPC plane is enabled, the cluster token is the encryption key.
+		if cfg.EndNode.RpcPort >= 1000 && len(cfg.EndNode.Cluster.Token) < minClusterTokenLen {
+			return fmt.Errorf("appconfig: end_node.cluster.token must be >= %d chars when rpc is enabled", minClusterTokenLen)
 		}
 	}
 

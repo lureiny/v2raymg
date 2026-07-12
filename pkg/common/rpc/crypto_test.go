@@ -37,7 +37,7 @@ func TestEncryptDecryptAES_Roundtrip(t *testing.T) {
 	key := bytes.Repeat([]byte("A"), 32)
 	plaintext := []byte("secret message for testing")
 
-	encrypted, err := rpc.EncryptWithAES(plaintext, key)
+	encrypted, err := rpc.EncryptWithAES(plaintext, key, nil)
 	if err != nil {
 		t.Fatalf("EncryptWithAES: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestEncryptDecryptAES_Roundtrip(t *testing.T) {
 		t.Error("encrypted data should differ from plaintext")
 	}
 
-	decrypted, err := rpc.DecryptWithAES(encrypted, key)
+	decrypted, err := rpc.DecryptWithAES(encrypted, key, nil)
 	if err != nil {
 		t.Fatalf("DecryptWithAES: %v", err)
 	}
@@ -58,11 +58,11 @@ func TestEncryptWithAES_RandomNonce(t *testing.T) {
 	key := bytes.Repeat([]byte("B"), 32)
 	plaintext := []byte("same message")
 
-	enc1, err := rpc.EncryptWithAES(plaintext, key)
+	enc1, err := rpc.EncryptWithAES(plaintext, key, nil)
 	if err != nil {
 		t.Fatalf("first encrypt: %v", err)
 	}
-	enc2, err := rpc.EncryptWithAES(plaintext, key)
+	enc2, err := rpc.EncryptWithAES(plaintext, key, nil)
 	if err != nil {
 		t.Fatalf("second encrypt: %v", err)
 	}
@@ -70,8 +70,8 @@ func TestEncryptWithAES_RandomNonce(t *testing.T) {
 		t.Error("two encryptions of same plaintext should produce different ciphertext")
 	}
 
-	dec1, _ := rpc.DecryptWithAES(enc1, key)
-	dec2, _ := rpc.DecryptWithAES(enc2, key)
+	dec1, _ := rpc.DecryptWithAES(enc1, key, nil)
+	dec2, _ := rpc.DecryptWithAES(enc2, key, nil)
 	if !bytes.Equal(dec1, plaintext) || !bytes.Equal(dec2, plaintext) {
 		t.Error("both should decrypt to original plaintext")
 	}
@@ -81,7 +81,7 @@ func TestDecryptWithAES_TamperedData(t *testing.T) {
 	key := bytes.Repeat([]byte("C"), 32)
 	plaintext := []byte("authenticated message")
 
-	encrypted, err := rpc.EncryptWithAES(plaintext, key)
+	encrypted, err := rpc.EncryptWithAES(plaintext, key, nil)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestDecryptWithAES_TamperedData(t *testing.T) {
 	copy(tampered, encrypted)
 	tampered[len(tampered)-1] ^= 0xFF
 
-	_, err = rpc.DecryptWithAES(tampered, key)
+	_, err = rpc.DecryptWithAES(tampered, key, nil)
 	if err == nil {
 		t.Error("expected error when decrypting tampered ciphertext")
 	}
@@ -98,7 +98,7 @@ func TestDecryptWithAES_TamperedData(t *testing.T) {
 
 func TestDecryptWithAES_TooShort(t *testing.T) {
 	key := bytes.Repeat([]byte("D"), 32)
-	_, err := rpc.DecryptWithAES([]byte("short"), key)
+	_, err := rpc.DecryptWithAES([]byte("short"), key, nil)
 	if err == nil {
 		t.Error("expected error for ciphertext shorter than nonce + tag")
 	}
@@ -106,7 +106,7 @@ func TestDecryptWithAES_TooShort(t *testing.T) {
 
 func TestDecryptWithAES_Empty(t *testing.T) {
 	key := bytes.Repeat([]byte("E"), 32)
-	_, err := rpc.DecryptWithAES([]byte{}, key)
+	_, err := rpc.DecryptWithAES([]byte{}, key, nil)
 	if err == nil {
 		t.Error("expected error for empty data")
 	}
@@ -114,11 +114,11 @@ func TestDecryptWithAES_Empty(t *testing.T) {
 
 func TestEncryptDecryptAES_EmptyPlaintext(t *testing.T) {
 	key := bytes.Repeat([]byte("E"), 32)
-	encrypted, err := rpc.EncryptWithAES([]byte{}, key)
+	encrypted, err := rpc.EncryptWithAES([]byte{}, key, nil)
 	if err != nil {
 		t.Fatalf("EncryptWithAES(empty): %v", err)
 	}
-	decrypted, err := rpc.DecryptWithAES(encrypted, key)
+	decrypted, err := rpc.DecryptWithAES(encrypted, key, nil)
 	if err != nil {
 		t.Fatalf("DecryptWithAES(empty): %v", err)
 	}
@@ -131,42 +131,63 @@ func TestDecryptWithAES_WrongKey(t *testing.T) {
 	key1 := bytes.Repeat([]byte("F"), 32)
 	key2 := bytes.Repeat([]byte("G"), 32)
 
-	encrypted, err := rpc.EncryptWithAES([]byte("secret"), key1)
+	encrypted, err := rpc.EncryptWithAES([]byte("secret"), key1, nil)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	_, err = rpc.DecryptWithAES(encrypted, key2)
+	_, err = rpc.DecryptWithAES(encrypted, key2, nil)
 	if err == nil {
 		t.Error("expected error when decrypting with wrong key")
 	}
 }
 
 func TestEncryptWithAES_InvalidKey(t *testing.T) {
-	_, err := rpc.EncryptWithAES([]byte("data"), []byte("short"))
+	_, err := rpc.EncryptWithAES([]byte("data"), []byte("short"), nil)
 	if err == nil {
 		t.Error("expected error for invalid key length")
 	}
 }
 
-func TestGetRpcKeyByToken_Long(t *testing.T) {
-	token := "abcdefghijklmnopqrstuvwxyz1234567890" // 36 chars > 32
-	key := rpc.GetRpcKeyByToken(token)
-	if len(key) != 32 {
-		t.Errorf("expected 32 bytes, got %d", len(key))
+func TestGetRpcKeyByToken_HKDF(t *testing.T) {
+	// Always 32 bytes, deterministic, and different tokens -> different keys.
+	long := rpc.GetRpcKeyByToken("abcdefghijklmnopqrstuvwxyz1234567890")
+	if len(long) != 32 {
+		t.Fatalf("expected 32-byte key, got %d", len(long))
 	}
-	if string(key) != token[:32] {
-		t.Errorf("expected first 32 bytes of token")
+	if !bytes.Equal(long, rpc.GetRpcKeyByToken("abcdefghijklmnopqrstuvwxyz1234567890")) {
+		t.Error("key derivation must be deterministic (both sides must agree)")
+	}
+	if bytes.Equal(long, rpc.GetRpcKeyByToken("a-different-token-value")) {
+		t.Error("different tokens must derive different keys")
+	}
+
+	// A weak/short token no longer degrades to a low-entropy or constant key
+	// (the old scheme padded with 0x20). Empty and short are distinct and are
+	// NOT the old constant.
+	empty := rpc.GetRpcKeyByToken("")
+	short := rpc.GetRpcKeyByToken("short")
+	if bytes.Equal(empty, short) {
+		t.Error("empty and short tokens must not derive the same key")
+	}
+	if bytes.Equal(empty, bytes.Repeat([]byte{0x20}, 32)) {
+		t.Error("empty token must not derive the old constant 0x20*32 key")
 	}
 }
 
-func TestGetRpcKeyByToken_Short(t *testing.T) {
-	token := "short"
-	key := rpc.GetRpcKeyByToken(token)
-	if len(key)%32 != 0 {
-		t.Errorf("expected padded to multiple of 32, got %d", len(key))
+// TestEncryptDecryptAES_AADMismatch verifies GCM rejects a decrypt with a
+// different AAD than was used to encrypt — the property that binds the
+// protocol version + message type in the codec.
+func TestEncryptDecryptAES_AADMismatch(t *testing.T) {
+	key := bytes.Repeat([]byte("K"), 32)
+	enc, err := rpc.EncryptWithAES([]byte("payload"), key, []byte("aad-A"))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
 	}
-	if string(key[:len(token)]) != token {
-		t.Error("key should start with the token")
+	if _, err := rpc.DecryptWithAES(enc, key, []byte("aad-B")); err == nil {
+		t.Error("decrypt with a different AAD must fail")
+	}
+	if _, err := rpc.DecryptWithAES(enc, key, []byte("aad-A")); err != nil {
+		t.Errorf("decrypt with the matching AAD must succeed, got %v", err)
 	}
 }
 

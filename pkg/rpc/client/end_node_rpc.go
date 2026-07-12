@@ -490,10 +490,9 @@ func (c *EndNodeClient) ReqToMultiEndNodeServer(ctx context.Context, reqType Req
 				return
 			}
 			endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
-			nodeAuthInfo := &proto.NodeAuthInfo{
-				Token: n.GetOutToken(),
-				Node:  &c.localNode.Node,
-			}
+			// Per-call anti-replay stamp; dest bound to the target node so a
+			// captured frame can't be replayed to a different node.
+			nodeAuthInfo := NewNodeAuthInfo(n.GetOutToken(), &c.localNode.Node, n.Name)
 			reqCtx := NewContext()
 			if ctx != nil {
 				reqCtx = ctx

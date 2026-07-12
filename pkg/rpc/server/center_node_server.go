@@ -2,6 +2,7 @@ package server
 
 import (
 	context "context"
+	"crypto/subtle"
 	"fmt"
 	"net"
 	"time"
@@ -20,6 +21,11 @@ type NodeMap map[string]*proto.Node
 type CenterNodeServer struct {
 	proto.UnimplementedCenterNodeAccessServer
 	clusters c.CenterClusterManager
+
+	// clusterTokens maps cluster name -> authorized shared token, used to
+	// authenticate heartbeats (a center may serve multiple clusters). Nil/empty
+	// means no cluster is authorized.
+	clusterTokens map[string]string
 
 	// ServerConfig fields (inlined)
 	Host string
@@ -106,7 +112,36 @@ func (s *CenterNodeServer) Init(cfg appconfig.CenterNodeConfig) {
 		name = fmt.Sprintf("%s:%d", cfg.ProxyHost, cfg.RpcPort)
 	}
 	s.Name = name
+	s.clusterTokens = cfg.ClusterTokens
 	s.clusters.Init()
+}
+
+// centerInterceptor authenticates every incoming request BEFORE the handler.
+// The center serves multiple clusters with different tokens, so a single global
+// encryption codec can't work; instead the request's NodeAuthInfo.Token must
+// match the configured token for its cluster (app-layer auth). This token check
+// is LOAD-BEARING (not defense-in-depth): it is the only thing stopping an
+// unauthenticated attacker from poisoning/enumerating the node directory. It
+// also runs the shared anti-replay check.
+func (s *CenterNodeServer) centerInterceptor() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		if err := checkReplay(req, s.Name); err != nil {
+			return nil, fmt.Errorf("replay check failed: %w", err)
+		}
+		carrier, ok := req.(authInfoCarrier)
+		if !ok || carrier.GetNodeAuthInfo() == nil || carrier.GetNodeAuthInfo().GetNode() == nil {
+			return nil, fmt.Errorf("missing node auth info")
+		}
+		ai := carrier.GetNodeAuthInfo()
+		clusterName := ai.GetNode().GetClusterName()
+		want, known := s.clusterTokens[clusterName]
+		if !known || subtle.ConstantTimeCompare([]byte(ai.GetToken()), []byte(want)) != 1 {
+			log.Error("center: unauthorized heartbeat", "cluster", clusterName,
+				"src_name", ai.GetNode().GetName())
+			return nil, fmt.Errorf("unauthorized: cluster %q not authorized", clusterName)
+		}
+		return handler(ctx, req)
+	}
 }
 
 func (s *CenterNodeServer) Start() {
@@ -116,7 +151,7 @@ func (s *CenterNodeServer) Start() {
 		log.Error("center node failed to listen", "addr", addr, "err", err)
 		return
 	}
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(s.centerInterceptor()))
 	proto.RegisterCenterNodeAccessServer(grpcServer, s)
 	go s.filter()
 	log.Info("center node server listening", "addr", lis.Addr())

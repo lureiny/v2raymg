@@ -18,7 +18,10 @@ func PKCS7Padding(plaintext []byte, blockSize int) []byte {
 
 // EncryptWithAES encrypts plaintext using AES-256-GCM with a random nonce.
 // Output format: nonce (12 bytes) + ciphertext + GCM tag (16 bytes).
-func EncryptWithAES(plaintext, key []byte) ([]byte, error) {
+// aad is authenticated but not encrypted; it must be supplied identically at
+// decrypt time or gcm.Open fails (used to bind the protocol version and message
+// type so a ciphertext cannot be reused across message types).
+func EncryptWithAES(plaintext, key, aad []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -34,11 +37,12 @@ func EncryptWithAES(plaintext, key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("generate nonce: %w", err)
 	}
 
-	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+	return gcm.Seal(nonce, nonce, plaintext, aad), nil
 }
 
-// DecryptWithAES decrypts data using AES-256-GCM.
-func DecryptWithAES(encryptedData, key []byte) ([]byte, error) {
+// DecryptWithAES decrypts data using AES-256-GCM. aad must match the value
+// passed to EncryptWithAES.
+func DecryptWithAES(encryptedData, key, aad []byte) ([]byte, error) {
 	if len(encryptedData) == 0 {
 		return nil, fmt.Errorf("empty data")
 	}
@@ -59,5 +63,5 @@ func DecryptWithAES(encryptedData, key []byte) ([]byte, error) {
 	}
 
 	nonce, ciphertext := encryptedData[:nonceSize], encryptedData[nonceSize:]
-	return gcm.Open(nil, nonce, ciphertext, nil)
+	return gcm.Open(nil, nonce, ciphertext, aad)
 }

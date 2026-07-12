@@ -155,6 +155,12 @@ func (s *EndNodeServer) authRemoteNode(req interface{}, fullMethod string) (bool
 // unaryServerInterceptor returns a gRPC unary interceptor bound to this server instance.
 func (s *EndNodeServer) unaryServerInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, hander grpc.UnaryHandler) (interface{}, error) {
+		// Anti-replay: reject stale/duplicate/cross-node frames before any
+		// handler runs. Runs for every method (incl. RegisterNode).
+		if err := checkReplay(req, s.Name); err != nil {
+			log.Error("rpc replay check failed", "api", info.FullMethod[methodPrefixLen:], "err", err)
+			return nil, fmt.Errorf("replay check failed: %w", err)
+		}
 		if s.cfg.OnlyGateway && !isOnlyGatewayMethod(info.FullMethod) {
 			return newEmptyRsp(info.FullMethod)
 		}

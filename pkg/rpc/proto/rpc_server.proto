@@ -50,6 +50,12 @@ enum BuilderType {
 message NodeAuthInfo {
     string token = 1;
     Node node = 2;
+    // Anti-replay fields (added 2026-07): every request carries a fresh
+    // timestamp + random nonce, and the destination node name, so the server
+    // can reject stale/duplicate frames and frames captured for a different node.
+    int64 timestamp_us = 3;
+    bytes nonce = 4;
+    string dest_node = 5;
 }
 
 message GetUsersReq {
