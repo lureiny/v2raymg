@@ -219,7 +219,7 @@ func newBasePingChecker() *basePingChecker {
 func (bpc *basePingChecker) Stop() {
 	if bpc.cancel != nil && bpc.isRunning.Load() {
 		bpc.cancel()
-		bpc.isRunning.Store(true)
+		bpc.isRunning.Store(false)
 	}
 }
 

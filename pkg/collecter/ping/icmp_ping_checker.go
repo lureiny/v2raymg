@@ -2,11 +2,19 @@ package ping
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/lureiny/v2raymg/pkg/log"
 	ping "github.com/prometheus-community/pro-bing"
 )
+
+// isTimedOut reports whether a ping packet sent at sendTime is overdue by now,
+// given the configured timeout. Extracted so the timeout comparison (which used
+// to hardcode the package-global pingTimeout) is unit-testable.
+func isTimedOut(sendTime, now time.Time, timeout time.Duration) bool {
+	return now.UnixMicro()-sendTime.UnixMicro() > timeout.Microseconds()
+}
 
 type getNodeFunc func() []*PingNodeInfo
 
@@ -36,6 +44,26 @@ type pingerInfo struct {
 	timeout     time.Duration
 	ctx         context.Context
 	cancel      context.CancelFunc
+	// run is the pinger's blocking run loop; a seam so tests can inject a
+	// failure without opening a raw ICMP socket. Defaults to pinger.Run.
+	run func() error
+	// failed records that the pinger's run loop exited with an error (e.g. no
+	// CAP_NET_RAW), which previously was swallowed silently.
+	failed atomic.Bool
+}
+
+// runPinger runs the pinger and surfaces (rather than swallows) a run failure
+// such as a missing CAP_NET_RAW capability, which otherwise left the node
+// probing silently with zero results. It logs once and marks the pinger failed;
+// it deliberately does NOT auto-retry (a permission error would then log-storm
+// once per reload tick).
+func (pi *pingerInfo) runPinger() {
+	if err := pi.run(); err != nil {
+		log.Error("icmp pinger run exited",
+			"geo", pi.nodeInfo.Geo, "isp", pi.nodeInfo.ISP,
+			"host", pi.nodeInfo.Host, "err", err)
+		pi.failed.Store(true)
+	}
 }
 
 func newPingerInfo(nodeInfo *PingNodeInfo, pingChecker string, interval, timeout time.Duration) *pingerInfo {
@@ -85,8 +113,18 @@ func (pi *pingerInfo) pingLoop(ch chan<- *PingResult) {
 			RTT: p.Rtt.Microseconds(),
 		}
 	}
-	pi.pinger.Interval = time.Second * time.Duration(pingInterval)
-	go pi.pinger.Run()
+	// Use the configured interval/timeout (carried in pi.interval/pi.timeout)
+	// instead of the package-global constants, which made ICMPPingInterval /
+	// ICMPPingTimeout config no-ops.
+	if pi.interval > 0 {
+		pi.pinger.Interval = pi.interval
+	} else {
+		pi.pinger.Interval = time.Second * time.Duration(pingInterval)
+	}
+	if pi.run == nil {
+		pi.run = pi.pinger.Run
+	}
+	go pi.runPinger()
 
 	checkCycleTicker := time.NewTicker(500 * time.Millisecond)
 	pingPacket := map[int]*PingPacketInfo{}
@@ -107,8 +145,12 @@ func (pi *pingerInfo) pingLoop(ch chan<- *PingResult) {
 			ch <- result
 		case <-checkCycleTicker.C:
 			// check cycle
+			timeout := pi.timeout
+			if timeout <= 0 {
+				timeout = pingTimeout
+			}
 			for seq, p := range pingPacket {
-				if time.Now().UnixMicro()-p.SendTime.UnixMicro() > pingTimeout.Microseconds() {
+				if isTimedOut(p.SendTime, time.Now(), timeout) {
 					// 丢包
 					delete(pingPacket, seq)
 					// 转发给外部

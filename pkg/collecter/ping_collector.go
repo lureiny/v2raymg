@@ -3,6 +3,7 @@ package collecter
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 
@@ -132,25 +133,46 @@ func (pc *PingCollector) startChecker(checker ping.PingChecker) {
 }
 
 // cleanupStaleResults removes results for nodes that no longer exist.
+//
+// A result is kept if either:
+//   - its host (extracted from the node name, with the TCP host:port stripped)
+//     matches a current node's Host — the exact match for IP-configured nodes; or
+//   - some current node in the same geo/isp is configured with a domain (a
+//     non-IP Host). ICMP results for domain nodes are keyed by the RESOLVED IP,
+//     which never equals the configured domain, so a plain host comparison
+//     wrongly deleted (and reset the 100-sample ring buffer of) every
+//     domain-configured node on each reload. This geo/isp fallback keeps them.
+//
+// Residual: in a geo/isp group that mixes a domain node with a removed IP node,
+// the removed IP node's result is also preserved (a small stale-entry leak) —
+// the acceptable trade for not deleting valid domain-node results.
 func (pc *PingCollector) cleanupStaleResults(currentNodes []*ping.PingNodeInfo) {
-	// Build host set for current nodes
 	hostSet := make(map[string]struct{})
+	geoISPHasDomain := make(map[string]struct{})
 	for _, n := range currentNodes {
 		hostSet[n.Host] = struct{}{}
+		if net.ParseIP(n.Host) == nil { // domain-configured node
+			geoISPHasDomain[n.Geo+"\x00"+n.ISP] = struct{}{}
+		}
 	}
 
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 
 	for checkerName, results := range pc.pingResultMap {
-		for nodeName := range results {
+		for nodeName, r := range results {
 			host := extractHostFromNodeName(nodeName, checkerName)
-			if host != "" {
-				if _, exists := hostSet[host]; !exists {
-					delete(results, nodeName)
-					log.Info("removed stale ping result", "checker", checkerName, "node", nodeName)
-				}
+			if host == "" {
+				continue
 			}
+			if _, exact := hostSet[host]; exact {
+				continue
+			}
+			if _, domainNode := geoISPHasDomain[r.Geo+"\x00"+r.ISP]; domainNode {
+				continue
+			}
+			delete(results, nodeName)
+			log.Info("removed stale ping result", "checker", checkerName, "node", nodeName)
 		}
 	}
 }

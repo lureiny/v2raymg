@@ -69,8 +69,12 @@ func (nm *nodeManagerImpl) LoadFromSources(sources []appconfig.PingNodeSource) e
 			if src.UpdateInterval > 0 {
 				if rl, ok := loader.(ReloadableLoader); ok {
 					stop := rl.StartReload(time.Duration(src.UpdateInterval)*time.Second, func(nodes []*PingNodeInfo) {
-						nm.updateNodes(nodes)
-						nm.notifyChange()
+						// Only notify (which triggers cleanupStaleResults) when the
+						// node set actually changed; a no-op reload otherwise wiped
+						// and rebuilt every node's 100-sample ring buffer each tick.
+						if nm.updateNodes(nodes) {
+							nm.notifyChange()
+						}
 					})
 					nm.stopFuncs = append(nm.stopFuncs, stop)
 				}
@@ -101,7 +105,10 @@ func (nm *nodeManagerImpl) LoadFromSources(sources []appconfig.PingNodeSource) e
 }
 
 // updateNodes updates the node map (called from reload callback).
-func (nm *nodeManagerImpl) updateNodes(newNodes []*PingNodeInfo) {
+// updateNodes replaces the node map with newNodes and reports whether the set
+// of hosts actually changed (add or remove), so callers can skip a no-op
+// notify. Field-only updates to an existing host do not count as a change.
+func (nm *nodeManagerImpl) updateNodes(newNodes []*PingNodeInfo) bool {
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
 
@@ -111,21 +118,28 @@ func (nm *nodeManagerImpl) updateNodes(newNodes []*PingNodeInfo) {
 		newHosts[n.Host] = struct{}{}
 	}
 
+	changed := false
+
 	// Remove nodes that no longer exist
 	for host := range nm.nodes {
 		if _, exists := newHosts[host]; !exists {
 			delete(nm.nodes, host)
+			changed = true
 			log.Debug("removed ping node", "host", host)
 		}
 	}
 
 	// Add/update nodes
 	for _, node := range newNodes {
+		if _, existed := nm.nodes[node.Host]; !existed {
+			changed = true
+		}
 		nm.nodes[node.Host] = node
 	}
 
 	// Log updated statistics
 	nm.logStatsLocked()
+	return changed
 }
 
 // logStatsLocked logs statistics about loaded nodes by usage type (caller must hold lock).
