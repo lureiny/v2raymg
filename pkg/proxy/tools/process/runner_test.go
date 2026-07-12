@@ -190,3 +190,63 @@ func TestRunner_Version(t *testing.T) {
 
 // Verify Runner implements expected interface
 var _ interface{} = (*Runner)(nil)
+
+// TestRunner_IsRunning_AfterSelfExit covers finding #1: once the process exits
+// on its own, the reaper must flip IsRunning to false and PID to 0 (before the
+// fix, IsRunning stayed true forever and the child became a zombie).
+func TestRunner_IsRunning_AfterSelfExit(t *testing.T) {
+	r, err := NewRunner(RunnerConfig{BinaryPath: "true"})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for r.IsRunning() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.IsRunning() {
+		t.Fatal("IsRunning must be false after the process self-exits (zombie / stale state)")
+	}
+	if r.PID() != 0 {
+		t.Errorf("PID must be 0 after exit, got %d", r.PID())
+	}
+}
+
+// TestRunner_RestartAfterSelfExit mirrors the updater path: after a crash,
+// IsRunning is false so Stop is skipped and Start is called directly — which
+// must succeed (the exited-aware guard allows it).
+func TestRunner_RestartAfterSelfExit(t *testing.T) {
+	r, _ := NewRunner(RunnerConfig{BinaryPath: "true"})
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for r.IsRunning() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.IsRunning() { // updater does: if IsRunning { Stop }
+		_ = r.Stop()
+	}
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start after self-exit must succeed, got: %v", err)
+	}
+	_ = r.Stop()
+}
+
+// TestRunner_Stop_AfterSelfExit_NoDoubleWait ensures Stop after a self-exit is a
+// clean no-op (it waits on the reaper's done channel and does not double-Wait).
+func TestRunner_Stop_AfterSelfExit_NoDoubleWait(t *testing.T) {
+	r, _ := NewRunner(RunnerConfig{BinaryPath: "true"})
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for r.IsRunning() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := r.Stop(); err != nil {
+		t.Fatalf("Stop after self-exit must be a clean no-op, got: %v", err)
+	}
+}

@@ -1103,6 +1103,13 @@ func (e *Executor) reconcileUsersForInbound(tag string) {
 
 // startReconcileLoop starts the periodic user reconciliation goroutine.
 func (e *Executor) startReconcileLoop() {
+	// Idempotent: a non-nil reconcileStopCh means a loop is already running.
+	// Now that IsRunning reflects real liveness, the updater can skip Stop and
+	// call Start on a crashed executor; without this guard that would spawn a
+	// second reconcile goroutine and race on reconcileStopCh.
+	if e.reconcileStopCh != nil {
+		return
+	}
 	interval := e.config.ReconcileInterval
 	if interval <= 0 {
 		interval = 30 * time.Second // default

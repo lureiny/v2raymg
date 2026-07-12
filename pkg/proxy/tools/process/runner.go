@@ -7,7 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/lureiny/v2raymg/pkg/log"
 )
 
 // RunnerConfig holds configuration for starting a process.
@@ -41,6 +44,14 @@ type Runner struct {
 	config RunnerConfig
 	cmd    *exec.Cmd
 	mu     sync.Mutex
+	// waitDone is closed by the current run's reaper after cmd.Wait() returns.
+	waitDone chan struct{}
+	// exited is set by the reaper once the process has actually exited, so
+	// IsRunning/PID reflect real liveness instead of "started and not Stopped".
+	exited atomic.Bool
+	// stopping (per run) is set by Stop before it signals the process, so the
+	// reaper can log an intentional stop at debug rather than as a crash.
+	stopping *atomic.Bool
 }
 
 // NewRunner creates a new Runner with the given configuration.
@@ -58,7 +69,11 @@ func (p *Runner) Start() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.cmd != nil && p.cmd.Process != nil {
+	// Reject only if a process is genuinely still alive. A previous process that
+	// self-exited (and was reaped) must not block a fresh Start — callers use
+	// IsRunning()==false to skip Stop and Start directly, so a crashed process
+	// has to be restartable here.
+	if p.cmd != nil && p.cmd.Process != nil && !p.exited.Load() {
 		return fmt.Errorf("process already running")
 	}
 
@@ -95,44 +110,80 @@ func (p *Runner) Start() error {
 		return err
 	}
 	p.cmd = cmd
+	p.exited.Store(false)
+	done := make(chan struct{})
+	p.waitDone = done
+	stopping := &atomic.Bool{}
+	p.stopping = stopping
+	name := p.config.BinaryPath // snapshot under lock (SetConfig may race otherwise)
+
+	// The reaper is the SOLE caller of cmd.Wait() — it reaps the child (no
+	// zombie) and flips exited so IsRunning reflects real liveness. Stop must
+	// never call cmd.Wait() itself; it waits on done instead.
+	go func(cmd *exec.Cmd, done chan struct{}, stopping *atomic.Bool) {
+		err := cmd.Wait()
+		p.exited.Store(true)
+		close(done)
+		switch {
+		case err == nil:
+			log.Debugf("[process] %s exited cleanly", name)
+		case stopping.Load():
+			log.Debugf("[process] %s stopped: %v", name, err)
+		default:
+			log.Warnf("[process] %s exited unexpectedly: %v", name, err)
+		}
+	}(cmd, done, stopping)
 	return nil
 }
 
 // Stop stops the running process gracefully with timeout and force-kill fallback.
 func (p *Runner) Stop() error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	cmd, done, stopping, already := p.cmd, p.waitDone, p.stopping, p.exited.Load()
+	p.mu.Unlock()
 
-	if p.cmd == nil || p.cmd.Process == nil {
+	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
+	// Already exited and reaped by the reaper: the PID may have been recycled,
+	// so do NOT signal it. Just clear our bookkeeping.
+	if already {
+		p.clear(cmd)
+		return nil
+	}
+	if stopping != nil {
+		stopping.Store(true)
+	}
 
-	// Try graceful shutdown with SIGINT
-	if err := p.cmd.Process.Signal(os.Interrupt); err != nil {
-		// If signal fails, try to kill directly
-		_ = p.cmd.Process.Kill()
-		p.cmd.Wait()
-		p.cmd = nil
+	// Graceful SIGINT; on signal failure, force kill. We wait on the reaper's
+	// done channel rather than calling cmd.Wait() (which the reaper owns).
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		_ = cmd.Process.Kill()
+		<-done
+		p.clear(cmd)
 		return err
 	}
-
-	// Wait with timeout
-	done := make(chan error, 1)
-	go func() {
-		done <- p.cmd.Wait()
-	}()
-
 	select {
 	case <-time.After(5 * time.Second):
-		// Timeout: force kill
-		_ = p.cmd.Process.Kill()
-		<-done // Wait for the goroutine to finish
+		_ = cmd.Process.Kill()
+		<-done
 	case <-done:
-		// Process exited gracefully
 	}
-
-	p.cmd = nil
+	p.clear(cmd)
 	return nil
+}
+
+// clear resets the current-process bookkeeping, but only if it still refers to
+// cmd — guarding against clearing a newer process installed by a concurrent
+// Start/Restart.
+func (p *Runner) clear(cmd *exec.Cmd) {
+	p.mu.Lock()
+	if p.cmd == cmd {
+		p.cmd = nil
+		p.waitDone = nil
+		p.stopping = nil
+	}
+	p.mu.Unlock()
 }
 
 // Restart stops and starts the process.
@@ -147,14 +198,14 @@ func (p *Runner) Restart() error {
 func (p *Runner) IsRunning() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.cmd != nil && p.cmd.Process != nil
+	return p.cmd != nil && p.cmd.Process != nil && !p.exited.Load()
 }
 
 // PID returns the process ID if running, 0 otherwise.
 func (p *Runner) PID() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.cmd != nil && p.cmd.Process != nil {
+	if p.cmd != nil && p.cmd.Process != nil && !p.exited.Load() {
 		return p.cmd.Process.Pid
 	}
 	return 0
