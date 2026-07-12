@@ -69,6 +69,12 @@ type ClientLimiter interface {
 
 	// RecordActivity records activity for a remote IP, resetting its drain deadline.
 	RecordActivity(remoteIP string)
+
+	// IsDrainExpired reports whether the single-direction drain deadline for
+	// remoteIP has elapsed with no intervening RecordActivity. Read live each
+	// tick so active reverse traffic renews the deadline (no false close) while
+	// idle half-open connections are still reclaimed after drainSec.
+	IsDrainExpired(remoteIP string) bool
 }
 
 // remoteIPClientLimiter implements ClientLimiter with remote IP based slots.

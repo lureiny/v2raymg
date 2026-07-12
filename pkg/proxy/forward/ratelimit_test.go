@@ -23,23 +23,32 @@ func TestTokenBucketLimiter_Unlimited(t *testing.T) {
 }
 
 func TestTokenBucketLimiter_LimitReaderPassthrough(t *testing.T) {
-	l := NewTokenBucketLimiter(0, 0)
-	r := strings.NewReader("hello")
-	lr := l.LimitReader(r)
+	l := NewTokenBucketLimiter(0, 0) // unlimited
+	lr := l.LimitReader(strings.NewReader("hello"))
 
-	// Should be the same reader (passthrough)
-	if lr != r {
-		t.Error("unlimited limiter should return original reader")
+	// LimitReader now always wraps (so a later SetRate applies to existing
+	// connections); an unlimited limiter must transfer all bytes unthrottled.
+	got := make([]byte, 5)
+	n, err := lr.Read(got)
+	if err != nil && err != io.EOF {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got[:n]) != "hello" {
+		t.Errorf("unlimited passthrough: got %q, want %q", got[:n], "hello")
 	}
 }
 
 func TestTokenBucketLimiter_LimitWriterPassthrough(t *testing.T) {
-	l := NewTokenBucketLimiter(0, 0)
+	l := NewTokenBucketLimiter(0, 0) // unlimited
 	var buf bytes.Buffer
 	lw := l.LimitWriter(&buf)
 
-	if lw != &buf {
-		t.Error("unlimited limiter should return original writer")
+	n, err := lw.Write([]byte("hello"))
+	if err != nil || n != 5 {
+		t.Fatalf("write n=%d err=%v", n, err)
+	}
+	if buf.String() != "hello" {
+		t.Errorf("unlimited passthrough: got %q, want %q", buf.String(), "hello")
 	}
 }
 

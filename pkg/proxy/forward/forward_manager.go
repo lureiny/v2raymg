@@ -187,11 +187,10 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 	limiterUp = userLimiter.UploadLimiter()
 	limiterDown = userLimiter.DownloadLimiter()
 
-	// Determine listen address
+	// Determine listen address. An empty host yields ":port", a wildcard the
+	// relays bind as a kernel dual-stack (v4+v6) socket with best-effort IPv4
+	// fallback — the default the previous explicit "0.0.0.0" (IPv4-only) broke.
 	listenAddr := rule.ListenAddr
-	if listenAddr == "" {
-		listenAddr = "0.0.0.0"
-	}
 	fullListenAddr := fmt.Sprintf("%s:%d", listenAddr, port)
 
 	// Determine effective client limit config with priority: rule > stored config > default

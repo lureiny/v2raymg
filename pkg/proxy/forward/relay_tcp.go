@@ -2,12 +2,16 @@ package forward
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
+
+	"github.com/lureiny/v2raymg/pkg/log"
 )
 
 const (
@@ -71,9 +75,41 @@ func NewTCPRelay(cfg TCPRelayConfig) *TCPRelay {
 	}
 }
 
+// isTemporaryAcceptErr reports whether an Accept error is transient and should
+// be retried after a backoff (fd exhaustion, aborted connections) rather than
+// treated as fatal.
+func isTemporaryAcceptErr(err error) bool {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Temporary() { //nolint:staticcheck // Temporary() still flags EMFILE/ECONNABORTED
+		return true
+	}
+	return errors.Is(err, syscall.EMFILE) ||
+		errors.Is(err, syscall.ENFILE) ||
+		errors.Is(err, syscall.ECONNABORTED)
+}
+
+// listenDualStack listens best-effort on both address families. For a wildcard
+// host (":port") Go creates a single IPV6_V6ONLY=0 socket that accepts both v4
+// and v6. If that bind fails (e.g. IPv6 disabled), it falls back to the IPv4
+// wildcard so the relay still starts — the best-effort dual-stack semantics
+// PROJECT_GUIDE requires. A non-wildcard host is bound as-is.
+func listenDualStack(addr string) (net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err == nil {
+		return ln, nil
+	}
+	if host, port, e := net.SplitHostPort(addr); e == nil && (host == "" || host == "::") {
+		if ln2, e2 := net.Listen("tcp", net.JoinHostPort("0.0.0.0", port)); e2 == nil {
+			log.Warnf("[TCPRelay] dual-stack bind %q failed (%v); fell back to IPv4-only", addr, err)
+			return ln2, nil
+		}
+	}
+	return nil, err // both families failed → real error
+}
+
 // Start begins listening and accepting connections.
 func (r *TCPRelay) Start() error {
-	ln, err := net.Listen("tcp", r.listenAddr)
+	ln, err := listenDualStack(r.listenAddr)
 	if err != nil {
 		return fmt.Errorf("relay listen %s: %w", r.listenAddr, err)
 	}
@@ -110,6 +146,7 @@ func (r *TCPRelay) ActiveConnections() int64 {
 func (r *TCPRelay) acceptLoop() {
 	defer r.wg.Done()
 
+	var tempDelay time.Duration
 	for {
 		conn, err := r.listener.Accept()
 		if err != nil {
@@ -117,10 +154,31 @@ func (r *TCPRelay) acceptLoop() {
 			case <-r.ctx.Done():
 				return
 			default:
-				// transient error, continue
+			}
+			// Transient (EMFILE/ENFILE/ECONNABORTED): exponential backoff 5ms→1s
+			// so fd exhaustion can't spin the loop at 100% CPU with no log.
+			if isTemporaryAcceptErr(err) {
+				if tempDelay == 0 {
+					tempDelay = 5 * time.Millisecond
+				} else {
+					tempDelay *= 2
+				}
+				if tempDelay > time.Second {
+					tempDelay = time.Second
+				}
+				log.Warnf("[TCPRelay] transient accept error on %s, backing off %v: %v", r.listenAddr, tempDelay, err)
+				select {
+				case <-time.After(tempDelay):
+				case <-r.ctx.Done():
+					return
+				}
 				continue
 			}
+			// Permanent: the listener is unusable; stop the accept loop.
+			log.Errorf("[TCPRelay] accept failed on %s, stopping relay: %v", r.listenAddr, err)
+			return
 		}
+		tempDelay = 0 // reset backoff after a successful accept
 
 		// Get remote IP for client limiter
 		remoteIP := ""
@@ -197,8 +255,9 @@ func (r *TCPRelay) handleConn(clientConn net.Conn, remoteIP string) {
 		})
 	}
 
-	// Track single-direction drain state
-	var drainDeadline time.Time
+	// Track single-direction drain state. The deadline itself lives in the
+	// client limiter's drainEnd map, which RecordActivity renews on every read,
+	// so we query IsDrainExpired live each tick instead of freezing a snapshot.
 	var drainActive bool
 	drainMu := sync.Mutex{}
 
@@ -226,7 +285,7 @@ func (r *TCPRelay) handleConn(clientConn net.Conn, remoteIP string) {
 		// Signal direction end and start drain
 		drainMu.Lock()
 		if r.clientLimiter != nil && remoteIP != "" {
-			drainDeadline = r.clientLimiter.OnSingleDirectionEnd(remoteIP)
+			r.clientLimiter.OnSingleDirectionEnd(remoteIP) // seeds drainEnd; renewed by RecordActivity
 			drainActive = true
 		}
 		drainMu.Unlock()
@@ -248,7 +307,7 @@ func (r *TCPRelay) handleConn(clientConn net.Conn, remoteIP string) {
 		// Signal direction end and start drain
 		drainMu.Lock()
 		if r.clientLimiter != nil && remoteIP != "" {
-			drainDeadline = r.clientLimiter.OnSingleDirectionEnd(remoteIP)
+			r.clientLimiter.OnSingleDirectionEnd(remoteIP) // seeds drainEnd; renewed by RecordActivity
 			drainActive = true
 		}
 		drainMu.Unlock()
@@ -274,7 +333,7 @@ func (r *TCPRelay) handleConn(clientConn net.Conn, remoteIP string) {
 			uploadComplete = true
 			// Check drain timeout
 			drainMu.Lock()
-			if drainActive && !time.Now().IsZero() && time.Now().After(drainDeadline) {
+			if drainActive && r.clientLimiter != nil && r.clientLimiter.IsDrainExpired(remoteIP) {
 				drainMu.Unlock()
 				// Drain expired, force close
 				clientConn.Close()
@@ -297,7 +356,7 @@ func (r *TCPRelay) handleConn(clientConn net.Conn, remoteIP string) {
 			downloadComplete = true
 			// Check drain timeout
 			drainMu.Lock()
-			if drainActive && !time.Now().IsZero() && time.Now().After(drainDeadline) {
+			if drainActive && r.clientLimiter != nil && r.clientLimiter.IsDrainExpired(remoteIP) {
 				drainMu.Unlock()
 				// Drain expired, force close
 				clientConn.Close()
@@ -319,7 +378,7 @@ func (r *TCPRelay) handleConn(clientConn net.Conn, remoteIP string) {
 		case <-idleTick.C:
 			// Check drain timeout
 			drainMu.Lock()
-			if drainActive && !time.Now().IsZero() && time.Now().After(drainDeadline) {
+			if drainActive && r.clientLimiter != nil && r.clientLimiter.IsDrainExpired(remoteIP) {
 				drainMu.Unlock()
 				clientConn.Close()
 				targetConn.Close()

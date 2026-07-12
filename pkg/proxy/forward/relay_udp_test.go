@@ -681,7 +681,8 @@ func (s *gateClientLimiter) CleanupExpiredSlots()     { s.inner.CleanupExpiredSl
 func (s *gateClientLimiter) OnSingleDirectionEnd(ip string) time.Time {
 	return s.inner.OnSingleDirectionEnd(ip)
 }
-func (s *gateClientLimiter) RecordActivity(ip string) { s.inner.RecordActivity(ip) }
+func (s *gateClientLimiter) RecordActivity(ip string)  { s.inner.RecordActivity(ip) }
+func (s *gateClientLimiter) IsDrainExpired(ip string) bool { return s.inner.IsDrainExpired(ip) }
 
 // TestUDPRelay_StopWaitsForOrphanReap locks in the F10 invariant:
 // forwardUpstream's Write-error path spawns an async reapSession goroutine,

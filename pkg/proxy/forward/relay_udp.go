@@ -7,7 +7,26 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/lureiny/v2raymg/pkg/log"
 )
+
+// listenPacketDualStack is the UDP counterpart of listenDualStack: a wildcard
+// host (":port") binds a single kernel dual-stack (v4+v6) socket, with
+// best-effort fallback to the IPv4 wildcard if that bind fails.
+func listenPacketDualStack(addr string) (net.PacketConn, error) {
+	pc, err := net.ListenPacket("udp", addr)
+	if err == nil {
+		return pc, nil
+	}
+	if host, port, e := net.SplitHostPort(addr); e == nil && (host == "" || host == "::") {
+		if pc2, e2 := net.ListenPacket("udp", net.JoinHostPort("0.0.0.0", port)); e2 == nil {
+			log.Warnf("[UDPRelay] dual-stack bind %q failed (%v); fell back to IPv4-only", addr, err)
+			return pc2, nil
+		}
+	}
+	return nil, err
+}
 
 const (
 	defaultUDPSessionIdle = 60 * time.Second
@@ -116,7 +135,7 @@ type udpSession struct {
 // Calling Start twice will fail the second call at ListenPacket (address
 // already in use), matching TCPRelay's failure semantics.
 func (r *UDPRelay) Start() error {
-	pc, err := net.ListenPacket("udp", r.listenAddr)
+	pc, err := listenPacketDualStack(r.listenAddr)
 	if err != nil {
 		return fmt.Errorf("udp relay listen %s: %w", r.listenAddr, err)
 	}

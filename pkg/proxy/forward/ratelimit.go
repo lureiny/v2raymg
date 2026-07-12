@@ -118,20 +118,35 @@ func (l *TokenBucketLimiter) GetRate() int64 {
 	return int64(l.rate)
 }
 
-// LimitReader returns a rate-limited reader. If unlimited, returns r as-is.
+// LimitReader returns a rate-limited reader. It ALWAYS wraps, even when the
+// limiter is currently unlimited: this is a stable-reference bucket whose rate
+// can flip unlimited→limited later via in-place SetRate, and the wrapper
+// re-checks IsUnlimited() on every Read (inside waitForTokens, before any lock),
+// so a connection established while unlimited starts honoring a rate set
+// afterwards. The unlimited-path cost is a single atomic.Bool load per Read.
 func (l *TokenBucketLimiter) LimitReader(r io.Reader) io.Reader {
-	if l.IsUnlimited() {
-		return r
-	}
 	return &limitedReader{r: r, limiter: l}
 }
 
-// LimitWriter returns a rate-limited writer. If unlimited, returns w as-is.
+// LimitWriter returns a rate-limited writer. Always wraps, for the same reason
+// as LimitReader.
 func (l *TokenBucketLimiter) LimitWriter(w io.Writer) io.Writer {
-	if l.IsUnlimited() {
-		return w
-	}
 	return &limitedWriter{w: w, limiter: l}
+}
+
+// refundTokens returns tokens that were deducted by waitForTokens but not
+// actually consumed by a short read/write. No-op when unlimited. Capped at burst
+// so a refund never inflates the bucket beyond capacity.
+func (l *TokenBucketLimiter) refundTokens(k int) {
+	if k <= 0 || l.IsUnlimited() {
+		return
+	}
+	l.mu.Lock()
+	l.tokens += float64(k)
+	if l.tokens > l.burst {
+		l.tokens = l.burst
+	}
+	l.mu.Unlock()
 }
 
 // waitForTokens blocks until n tokens are available, consuming them.
@@ -203,7 +218,13 @@ type limitedReader struct {
 func (lr *limitedReader) Read(p []byte) (int, error) {
 	// Limit the read size to what the token bucket allows
 	allowed := lr.limiter.waitForTokens(len(p))
-	return lr.r.Read(p[:allowed])
+	n, err := lr.r.Read(p[:allowed])
+	if n < allowed {
+		// Short read: refund the tokens we deducted but did not spend, so small
+		// packets don't burn budget at buffer granularity on a shared bucket.
+		lr.limiter.refundTokens(allowed - n)
+	}
+	return n, err
 }
 
 // limitedWriter wraps an io.Writer with rate limiting.
@@ -218,6 +239,9 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 		remaining := p[totalWritten:]
 		allowed := lw.limiter.waitForTokens(len(remaining))
 		n, err := lw.w.Write(remaining[:allowed])
+		if n < allowed {
+			lw.limiter.refundTokens(allowed - n)
+		}
 		totalWritten += n
 		if err != nil {
 			return totalWritten, err
