@@ -1,6 +1,7 @@
 package hysteria
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,11 +40,27 @@ type hysteriaTrafficStats struct {
 }
 
 // startProcess ensures the binary exists, generates config, and starts the hysteria process.
-func (hc *HysteriaContainer) startProcess() error {
+// ctx bounds the potential binary download so a pending start can be
+// interrupted when the container stops (the stop hook blocks until this
+// returns — an unbounded download here would hang Stop indefinitely).
+func (hc *HysteriaContainer) startProcess(ctx context.Context) error {
+	hc.procMu.Lock()
+	defer hc.procMu.Unlock()
+
+	// Cross-generation guard: if an interleaved Start/Stop left a previous
+	// process behind, stop it first so it cannot leak as an orphan.
+	if hc.runner != nil {
+		log.Infof("hysteria: stopping stale process before start, pid=%d", hc.runner.PID())
+		if err := hc.runner.Stop(); err != nil {
+			return fmt.Errorf("hysteria: stop stale process: %w", err)
+		}
+		hc.runner = nil
+	}
+
 	// Ensure binary exists, download if missing
 	if _, err := os.Stat(hc.cfg.BinaryPath); os.IsNotExist(err) {
 		log.Infof("hysteria: binary not found at %s, downloading %s", hc.cfg.BinaryPath, hc.cfg.Version)
-		if err := downloadHysteria(hc.cfg.Version, hc.cfg.BinaryPath); err != nil {
+		if err := downloadHysteria(ctx, hc.cfg.Version, hc.cfg.BinaryPath); err != nil {
 			return fmt.Errorf("hysteria: auto-download failed: %w", err)
 		}
 		log.Infof("hysteria: downloaded hysteria %s to %s", hc.cfg.Version, hc.cfg.BinaryPath)
@@ -101,6 +118,9 @@ func (hc *HysteriaContainer) startProcess() error {
 
 // stopProcess stops the running hysteria process.
 func (hc *HysteriaContainer) stopProcess() error {
+	hc.procMu.Lock()
+	defer hc.procMu.Unlock()
+
 	if hc.runner == nil {
 		return nil
 	}

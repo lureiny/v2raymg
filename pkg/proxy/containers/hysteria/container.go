@@ -27,11 +27,18 @@ type CertReader interface {
 // HysteriaContainer implements the Container interface for hysteria2.
 type HysteriaContainer struct {
 	*container.BaseContainer
-	cfg         HysteriaConfig
-	httpPort    int // v2raymg HTTP server port, used for auth callback
-	inbound     inbound.Inbound
-	runner      *process.Runner
-	userMgr     *usermanager.UserManager
+	cfg      HysteriaConfig
+	httpPort int // v2raymg HTTP server port, used for auth callback
+	inbound  inbound.Inbound
+	runner   *process.Runner
+	userMgr  *usermanager.UserManager
+	// userEventCh is created once in NewHysteriaContainer and never closed
+	// or reassigned afterwards (immutable after construction), so all
+	// goroutines may read the field without locking and sends can never
+	// panic on a closed channel. Draining is done by the per-generation
+	// user event handler goroutine; while the container is stopped, events
+	// accumulate in the buffer (oldest beyond capacity are dropped by
+	// forwardUserEvents) and are consumed again after the next Start.
 	userEventCh chan usermanager.UserEvent
 	storeMgr    *store.StoreManager
 	certReader  CertReader
@@ -48,7 +55,25 @@ type HysteriaContainer struct {
 	inboundEnabled  bool
 	reconcileStopCh chan struct{}
 	reconcileWg     sync.WaitGroup
-	certWaitStopCh  chan struct{}
+	// lifecycleMu guards swaps of the session field (run/stop hooks only).
+	// It is never held while cancelling or waiting on a session.
+	lifecycleMu sync.Mutex
+	// session is the current Start/Stop generation; nil while stopped.
+	session *lifecycleSession
+	// procMu serializes startProcess/stopProcess across generations so an
+	// interleaved Start/Stop can never leak an untracked process.
+	procMu sync.Mutex
+}
+
+// lifecycleSession bundles the stop signal and goroutine tracking for one
+// Start/Stop generation. The run hook installs a fresh session; the stop hook
+// cancels it and waits for all session goroutines (cert wait, user event
+// handler) to exit before killing the process. Goroutines capture ctx by
+// value and never read hc.session, so generation swaps cannot race with them.
+type lifecycleSession struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // hysteriaHooks implements container.Hooks for HysteriaContainer.
@@ -66,25 +91,49 @@ func (h *hysteriaHooks) GetRunFunc() (func() error, func() error) {
 			slog.Warn("hysteria: save inbound config failed", "err", err)
 		}
 
+		// Install a fresh lifecycle session for this generation. A stale
+		// session can survive an interleaved Start/Stop (BaseContainer
+		// allows Stopping→Starting); cancel it so its goroutines
+		// self-terminate — they hold ctx by value, no waiting needed.
+		s := &lifecycleSession{}
+		s.ctx, s.cancel = context.WithCancel(context.Background())
+		h.c.lifecycleMu.Lock()
+		if old := h.c.session; old != nil {
+			old.cancel()
+		}
+		h.c.session = s
+		h.c.lifecycleMu.Unlock()
+
 		// Start user event handler and periodic reconcile loop
-		h.c.startUserEventHandler()
+		h.c.startUserEventHandler(s)
 		h.c.startReconcileLoop()
 
-		// Initialize cert wait stop channel
-		h.c.certWaitStopCh = make(chan struct{})
+		// Wait for the certificate and start the process in background
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			h.c.waitForCertAndStart(s.ctx)
+		}()
 
-		// Start cert wait and process in background
-		go h.c.waitForCertAndStart()
-
+		// NOTE: if this hook ever gains an error return path, it must
+		// s.cancel() and s.wg.Wait() before returning that error.
 		return nil
 	}
 	stop := func() error {
 		// Stop reconcile loop first
 		h.c.stopReconcileLoop()
-		// Close cert wait stop channel
-		h.c.closeCertWaitStopCh()
-		// Close user event channel
-		h.c.closeUserEventCh()
+		// Cancel this generation and wait for its goroutines to fully
+		// exit BEFORE killing the process: once wg.Wait returns, no
+		// session goroutine can call startProcess anymore, so the
+		// stopProcess below cannot leave an orphan behind.
+		h.c.lifecycleMu.Lock()
+		s := h.c.session
+		h.c.session = nil
+		h.c.lifecycleMu.Unlock()
+		if s != nil {
+			s.cancel()
+			s.wg.Wait()
+		}
 		// Stop the hysteria process
 		return h.c.stopProcess()
 	}
@@ -164,12 +213,20 @@ func NewHysteriaContainer(cfg HysteriaConfig, opts ...HysteriaOption) (*Hysteria
 // If the certificate does not exist, triggers issuance via certMgr.Issue() in a
 // background goroutine, then continues polling until the cert is ready.
 // If cert_file and key_file are set in config (direct path), skip polling and start immediately.
-func (hc *HysteriaContainer) waitForCertAndStart() {
+//
+// ctx is the owning lifecycle session's context: the goroutine exits promptly
+// once cancelled, and re-checks ctx before every startProcess call so a
+// concurrent Stop cannot be raced into leaving an orphan process behind
+// (the stop hook additionally waits for this goroutine before stopProcess).
+func (hc *HysteriaContainer) waitForCertAndStart(ctx context.Context) {
 	// Direct cert path configured — no polling needed, start immediately
 	if hc.cfg.CertFile != "" && hc.cfg.KeyFile != "" {
 		slog.Info("hysteria: using direct cert path, starting process",
 			"cert", hc.cfg.CertFile, "key", hc.cfg.KeyFile)
-		if err := hc.startProcess(); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := hc.startProcess(ctx); err != nil {
 			slog.Error("hysteria: start process failed", "err", err)
 		}
 		return
@@ -194,7 +251,10 @@ func (hc *HysteriaContainer) waitForCertAndStart() {
 
 	// Try immediately first
 	if hasCert() {
-		if err := hc.startProcess(); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := hc.startProcess(ctx); err != nil {
 			slog.Error("hysteria: start process failed", "err", err)
 		}
 		return
@@ -222,29 +282,20 @@ func (hc *HysteriaContainer) waitForCertAndStart() {
 
 	for {
 		select {
-		case <-hc.certWaitStopCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			if hasCert() {
+				if ctx.Err() != nil {
+					return
+				}
 				slog.Info("hysteria: certificate ready, starting process", "domain", hc.cfg.Domain)
-				if err := hc.startProcess(); err != nil {
+				if err := hc.startProcess(ctx); err != nil {
 					slog.Error("hysteria: start process failed", "err", err)
 				}
 				return
 			}
 			slog.Info("hysteria: still waiting for certificate", "domain", hc.cfg.Domain)
-		}
-	}
-}
-
-// closeCertWaitStopCh closes the cert wait stop channel if open.
-func (hc *HysteriaContainer) closeCertWaitStopCh() {
-	if hc.certWaitStopCh != nil {
-		select {
-		case <-hc.certWaitStopCh:
-			// Already closed
-		default:
-			close(hc.certWaitStopCh)
 		}
 	}
 }
@@ -284,7 +335,7 @@ func (hc *HysteriaContainer) ConfigFile() string {
 }
 
 // Update downloads a new version, restarts the process, and returns the result.
-func (hc *HysteriaContainer) Update(_ context.Context, req container.UpdateRequest) (*container.UpdateResult, error) {
+func (hc *HysteriaContainer) Update(ctx context.Context, req container.UpdateRequest) (*container.UpdateResult, error) {
 	targetVersion := req.TargetTag
 	if targetVersion == "" {
 		targetVersion = hc.cfg.Version
@@ -301,7 +352,7 @@ func (hc *HysteriaContainer) Update(_ context.Context, req container.UpdateReque
 
 	// Download new version to a temp path
 	tmpBinary := hc.cfg.BinaryPath + ".new"
-	if err := downloadHysteria(targetVersion, tmpBinary); err != nil {
+	if err := downloadHysteria(ctx, targetVersion, tmpBinary); err != nil {
 		return nil, fmt.Errorf("hysteria: download update: %w", err)
 	}
 
@@ -458,14 +509,24 @@ func (hc *HysteriaContainer) forwardUserEvents(source <-chan usermanager.UserEve
 	}
 }
 
-// startUserEventHandler starts a goroutine to process user events from the channel.
-func (hc *HysteriaContainer) startUserEventHandler() {
+// startUserEventHandler starts a goroutine to process user events from the
+// channel. The goroutine belongs to the given lifecycle session: it exits on
+// session cancel and is restarted by the next generation's run hook, so user
+// event handling survives Stop→Start cycles (e.g. the Update() restart path).
+func (hc *HysteriaContainer) startUserEventHandler(s *lifecycleSession) {
 	if hc.userEventCh == nil {
 		return
 	}
+	s.wg.Add(1)
 	go func() {
-		for event := range hc.userEventCh {
-			hc.handleUserEvent(event)
+		defer s.wg.Done()
+		for {
+			select {
+			case <-s.ctx.Done():
+				return
+			case event := <-hc.userEventCh:
+				hc.handleUserEvent(event)
+			}
 		}
 	}()
 }
@@ -831,13 +892,5 @@ func (hc *HysteriaContainer) stopReconcileLoop() {
 		close(hc.reconcileStopCh)
 		hc.reconcileWg.Wait()
 		hc.reconcileStopCh = nil
-	}
-}
-
-// closeUserEventCh closes the user event channel to terminate the forwardUserEvents goroutine.
-func (hc *HysteriaContainer) closeUserEventCh() {
-	if hc.userEventCh != nil {
-		close(hc.userEventCh)
-		hc.userEventCh = nil
 	}
 }
