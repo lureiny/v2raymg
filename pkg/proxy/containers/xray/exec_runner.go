@@ -673,6 +673,15 @@ func (e *Executor) AddInboundNative(nativeInboundJSON []byte) error {
 		}
 	}
 
+	// Surface (but do not reject on) a credential-less vmess/vless/trojan inbound
+	// restored from the store: it predates the FastAddInbound guard and is a dead
+	// inbound whose empty credential poisons subscriptions. We keep restoring it
+	// so a batch restore isn't aborted, but operators should delete and recreate
+	// it. Rejecting here could turn a subscription issue into a startup failure.
+	if credentialLessInbound(protocol, defaultClientUUID, defaultPassword) {
+		log.Warnf("xray: restored credential-less %s inbound %q (dead inbound; recreate it to fix subscriptions)", protocol, tag)
+	}
+
 	// Build extra map from native JSON for subscription URI generation.
 	// Without extra, subscription URIs won't contain transport-specific params.
 	extra := extractNativeExtra(raw, transport, security)
@@ -1913,6 +1922,16 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 		}
 	}
 
+	// Refuse to persist a credential-less vmess/vless/trojan inbound: it is a
+	// dead inbound (no client can authenticate) and, worse, its empty
+	// credential makes subscription generation fail-fast, killing the user's
+	// whole subscription. Catch it here at the entry point rather than at
+	// subscription time.
+	if credentialLessInbound(protocol, defaultClientUUID, defaultPassword) {
+		return errs.Newf(errs.ErrFastAddInboundFailed,
+			"refusing to add credential-less %s inbound %q", protocol, tag)
+	}
+
 	// Store cert_source in extensions for subscription SNI logic
 	if certSource != "none" {
 		if spec.Extensions == nil {
@@ -2086,6 +2105,22 @@ func writeCertToTempFiles(certPEM, keyPEM string) (certFile, keyFile string, err
 	return certF.Name(), keyF.Name(), nil
 }
 
+// credentialLessInbound reports whether a vmess/vless/trojan inbound has no
+// usable default credential (empty settings.clients), which makes it a dead
+// inbound nobody can authenticate to and which poisons subscription generation.
+// socks5/http (per-user AuthToken) and shadowsocks (settings-level password)
+// are intentionally excluded.
+func credentialLessInbound(protocol contracts.Protocol, defaultClientUUID, defaultPassword string) bool {
+	switch protocol {
+	case contracts.ProtocolVMess, contracts.ProtocolVLess:
+		return defaultClientUUID == ""
+	case contracts.ProtocolTrojan:
+		return defaultPassword == ""
+	default:
+		return false
+	}
+}
+
 // buildFastAddSimpleSpec builds a minimal InboundSpec for security=none protocols.
 func buildFastAddSimpleSpec(tag string, port uint32, protocol contracts.Protocol, params map[string]any) (contracts.InboundSpec, error) {
 	extensions := map[string]any{
@@ -2093,19 +2128,47 @@ func buildFastAddSimpleSpec(tag string, port uint32, protocol contracts.Protocol
 		"transport":   fastGetString(params, "transport", "tcp"),
 		"listen_addr": fastGetString(params, "listen", "0.0.0.0"),
 	}
+	// Credentials must go into extensions["users"] — the only key Adapter.ToProvider
+	// reads to build settings.clients. The old extensions["uuid"]/["password"]
+	// keys were never read, so the adapter produced clients:[] and the inbound was
+	// unusable (no user could authenticate), which then failed the credential
+	// lookup at subscription time and fail-fast killed the user's whole
+	// subscription. Field names mirror MapUsers / profilegen exactly.
 	switch protocol {
-	case contracts.ProtocolVMess, contracts.ProtocolVLess:
+	case contracts.ProtocolVMess:
 		uuidStr := fastGetString(params, "uuid", "")
 		if uuidStr == "" {
 			uuidStr = generateUUID()
 		}
-		extensions["uuid"] = uuidStr
+		extensions["users"] = []map[string]any{{
+			"email":    "auto@vmess.local",
+			"uuid":     uuidStr,
+			"alter_id": uint32(0),
+		}}
+	case contracts.ProtocolVLess:
+		uuidStr := fastGetString(params, "uuid", "")
+		if uuidStr == "" {
+			uuidStr = generateUUID()
+		}
+		user := map[string]any{
+			"email": "auto@vless.local",
+			"uuid":  uuidStr,
+		}
+		// security=none is plaintext; flow (xtls-vision) requires TLS/reality, so
+		// only carry it through when explicitly provided.
+		if flow := fastGetString(params, "flow", ""); flow != "" {
+			user["flow"] = flow
+		}
+		extensions["users"] = []map[string]any{user}
 	case contracts.ProtocolTrojan:
 		password := fastGetString(params, "password", "")
 		if password == "" {
 			password = generateTrojanPassword()
 		}
-		extensions["password"] = password
+		extensions["users"] = []map[string]any{{
+			"email":    "auto@trojan.local",
+			"password": password,
+		}}
 	case contracts.ProtocolShadowsocks:
 		method := fastGetString(params, "method", "")
 		// Simple path only supports 2022 methods
