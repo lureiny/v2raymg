@@ -44,13 +44,18 @@ func NewEndNodeClusterManagerFromConfig(clusterCfg ClusterInitConfig, nodeCfg No
 	mgr.Token = clusterCfg.ClusterToken
 
 	// Register the local node with permanent heartbeat timestamps so it is
-	// never filtered out as "expired".
+	// never filtered out as "expired". These sentinel values (not now()) are
+	// load-bearing: registerOrHeartBeatToEndNode may skip the local node's
+	// periodic refresh, so the local node must never appear expired. This
+	// in-package struct literal writes the unexported runtime fields directly
+	// (single-threaded, before Add publishes the node) — do NOT use the
+	// Set*/Touch accessors here, which would overwrite the sentinels with now().
 	mgr.Add(&Node{
 		Node:                &localNode.Node,
-		InToken:             localNode.Token,
-		OutToken:            localNode.Token,
-		ReportHeartBeatTime: math.MaxInt64 - NodeTimeOut,
-		GetHeartBeatTime:    math.MaxInt64 - NodeTimeOut,
+		inToken:             localNode.Token,
+		outToken:            localNode.Token,
+		reportHeartBeatTime: math.MaxInt64 - NodeTimeOut,
+		recvHeartBeatTime:   math.MaxInt64 - NodeTimeOut,
 		CreateTime:          time.Now().Unix(),
 	})
 

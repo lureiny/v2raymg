@@ -93,13 +93,10 @@ func (cluster *Cluster) AuthRemoteNode(node **Node) error {
 	} else if !(*node).Compare(n) {
 		// node的meta info指 host+port+cluster+name, 这四个值可以指定唯一一个node
 		return fmt.Errorf("there at least two node with same name[%s], but have different meta info.", n.GetName())
-	} else if (*node).InToken != n.InToken {
-		return fmt.Errorf("wrong token")
-	} else if n.GetHeartBeatTime != 0 && n.GetHeartBeatTime+int64(HeartBeatTimeout) < time.Now().Unix() {
-		return fmt.Errorf("invalid token, token timeout")
+	} else if err := n.AuthAndTouch((*node).GetInToken()); err != nil {
+		// 验证 token 与心跳未超时, 通过则原子刷新收到心跳时间 (check-then-act 在 Node 内加锁完成)
+		return err
 	} else {
-		// 验证通过后即可认为对方上报了一次心跳, 更新心跳上报时间
-		n.GetHeartBeatTime = time.Now().Unix()
 		*node = n
 	}
 	return nil

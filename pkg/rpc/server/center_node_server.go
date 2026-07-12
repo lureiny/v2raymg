@@ -48,10 +48,10 @@ func (s *CenterNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.He
 	}
 
 	node := &c.Node{
-		Node:             heartBeatReq.GetNodeAuthInfo().GetNode(),
-		CreateTime:       time.Now().Unix(),
-		GetHeartBeatTime: time.Now().Unix(),
+		Node:       heartBeatReq.GetNodeAuthInfo().GetNode(),
+		CreateTime: time.Now().Unix(),
 	}
+	node.SetRecvHeartBeatTime(time.Now().Unix())
 	if !node.IsComplete() {
 		log.Error("heartbeat: not complete node",
 			"src", fmt.Sprintf("%s:%d", node.GetHost(), node.GetPort()),
@@ -67,7 +67,7 @@ func (s *CenterNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.He
 	clusterName := node.GetClusterName()
 	if cluster := s.clusters.GetCluster(clusterName); cluster != nil {
 		if n := cluster.Get(nodeName); n != nil {
-			n.GetHeartBeatTime = time.Now().Unix()
+			n.SetRecvHeartBeatTime(time.Now().Unix())
 		} else {
 			log.Info("new node joining cluster",
 				"src", fmt.Sprintf("%s:%d", node.GetHost(), node.GetPort()),

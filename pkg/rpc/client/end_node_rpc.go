@@ -491,7 +491,7 @@ func (c *EndNodeClient) ReqToMultiEndNodeServer(ctx context.Context, reqType Req
 			}
 			endNodeAccessClient := proto.NewEndNodeAccessClient(conn)
 			nodeAuthInfo := &proto.NodeAuthInfo{
-				Token: n.OutToken,
+				Token: n.GetOutToken(),
 				Node:  &c.localNode.Node,
 			}
 			reqCtx := NewContext()

@@ -24,17 +24,17 @@ func makeNode(name, host string, port int32, clusterName string) *cluster.Node {
 
 func TestNode_IsValid_RecentHeartbeat(t *testing.T) {
 	n := makeNode("n1", "10.0.0.1", 2000, "c1")
-	n.GetHeartBeatTime = time.Now().Unix()
+	n.SetRecvHeartBeatTime(time.Now().Unix())
 	if !n.IsValid() {
-		t.Error("expected valid with recent GetHeartBeatTime")
+		t.Error("expected valid with recent recvHeartBeatTime")
 	}
 }
 
 func TestNode_IsValid_RecentReport(t *testing.T) {
 	n := makeNode("n1", "10.0.0.1", 2000, "c1")
-	n.ReportHeartBeatTime = time.Now().Unix()
+	n.SetReportHeartBeatTime(time.Now().Unix())
 	if !n.IsValid() {
-		t.Error("expected valid with recent ReportHeartBeatTime")
+		t.Error("expected valid with recent reportHeartBeatTime")
 	}
 }
 
@@ -56,8 +56,8 @@ func TestNode_IsValid_Expired(t *testing.T) {
 
 func TestNode_IsCompleteRegister_Both(t *testing.T) {
 	n := makeNode("n1", "10.0.0.1", 2000, "c1")
-	n.GetHeartBeatTime = time.Now().Unix()
-	n.ReportHeartBeatTime = time.Now().Unix()
+	n.SetRecvHeartBeatTime(time.Now().Unix())
+	n.SetReportHeartBeatTime(time.Now().Unix())
 	if !n.IsCompleteRegister() {
 		t.Error("expected complete register")
 	}
@@ -65,16 +65,16 @@ func TestNode_IsCompleteRegister_Both(t *testing.T) {
 
 func TestNode_IsCompleteRegister_OnlyOne(t *testing.T) {
 	n := makeNode("n1", "10.0.0.1", 2000, "c1")
-	n.GetHeartBeatTime = time.Now().Unix()
+	n.SetRecvHeartBeatTime(time.Now().Unix())
 	if n.IsCompleteRegister() {
-		t.Error("expected incomplete register with only GetHeartBeatTime")
+		t.Error("expected incomplete register with only recvHeartBeatTime")
 	}
 }
 
 func TestNode_RegisteredLocal(t *testing.T) {
 	n := makeNode("n1", "10.0.0.1", 2000, "c1")
-	n.InToken = "tok"
-	n.GetHeartBeatTime = time.Now().Unix()
+	n.SetInToken("tok")
+	n.SetRecvHeartBeatTime(time.Now().Unix())
 	if !n.RegisteredLocal() {
 		t.Error("expected RegisteredLocal true")
 	}
@@ -82,16 +82,16 @@ func TestNode_RegisteredLocal(t *testing.T) {
 
 func TestNode_RegisteredLocal_NoToken(t *testing.T) {
 	n := makeNode("n1", "10.0.0.1", 2000, "c1")
-	n.GetHeartBeatTime = time.Now().Unix()
+	n.SetRecvHeartBeatTime(time.Now().Unix())
 	if n.RegisteredLocal() {
-		t.Error("expected RegisteredLocal false without InToken")
+		t.Error("expected RegisteredLocal false without inToken")
 	}
 }
 
 func TestNode_RegisteredRemote(t *testing.T) {
 	n := makeNode("n1", "10.0.0.1", 2000, "c1")
-	n.OutToken = "tok"
-	n.ReportHeartBeatTime = time.Now().Unix()
+	n.SetOutToken("tok")
+	n.SetReportHeartBeatTime(time.Now().Unix())
 	if !n.RegisteredRemote() {
 		t.Error("expected RegisteredRemote true")
 	}
@@ -99,8 +99,8 @@ func TestNode_RegisteredRemote(t *testing.T) {
 
 func TestNode_RegisteredRemote_Expired(t *testing.T) {
 	n := makeNode("n1", "10.0.0.1", 2000, "c1")
-	n.OutToken = "tok"
-	n.ReportHeartBeatTime = 0
+	n.SetOutToken("tok")
+	n.SetReportHeartBeatTime(0)
 	if n.RegisteredRemote() {
 		t.Error("expected RegisteredRemote false with expired timestamp")
 	}
@@ -154,12 +154,12 @@ func TestCluster_AuthRemoteNode_NotExist(t *testing.T) {
 func TestCluster_AuthRemoteNode_WrongToken(t *testing.T) {
 	c := newTestCluster("c1", "tok")
 	local := makeNode("n1", "10.0.0.1", 2000, "c1")
-	local.InToken = "correct-token"
+	local.SetInToken("correct-token")
 	local.CreateTime = time.Now().Unix()
 	c.Add(local)
 
 	remote := makeNode("n1", "10.0.0.1", 2000, "c1")
-	remote.InToken = "wrong-token"
+	remote.SetInToken("wrong-token")
 	err := c.AuthRemoteNode(&remote)
 	if err == nil {
 		t.Error("expected error for wrong token")
@@ -169,13 +169,13 @@ func TestCluster_AuthRemoteNode_WrongToken(t *testing.T) {
 func TestCluster_AuthRemoteNode_Success(t *testing.T) {
 	c := newTestCluster("c1", "tok")
 	local := makeNode("n1", "10.0.0.1", 2000, "c1")
-	local.InToken = "correct-token"
-	local.GetHeartBeatTime = time.Now().Unix()
+	local.SetInToken("correct-token")
+	local.SetRecvHeartBeatTime(time.Now().Unix())
 	local.CreateTime = time.Now().Unix()
 	c.Add(local)
 
 	remote := makeNode("n1", "10.0.0.1", 2000, "c1")
-	remote.InToken = "correct-token"
+	remote.SetInToken("correct-token")
 	err := c.AuthRemoteNode(&remote)
 	if err != nil {
 		t.Errorf("expected success, got %v", err)
@@ -189,13 +189,13 @@ func TestCluster_AuthRemoteNode_Success(t *testing.T) {
 func TestCluster_AuthRemoteNode_Expired(t *testing.T) {
 	c := newTestCluster("c1", "tok")
 	local := makeNode("n1", "10.0.0.1", 2000, "c1")
-	local.InToken = "tok"
-	local.GetHeartBeatTime = 1 // long expired
+	local.SetInToken("tok")
+	local.SetRecvHeartBeatTime(1) // long expired
 	local.CreateTime = time.Now().Unix()
 	c.Add(local)
 
 	remote := makeNode("n1", "10.0.0.1", 2000, "c1")
-	remote.InToken = "tok"
+	remote.SetInToken("tok")
 	err := c.AuthRemoteNode(&remote)
 	if err == nil {
 		t.Error("expected error for expired token")
@@ -294,8 +294,8 @@ func TestNewEndNodeClusterManagerFromConfig(t *testing.T) {
 	if n == nil {
 		t.Fatal("expected local node registered in cluster")
 	}
-	if n.GetHeartBeatTime != math.MaxInt64-cluster.NodeTimeOut {
-		t.Errorf("expected permanent heartbeat, got %d", n.GetHeartBeatTime)
+	if n.GetRecvHeartBeatTime() != math.MaxInt64-cluster.NodeTimeOut {
+		t.Errorf("expected permanent heartbeat, got %d", n.GetRecvHeartBeatTime())
 	}
 }
 

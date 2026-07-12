@@ -113,8 +113,17 @@ var methodRspMap = map[string]interface{}{
 	"GetContainers":           &proto.GetContainersRsp{},
 }
 
+// newEmptyRsp returns a fresh, per-call response instance for the given method.
+// methodRspMap holds shared prototype pointers; returning them directly (as the
+// old code did) let concurrent requests share one struct — a data race under the
+// codec plus cross-request field bleed-through. reflect.New mints a private *T
+// each call so callers never share state (finding #3).
 func newEmptyRsp(fullMethod string) (interface{}, error) {
-	return methodRspMap[fullMethod[methodPrefixLen:]], nil
+	proto := methodRspMap[fullMethod[methodPrefixLen:]]
+	if proto == nil {
+		return nil, nil
+	}
+	return reflect.New(reflect.TypeOf(proto).Elem()).Interface(), nil
 }
 
 func (s *EndNodeServer) authRemoteNode(req interface{}, fullMethod string) (bool, interface{}, *proto.Node) {
@@ -123,18 +132,19 @@ func (s *EndNodeServer) authRemoteNode(req interface{}, fullMethod string) (bool
 	if fullMethod[methodPrefixLen:] == "RegisterNode" {
 		return true, nil, nodeAuthInfo.Node
 	}
-	node := &cluster.Node{
-		Node:    nodeAuthInfo.Node,
-		InToken: nodeAuthInfo.Token,
-	}
-	if err := s.clusterState.AuthRemoteNode(&node); err != nil && localNode.Token != node.InToken {
+	node := &cluster.Node{Node: nodeAuthInfo.Node}
+	node.SetInToken(nodeAuthInfo.Token)
+	if err := s.clusterState.AuthRemoteNode(&node); err != nil && localNode.Token != node.GetInToken() {
 		errMsg := fmt.Sprintf("auth err > %v", err)
 		log.Error("auth remote node failed",
 			"err", errMsg,
 			"src_host", node.Host, "src_port", node.Port,
 			"src_name", node.Name, "api", fullMethod[methodPrefixLen:],
 		)
-		rspValue := reflect.ValueOf(methodRspMap[fullMethod[methodPrefixLen:]])
+		// Build a private response instance (not the shared prototype) before
+		// reflect-writing Code/Msg, so concurrent auth failures don't clobber
+		// each other's error message (finding #3).
+		rspValue := reflect.New(reflect.TypeOf(methodRspMap[fullMethod[methodPrefixLen:]]).Elem())
 		rspValue.Elem().FieldByName("Code").SetInt(400)
 		rspValue.Elem().FieldByName("Msg").SetString(errMsg)
 		return false, rspValue.Interface(), nodeAuthInfo.Node

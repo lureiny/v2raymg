@@ -70,26 +70,24 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 			log.Error("register node failed", "err", errMsg, "src_name", nodeName)
 			registerNodeRsp.Code = 102
 			registerNodeRsp.Msg = errMsg
-			token = n.InToken
+			token = n.GetInToken()
 		} else {
 			token = uuid.New().String()
-			n.InToken = token
+			n.SetInToken(token)
 			log.Info("register node update",
 				"src_host", node.Host, "src_port", node.Port,
 				"src_name", nodeName, "cluster", node.ClusterName,
 			)
 		}
-		n.GetHeartBeatTime = time.Now().Unix()
+		n.SetRecvHeartBeatTime(time.Now().Unix())
 	} else {
 		token = uuid.New().String()
 		newNode := &cluster.Node{
-			Node:                node,
-			InToken:             token,
-			OutToken:            "",
-			GetHeartBeatTime:    time.Now().Unix(),
-			CreateTime:          time.Now().Unix(),
-			ReportHeartBeatTime: 0,
+			Node:       node,
+			CreateTime: time.Now().Unix(),
 		}
+		newNode.SetInToken(token)
+		newNode.SetRecvHeartBeatTime(time.Now().Unix())
 		s.clusterState.Add(newNode)
 		log.Info("register node new",
 			"src_host", node.Host, "src_port", node.Port,
@@ -209,8 +207,8 @@ func (s *EndNodeServer) registerToEndNode(node *cluster.Node, wg *sync.WaitGroup
 	}
 	if len(registerRsp.GetData()) != 0 {
 		token := string(registerRsp.GetData())
-		node.OutToken = token
-		node.ReportHeartBeatTime = time.Now().Unix()
+		node.SetOutToken(token)
+		node.SetReportHeartBeatTime(time.Now().Unix())
 	}
 }
 
@@ -230,7 +228,7 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 
 	c := proto.NewEndNodeAccessClient(conn)
 	nodeAuthInfo := &proto.NodeAuthInfo{
-		Token: node.OutToken,
+		Token: node.GetOutToken(),
 		Node:  &localNode.Node,
 	}
 	heartBeatMsg := &proto.HeartBeatReq{
@@ -253,7 +251,7 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 	reqData, _ := pb.Marshal(heartBeatReq.(pb.Message))
 	rsp, err := rpcClient.ReqHeartBeat(rpcClient.NewContext(), reqData, c, nodeAuthInfo, s.clusterState.GetClusterToken())
 	if err != nil {
-		node.OutToken = ""
+		node.SetOutToken("")
 		log.Error("heartbeat to end node failed",
 			"err", fmt.Sprintf("heartbeat to end node failed > %v", err),
 			"dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name,
@@ -262,20 +260,20 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 	}
 	heartBeatRsp, ok := rsp.(*proto.HeartBeatRsp)
 	if !ok || heartBeatRsp == nil {
-		node.OutToken = ""
+		node.SetOutToken("")
 		log.Error("heartbeat to end node failed", "err", "unexpected nil response",
 			"dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name,
 		)
 		return
 	}
 	if heartBeatRsp.GetCode() != 0 {
-		node.OutToken = ""
-		node.ReportHeartBeatTime = time.Now().Unix()
+		node.SetOutToken("")
+		node.SetReportHeartBeatTime(time.Now().Unix())
 		log.Error("heartbeat to end node failed",
 			"err", heartBeatRsp.GetMsg(), "dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name,
 		)
 	} else {
-		node.ReportHeartBeatTime = time.Now().Unix()
+		node.SetReportHeartBeatTime(time.Now().Unix())
 		addRemoteNode(heartBeatRsp, s, "End")
 
 		// Push full user payloads to the remote node for any users it requested.
@@ -310,13 +308,16 @@ func (s *EndNodeServer) registerOrHeartBeatToEndNode() {
 			continue
 		}
 		if node.IsLocal() {
-			node.ReportHeartBeatTime = time.Now().Unix()
+			node.SetReportHeartBeatTime(time.Now().Unix())
 		}
 		if !node.IsValid() {
+			// Skip only this invalid node; using return here (finding #7)
+			// aborted the whole round, so a single stale peer silently
+			// starved every subsequent node of heartbeat/registration.
 			log.Info("skip heartbeat to invalid node",
 				"dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name,
 			)
-			return
+			continue
 		}
 		ch <- struct{}{}
 		wg.Add(1)
@@ -376,12 +377,8 @@ func addRemoteNode(rsp *proto.HeartBeatRsp, s *EndNodeServer, remoteServerType s
 				"node_host", remoteNode.GetHost(), "node_port", remoteNode.GetPort(), "node_name", remoteNode.GetName(),
 			)
 			s.clusterState.Add(&cluster.Node{
-				Node:                remoteNode,
-				InToken:             "",
-				OutToken:            "",
-				GetHeartBeatTime:    0,
-				ReportHeartBeatTime: 0,
-				CreateTime:          time.Now().Unix(),
+				Node:       remoteNode,
+				CreateTime: time.Now().Unix(),
 			})
 		}
 	}
