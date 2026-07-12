@@ -68,8 +68,10 @@ func (m *Manager) runRenewCycle(ctx context.Context) {
 		}
 		// renewed != nil only when a certificate was actually replaced this cycle
 		// (nil,nil means "not yet due"). Files are overwritten in place at the same
-		// path, so proxy cores pick up the new cert via their own file hot-reload;
-		// no container restart is issued here by design.
+		// path; whether the new cert takes effect without a restart depends on the
+		// specific proxy core's own file hot-reload (xray/mihomo reload from disk;
+		// hysteria's container Reload is a no-op, so it relies on the hysteria
+		// binary re-reading the cert). No container restart is issued here.
 		if renewed != nil {
 			log.Info("certmgmt: auto-renew renewed in place",
 				"domain", renewed.Domain,

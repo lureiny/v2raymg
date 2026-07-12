@@ -39,6 +39,13 @@ func (m *Manager) AddCertificates(d string, keyData, certData []byte) error {
 		return fmt.Errorf("certmgmt: AddCertificates: empty cert or key data")
 	}
 
+	// Serialize with Issue/RenewDomain on the same domain: both write the same
+	// four files, so without this lock a concurrent auto-renew and an import
+	// could interleave their renames into a persistently crossed crt/key pair.
+	mu := m.domainLock(d)
+	mu.Lock()
+	defer mu.Unlock()
+
 	notAfter, err := certmgmtlego.ParseCertNotAfter(certData)
 	if err != nil {
 		return fmt.Errorf("certmgmt: AddCertificates: parse cert: %w", err)
@@ -63,6 +70,12 @@ func (m *Manager) AddCertificates(d string, keyData, certData []byte) error {
 // DeleteCert removes the certificate files for the given domain.
 // Implements pkg/rpc/server.CertManager.
 func (m *Manager) DeleteCert(d string) error {
+	// Serialize with Issue/RenewDomain/AddCertificates so a delete cannot
+	// interleave with a write and leave a half-deleted set (e.g. meta gone but
+	// crt/key present).
+	mu := m.domainLock(d)
+	mu.Lock()
+	defer mu.Unlock()
 	return certmgmtlego.DeleteCert(m.cfg.Path, d)
 }
 

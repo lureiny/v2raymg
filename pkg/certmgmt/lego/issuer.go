@@ -105,6 +105,12 @@ func (li *LegoIssuer) Issue(ctx context.Context, req domain.IssueRequest) (*doma
 // Renew renews an existing certificate if it is close to expiry.
 // Returns nil, nil if renewal is not yet needed.
 func (li *LegoIssuer) Renew(ctx context.Context, record *domain.CertificateRecord, req domain.IssueRequest) (*domain.CertificateRecord, error) {
+	// Validate the challenge config on renewal too, so an unknown type cannot
+	// silently downgrade to HTTP-01 on :80 during an auto-renew (Issue already
+	// validates; Renew did not).
+	if err := validateIssueRequest(req); err != nil {
+		return nil, err
+	}
 	if time.Until(record.NotAfter) > renewBeforeDuration(req) {
 		return nil, nil // not yet due
 	}
@@ -266,6 +272,15 @@ func validateIssueRequest(req domain.IssueRequest) error {
 	}
 	if req.Challenge.Type == "" {
 		return fmt.Errorf("%w: challenge type required", domain.ErrConfigInvalid)
+	}
+	// Reject unrecognized challenge types explicitly instead of silently
+	// downgrading to HTTP-01 on :80 (which hid misconfigured dns setups).
+	if req.Challenge.Type != domain.ChallengeHTTP01 && req.Challenge.Type != domain.ChallengeDNS01 {
+		return fmt.Errorf("%w: unknown challenge type %q (want %q or %q)",
+			domain.ErrConfigInvalid, req.Challenge.Type, domain.ChallengeHTTP01, domain.ChallengeDNS01)
+	}
+	if req.Challenge.Type == domain.ChallengeDNS01 && req.Challenge.DNS == nil {
+		return fmt.Errorf("%w: dns01 challenge requires dns config", domain.ErrConfigInvalid)
 	}
 	return nil
 }

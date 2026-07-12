@@ -31,16 +31,38 @@ func certPaths(basePath, d string) (crt, key, res, meta string) {
 	return
 }
 
-// atomicWrite writes data to path atomically via a temp file + rename.
-func atomicWrite(path string, data []byte, perm os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
-		return err
+// stageTemp writes data to a uniquely-named temp file in the same directory as
+// path (so the later rename stays on one filesystem) and returns the temp path.
+// A unique name (not the old fixed path+".tmp") prevents two concurrent writers
+// for the same domain from clobbering each other's temp file.
+func stageTemp(path string, data []byte, perm os.FileMode) (string, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return "", err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	_, werr := f.Write(data)
+	if werr == nil {
+		werr = f.Chmod(perm)
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		os.Remove(tmp)
+		return "", werr
+	}
+	return tmp, nil
 }
 
-// SaveCert atomically persists certificate files and metadata.
+// SaveCert persists the certificate files and metadata. It stages all four
+// files as temp files FIRST, then renames them into place, so a failure while
+// writing (disk full, permissions) leaves the previous live cert/key/meta set
+// completely untouched instead of a persisted half-update. Each rename is
+// atomic; the only residual window is the sub-millisecond gap between the key
+// and crt renames on a genuine key change (import / re-issue), which POSIX
+// cannot close for two separately-read files — auto-renewal reuses the old key
+// (see issuer Renew), so its crt/key pair always matches regardless.
 func SaveCert(basePath string, record *domain.CertificateRecord, resource *domain.LegoResource) error {
 	dir := filepath.Join(basePath, certsFolder)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -49,39 +71,52 @@ func SaveCert(basePath string, record *domain.CertificateRecord, resource *domai
 
 	crtPath, keyPath, resPath, metaPath := certPaths(basePath, record.Domain)
 
-	// Write certificate PEM
-	if err := atomicWrite(crtPath, resource.CertificatePEM, 0600); err != nil {
-		return fmt.Errorf("%w: write crt: %v", domain.ErrStorageIO, err)
-	}
-
-	// Write private key PEM
-	if err := atomicWrite(keyPath, resource.PrivateKeyPEM, 0600); err != nil {
-		return fmt.Errorf("%w: write key: %v", domain.ErrStorageIO, err)
-	}
-
-	// Write LegoResource JSON (needed for renewal)
-	resBytes, err := json.MarshalIndent(resource, "", "\t")
-	if err != nil {
-		return fmt.Errorf("%w: marshal resource: %v", domain.ErrStorageIO, err)
-	}
-	if err := atomicWrite(resPath, resBytes, 0600); err != nil {
-		return fmt.Errorf("%w: write resource json: %v", domain.ErrStorageIO, err)
-	}
-
-	// Fill in file paths on the record before persisting
+	// Fill in file paths on the record before marshaling it.
 	record.CertFile = crtPath
 	record.KeyFile = keyPath
 	record.ResourceFile = resPath
 
-	// Write CertificateRecord meta JSON
+	resBytes, err := json.MarshalIndent(resource, "", "\t")
+	if err != nil {
+		return fmt.Errorf("%w: marshal resource: %v", domain.ErrStorageIO, err)
+	}
 	metaBytes, err := json.MarshalIndent(record, "", "\t")
 	if err != nil {
 		return fmt.Errorf("%w: marshal meta: %v", domain.ErrStorageIO, err)
 	}
-	if err := atomicWrite(metaPath, metaBytes, 0600); err != nil {
-		return fmt.Errorf("%w: write meta json: %v", domain.ErrStorageIO, err)
+
+	// Phase 1: stage every file as a temp. If any staging fails, remove the
+	// temps we already created and touch no live file.
+	type staged struct{ tmp, dst string }
+	plan := []struct {
+		dst  string
+		data []byte
+	}{
+		{keyPath, resource.PrivateKeyPEM},
+		{crtPath, resource.CertificatePEM},
+		{resPath, resBytes},
+		{metaPath, metaBytes},
+	}
+	var staged1 []staged
+	for _, p := range plan {
+		tmp, err := stageTemp(p.dst, p.data, 0600)
+		if err != nil {
+			for _, s := range staged1 {
+				os.Remove(s.tmp)
+			}
+			return fmt.Errorf("%w: stage %s: %v", domain.ErrStorageIO, p.dst, err)
+		}
+		staged1 = append(staged1, staged{tmp: tmp, dst: p.dst})
 	}
 
+	// Phase 2: rename staged temps into place (key before crt so a reader that
+	// keys off the crt file sees a matching key already present).
+	for _, s := range staged1 {
+		if err := os.Rename(s.tmp, s.dst); err != nil {
+			os.Remove(s.tmp)
+			return fmt.Errorf("%w: commit %s: %v", domain.ErrStorageIO, s.dst, err)
+		}
+	}
 	return nil
 }
 

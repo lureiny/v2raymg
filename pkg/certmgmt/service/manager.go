@@ -3,6 +3,7 @@ package certmgmtservice
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -166,8 +167,28 @@ func (m *Manager) ListCerts() []*domain.CertificateRecord {
 // with the old lego.CertManager interface. These require importing the old package types
 // which is currently forbidden (init() side effects). Deferred to Phase B.
 
+// normalizeChallengeType maps the configured challenge type (accepting common
+// aliases and the lego-style hyphenated spelling) to a canonical
+// domain.ChallengeType. The second return is false for unrecognized values,
+// which are passed through unchanged so the issuer rejects them explicitly
+// rather than silently falling back to HTTP-01 on :80.
+func normalizeChallengeType(raw string) (domain.ChallengeType, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "dns01", "dns-01", "dns":
+		return domain.ChallengeDNS01, true
+	case "http01", "http-01", "http":
+		return domain.ChallengeHTTP01, true
+	default:
+		return domain.ChallengeType(raw), false
+	}
+}
+
 // buildIssueRequest converts the Manager's config into a domain.IssueRequest.
 func (m *Manager) buildIssueRequest(domains []string) domain.IssueRequest {
+	// Normalize once so Challenge.Type and the DNS/HTTP sub-config below always
+	// agree — the previous code filled DNS config for "dns" but left Type="dns",
+	// which the issuer then treated as unknown and downgraded to HTTP-01 on :80.
+	ct, _ := normalizeChallengeType(m.cfg.Challenge.Type)
 	req := domain.IssueRequest{
 		Domains:         domains,
 		Email:           m.cfg.Email,
@@ -177,15 +198,15 @@ func (m *Manager) buildIssueRequest(domains []string) domain.IssueRequest {
 		// the issuer gate uses it so a window > 30 days is not silently capped.
 		RenewBefore: m.cfg.renewBeforeDuration(),
 		Challenge: domain.ChallengeConfig{
-			Type: domain.ChallengeType(m.cfg.Challenge.Type),
+			Type: ct,
 		},
 	}
 	if req.RenewBeforeDays <= 0 {
 		req.RenewBeforeDays = 30
 	}
 
-	switch m.cfg.Challenge.Type {
-	case string(domain.ChallengeDNS01), "dns": // accept both "dns01" and "dns"
+	switch ct {
+	case domain.ChallengeDNS01:
 		req.Challenge.DNS = &domain.DNSChallengeConfig{
 			ProviderName:               m.cfg.Challenge.DNS.ProviderName,
 			Credentials:                m.cfg.Challenge.DNS.Credentials,
