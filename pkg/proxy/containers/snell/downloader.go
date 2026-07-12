@@ -8,7 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 )
+
+// downloadTimeout bounds the whole snell-server download (connect + body read).
+// Without it, http.Get uses a default client with no timeout; because the
+// container's run hook calls startProcess (and thus this download) while holding
+// BaseContainer.opMu, a stalled download would block any concurrent Stop /
+// StopAll for the whole hang. A finite ceiling caps that worst case.
+const downloadTimeout = 5 * time.Minute
 
 // archMap maps GOARCH to snell download archive architecture names.
 var archMap = map[string]string{
@@ -35,7 +43,8 @@ func downloadSnellServer(version, binaryPath string) error {
 	tmpPath := tmpFile.Name()
 	defer os.Remove(tmpPath)
 
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: downloadTimeout}
+	resp, err := client.Get(url)
 	if err != nil {
 		tmpFile.Close()
 		return fmt.Errorf("snell: download %s: %w", url, err)

@@ -11,6 +11,19 @@ import (
 
 // startProcess ensures the binary exists, generates config, and starts the snell-server process.
 func (sc *SnellContainer) startProcess() error {
+	sc.procMu.Lock()
+	defer sc.procMu.Unlock()
+
+	// Cross-generation guard: if an interleaved Start/Stop left a previous
+	// process behind, stop it first so it cannot leak as an orphan.
+	if sc.runner != nil {
+		log.Infof("snell: stopping stale process before start, pid=%d", sc.runner.PID())
+		if err := sc.runner.Stop(); err != nil {
+			return fmt.Errorf("snell: stop stale process: %w", err)
+		}
+		sc.runner = nil
+	}
+
 	// Ensure binary exists, download if missing
 	if _, err := os.Stat(sc.cfg.BinaryPath); os.IsNotExist(err) {
 		log.Infof("snell: binary not found at %s, downloading %s", sc.cfg.BinaryPath, sc.cfg.Version)
@@ -49,6 +62,9 @@ func (sc *SnellContainer) startProcess() error {
 
 // stopProcess stops the running snell-server process.
 func (sc *SnellContainer) stopProcess() error {
+	sc.procMu.Lock()
+	defer sc.procMu.Unlock()
+
 	if sc.runner == nil {
 		return nil
 	}

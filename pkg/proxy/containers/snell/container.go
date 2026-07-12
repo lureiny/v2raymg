@@ -30,7 +30,14 @@ type SnellContainer struct {
 	runner  *process.Runner
 
 	// UserManager integration
-	userMgr     *usermanager.UserManager
+	userMgr *usermanager.UserManager
+	// userEventCh is created once in NewSnellContainer and never closed or
+	// reassigned afterwards (immutable after construction), so forwardUserEvents
+	// can read the field lock-free and sends can never panic on a closed
+	// channel. Draining is done by the per-generation user event handler
+	// goroutine; while the container is stopped, events accumulate in the
+	// buffer (oldest beyond capacity dropped by forwardUserEvents' select
+	// default) and are consumed again after the next Start.
 	userEventCh chan usermanager.UserEvent
 
 	// storeMgr provides unified access to persistence stores.
@@ -50,6 +57,26 @@ type SnellContainer struct {
 	// Reconcile loop for periodic user sync
 	reconcileStopCh chan struct{}
 	reconcileWg     sync.WaitGroup
+	// lifecycleMu guards swaps of the session field (run/stop hooks only).
+	// It is never held while cancelling or waiting on a session.
+	lifecycleMu sync.Mutex
+	// session is the current Start/Stop generation; nil while stopped.
+	session *lifecycleSession
+	// procMu serializes startProcess/stopProcess so an interleaved Start/Stop
+	// can never leak an untracked process (defense-in-depth; BaseContainer's
+	// opMu already serializes the hooks that call them).
+	procMu sync.Mutex
+}
+
+// lifecycleSession bundles the stop signal and goroutine tracking for one
+// Start/Stop generation, mirroring the hysteria container. The run hook installs
+// a fresh session; the stop hook cancels it and waits for its goroutines (the
+// user event handler) to exit before stopping the process. Goroutines capture
+// ctx by value and never read sc.session, so generation swaps cannot race.
+type lifecycleSession struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // snellHooks implements container.Hooks for SnellContainer.
@@ -67,18 +94,54 @@ func (h *snellHooks) GetRunFunc() (func() error, func() error) {
 			slog.Warn("snell: save inbound config failed", "err", err)
 		}
 
+		// Install a fresh lifecycle session for this generation, cancelling any
+		// stale one (defensive: BaseContainer's opMu makes this a no-op in
+		// practice, since the previous Stop has already nil'd session).
+		s := &lifecycleSession{}
+		s.ctx, s.cancel = context.WithCancel(context.Background())
+		h.c.lifecycleMu.Lock()
+		if old := h.c.session; old != nil {
+			old.cancel()
+		}
+		h.c.session = s
+		h.c.lifecycleMu.Unlock()
+
 		// Start user event handler and reconcile loop
-		h.c.startUserEventHandler()
+		h.c.startUserEventHandler(s)
 		h.c.startReconcileLoop()
 
-		// Start snell-server process
-		return h.c.startProcess()
+		// Start the snell-server process synchronously. Unlike hysteria (whose
+		// run returns nil and starts the process in a background goroutine),
+		// snell starts here, so on failure we must tear this session and the
+		// reconcile loop down before returning the error — otherwise their
+		// goroutines would leak.
+		if err := h.c.startProcess(); err != nil {
+			h.c.stopReconcileLoop()
+			h.c.lifecycleMu.Lock()
+			if h.c.session == s {
+				h.c.session = nil
+			}
+			h.c.lifecycleMu.Unlock()
+			s.cancel()
+			s.wg.Wait()
+			return err
+		}
+		return nil
 	}
 	stop := func() error {
 		// Stop reconcile loop first
 		h.c.stopReconcileLoop()
-		// Close user event channel to terminate forwardUserEvents goroutine
-		h.c.closeUserEventCh()
+		// Cancel this generation and wait for its goroutines (the user event
+		// handler) to exit before stopping the process. userEventCh is never
+		// closed, so forwardUserEvents can never panic on a closed channel.
+		h.c.lifecycleMu.Lock()
+		s := h.c.session
+		h.c.session = nil
+		h.c.lifecycleMu.Unlock()
+		if s != nil {
+			s.cancel()
+			s.wg.Wait()
+		}
 		// Stop the snell-server process
 		return h.c.stopProcess()
 	}
@@ -364,14 +427,24 @@ func (sc *SnellContainer) forwardUserEvents(source <-chan usermanager.UserEvent)
 	}
 }
 
-// startUserEventHandler starts a goroutine to process user events from the channel.
-func (sc *SnellContainer) startUserEventHandler() {
+// startUserEventHandler starts a goroutine to process user events from the
+// channel. The goroutine belongs to the given lifecycle session: it exits on
+// session cancel and is restarted by the next generation's run hook, so user
+// event handling survives Stop→Start cycles (e.g. the Update() restart path).
+func (sc *SnellContainer) startUserEventHandler(s *lifecycleSession) {
 	if sc.userEventCh == nil {
 		return
 	}
+	s.wg.Add(1)
 	go func() {
-		for event := range sc.userEventCh {
-			sc.handleUserEvent(event)
+		defer s.wg.Done()
+		for {
+			select {
+			case <-s.ctx.Done():
+				return
+			case event := <-sc.userEventCh:
+				sc.handleUserEvent(event)
+			}
 		}
 	}()
 }
@@ -384,6 +457,9 @@ func (sc *SnellContainer) startUserEventHandler() {
 // so a TOCTOU race where two callers both see !exists and both invoke
 // GetBindPort is still correct.
 func (sc *SnellContainer) handleUserEvent(event usermanager.UserEvent) {
+	if sc.userMgr == nil {
+		return
+	}
 	switch event.Type {
 	case usermanager.UserEventAdd:
 		sc.mu.Lock()
@@ -691,13 +767,5 @@ func (sc *SnellContainer) stopReconcileLoop() {
 		close(sc.reconcileStopCh)
 		sc.reconcileWg.Wait()
 		sc.reconcileStopCh = nil
-	}
-}
-
-// closeUserEventCh closes the user event channel to terminate the forwardUserEvents goroutine.
-func (sc *SnellContainer) closeUserEventCh() {
-	if sc.userEventCh != nil {
-		close(sc.userEventCh)
-		sc.userEventCh = nil
 	}
 }

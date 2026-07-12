@@ -60,6 +60,16 @@ type Hooks interface {
 //
 // All fields are private to enforce usage through methods.
 type BaseContainer struct {
+	// opMu serializes the ENTIRE Start/Stop operation, including hook
+	// execution, so a Start and a Stop can never run concurrently. It is the
+	// only lock held across a hook; mu below is taken only for brief state
+	// reads/writes, so State()/IsRunning() readers are never blocked by a slow
+	// hook. Lock order: opMu is outermost — hooks may take container-level
+	// locks (e.g. a container's own mu / process lock) strictly inside it,
+	// never the reverse. Serializing Start against Stop removes the
+	// Start/Stop interleavings that otherwise left orphan processes and a
+	// lying state (Stopped while the process is still running).
+	opMu          sync.Mutex
 	mu            sync.RWMutex
 	state         ContainerState
 	containerType contracts.ContainerType
@@ -132,6 +142,10 @@ func (b *BaseContainer) GetRunFunc() (func() error, func() error) {
 // 5. On success, transition state to Running (via MarkRunning)
 // 6. On failure, transition back to Stopped with error
 func (b *BaseContainer) Start() error {
+	// Serialize the whole Start against any concurrent Stop (see opMu doc).
+	b.opMu.Lock()
+	defer b.opMu.Unlock()
+
 	b.mu.Lock()
 
 	// Verify hooks is set - this is a programming error if not
@@ -222,6 +236,12 @@ func (b *BaseContainer) MarkStopped() {
 // 3. Execute the stop function (if provided)
 // 4. Transition state to Stopped (via MarkStopped)
 func (b *BaseContainer) Stop() error {
+	// Serialize the whole Stop against any concurrent Start (see opMu doc).
+	// Restart() must NOT hold opMu: it calls Stop() then Start(), which each
+	// take opMu themselves; holding it in Restart would self-deadlock.
+	b.opMu.Lock()
+	defer b.opMu.Unlock()
+
 	b.mu.Lock()
 
 	// Save stop function reference before changing state
