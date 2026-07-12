@@ -50,3 +50,10 @@ jobs:
 
       - name: Test
         run: go test ./... -count=1
+
+      # Race-detector run, scoped to packages whose concurrency fixes have
+      # dedicated -race regression tests. The pointer-swap races these tests
+      # cover do not crash without -race, so this step is their only CI
+      # protection. Expand the package list as more modules gain race tests.
+      - name: Test (race, targeted)
+        run: go test -race -count=1 ./pkg/cluster/... ./pkg/proxy/containers/hysteria/...

@@ -12,7 +12,9 @@ import (
 type NodeManager struct {
 	nodes *map[string]*Node
 	name  string
-	lock  sync.RWMutex
+	// lock 保护 nodes 指针及其指向的 map。
+	// 注意: 持 lock 期间不得调用本类型的其他方法(RWMutex 不可重入)。
+	lock sync.RWMutex
 }
 
 const defaultNodeManagerName = "NodeManager"
@@ -36,6 +38,8 @@ func (nm *NodeManager) Add(key string, node *Node) {
 
 // HaveNode 判断是否存在该node
 func (nm *NodeManager) HaveNode(key string) bool {
+	nm.lock.RLock()
+	defer nm.lock.RUnlock()
 	_, ok := (*nm.nodes)[key]
 	return ok
 }
@@ -95,15 +99,24 @@ func (nm *NodeManager) Clear() {
 
 // Get ...
 func (nm *NodeManager) Get(nodeName string) *Node {
+	nm.lock.RLock()
+	defer nm.lock.RUnlock()
 	if n, ok := (*nm.nodes)[nodeName]; ok {
 		return n
 	}
 	return nil
 }
 
-// GetAllNode ...
+// GetAllNode 返回当前节点表的浅拷贝快照。
+// 修改返回的 map 不影响内部状态; value 仍是共享的 *Node 指针。
 func (nm *NodeManager) GetAllNode() map[string]*Node {
-	return *nm.nodes
+	nm.lock.RLock()
+	defer nm.lock.RUnlock()
+	nodes := make(map[string]*Node, len(*nm.nodes))
+	for key, node := range *nm.nodes {
+		nodes[key] = node
+	}
+	return nodes
 }
 
 func (nm *NodeManager) GetNodesWithFilter(filter NodeFilter) []*Node {
