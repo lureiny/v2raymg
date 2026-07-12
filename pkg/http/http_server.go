@@ -2,6 +2,7 @@ package http
 
 import (
 	"fmt"
+	"net"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/pkg/cluster"
@@ -89,9 +90,23 @@ func (s *HttpServer) SetName(name string) {
 	s.Name = name
 }
 
-func (s *HttpServer) Start() {
+// Listen binds the HTTP listener synchronously so a bind failure can fail-fast
+// instead of being swallowed by gin's Engine.Run running in a goroutine (which
+// discarded its error, leaving a management-plane-less zombie node).
+func (s *HttpServer) Listen() (net.Listener, error) {
+	lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", s.Host, s.Port))
+	if err != nil {
+		return nil, fmt.Errorf("http listen %s:%d: %w", s.Host, s.Port, err)
+	}
+	return lis, nil
+}
+
+// Serve runs the gin engine on an already-bound listener and blocks.
+func (s *HttpServer) Serve(lis net.Listener) {
 	log.Info("http server starting", "host", s.Host, "port", s.Port)
-	s.RestfulServer.Run(fmt.Sprintf("%s:%d", s.Host, s.Port))
+	if err := s.RestfulServer.RunListener(lis); err != nil {
+		log.Error("http server exited", "err", err)
+	}
 }
 
 // GetTargetNodes returns the nodes to route an HTTP request to based on the target param.

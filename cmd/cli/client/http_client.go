@@ -42,6 +42,14 @@ func getCallBackFunc(fn func(resp *http.Response) error) HttpCallback {
 		if err != nil {
 			return err
 		}
+		// Reject non-2xx responses here, at the one entry point every wrapper
+		// shares, so a 4xx/5xx error body is never mistaken for a successful
+		// result. Business errors are carried in a 200 body (code!=0) and are
+		// left untouched.
+		if r.StatusCode < 200 || r.StatusCode >= 300 {
+			body, _ := readBody(r) // consumes+closes the body; only on the error path
+			return unexpectedHTTPStatus(r, body)
+		}
 		return fn(r)
 	}
 }

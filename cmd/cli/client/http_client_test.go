@@ -361,3 +361,21 @@ func TestListCert_Forbidden_ReturnsHTTPError(t *testing.T) {
 		t.Fatalf("expected clear HTTP error, got %q", got)
 	}
 }
+
+// TestGetStatus_ServerError_ReturnsHTTPError covers finding #3: a 5xx response
+// must be returned as an error, not printed as a successful result.
+func TestGetStatus_ServerError_ReturnsHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("boom"))
+	}))
+	defer srv.Close()
+
+	_, err := GetStatus(srv.URL, "tok", "")
+	if err == nil {
+		t.Fatal("expected an error on HTTP 500, got nil (4xx/5xx treated as success)")
+	}
+	if got := err.Error(); got != "HTTP 500: boom" {
+		t.Fatalf("expected 'HTTP 500: boom', got %q", got)
+	}
+}

@@ -225,15 +225,26 @@ func isAddrValid(host string, port int) bool {
 	return host != "" && port >= 1000
 }
 
-func (s *EndNodeServer) Start() {
+// Listen binds the RPC listener synchronously so a genuine bind failure
+// (port in use, permission) surfaces to the caller for fail-fast handling
+// instead of being swallowed inside a goroutine. When the address is simply
+// not configured (isAddrValid false) it returns (nil, nil) — a disabled RPC
+// plane, which is a legitimate single-machine HTTP-only deployment — so the
+// caller skips Serve rather than exiting.
+func (s *EndNodeServer) Listen() (net.Listener, error) {
 	if !isAddrValid(s.Host, s.Port) {
-		return
+		log.Info("rpc server disabled: address not configured", "host", s.Host, "port", s.Port)
+		return nil, nil
 	}
 	lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", s.Host, s.Port))
 	if err != nil {
-		log.Error("start server failed", "err", err.Error(), "host", s.Host, "port", s.Port)
-		return
+		return nil, fmt.Errorf("rpc listen %s:%d: %w", s.Host, s.Port, err)
 	}
+	return lis, nil
+}
+
+// Serve registers gRPC services on an already-bound listener and blocks.
+func (s *EndNodeServer) Serve(lis net.Listener) {
 	encoding.RegisterCodec(rpc.NewEncryptMessageCodec(s.cfg.Cluster.Token))
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(s.unaryServerInterceptor()))
 	proto.RegisterEndNodeAccessServer(grpcServer, s)
@@ -241,7 +252,7 @@ func (s *EndNodeServer) Start() {
 	go s.filter()
 	log.Info("server listening", "addr", lis.Addr())
 	if err := grpcServer.Serve(lis); err != nil {
-		log.Error("start server failed", "err", err.Error(), "host", s.Host, "port", s.Port)
+		log.Error("rpc server exited", "err", err.Error(), "host", s.Host, "port", s.Port)
 	}
 }
 

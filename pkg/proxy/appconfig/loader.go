@@ -166,6 +166,12 @@ func LoadFromFile(path string) (*AppConfig, error) {
 			}
 			cfg := migrateLegacyConfig(&old)
 			fmt.Fprintf(os.Stderr, "[appconfig] detected legacy config format, migrating automatically\n")
+			// Migrated configs must get the same runtime defaults as a normal
+			// load — without this the legacy path skipped jwt_secret generation
+			// (breaking /login) and the ping NodeSources default.
+			if err := applyRuntimeDefaults(cfg); err != nil {
+				return nil, err
+			}
 			return cfg, nil
 		}
 	}
@@ -185,27 +191,35 @@ func LoadFromFile(path string) (*AppConfig, error) {
 		return nil, fmt.Errorf("appconfig: unsupported file extension %q (want .yaml, .yml, or .json)", ext)
 	}
 
-	// Set default NodeSources if not configured
+	if err := applyRuntimeDefaults(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// applyRuntimeDefaults fills defaults needed by BOTH the normal load path and
+// legacy migration: the ping NodeSources default and the auto-generated
+// jwt_secret. It is extracted so migrated configs are not left without a
+// jwt_secret (which breaks /login) or NodeSources. It is idempotent and never
+// overwrites an already-set jwt_secret.
+func applyRuntimeDefaults(cfg *AppConfig) error {
 	if len(cfg.EndNode.Ping.NodeSources) == 0 {
 		cfg.EndNode.Ping.NodeSources = []PingNodeSource{
 			{Type: "file", Source: "./config/ping_nodes.yaml"},
 		}
 	}
-
-	// Auto-generate jwt_secret when not configured.
 	// The secret is only used to sign in-memory session tokens; each restart
 	// with a new secret simply invalidates existing sessions (users re-login).
 	// This allows old configs to upgrade without modification.
 	if !strings.EqualFold(cfg.NodeType, "center") && cfg.EndNode.JWTSecret == "" {
 		secret, err := generateRandomSecret(32)
 		if err != nil {
-			return nil, fmt.Errorf("appconfig: generate jwt_secret: %w", err)
+			return fmt.Errorf("appconfig: generate jwt_secret: %w", err)
 		}
 		cfg.EndNode.JWTSecret = secret
 		fmt.Fprintf(os.Stderr, "[appconfig] end_node.jwt_secret not set — using a random secret (sessions will be invalidated on restart)\n")
 	}
-
-	return cfg, nil
+	return nil
 }
 
 // generateRandomSecret returns a URL-safe base64-encoded random string of n bytes.

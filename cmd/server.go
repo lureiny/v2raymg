@@ -226,8 +226,6 @@ func runEndNode(cfg *appconfig.AppConfig) {
 		)
 	}
 
-	go rpcServer.Start()
-
 	// 10. HTTP Server
 	httpListen := cfg.EndNode.HttpListen
 	if httpListen == "" {
@@ -254,7 +252,28 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	if cfg.EndNode.EnablePrometheus {
 		http.RegisterPrometheus(httpServer)
 	}
-	go httpServer.Start()
+
+	// Bind both core listeners synchronously BEFORE serving either, so a bind
+	// failure fails fast (os.Exit) instead of leaving a zombie node with no
+	// management/RPC plane. Binding both first also avoids registering with the
+	// center over RPC and then exiting because the HTTP bind failed.
+	rpcListener, err := rpcServer.Listen()
+	if err != nil {
+		log.Error("bind rpc server failed", "err", err)
+		os.Exit(1)
+	}
+	httpListener, err := httpServer.Listen()
+	if err != nil {
+		if rpcListener != nil {
+			rpcListener.Close()
+		}
+		log.Error("bind http server failed", "err", err)
+		os.Exit(1)
+	}
+	if rpcListener != nil { // nil = RPC disabled (address not configured)
+		go rpcServer.Serve(rpcListener)
+	}
+	go httpServer.Serve(httpListener)
 
 	// 11. Start background tasks
 	userMgr.StartTrafficStats(0)

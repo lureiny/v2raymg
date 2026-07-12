@@ -513,3 +513,28 @@ func TestLoadFromFile_HttpListen_JSON(t *testing.T) {
 	assert.Equal(t, "0.0.0.0", cfg.EndNode.Listen)
 	assert.Equal(t, "127.0.0.1", cfg.EndNode.HttpListen)
 }
+
+// TestLoadFromFile_LegacyMigration_FillsJWTAndNodeSources covers finding #1:
+// the legacy-migration path must still apply the shared runtime defaults
+// (jwt_secret + ping NodeSources) that a normal load gets — before the fix it
+// returned early and left them empty, breaking /login.
+func TestLoadFromFile_LegacyMigration_FillsJWTAndNodeSources(t *testing.T) {
+	content := "server:\n" +
+		"  type: end\n" +
+		"  name: node-a\n" +
+		"  listen: 0.0.0.0\n" +
+		"proxy:\n" +
+		"  host: example.com\n" +
+		"  port: 443\n" +
+		"cluster:\n" +
+		"  name: c1\n" +
+		"  token: t1\n"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+
+	cfg, err := LoadFromFile(path)
+	require.NoError(t, err)
+	assert.NotEmpty(t, cfg.EndNode.JWTSecret, "migrated end node must get an auto jwt_secret")
+	assert.NotEmpty(t, cfg.EndNode.Ping.NodeSources, "migrated config must get default NodeSources")
+}
