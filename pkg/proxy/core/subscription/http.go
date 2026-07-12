@@ -24,6 +24,9 @@ const (
 // httpGet 发起 HTTP GET 请求并返回响应体。
 // 设置 Host 和 Accept 头，与旧版 proxy/sub/converter 行为一致。
 func httpGet(reqURL string) ([]byte, error) {
+	if err := ValidateOutboundURL(reqURL); err != nil {
+		return nil, fmt.Errorf("httpGet: %w", err)
+	}
 	parsedURL, err := url.Parse(reqURL)
 	if err != nil {
 		return nil, fmt.Errorf("httpGet: parse url: %w", err)
@@ -36,7 +39,9 @@ func httpGet(reqURL string) ([]byte, error) {
 	req.Header.Add("Host", parsedURL.Host)
 	req.Header.Add("Accept", "*/*")
 
-	client := &http.Client{Timeout: httpTimeout}
+	// SafeHTTPClient rejects connections to non-public IPs at dial time,
+	// covering DNS rebinding and every redirect hop.
+	client := SafeHTTPClient(httpTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("httpGet: do request: %w", err)

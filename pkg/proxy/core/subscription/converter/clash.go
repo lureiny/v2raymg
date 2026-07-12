@@ -712,9 +712,27 @@ func fetchClashTemplate() (NodeMap, error) {
 			errMsg += "|" + err.Error()
 			continue
 		}
+		pruneUnsafeTemplateKeys(nodeMap)
 		return nodeMap, nil
 	}
 	return nil, fmt.Errorf("all clash template sources failed: %s", errMsg)
+}
+
+// pruneUnsafeTemplateKeys drops top-level keys that this project never emits
+// itself but that the (untrusted, third-party) Clash template could inject with
+// active/hijack semantics: "dns" (DNS hijack) and "proxy-providers" (client-side
+// remote fetch = exfil + second-stage injection). Stripping them is lossless for
+// our output, which only ever produces proxies/proxy-groups/rules/rule-providers.
+//
+// This NARROWS the injection surface; it does not eliminate template trust:
+// "rules"/"rule-providers"/"proxy-groups" are still passed through from the
+// third-party sources (and rule-providers is itself a client-side remote-fetch
+// primitive). Fully removing that trust requires self-hosting the template or a
+// full schema allowlist, which is out of scope here.
+func pruneUnsafeTemplateKeys(nodeMap NodeMap) {
+	for _, k := range []string{"dns", "proxy-providers"} {
+		delete(nodeMap, k)
+	}
 }
 
 // clearClashTemplateNoise 清除模板中假节点留下的痕迹，并修复已知格式问题。
