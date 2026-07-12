@@ -8,6 +8,7 @@ import (
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/forward"
+	usync "github.com/lureiny/v2raymg/pkg/proxy/usermanager/sync"
 )
 
 // mockForwardManager is a mock implementation of forward.ForwardManager.
@@ -948,13 +949,16 @@ func TestReleaseBindPort_DeletingUserStaysAsTombstone(t *testing.T) {
 	mockFM := newMockForwardManager()
 	um := NewUserManager(mockFM, "test-node")
 
-	// Add forward rule to the mock
-	mockFM.rules["xray:inbound:12345"] = &forward.ForwardRule{
-		Username:   "testuser",
-		InboundTag: "inbound",
-		ListenPort: 12345,
-		TargetAddr: "127.0.0.1:443",
+	// Add forward rule to the mock, keyed by RuleKey() so ReleaseBindPort's
+	// per-port RemoveRule(RuleKey()) can find and remove it.
+	fr := &forward.ForwardRule{
+		Username:      "testuser",
+		ContainerType: contracts.ContainerXray,
+		InboundTag:    "inbound",
+		ListenPort:    12345,
+		TargetAddr:    "127.0.0.1:443",
 	}
+	mockFM.rules[fr.RuleKey()] = fr
 
 	// Add a user
 	err := um.AddUser(AddUserRequest{Username: "testuser", Password: "testpass"})
@@ -1807,11 +1811,15 @@ func TestSyncUpsertUser_UpdateConflictingTokenRegenerated(t *testing.T) {
 	u2OldToken := u2.AuthToken
 
 	// Sync u2 with u1's token from a "newer" remote version — should regenerate.
+	// The remote Hash is deliberately a stand-in value: adopting it after the
+	// local token was regenerated is exactly the bug (a lying, self-inconsistent
+	// hash that also silences the digest-based self-heal).
 	incoming := &contracts.User{
 		Username:    "u2",
 		AuthToken:   u1.AuthToken,
 		UpdatedAtUs: u2.UpdatedAtUs + 1000,
 		OriginNode:  "node-b",
+		Hash:        "remote-fake-hash",
 	}
 	applied, err := um.SyncUpsertUser(incoming)
 	if err != nil {
@@ -1825,12 +1833,59 @@ func TestSyncUpsertUser_UpdateConflictingTokenRegenerated(t *testing.T) {
 	if u2After.AuthToken == u1.AuthToken {
 		t.Error("conflicting token should have been regenerated")
 	}
-	if u2After.AuthToken == u2OldToken {
-		// It's OK if it happens to be different from old; just must not be u1's.
-		// This check is a no-op assertion but documents intent.
-	}
+	_ = u2OldToken
 	if !isValidUUIDv4(u2After.AuthToken) {
 		t.Errorf("regenerated token should be valid UUID v4, got %s", u2After.AuthToken)
+	}
+	// After regenerating locally, the record must be re-stamped (local origin +
+	// recomputed hash) rather than adopting the remote version triple — otherwise
+	// the fork never heals.
+	if u2After.OriginNode != "test-node" {
+		t.Errorf("expected re-stamped OriginNode=test-node, got %q (remote triple adopted)", u2After.OriginNode)
+	}
+	if u2After.Hash == incoming.Hash {
+		t.Error("stored Hash must not be the remote hash after a local token regeneration")
+	}
+	if u2After.Hash != usync.ComputeHash(u2After) {
+		t.Errorf("stored Hash %q is inconsistent with the record's content (would poison digest sync)", u2After.Hash)
+	}
+}
+
+// TestReleaseBindPort_MultiInbound_OnlyReleasesMatchingPort verifies that
+// releasing one port only removes that inbound's forward rule, leaving the same
+// user's rule on a sibling inbound intact.
+func TestReleaseBindPort_MultiInbound_OnlyReleasesMatchingPort(t *testing.T) {
+	mockFM := newMockForwardManager()
+	um := NewUserManager(mockFM, "test-node")
+
+	if err := um.AddUser(AddUserRequest{Username: "u", Password: "p"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	user, _ := um.GetUser("u")
+	user.BindPorts = []uint32{20001, 20002}
+	user.PortMappings = map[uint32]uint32{443: 20001, 8443: 20002}
+
+	rA := &forward.ForwardRule{Username: "u", ContainerType: contracts.ContainerXray, InboundTag: "in-a", ListenPort: 20001, TargetAddr: "127.0.0.1:443"}
+	rB := &forward.ForwardRule{Username: "u", ContainerType: contracts.ContainerXray, InboundTag: "in-b", ListenPort: 20002, TargetAddr: "127.0.0.1:8443"}
+	mockFM.rules[rA.RuleKey()] = rA
+	mockFM.rules[rB.RuleKey()] = rB
+
+	if err := um.ReleaseBindPort(ReleaseBindPortRequest{Username: "u", BindPort: 20001}); err != nil {
+		t.Fatalf("ReleaseBindPort: %v", err)
+	}
+
+	remaining := mockFM.GetRulesByUser("u")
+	if len(remaining) != 1 {
+		t.Fatalf("expected 1 remaining rule (sibling inbound), got %d (whole-user deletion)", len(remaining))
+	}
+	if remaining[0].ListenPort != 20002 {
+		t.Errorf("wrong rule survived: ListenPort=%d, want 20002", remaining[0].ListenPort)
+	}
+	if _, ok := user.PortMappings[8443]; !ok {
+		t.Error("PortMappings for the surviving inbound was dropped")
+	}
+	if _, ok := user.PortMappings[443]; ok {
+		t.Error("PortMappings for the released port was not dropped")
 	}
 }
 

@@ -1356,9 +1356,23 @@ func (m *UserManager) ReleaseBindPort(req ReleaseBindPortRequest) error {
 		Ports:    []uint32{req.BindPort},
 	})
 
-	// Remove forward rule via ForwardManager
+	// Remove ONLY the forward rule bound to this specific port. ReleaseBindPort
+	// is a per-port operation — every caller resolves req.BindPort from its own
+	// inbound via GetUserPortByDstForCleanup — so removing by username here would
+	// also tear down this user's rules on sibling inbounds (with no rebuild),
+	// breaking forwarding there. Whole-user teardown goes through
+	// RemoveUser/DropUser; whole-inbound teardown through ReleaseInboundPorts.
+	// ListenPort is unique per user (the allocator hands out distinct ports), so
+	// at most one rule matches.
 	if m.forwardMgr != nil {
-		m.forwardMgr.RemoveRulesByUser(req.Username)
+		for _, r := range m.forwardMgr.GetRulesByUser(req.Username) {
+			if r.ListenPort == req.BindPort {
+				if err := m.forwardMgr.RemoveRule(r.RuleKey()); err != nil {
+					log.Warn("[ReleaseBindPort] remove rule failed",
+						"user", req.Username, "port", req.BindPort, "err", err)
+				}
+			}
+		}
 	}
 
 	// Persist updated PortMappings / BindPorts so restart doesn't resurrect stale mappings.
@@ -1588,15 +1602,14 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 
 	// Existing user, incoming is newer — update fields.
 	// Ensure auth token is valid and unique; if invalid or conflicting, regenerate.
+	tokenRegenerated := false
 	if err := m.setAuthTokenLocked(existing, incoming.AuthToken); err != nil {
 		_ = m.setAuthTokenLocked(existing, "")
+		tokenRegenerated = true
 	}
 	existing.ExpiryTime = incoming.ExpiryTime
 	existing.Role = incoming.Role
 	existing.TargetGroup = incoming.TargetGroup
-	existing.UpdatedAtUs = incoming.UpdatedAtUs
-	existing.OriginNode = incoming.OriginNode
-	existing.Hash = incoming.Hash
 	existing.BandwidthUploadBps = incoming.BandwidthUploadBps
 	existing.BandwidthDownloadBps = incoming.BandwidthDownloadBps
 	existing.MaxClients = incoming.MaxClients
@@ -1606,9 +1619,32 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 	if incoming.LoginPassword != "" {
 		existing.LoginPassword = incoming.LoginPassword
 	}
-	// Clear deletion state if the remote version is active.
+	// Clear deletion state if the remote version is active. (Must happen before
+	// the Hash is (re)computed — the deleted flag is part of the hash.)
 	if existing.IsDeleting() {
 		existing.MarkActive()
+	}
+
+	if tokenRegenerated {
+		// We replaced the conflicting AuthToken locally, so our content now
+		// differs from the remote record. Adopting the remote version triple
+		// would store a Hash that doesn't match our token AND make our heartbeat
+		// digest identical to the origin's, so CompareDigests would never request
+		// a full sync and the split would never heal. Re-stamp with local origin,
+		// a bumped timestamp, and a recomputed Hash so the corrected record
+		// out-versions the origin and the cluster converges on our (unique) token
+		// — the same handling the new-user branch above already applies.
+		//
+		// Under severe clock skew (origin timestamp far in our future) this can
+		// churn — regenerating a fresh token each round until our wall clock
+		// passes the remote timestamp — but it is bounded and self-terminating,
+		// and strictly better than a silent permanent fork. Forks created before
+		// this fix are not retroactively healed (their digests already match).
+		m.stampVersion(existing)
+	} else {
+		existing.UpdatedAtUs = incoming.UpdatedAtUs
+		existing.OriginNode = incoming.OriginNode
+		existing.Hash = incoming.Hash
 	}
 
 	if m.store != nil {
