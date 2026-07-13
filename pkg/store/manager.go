@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // StoreManager provides unified access to all persistence stores.
@@ -18,10 +19,12 @@ type StoreManager struct {
 // It creates the database directory if needed, opens the connection,
 // runs migrations, and initializes all stores.
 func NewStoreManager(dsn string, migrations []Migration) (*StoreManager, error) {
-	// Create directory if needed
+	// Create directory if needed. The DB stores plaintext auth tokens, so keep
+	// the directory owner-only (a shared/existing dir keeps its perms — MkdirAll
+	// does not chmod what already exists; the file perms below are the guarantee).
 	dir := filepath.Dir(dsn)
 	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0700); err != nil {
 			return nil, err
 		}
 	}
@@ -38,11 +41,32 @@ func NewStoreManager(dsn string, migrations []Migration) (*StoreManager, error) 
 		return nil, err
 	}
 
+	// Tighten perms on the DB file and its WAL/SHM sidecars (created by the
+	// migrations above): the users table holds plaintext auth_token, which the
+	// sqlite driver would otherwise leave world-readable (0644).
+	secureSQLiteFiles(dsn)
+
 	return &StoreManager{
 		db:           db,
 		userStore:    NewSQLiteUserStore(db),
 		inboundStore: NewSQLiteInboundStore(db),
 	}, nil
+}
+
+// secureSQLiteFiles chmods the sqlite database and its -wal/-shm sidecars to
+// 0600. Best-effort: skips non-file DSNs (":memory:", or a DSN carrying query
+// params we can't map to a path) and sidecars that don't exist yet.
+func secureSQLiteFiles(dsn string) {
+	if dsn == "" || strings.Contains(dsn, ":memory:") || strings.Contains(dsn, "?") {
+		return
+	}
+	for _, f := range []string{dsn, dsn + "-wal", dsn + "-shm"} {
+		if err := os.Chmod(f, 0600); err != nil && !os.IsNotExist(err) {
+			// Non-fatal: the DB is already open and usable. A failure to tighten
+			// perms is a hardening gap, not a correctness error.
+			continue
+		}
+	}
 }
 
 // UserStore returns the user store.
