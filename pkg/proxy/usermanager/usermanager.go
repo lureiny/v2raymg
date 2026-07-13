@@ -109,10 +109,10 @@ type NodeGroupsStore interface {
 // UserManager manages users and their port bindings.
 // It also provides an event channel for user state changes.
 type UserManager struct {
-	mu            sync.RWMutex
-	users         map[string]*contracts.User
-	forwardMgr    forward.ForwardManager
-	store         UserStore // nil = pure in-memory mode
+	mu         sync.RWMutex
+	users      map[string]*contracts.User
+	forwardMgr forward.ForwardManager
+	store      UserStore // nil = pure in-memory mode
 
 	// eventCh is the legacy single channel for broadcasting user events.
 	// Deprecated: use Subscribe() for multi-consumer pub/sub.
@@ -1188,7 +1188,7 @@ func (m *UserManager) applyRuntimeSideEffects(username string, uploadBps, downlo
 	_ = m.forwardMgr.SetUserBandwidthLimit(username, forward.BandwidthDownload, downloadBps)
 	_ = m.forwardMgr.SetUserClientLimitConfig(username, forward.ClientLimitConfig{
 		MaxClients:              maxClients,
-		RecycleDelaySec:        recycleDelaySec,
+		RecycleDelaySec:         recycleDelaySec,
 		SingleDirectionDrainSec: drainSec,
 	})
 }
@@ -1741,13 +1741,12 @@ type TrafficStats struct {
 	TotalDownlink int64 `json:"total_downlink"`
 }
 
-
 // UserTrafficStats holds traffic stats for a specific user.
 type UserTrafficStats struct {
 	ContainerType contracts.ContainerType `json:"container_type"`
 	InboundTag    string                  `json:"inbound_tag"`
 	Protocol      contracts.Protocol      `json:"protocol"`
-	Username      string                   `json:"username"`
+	Username      string                  `json:"username"`
 	TrafficStats
 }
 
@@ -1774,7 +1773,7 @@ type AggregatedStats struct {
 	ByUser      map[string]UserTrafficStats      `json:"by_user"`      // key: "container:inbound:user"
 	ByInbound   map[string]InboundTrafficStats   `json:"by_inbound"`   // key: "container:inbound"
 	ByContainer map[string]ContainerTrafficStats `json:"by_container"` // key: "container"
-	Global      GlobalTrafficStats                `json:"global"`
+	Global      GlobalTrafficStats               `json:"global"`
 }
 
 // statsCollector manages traffic stats collection from forward layer.
@@ -1785,12 +1784,12 @@ type statsCollector struct {
 	mu         sync.RWMutex
 	forwardMgr forward.ForwardManager
 	// stats holds the current aggregated view (Delta = since last per-user reset, Total = cumulative)
-	stats      AggregatedStats
+	stats AggregatedStats
 	// prevCounters tracks the last seen forward-layer counter values to compute increments
 	prevCounters map[string]trafficCounter // key: "container:inbound:user"
-	interval   time.Duration
-	stopCh     chan struct{}
-	running    bool
+	interval     time.Duration
+	stopCh       chan struct{}
+	running      bool
 	// onCollect is called after each collect() cycle with a snapshot of ByUser stats.
 	// Used by UserManager to persist TotalUplink/TotalDownlink.
 	onCollect func(byUser map[string]UserTrafficStats)
@@ -1974,12 +1973,33 @@ func (sc *statsCollector) collect() {
 	}
 }
 
-
 // GetStats returns the current aggregated stats.
+// GetStats returns a deep copy of the aggregate. The previous version returned
+// sc.stats directly, whose ByUser/ByInbound/ByContainer maps are the SAME maps
+// collect() mutates under sc.mu — so any caller that ranged the result after
+// GetStats released the RLock raced collect() and could hit the "concurrent map
+// iteration and map write" fatal. Cloning the maps under the lock makes every
+// GetStats caller safe; the stat structs are pure value types, so a per-entry
+// value copy is a full deep copy.
 func (sc *statsCollector) GetStats() AggregatedStats {
 	sc.mu.RLock()
 	defer sc.mu.RUnlock()
-	return sc.stats
+	out := AggregatedStats{
+		ByUser:      make(map[string]UserTrafficStats, len(sc.stats.ByUser)),
+		ByInbound:   make(map[string]InboundTrafficStats, len(sc.stats.ByInbound)),
+		ByContainer: make(map[string]ContainerTrafficStats, len(sc.stats.ByContainer)),
+		Global:      sc.stats.Global,
+	}
+	for k, v := range sc.stats.ByUser {
+		out.ByUser[k] = v
+	}
+	for k, v := range sc.stats.ByInbound {
+		out.ByInbound[k] = v
+	}
+	for k, v := range sc.stats.ByContainer {
+		out.ByContainer[k] = v
+	}
+	return out
 }
 
 // GetUserStats returns stats for a specific user.
@@ -2029,22 +2049,41 @@ func (sc *statsCollector) ForceCollect() {
 }
 
 // resetUserDelta zeroes the DeltaUplink/DeltaDownlink for a specific user across all keys.
-func (sc *statsCollector) resetUserDelta(username string) {
+// drainUserDelta returns a copy of the first ByUser entry matching username and
+// zeroes the delta of every entry for that username — read and reset under a
+// single sc.mu section. This is the per-user twin of drainDeltas: it replaces
+// the GetUserStats()+resetUserDelta() two-step, which read and reset under two
+// separate locks so a collect() tick in the gap could zero a delta that was
+// never returned (per-user under-billing). Returns (nil,false) if no entry
+// matches. Match order follows the existing GetUserStats semantics (first entry
+// encountered during map iteration; multiple inbounds per user are all reset).
+func (sc *statsCollector) drainUserDelta(username string) (*UserTrafficStats, bool) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
+	var found *UserTrafficStats
 	for key, v := range sc.stats.ByUser {
-		if v.Username == username {
-			v.DeltaUplink = 0
-			v.DeltaDownlink = 0
-			sc.stats.ByUser[key] = v
+		if v.Username != username {
+			continue
 		}
+		if found == nil {
+			cp := v // capture the pre-reset delta for the returned snapshot
+			found = &cp
+		}
+		v.DeltaUplink = 0
+		v.DeltaDownlink = 0
+		sc.stats.ByUser[key] = v
 	}
+	if found == nil {
+		return nil, false
+	}
+	return found, true
 }
 
-// resetAllDeltas zeroes DeltaUplink/DeltaDownlink for all entries.
-func (sc *statsCollector) resetAllDeltas() {
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
+// resetAllDeltasLocked zeroes DeltaUplink/DeltaDownlink for all entries. The
+// caller MUST already hold sc.mu (write lock); it is the shared body used by
+// resetAllDeltas and by drainDeltas so a snapshot+reset can happen atomically
+// under a single lock.
+func (sc *statsCollector) resetAllDeltasLocked() {
 	for k, v := range sc.stats.ByUser {
 		v.DeltaUplink = 0
 		v.DeltaDownlink = 0
@@ -2062,6 +2101,30 @@ func (sc *statsCollector) resetAllDeltas() {
 	}
 	sc.stats.Global.Total.DeltaUplink = 0
 	sc.stats.Global.Total.DeltaDownlink = 0
+}
+
+// drainDeltas returns a copy of every per-user stat entry and, when reset is
+// true, zeroes all delta counters — the read and the reset happen under a
+// single sc.mu critical section. Two properties matter:
+//   - No shared map escapes: the returned slice holds value copies of
+//     UserTrafficStats (a pure value struct), and the ByUser map is iterated
+//     while the lock is held, so callers can never range the collector's live
+//     map concurrently with collect() (the "concurrent map iteration and map
+//     write" fatal this replaces).
+//   - No lost traffic: snapshot and reset are atomic, so a collect() tick can
+//     no longer slip between the read and the reset and zero a period's delta
+//     that was never returned.
+func (sc *statsCollector) drainDeltas(reset bool) []UserTrafficStats {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	result := make([]UserTrafficStats, 0, len(sc.stats.ByUser))
+	for _, v := range sc.stats.ByUser {
+		result = append(result, v)
+	}
+	if reset {
+		sc.resetAllDeltasLocked()
+	}
+	return result
 }
 
 // resetUserTotal zeroes TotalUplink/TotalDownlink for a specific user.
@@ -2257,11 +2320,13 @@ func (m *UserManager) GetUserDeltaTraffic(username string, reset bool) (*UserTra
 	if m.statsCollector == nil {
 		return nil, false
 	}
-	stats, ok := m.statsCollector.GetUserStats(username)
-	if ok && reset {
-		m.statsCollector.resetUserDelta(username)
+	if reset {
+		// Atomic read+reset (see drainUserDelta): the previous
+		// GetUserStats()+resetUserDelta() pair used two separate locks, so a
+		// collect() tick in the gap could zero a delta that was never returned.
+		return m.statsCollector.drainUserDelta(username)
 	}
-	return stats, ok
+	return m.statsCollector.GetUserStats(username)
 }
 
 // GetAllDeltaTraffic returns all users' delta traffic and optionally resets all deltas.
@@ -2270,15 +2335,11 @@ func (m *UserManager) GetAllDeltaTraffic(reset bool) []UserTrafficStats {
 	if m.statsCollector == nil {
 		return nil
 	}
-	agg := m.statsCollector.GetStats()
-	result := make([]UserTrafficStats, 0, len(agg.ByUser))
-	for _, v := range agg.ByUser {
-		result = append(result, v)
-	}
-	if reset {
-		m.statsCollector.resetAllDeltas()
-	}
-	return result
+	// drainDeltas snapshots and resets atomically under sc.mu; it replaces the
+	// previous GetStats()+resetAllDeltas() two-step, which ranged the shared
+	// ByUser map lock-free (fatal map race) and could lose a period's delta in
+	// the gap between the two locks.
+	return m.statsCollector.drainDeltas(reset)
 }
 
 // ResetUserTotalTraffic resets the lifetime cumulative traffic counters for a
