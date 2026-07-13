@@ -150,10 +150,13 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 	for _, n := range succNodes {
 		switch v := succList[n].(type) {
 		case []string:
-			log.Info("[SubHandler] node URIs", "node", n, "count", len(v), "uris", v)
+			// Log only the count, never the URIs themselves: node share-links
+			// embed UUIDs / passwords / SS PSKs in cleartext, and this handler
+			// runs at Info on every /sub request.
+			log.Info("[SubHandler] node URIs", "node", n, "count", len(v))
 			allURIs = append(allURIs, v...)
 		case string:
-			log.Warn("[SubHandler] node returned string (expected []string)", "node", n, "value", v)
+			log.Warn("[SubHandler] node returned string (expected []string)", "node", n)
 		default:
 			log.Warn("[SubHandler] node returned unexpected type", "node", n, "type", fmt.Sprintf("%T", v))
 		}
