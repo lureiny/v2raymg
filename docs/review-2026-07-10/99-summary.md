@@ -48,7 +48,16 @@
 > - `usermanager.go:2233` 零回归测试 ✅ —— 新增 `stats_concurrency_test.go`。另修 `GetUserDeltaTraffic` 的同类 per-user 两段锁（`drainUserDelta`）。
 > - **残留（本次划出，非回归、当前生产不可达）**：`collect()` 在锁外读 records、锁内应用 delta，两个并发 collect 乱序 → 触发 counter-reset 启发式 → over-count；但生产中 collect 仅由单 collectLoop 驱动，唯一并发入口 `ForceCollect`(`go sc.collect()`) 只有测试调用。列为 latent P2。
 >
-> **其余仍未闭合（非回归/已降级）**：VLESS 缺 subscription_chain 测试（P1 测试缺口）、CI `-race` 仅覆盖 `pkg/cluster`+hysteria 两包（应扩面 P2）、HC `run()` 假 Running（降 P2）、drainEnd map 慢泄漏（降 P3）、clash 外部 sub-converter 依赖（遗留/外部设计 P1）、`pkg/rpc/client` 整目录零测试（P2/P3）、rotate 测试泄漏 listener（P2/P3）。
+> **原"其余仍未闭合"的 backlog 现已全部处理（2026-07-13，用户指示"把 backlog 里的全部修复"）**：
+> - VLESS subscription_chain 测试（P1）✅ `test(systemtest)` —— 加 `ConvertVLessForTest` + tcp-tls / tcp-reality-vision 两条走真订阅链路的用例。
+> - clash 外部 sub-converter 依赖（P1）✅ `fix(subscription)` —— 全部外部源失败时降级到内置最小模板（loud WARN、无注入面），默认可达时行为不变；顺带修好网络 flaky 的 `TestConvertWithOptions_VLessIncluded`。
+> - CI `-race` 扩面（P2）✅ `ci` —— 从 2 包扩到全部 campaign 修复的并发包（逐包核实 race-clean）。
+> - HC `run()` 假 Running（P2）✅ `fix(hysteria)` —— `IsRunning()/State()` 改反映真实进程（读侧 override，无写态竞态）。
+> - forward drainEnd 慢泄漏（P3）✅ `fix(forward)` —— slot 删除处同步清 drainEnd。
+> - `pkg/rpc/client` 零测试（P2）✅ `test(rpc/client)` —— NewNodeAuthInfo nonce 新鲜性等。
+> - rotate 测试泄漏 listener（P2/P3）✅ `test(rpc)` —— `t.Cleanup` 关闭 ForwardManager。
+>
+> **剩余唯一 latent 项**：上面 usermanager `collect()` 并发 over-count（当前生产不可达，`ForceCollect` 仅测试调用），保留为 latent P2。
 >
 > **B1 集群 RPC 加密/鉴权** 用户选**方案 A（一步到位协调式破坏升级，多 cluster 共 center 拓扑）**已实施于 commit `61adb83`（HKDF KDF + 消息类型 AAD + ts/nonce/dest 防重放 + center app 层多 token 鉴权）；部署硬要求（全集群同时升级、center 配全 cluster_tokens、NTP 依赖扩面、无密钥轮换）见 `B1-rpc-crypto-DECISION-NEEDED.md`。 各簇 commit：A1 集群节点并发 `7a5ffbe`；A2 容器状态机+snell `13e5c25`；B2 SSRF/模板 `e0e0170`；B3 xray security=none `c425504`；C 转发数据面 `a2c3c08`；D 证书原子性 `571a7dd`；E 集群同步一致性 `ddffbe7`；F 资源泄漏/僵尸进程 `77106f6`；G 启动/降级静默失败 `3851c81`；H 探测/采集 `a93f985`。
 
