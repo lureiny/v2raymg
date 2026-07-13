@@ -101,6 +101,13 @@ type ClusterConfig struct {
 	Name string `yaml:"name" json:"name"`
 	// Token is the shared secret used to authenticate cluster members and encrypt gRPC traffic.
 	Token string `yaml:"token" json:"token"`
+	// CenterToken is the shared secret that encrypts the end->center channel
+	// (the heartbeat/discovery envelope). It is SEPARATE from Token — the center
+	// channel therefore never carries the end<->end key, so sniffing or leaking
+	// CenterToken does not compromise the user-management plane. All end nodes
+	// reporting to the same center must share this value. Empty keeps the center
+	// channel in plaintext (legacy / decentralized mode).
+	CenterToken string `yaml:"center_token" json:"center_token"`
 	// CenterNodeHost is the optional center node host for initial node discovery.
 	// Leave empty to operate in fully decentralized mode.
 	CenterNodeHost string `yaml:"center_node_host" json:"center_node_host"`
@@ -194,6 +201,13 @@ type CenterNodeConfig struct {
 	// its cluster name is listed here and its token matches. An empty map means
 	// no cluster is authorized (all heartbeats rejected).
 	ClusterTokens map[string]string `yaml:"cluster_tokens" json:"cluster_tokens"`
+	// CenterToken is the shared secret used to encrypt every end->center channel
+	// (the AES envelope over heartbeat/discovery). All end nodes that report to
+	// this center must be configured with the same value. It is orthogonal to
+	// ClusterTokens: the per-cluster tokens still authenticate cluster membership
+	// inside the envelope, so cluster isolation is preserved. Empty keeps the
+	// center channel in plaintext (legacy).
+	CenterToken string `yaml:"center_token" json:"center_token"`
 }
 
 // ClusterUserConfig controls the ClusterUser sync layer and placement controller behaviour.

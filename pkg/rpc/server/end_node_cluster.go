@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	commonrpc "github.com/lureiny/v2raymg/pkg/common/rpc"
 	rpcClient "github.com/lureiny/v2raymg/pkg/rpc/client"
 	"github.com/lureiny/v2raymg/pkg/cluster"
 	"github.com/lureiny/v2raymg/pkg/log"
+	grpc "google.golang.org/grpc"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	usync "github.com/lureiny/v2raymg/pkg/proxy/usermanager/sync"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
@@ -343,12 +345,19 @@ func (s *EndNodeServer) heartbeatToCenterNode() {
 	// Authenticate to the center with the cluster token (was empty = anyone
 	// could forge a heartbeat). The center validates it against its configured
 	// per-cluster tokens. dest_node is "" since the center has no node name
-	// known to the end. This channel stays plaintext (center may serve multiple
-	// clusters and carries only the node directory, not user credentials).
+	// known to the end. When CenterToken is configured the whole exchange is
+	// wrapped in an AES envelope keyed by that token (separate from the cluster
+	// token), so the node directory and the inner cluster token are hidden from
+	// on-path observers; the center still authenticates membership via the inner
+	// cluster token. Empty CenterToken keeps the channel plaintext (legacy).
 	heartBeatReq := &proto.HeartBeatReq{
 		NodeAuthInfo: rpcClient.NewNodeAuthInfo(s.clusterState.GetClusterToken(), &localNode.Node, ""),
 	}
-	rsp, err := c.HeartBeat(rpcClient.NewContext(), heartBeatReq)
+	var centerOpts []grpc.CallOption
+	if ct := s.cfg.Cluster.CenterToken; ct != "" {
+		centerOpts = append(centerOpts, grpc.ForceCodec(commonrpc.NewEncryptMessageCodec(ct)))
+	}
+	rsp, err := c.HeartBeat(rpcClient.NewContext(), heartBeatReq, centerOpts...)
 	if err != nil {
 		log.Error("heartbeat to center node failed",
 			"err", fmt.Sprintf("heartbeat failed > %v", err),

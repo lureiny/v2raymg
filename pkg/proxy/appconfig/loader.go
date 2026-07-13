@@ -292,6 +292,10 @@ func Validate(cfg *AppConfig) error {
 				return fmt.Errorf("appconfig: center_node.cluster_tokens[%q] must be >= %d chars", cn, minClusterTokenLen)
 			}
 		}
+		// center_token encrypts the end->center channel; empty keeps it plaintext.
+		if t := cfg.CenterNode.CenterToken; t != "" && len(t) < minClusterTokenLen {
+			return fmt.Errorf("appconfig: center_node.center_token must be >= %d chars when set", minClusterTokenLen)
+		}
 	} else {
 		enabledCount := 0
 		for _, c := range cfg.Containers.Containers {
@@ -305,6 +309,10 @@ func Validate(cfg *AppConfig) error {
 		// When the RPC plane is enabled, the cluster token is the encryption key.
 		if cfg.EndNode.RpcPort >= 1000 && len(cfg.EndNode.Cluster.Token) < minClusterTokenLen {
 			return fmt.Errorf("appconfig: end_node.cluster.token must be >= %d chars when rpc is enabled", minClusterTokenLen)
+		}
+		// center_token, when set, encrypts the end->center channel; empty = plaintext.
+		if t := cfg.EndNode.Cluster.CenterToken; t != "" && len(t) < minClusterTokenLen {
+			return fmt.Errorf("appconfig: end_node.cluster.center_token must be >= %d chars when set", minClusterTokenLen)
 		}
 	}
 

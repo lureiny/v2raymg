@@ -15,6 +15,7 @@ import (
 	c "github.com/lureiny/v2raymg/pkg/cluster"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 	grpc "google.golang.org/grpc"
+	"google.golang.org/grpc/encoding"
 )
 
 type NodeMap map[string]*proto.Node
@@ -27,6 +28,11 @@ type CenterNodeServer struct {
 	// authenticate heartbeats (a center may serve multiple clusters). Nil/empty
 	// means no cluster is authorized.
 	clusterTokens map[string]string
+
+	// centerToken keys the AES envelope over the end->center channel. Empty =
+	// plaintext center channel (legacy). Distinct from clusterTokens, which
+	// still authenticate cluster membership inside the envelope.
+	centerToken string
 
 	// ServerConfig fields (inlined)
 	Host string
@@ -114,6 +120,7 @@ func (s *CenterNodeServer) Init(cfg appconfig.CenterNodeConfig) {
 	}
 	s.Name = name
 	s.clusterTokens = cfg.ClusterTokens
+	s.centerToken = cfg.CenterToken
 	s.clusters.Init()
 }
 
@@ -156,6 +163,16 @@ func (s *CenterNodeServer) Start() {
 	if err != nil {
 		log.Error("center node failed to listen", "addr", addr, "err", err)
 		return
+	}
+	// Register the AES codec so the end->center channel (heartbeat/discovery) is
+	// encrypted: end nodes ForceCodec with the same centerToken, and this codec
+	// decrypts the request and encrypts the node-directory response. Empty
+	// centerToken keeps the channel in plaintext (legacy). A center process runs
+	// only the center server, so this global codec never collides with the
+	// end-node server's cluster-token codec.
+	if s.centerToken != "" {
+		encoding.RegisterCodec(rpc.NewEncryptMessageCodec(s.centerToken))
+		log.Info("center node channel encryption enabled")
 	}
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(s.centerInterceptor()))
 	proto.RegisterCenterNodeAccessServer(grpcServer, s)
