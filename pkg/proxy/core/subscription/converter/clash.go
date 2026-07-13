@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription"
 )
@@ -49,6 +50,43 @@ var subConverterURLs = []string{
 	"https://api.dler.io/sub?target=clash&new_name=true&url=%s",
 	"https://sub.maoxiongnet.com/sub?target=clash&new_name=true&url=%s",
 	"https://sub.id9.cc/sub?target=clash&new_name=true&url=%s",
+}
+
+// fetchClashTemplateFn is a seam so tests can force the external fetch to fail
+// and exercise the built-in fallback deterministically (without network).
+var fetchClashTemplateFn = fetchClashTemplate
+
+// localClashTemplate is a minimal, self-contained Clash config skeleton used
+// only when every external sub-converter source is unreachable. It is
+// deliberately bare — a single "Manual" selector plus a catch-all rule — so it
+// is obviously a degraded fallback rather than a silent stand-in for the rich
+// third-party template. Because it is built in, it also carries none of the
+// external template's injection surface (no dns / proxy-providers / third-party
+// rules). injectProxiesToTemplate overwrites `proxies` and ensureTemplateGroups
+// fills the empty Manual group with the node names (+ DIRECT).
+const localClashTemplate = `port: 7890
+socks-port: 7891
+allow-lan: false
+mode: rule
+log-level: info
+proxies: []
+proxy-groups:
+  - name: Manual
+    type: select
+    proxies: []
+rules:
+  - MATCH,Manual
+`
+
+// localClashTemplateNodeMap parses the built-in fallback template into the same
+// NodeMap shape fetchClashTemplate returns, so both feed the identical
+// injectProxiesToTemplate / patch pipeline.
+func localClashTemplateNodeMap() (NodeMap, error) {
+	nodeMap := NodeMap{}
+	if err := yaml.Unmarshal([]byte(localClashTemplate), nodeMap); err != nil {
+		return nil, fmt.Errorf("parse built-in clash fallback template: %w", err)
+	}
+	return nodeMap, nil
 }
 
 const (
@@ -172,11 +210,19 @@ func (c *ClashConverter) ConvertWithOptions(specs []contracts.SubscriptionSpec, 
 
 	hasCustomOptions := opts != nil && (len(opts.ProxyGroups) > 0 || len(opts.RuleProviders) > 0 || len(opts.Rules) > 0)
 
-	// Always go through the external template to avoid silently falling back to
-	// a different config semantics on network/template error.
-	nodeMap, err := fetchClashTemplate()
+	// Prefer the external template; its rich proxy-groups/rules are the intended
+	// output. But the node has no control over those third-party services, so a
+	// total outage must not hard-fail every subscription (availability). When all
+	// sources fail, degrade to the built-in minimal template. This is logged
+	// loudly and the fallback is deliberately bare — not a silent swap for
+	// different rich routing semantics — and it is injection-free.
+	nodeMap, err := fetchClashTemplateFn()
 	if err != nil {
-		return "", fmt.Errorf("fetch clash template failed: %w", err)
+		log.Warnf("clash: all external template sources failed (%v); using built-in minimal fallback template", err)
+		nodeMap, err = localClashTemplateNodeMap()
+		if err != nil {
+			return "", fmt.Errorf("clash fallback template failed after external sources failed: %w", err)
+		}
 	}
 	if err := injectProxiesToTemplate(nodeMap, proxies); err != nil {
 		return "", fmt.Errorf("inject proxies to clash template failed: %w", err)
