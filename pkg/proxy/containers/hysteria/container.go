@@ -209,6 +209,44 @@ func NewHysteriaContainer(cfg HysteriaConfig, opts ...HysteriaOption) (*Hysteria
 	return hc, nil
 }
 
+// processUp reports whether the hysteria subprocess is actually running right
+// now — started and not yet exited. This is distinct from BaseContainer's
+// state, which flips to Running the instant the run hook returns, before
+// waitForCertAndStart has launched the process (the cert wait runs in the
+// background) and regardless of whether cert issuance or startProcess later
+// fails. runner is set only on a successful startProcess and its IsRunning()
+// reflects the process reaper, so a crash after start also reads as not-up.
+func (hc *HysteriaContainer) processUp() bool {
+	hc.procMu.Lock()
+	defer hc.procMu.Unlock()
+	return hc.runner != nil && hc.runner.IsRunning()
+}
+
+// IsRunning reports the real process state rather than merely that Start()
+// returned. BaseContainer.IsRunning() alone would report Running throughout the
+// (potentially minutes-long) certificate wait and even after a failed start, so
+// health checks and failover would be misled. Both locks are taken and released
+// in sequence, never held together, so there is no ordering hazard with
+// startProcess/stopProcess.
+func (hc *HysteriaContainer) IsRunning() bool {
+	return hc.BaseContainer.IsRunning() && hc.processUp()
+}
+
+// State downgrades a BaseContainer "Running" to "Starting" while the process is
+// not actually up yet (certificate wait, or a start that has not — or will not —
+// succeed), so status reporting reflects the truth. Stopped/Stopping/Starting
+// pass through unchanged; the load-bearing signal for callers is that
+// IsRunning() is false and State() is not Running until the process is live.
+func (hc *HysteriaContainer) State() container.ContainerState {
+	if st := hc.BaseContainer.State(); st != container.ContainerStateRunning {
+		return st
+	}
+	if hc.processUp() {
+		return container.ContainerStateRunning
+	}
+	return container.ContainerStateStarting
+}
+
 // waitForCertAndStart polls for certificate availability.
 // If the certificate does not exist, triggers issuance via certMgr.Issue() in a
 // background goroutine, then continues polling until the cert is ready.
