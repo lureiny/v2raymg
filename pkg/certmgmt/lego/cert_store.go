@@ -14,10 +14,31 @@ const (
 	certsFolder = "certificates"
 )
 
-// domainToFilename converts a domain name to a safe filename component.
-// Wildcard '*' is replaced with '_'.
+// domainToFilename converts a domain name to a safe single filename component.
+// The domain reaches here from cert requests (ObtainNewCert/AddCertificates), so
+// it must not be able to escape the certs directory: previously it only mapped
+// the lego wildcard '*' -> '_', leaving '/' and '..' intact, which filepath.Join
+// would resolve as path traversal. Now every character outside the domain-safe
+// set [A-Za-z0-9.-] becomes '_' (covers '*', '/', '\\', spaces, etc.) and any
+// remaining ".." is neutralized. Legitimate domains (only [a-z0-9.-] plus a '*'
+// wildcard) map to exactly the same name as before, so existing cert files stay
+// addressable.
 func domainToFilename(d string) string {
-	return strings.ReplaceAll(d, "*", "_")
+	var b strings.Builder
+	b.Grow(len(d))
+	for _, r := range d {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	name := strings.ReplaceAll(b.String(), "..", "__")
+	if name == "" || name == "." {
+		name = "_"
+	}
+	return name
 }
 
 // certPaths returns the file paths for a given domain under basePath.
