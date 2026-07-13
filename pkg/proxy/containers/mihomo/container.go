@@ -582,8 +582,26 @@ func (c *MihomoContainer) RemoveInboundConfig(tag string) error {
 	// removed from mihomo and the store; a leftover cert file is a leak, not a
 	// correctness issue. Phase ordering puts cleanup after map delete so a
 	// retry caused by an earlier phase never touches cert files twice.
+	//
+	// writePEMToScratch names PEM cert files by content digest, so two inbounds
+	// with identical PEM deliberately share one pem-<digest> pair. Deleting a
+	// file a surviving inbound still points at would strand that survivor's cert
+	// on the next reload (finding CTR-#53). Scan the remaining inbounds and keep
+	// any file still referenced — effectively reference-counting by path.
+	stillReferenced := make(map[string]struct{})
+	for _, other := range c.inbounds { // tag already deleted above
+		for _, f := range other.cleanupCertFiles() {
+			if f != "" {
+				stillReferenced[f] = struct{}{}
+			}
+		}
+	}
 	for _, p := range inb.cleanupCertFiles() {
 		if p == "" {
+			continue
+		}
+		if _, shared := stillReferenced[p]; shared {
+			log.Debugf("mihomo: keep cert file %q while removing inbound %q; still used by another inbound", p, tag)
 			continue
 		}
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
