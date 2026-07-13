@@ -25,18 +25,18 @@ type ClientLimitConfig struct {
 func DefaultClientLimitConfig() ClientLimitConfig {
 	return ClientLimitConfig{
 		MaxClients:              1,
-		RecycleDelaySec:        60,
+		RecycleDelaySec:         60,
 		SingleDirectionDrainSec: 2,
 	}
 }
 
 // clientSlot represents the state of a single remote IP (client).
 type clientSlot struct {
-	activeConns   atomic.Int64  // atomic counter for confirmed active connections
-	pendingConns  atomic.Int64  // atomic counter for pending connections (dialing, not yet confirmed)
-	recycling     int32         // atomic flag: 1 = slot is being recycled (no active conns, timer running)
-	recycleTimer  *time.Timer   // timer for real-time slot recycling
-	mu            sync.Mutex    // for timer and recycling flag operations
+	activeConns  atomic.Int64 // atomic counter for confirmed active connections
+	pendingConns atomic.Int64 // atomic counter for pending connections (dialing, not yet confirmed)
+	recycling    int32        // atomic flag: 1 = slot is being recycled (no active conns, timer running)
+	recycleTimer *time.Timer  // timer for real-time slot recycling
+	mu           sync.Mutex   // for timer and recycling flag operations
 }
 
 // ClientLimiter is the interface for remote_ip based client connection limiting.
@@ -79,10 +79,10 @@ type ClientLimiter interface {
 
 // remoteIPClientLimiter implements ClientLimiter with remote IP based slots.
 type remoteIPClientLimiter struct {
-	mu     sync.Mutex
-	config ClientLimitConfig
-	slots  map[string]*clientSlot // key: remote IP
-	drainEnd map[string]time.Time  // drain deadline for each remote IP (single-direction recovery)
+	mu       sync.Mutex
+	config   ClientLimitConfig
+	slots    map[string]*clientSlot // key: remote IP
+	drainEnd map[string]time.Time   // drain deadline for each remote IP (single-direction recovery)
 }
 
 // newRemoteIPClientLimiter creates a remoteIPClientLimiter.
@@ -184,8 +184,12 @@ func (l *remoteIPClientLimiter) CancelAcquire(remoteIP string) {
 	active := slot.activeConns.Load()
 	pending := slot.pendingConns.Load()
 	if active == 0 && pending == 0 {
-		// Remove the empty slot
+		// Remove the empty slot and its drain deadline together — the client is
+		// fully gone, so any drainEnd entry is stale. Without this the drainEnd
+		// map grew one entry per unique remote IP that ever drained and was never
+		// evicted (ClearDrain had no callers).
 		delete(l.slots, remoteIP)
+		l.clearDrainLocked(remoteIP)
 	}
 }
 
@@ -238,11 +242,13 @@ func (l *remoteIPClientLimiter) Release(remoteIP string) {
 		active := s.activeConns.Load()
 		pending := s.pendingConns.Load()
 		if active == 0 && pending == 0 {
-			// Safe to delete - stop timer and remove slot
+			// Safe to delete - stop timer and remove slot (and its stale
+			// drainEnd entry) so neither map grows unbounded under IP churn.
 			if s.recycleTimer != nil {
 				s.recycleTimer.Stop()
 			}
 			delete(l.slots, ip)
+			l.clearDrainLocked(ip)
 		}
 	})
 }
@@ -302,7 +308,13 @@ func (l *remoteIPClientLimiter) IsDrainExpired(remoteIP string) bool {
 func (l *remoteIPClientLimiter) ClearDrain(remoteIP string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.clearDrainLocked(remoteIP)
+}
 
+// clearDrainLocked removes any drain deadline for remoteIP. Caller must hold
+// l.mu. Called both by ClearDrain and inline whenever a client slot is removed,
+// so the drainEnd map is bounded to the same lifecycle as slots.
+func (l *remoteIPClientLimiter) clearDrainLocked(remoteIP string) {
 	delete(l.drainEnd, remoteIP)
 }
 
@@ -317,7 +329,7 @@ func (l *remoteIPClientLimiter) SetConfig(config ClientLimitConfig) {
 func NewTestClientLimiter(maxClients int) ClientLimiter {
 	config := ClientLimitConfig{
 		MaxClients:              maxClients,
-		RecycleDelaySec:        60,
+		RecycleDelaySec:         60,
 		SingleDirectionDrainSec: 2,
 	}
 	return newRemoteIPClientLimiter(config)
