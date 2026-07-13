@@ -232,13 +232,39 @@ func generateRandomSecret(n int) (string, error) {
 }
 
 // SaveToFile writes an AppConfig to a YAML file, overwriting any existing content.
+//
+// The config embeds secrets — cluster/center tokens, jwt_secret, DNS API
+// credentials — so it is written 0600 (not world-readable) and atomically via a
+// temp file + rename, so a crash mid-write can't leave a truncated config and no
+// world-readable window exists. `server --migrate` persists a freshly generated
+// jwt_secret through here, which makes the 0600 guarantee load-bearing.
 func SaveToFile(cfg *AppConfig, path string) error {
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("appconfig: marshal YAML: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("appconfig: write file %q: %w", path, err)
+	// Temp in the same directory so the rename is atomic (same filesystem).
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".appconfig-*.tmp")
+	if err != nil {
+		return fmt.Errorf("appconfig: create temp for %q: %w", path, err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename below succeeds
+	// os.CreateTemp already makes the file 0600; set it explicitly to be robust
+	// against a permissive umask override on some platforms.
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("appconfig: chmod temp: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("appconfig: write temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("appconfig: close temp: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("appconfig: rename into place %q: %w", path, err)
 	}
 	return nil
 }
