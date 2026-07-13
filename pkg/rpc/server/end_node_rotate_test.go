@@ -19,6 +19,11 @@ func newRotateTestServer(t *testing.T) *EndNodeServer {
 	if err != nil {
 		t.Fatalf("NewDefaultForwardManager: %v", err)
 	}
+	// Close the manager when the test ends: GetBindPort/RotateInboundPort open
+	// real relay listeners on 30000-40000 via AddRule, and without Close() every
+	// test in this file leaked its listeners, eventually exhausting the range and
+	// flaking CI. Close() stops all relays and releases the ports.
+	t.Cleanup(func() { _ = fwdMgr.Close() })
 	mgr := usermanager.NewUserManager(fwdMgr, "test-node")
 	return &EndNodeServer{userMgr: mgr}
 }
