@@ -42,7 +42,12 @@
 
 ## 4. P1 跨层主题（57 条，按复现模式归并）
 
-> **状态更新（2026-07-13，按 finding 逐条核对后修正）**：P0 **2/2 全修**；P1 **46/52 已修**，落在分支 `fix/p0-concurrency`（14 个 `fix(` commit）。此前"P1 全部 8 簇完成"的表述是**按簇报、非按 finding 报，过度乐观**——8 个主题簇各有 commit，但簇内曾有 9 条 P1 未逐条闭合。**usermanager 计费并发子簇（本属最大并发簇但被 E 提交漏掉）已于 `0835f7a` 补修**：
+> **最终状态（2026-07-13，对抗性逐条审计 + 用户逐条决策后）**：分支 `fix/p0-concurrency`（30 commit，本地未 push）。跑了 59 条（2 P0 + 57 P1）逐条对抗审计（auditor→skeptic，默认判 unfixed），查出前述"全清零"过度乐观，剩 7 条残留，现已全部处置：
+> - **5 修**：#56 UserEvent 活指针→emit 快照 `a598ed9`；#53 mihomo 删 inbound 毁共享 PEM→survivor-scan `f924a3c`；#46 ReqToMultiEndNodeServer 无 -race 测试→补 `694f4dd`；**#2 跨方法剪接→方案 B 方法绑定**（NodeAuthInfo.dest_method + 客户端拦截器盖章 + 服务端 VerifyDestMethod）`3999e19`；**#31 明文 center 通道→专用 center_token AES 信封**（复用 codec，内层 per-cluster 鉴权不变，隔离保留）`2ae108d`。
+> - **2 接受**：#21（续期不匹配已修，残留仅手动 re-issue 的 sub-ms 窗口，POSIX 限制，用户"不用动"）；#54（sub-converter 半可信+TLS，dns/proxy-providers 已裁，用户"保持现状"）。
+> - **#2/#31 是破坏性升级**：center + 全 end 需同时升级并配 center_token（详见各 commit message）。**所有 P0/P1 correctness 至此全部闭合或经用户明确接受。**
+>
+> **旧状态（保留存档）**：P0 **2/2 全修**；P1 **46/52 已修**，落在分支 `fix/p0-concurrency`（14 个 `fix(` commit）。此前"P1 全部 8 簇完成"的表述是**按簇报、非按 finding 报，过度乐观**——8 个主题簇各有 commit，但簇内曾有 9 条 P1 未逐条闭合。**usermanager 计费并发子簇（本属最大并发簇但被 E 提交漏掉）已于 `0835f7a` 补修**：
 > - `usermanager.go:2239` **GetStats 共享 map 并发崩溃（P0 级 fatal）** ✅ —— 改 `drainDeltas` 单锁快照+重置 + `GetStats` 深拷贝，map 不再逃逸锁。`TestGetAllDeltaTraffic_ConcurrentDrainAndCollect` 修前 -race 必炸、修后 6/6 绿。
 > - `usermanager.go:2237` GetAllDeltaTraffic 两段锁丢流量 ✅ —— 快照+重置原子化（守恒测试 pin）。
 > - `usermanager.go:2233` 零回归测试 ✅ —— 新增 `stats_concurrency_test.go`。另修 `GetUserDeltaTraffic` 的同类 per-user 两段锁（`drainUserDelta`）。
