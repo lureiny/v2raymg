@@ -88,8 +88,12 @@ const (
 type UserEvent struct {
 	Type     UserEventType
 	Username string
-	User     *contracts.User // nil for remove/expire events
-	Ports    []uint32        // affected ports for port_bind events
+	// User is a *snapshot* (contracts.User.Clone), never the live pointer from
+	// the manager's map — subscribers read it off m.mu while writers mutate the
+	// original under it. Producers must keep cloning before emit (finding UM-#56).
+	// nil for remove/expire events.
+	User  *contracts.User
+	Ports []uint32 // affected ports for port_bind events
 }
 
 // UserLister is the interface to list users.
@@ -377,7 +381,8 @@ func (m *UserManager) mutateUser(username string, eventType UserEventType, mutat
 	if eventType == UserEventRemove {
 		evt.Ports = user.BindPorts
 	} else {
-		evt.User = user
+		// Snapshot under m.mu: subscribers read evt.User off the lock.
+		evt.User = user.Clone()
 	}
 	m.emitEvent(evt)
 	return nil
@@ -532,7 +537,7 @@ func (m *UserManager) AddUser(req AddUserRequest) error {
 	m.emitEvent(UserEvent{
 		Type:     UserEventAdd,
 		Username: req.Username,
-		User:     user,
+		User:     user.Clone(),
 	})
 
 	return nil
@@ -959,7 +964,7 @@ func (m *UserManager) GetBindPort(req GetBindPortRequest) (uint32, error) {
 	m.emitEvent(UserEvent{
 		Type:     UserEventPortBind,
 		Username: req.Username,
-		User:     user,
+		User:     user.Clone(),
 		Ports:    []uint32{createdRule.ListenPort},
 	})
 
@@ -1109,12 +1114,14 @@ func (m *UserManager) RotateUserPortForInbound(username string, containerType co
 			log.Warn("[RotateUserPortForInbound] failed to persist port_mappings", "err", err)
 		}
 	}
+	// Snapshot before releasing the lock; the emit below runs unlocked.
+	userSnapshot := user.Clone()
 	m.mu.Unlock()
 
 	m.emitEvent(UserEvent{
 		Type:     UserEventPortBind,
 		Username: username,
-		User:     user,
+		User:     userSnapshot,
 		Ports:    []uint32{newPort},
 	})
 
@@ -1352,7 +1359,7 @@ func (m *UserManager) ReleaseBindPort(req ReleaseBindPortRequest) error {
 	m.emitEvent(UserEvent{
 		Type:     UserEventPortBind,
 		Username: req.Username,
-		User:     user,
+		User:     user.Clone(),
 		Ports:    []uint32{req.BindPort},
 	})
 
@@ -1595,7 +1602,7 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 		m.emitEvent(UserEvent{
 			Type:     UserEventAdd,
 			Username: incoming.Username,
-			User:     incoming,
+			User:     incoming.Clone(),
 		})
 		return true, nil
 	}
@@ -1668,7 +1675,7 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 	m.emitEvent(UserEvent{
 		Type:     UserEventUpdate,
 		Username: existing.Username,
-		User:     existing,
+		User:     existing.Clone(),
 	})
 	return true, nil
 }

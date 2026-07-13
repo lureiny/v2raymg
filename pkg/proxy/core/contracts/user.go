@@ -102,6 +102,33 @@ type UserSpec struct {
 
 }
 
+// Clone returns a deep copy safe to share across goroutines without a lock.
+// All scalar fields are value-copied (time.Time and its shared *Location are
+// immutable, so a value copy is safe); the two reference fields — BindPorts
+// and PortMappings — are duplicated so later mutations of the original never
+// race with a reader of the clone. A nil receiver clones to nil.
+//
+// Emitted UserEvents must carry a Clone, never the live *User held in the
+// manager's map: subscribers read event.User off the lock while mutateUser
+// writes the same struct under it (2026-07-10 review finding UM-#56).
+func (u *UserSpec) Clone() *UserSpec {
+	if u == nil {
+		return nil
+	}
+	c := *u
+	if u.BindPorts != nil {
+		c.BindPorts = make([]uint32, len(u.BindPorts))
+		copy(c.BindPorts, u.BindPorts)
+	}
+	if u.PortMappings != nil {
+		c.PortMappings = make(map[uint32]uint32, len(u.PortMappings))
+		for k, v := range u.PortMappings {
+			c.PortMappings[k] = v
+		}
+	}
+	return &c
+}
+
 // IsExpired returns true if the user has expired.
 func (u *UserSpec) IsExpired() bool {
 	if u.ExpiryTime.IsZero() {
