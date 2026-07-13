@@ -42,12 +42,13 @@
 
 ## 4. P1 跨层主题（57 条，按复现模式归并）
 
-> **状态更新（2026-07-13，按 finding 逐条核对后修正）**：P0 **2/2 全修**；P1 **43/52 已修**，落在分支 `fix/p0-concurrency`（13 个 `fix(` commit）。此前"P1 全部 8 簇完成"的表述是**按簇报、非按 finding 报，过度乐观**——8 个主题簇各有 commit，但簇内仍有 9 条 P1 未逐条闭合（2 deferred 降 P2/P3 + 7 未处理）。**仍为真 P1、必须补修（usermanager 计费并发子簇，本属最大并发簇但被 E 提交漏掉）**：
-> - `usermanager.go:2239` **GetStats 共享 map 并发崩溃（P0 级 fatal）**——bandwidth 采集 goroutine 在锁外 range `ByUser`，与 collect ticker 写并发 → `concurrent map iteration and map write` 整进程 panic。
-> - `usermanager.go:2237` GetAllDeltaTraffic 两段锁丢流量（GetStats 释放锁后再单独 reset，中间 collect 增量被清零不返回 → 计费少算）。
-> - `usermanager.go:2233` 上述两函数零回归测试。
+> **状态更新（2026-07-13，按 finding 逐条核对后修正）**：P0 **2/2 全修**；P1 **46/52 已修**，落在分支 `fix/p0-concurrency`（14 个 `fix(` commit）。此前"P1 全部 8 簇完成"的表述是**按簇报、非按 finding 报，过度乐观**——8 个主题簇各有 commit，但簇内曾有 9 条 P1 未逐条闭合。**usermanager 计费并发子簇（本属最大并发簇但被 E 提交漏掉）已于 `0835f7a` 补修**：
+> - `usermanager.go:2239` **GetStats 共享 map 并发崩溃（P0 级 fatal）** ✅ —— 改 `drainDeltas` 单锁快照+重置 + `GetStats` 深拷贝，map 不再逃逸锁。`TestGetAllDeltaTraffic_ConcurrentDrainAndCollect` 修前 -race 必炸、修后 6/6 绿。
+> - `usermanager.go:2237` GetAllDeltaTraffic 两段锁丢流量 ✅ —— 快照+重置原子化（守恒测试 pin）。
+> - `usermanager.go:2233` 零回归测试 ✅ —— 新增 `stats_concurrency_test.go`。另修 `GetUserDeltaTraffic` 的同类 per-user 两段锁（`drainUserDelta`）。
+> - **残留（本次划出，非回归、当前生产不可达）**：`collect()` 在锁外读 records、锁内应用 delta，两个并发 collect 乱序 → 触发 counter-reset 启发式 → over-count；但生产中 collect 仅由单 collectLoop 驱动，唯一并发入口 `ForceCollect`(`go sc.collect()`) 只有测试调用。列为 latent P2。
 >
-> **其余未闭合（非回归/已降级）**：VLESS 缺 subscription_chain 测试（P1 测试缺口）、CI `-race` 仅覆盖 `pkg/cluster`+hysteria 两包（应扩面）、HC `run()` 假 Running（降 P2）、drainEnd map 慢泄漏（降 P3）、clash 外部 sub-converter 依赖（遗留/外部设计）、`pkg/rpc/client` 整目录零测试、rotate 测试泄漏 listener。
+> **其余仍未闭合（非回归/已降级）**：VLESS 缺 subscription_chain 测试（P1 测试缺口）、CI `-race` 仅覆盖 `pkg/cluster`+hysteria 两包（应扩面 P2）、HC `run()` 假 Running（降 P2）、drainEnd map 慢泄漏（降 P3）、clash 外部 sub-converter 依赖（遗留/外部设计 P1）、`pkg/rpc/client` 整目录零测试（P2/P3）、rotate 测试泄漏 listener（P2/P3）。
 >
 > **B1 集群 RPC 加密/鉴权** 用户选**方案 A（一步到位协调式破坏升级，多 cluster 共 center 拓扑）**已实施于 commit `61adb83`（HKDF KDF + 消息类型 AAD + ts/nonce/dest 防重放 + center app 层多 token 鉴权）；部署硬要求（全集群同时升级、center 配全 cluster_tokens、NTP 依赖扩面、无密钥轮换）见 `B1-rpc-crypto-DECISION-NEEDED.md`。 各簇 commit：A1 集群节点并发 `7a5ffbe`；A2 容器状态机+snell `13e5c25`；B2 SSRF/模板 `e0e0170`；B3 xray security=none `c425504`；C 转发数据面 `a2c3c08`；D 证书原子性 `571a7dd`；E 集群同步一致性 `ddffbe7`；F 资源泄漏/僵尸进程 `77106f6`；G 启动/降级静默失败 `3851c81`；H 探测/采集 `a93f985`。
 
