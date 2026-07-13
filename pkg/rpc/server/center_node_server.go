@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lureiny/v2raymg/pkg/common"
+	rpc "github.com/lureiny/v2raymg/pkg/common/rpc"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/appconfig"
 
@@ -127,6 +128,11 @@ func (s *CenterNodeServer) centerInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		if err := checkReplay(req, s.Name); err != nil {
 			return nil, fmt.Errorf("replay check failed: %w", err)
+		}
+		// Bind the payload to its method (finding #2); harmless for the center's
+		// two distinct-typed methods but keeps the check uniform across channels.
+		if err := rpc.VerifyDestMethod(req, info.FullMethod); err != nil {
+			return nil, fmt.Errorf("method binding failed: %w", err)
 		}
 		carrier, ok := req.(authInfoCarrier)
 		if !ok || carrier.GetNodeAuthInfo() == nil || carrier.GetNodeAuthInfo().GetNode() == nil {

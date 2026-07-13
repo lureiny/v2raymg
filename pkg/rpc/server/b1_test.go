@@ -65,21 +65,28 @@ func TestCenterInterceptor_TokenAuth(t *testing.T) {
 		handled = true
 		return &proto.HeartBeatRsp{}, nil
 	}
-	info := &grpc.UnaryServerInfo{}
+	info := &grpc.UnaryServerInfo{FullMethod: "/proto.CenterNodeAccess/HeartBeat"}
+	// mk builds a request and method-stamps it exactly as the client interceptor
+	// would, so it passes method binding and reaches the token-auth logic here.
+	mk := func(nonce, dest, cluster, token string) *proto.HeartBeatReq {
+		r := authReq(nonce, dest, cluster, token)
+		commonrpc.StampDestMethod(r, info.FullMethod)
+		return r
+	}
 
 	// wrong token -> rejected, handler not reached
-	if _, err := itc(context.Background(), authReq("b1-c-1", "", "c1", "wrong-token"), info, handler); err == nil {
+	if _, err := itc(context.Background(), mk("b1-c-1", "", "c1", "wrong-token"), info, handler); err == nil {
 		t.Error("wrong token must be rejected")
 	}
 	if handled {
 		t.Fatal("handler must not run on auth failure")
 	}
 	// unknown cluster -> rejected
-	if _, err := itc(context.Background(), authReq("b1-c-2", "", "unknown", good), info, handler); err == nil {
+	if _, err := itc(context.Background(), mk("b1-c-2", "", "unknown", good), info, handler); err == nil {
 		t.Error("unknown cluster must be rejected")
 	}
 	// valid -> handler runs
-	if _, err := itc(context.Background(), authReq("b1-c-3", "", "c1", good), info, handler); err != nil {
+	if _, err := itc(context.Background(), mk("b1-c-3", "", "c1", good), info, handler); err != nil {
 		t.Fatalf("valid request must pass: %v", err)
 	}
 	if !handled {

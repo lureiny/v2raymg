@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	commonrpc "github.com/lureiny/v2raymg/pkg/common/rpc"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
@@ -148,7 +149,13 @@ func (node *Node) GetGrpcClientConn() (*grpc.ClientConn, error) {
 		node.grpcClientConn = nil
 	}
 	addr := fmt.Sprintf("%s:%d", node.GetHost(), node.GetPort())
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// StampDestMethod binds every outgoing request to its gRPC method inside the
+	// authenticated payload, so an on-path attacker cannot redirect a ciphertext
+	// to a sibling method sharing the same request type (finding #2).
+	conn, err := grpc.Dial(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(commonrpc.StampDestMethodClientInterceptor),
+	)
 	if err != nil {
 		// Do not poison the field with a nil/failed conn.
 		return nil, err

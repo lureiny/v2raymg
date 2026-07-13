@@ -161,6 +161,13 @@ func (s *EndNodeServer) unaryServerInterceptor() grpc.UnaryServerInterceptor {
 			log.Error("rpc replay check failed", "api", info.FullMethod[methodPrefixLen:], "err", err)
 			return nil, fmt.Errorf("replay check failed: %w", err)
 		}
+		// Method binding: the payload must declare the method it was built for,
+		// so a captured ciphertext can't be redirected to a sibling method that
+		// shares its request type (finding #2). Runs for every method.
+		if err := rpc.VerifyDestMethod(req, info.FullMethod); err != nil {
+			log.Error("rpc method binding failed", "api", info.FullMethod[methodPrefixLen:], "err", err)
+			return nil, fmt.Errorf("method binding failed: %w", err)
+		}
 		if s.cfg.OnlyGateway && !isOnlyGatewayMethod(info.FullMethod) {
 			return newEmptyRsp(info.FullMethod)
 		}

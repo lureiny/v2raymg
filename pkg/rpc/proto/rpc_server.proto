@@ -56,6 +56,13 @@ message NodeAuthInfo {
     int64 timestamp_us = 3;
     bytes nonce = 4;
     string dest_node = 5;
+    // dest_method binds the (encrypted, authenticated) payload to the gRPC
+    // method it was built for. The server rejects a request whose dest_method
+    // differs from the dispatched method, so an on-path attacker on the plaintext
+    // transport cannot move a ciphertext to a sibling method that shares the same
+    // request type (e.g. ResetUserTraffic -> DeleteUsers, both UserOpReq). Added
+    // 2026-07; stamped by the client interceptor, checked in the server interceptor.
+    string dest_method = 6;
 }
 
 message GetUsersReq {

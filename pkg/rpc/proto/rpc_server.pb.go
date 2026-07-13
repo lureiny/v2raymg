@@ -266,9 +266,16 @@ type NodeAuthInfo struct {
 	// Anti-replay fields (added 2026-07): every request carries a fresh
 	// timestamp + random nonce, and the destination node name, so the server
 	// can reject stale/duplicate frames and frames captured for a different node.
-	TimestampUs   int64  `protobuf:"varint,3,opt,name=timestamp_us,json=timestampUs,proto3" json:"timestamp_us,omitempty"`
-	Nonce         []byte `protobuf:"bytes,4,opt,name=nonce,proto3" json:"nonce,omitempty"`
-	DestNode      string `protobuf:"bytes,5,opt,name=dest_node,json=destNode,proto3" json:"dest_node,omitempty"`
+	TimestampUs int64  `protobuf:"varint,3,opt,name=timestamp_us,json=timestampUs,proto3" json:"timestamp_us,omitempty"`
+	Nonce       []byte `protobuf:"bytes,4,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	DestNode    string `protobuf:"bytes,5,opt,name=dest_node,json=destNode,proto3" json:"dest_node,omitempty"`
+	// dest_method binds the (encrypted, authenticated) payload to the gRPC
+	// method it was built for. The server rejects a request whose dest_method
+	// differs from the dispatched method, so an on-path attacker on the plaintext
+	// transport cannot move a ciphertext to a sibling method that shares the same
+	// request type (e.g. ResetUserTraffic -> DeleteUsers, both UserOpReq). Added
+	// 2026-07; stamped by the client interceptor, checked in the server interceptor.
+	DestMethod    string `protobuf:"bytes,6,opt,name=dest_method,json=destMethod,proto3" json:"dest_method,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -334,6 +341,13 @@ func (x *NodeAuthInfo) GetNonce() []byte {
 func (x *NodeAuthInfo) GetDestNode() string {
 	if x != nil {
 		return x.DestNode
+	}
+	return ""
+}
+
+func (x *NodeAuthInfo) GetDestMethod() string {
+	if x != nil {
+		return x.DestMethod
 	}
 	return ""
 }
@@ -5135,13 +5149,15 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\x05group\x18\r \x01(\tR\x05group\x12\x1d\n" +
 	"\n" +
 	"auth_token\x18\x0e \x01(\tR\tauthToken\x12.\n" +
-	"\x13login_password_hash\x18\x0f \x01(\tR\x11loginPasswordHashJ\x04\b\x04\x10\x05\"\x9b\x01\n" +
+	"\x13login_password_hash\x18\x0f \x01(\tR\x11loginPasswordHashJ\x04\b\x04\x10\x05\"\xbc\x01\n" +
 	"\fNodeAuthInfo\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1f\n" +
 	"\x04node\x18\x02 \x01(\v2\v.proto.NodeR\x04node\x12!\n" +
 	"\ftimestamp_us\x18\x03 \x01(\x03R\vtimestampUs\x12\x14\n" +
 	"\x05nonce\x18\x04 \x01(\fR\x05nonce\x12\x1b\n" +
-	"\tdest_node\x18\x05 \x01(\tR\bdestNode\"i\n" +
+	"\tdest_node\x18\x05 \x01(\tR\bdestNode\x12\x1f\n" +
+	"\vdest_method\x18\x06 \x01(\tR\n" +
+	"destMethod\"i\n" +
 	"\vGetUsersReq\x129\n" +
 	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x12\x1f\n" +
 	"\vinclude_all\x18\x02 \x01(\bR\n" +
