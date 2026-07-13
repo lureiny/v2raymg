@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription/converter"
 )
 
 // TestMihomoVLESSMatrix drives a real VLESS transport × security matrix
@@ -181,6 +184,198 @@ func TestMihomoVLESSMatrix(t *testing.T) {
 			runVLESSMatrixCase(t, rig, mihomoBin, tc, upstream)
 		})
 	}
+
+	// subscription_chain cases drive the REAL GetUserSubscriptions→convertVLess
+	// path (via ConvertVLessForTest) instead of the hand-written
+	// buildVLESSClashProxy, closing the L6 gap where VLESS — the converter's
+	// most complex protocol — was the only matrix bypassing its own converter.
+	t.Run("subscription_chain_tcp_tls", func(t *testing.T) {
+		runVLESSSubscriptionChainCase(t, rig, mihomoBin, vlessMatrixCase{
+			name:      "subscription-chain-tcp-tls",
+			transport: "tcp",
+			security:  "tls",
+			certFile:  certPath,
+			keyFile:   keyPath,
+		}, upstream)
+	})
+	t.Run("subscription_chain_tcp_reality_vision", func(t *testing.T) {
+		runVLESSSubscriptionChainCase(t, rig, mihomoBin, vlessMatrixCase{
+			name:         "subscription-chain-tcp-reality",
+			transport:    "tcp",
+			security:     "reality",
+			flow:         "xtls-rprx-vision",
+			realityPriv:  realityPriv,
+			realityPub:   realityPub,
+			realityDest:  "www.microsoft.com:443",
+			realityNames: []string{"www.microsoft.com"},
+			realityShort: []string{"aabbccddeeff0011"},
+		}, upstream)
+	})
+}
+
+// runVLESSSubscriptionChainCase is runVLESSMatrixCase's converter-exercising
+// twin: it stands up the same server inbound, then builds the client proxy from
+// the user's real subscription (GetUserSubscriptions → ConvertVLessForTest)
+// rather than from the test case struct, so a regression anywhere in that chain
+// (spec population, VLESS conversion) surfaces here as a connectivity failure.
+func runVLESSSubscriptionChainCase(t *testing.T, rig *mihomoTestRig, mihomoBin string, tc vlessMatrixCase, upstream string) {
+	t.Helper()
+
+	inboundPort, err := freeTCPPort()
+	if err != nil {
+		t.Fatalf("freeTCPPort: %v", err)
+	}
+	tag := fmt.Sprintf("vless-%s-%d", tc.name, inboundPort)
+	uuid := fmt.Sprintf("%08x-4444-5555-6666-%012x", inboundPort, inboundPort)
+
+	params := map[string]any{
+		"protocol":  "vless",
+		"port":      inboundPort,
+		"uuid":      uuid,
+		"transport": tc.transport,
+		"security":  tc.security,
+	}
+	switch tc.security {
+	case "tls":
+		params["cert_file"] = tc.certFile
+		params["key_file"] = tc.keyFile
+		params["cert_source"] = "self_signed"
+	case "reality":
+		params["reality_target"] = tc.realityDest
+		params["reality_server_names"] = tc.realityNames
+		params["reality_short_ids"] = tc.realityShort
+		params["reality_private_key"] = tc.realityPriv
+		params["reality_public_key"] = tc.realityPub
+		if tc.flow != "" {
+			params["flow"] = tc.flow
+		}
+	}
+	if tc.wsPath != "" {
+		params["ws_path"] = tc.wsPath
+	}
+
+	if err := rig.container.FastAddInbound(tag, params); err != nil {
+		t.Fatalf("FastAddInbound: %v", err)
+	}
+	t.Cleanup(func() { _ = rig.container.RemoveInboundConfig(tag) })
+
+	if err := waitPort(fmt.Sprintf("127.0.0.1:%d", inboundPort), 15*time.Second); err != nil {
+		t.Fatalf("mihomo listener %d not ready: %v", inboundPort, err)
+	}
+
+	username := fmt.Sprintf("alice-vless-chain-%s-%d", tc.name, inboundPort)
+	forwardPort := addMihomoUserAndWaitForPort(t, rig, username, uint32(inboundPort))
+
+	specs, err := rig.container.GetUserSubscriptions(contracts.SubscriptionRequest{
+		User: contracts.UserSpec{Username: username},
+		Host: "127.0.0.1",
+	})
+	if err != nil {
+		t.Fatalf("GetUserSubscriptions: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected exactly one spec, got %d", len(specs))
+	}
+	if specs[0].Port != forwardPort {
+		t.Fatalf("spec.Port = %d, want forward port %d", specs[0].Port, forwardPort)
+	}
+	if extString(specs[0].Extensions, "security") == "reality" {
+		specs[0].Extensions["utls_fingerprint"] = "chrome"
+	}
+
+	proxy := vlessProxyFromSpec(t, specs[0])
+	clientCaseDir := filepath.Join(t.TempDir(), tc.name)
+	if err := os.MkdirAll(clientCaseDir, 0o755); err != nil {
+		t.Fatalf("mkdir client case dir: %v", err)
+	}
+	socksPort := spawnMihomoClient(t, clientCaseDir, mihomoClientConfig{
+		BinaryPath: mihomoBin,
+		DataDir:    filepath.Join(clientCaseDir, "data"),
+		Proxy:      proxy,
+	})
+
+	status, body := httpGetViaSocks5(t, socksPort, upstream)
+	if status < 200 || status >= 400 {
+		t.Fatalf("upstream via vless subscription chain: status=%d body=%q", status, body)
+	}
+	t.Logf("PASS: %s upstream=%s status=%d via vless subscription chain", tc.name, upstream, status)
+}
+
+// vlessProxyFromSpec builds the mihomo client outbound from a subscription spec
+// using the real converter (ConvertVLessForTest), mirroring trojanProxyFromSpec.
+// Field names match mihomo's clash vless-outbound schema.
+func vlessProxyFromSpec(t *testing.T, spec contracts.SubscriptionSpec) map[string]any {
+	t.Helper()
+	cp := converter.ConvertVLessForTest(spec)
+	if cp == nil {
+		t.Fatalf("convertVLess returned nil for spec: %+v", spec)
+	}
+	if extString(spec.Extensions, "security") == "reality" && cp.RealityOpts == nil {
+		t.Fatalf("convertVLess reality spec did not populate RealityOpts")
+	}
+
+	p := map[string]any{
+		"name":   "vless-subscription-chain",
+		"type":   "vless",
+		"server": cp.Server,
+		"port":   cp.Port,
+		"uuid":   cp.UUID,
+		"udp":    cp.UDP,
+	}
+	if cp.TLS {
+		p["tls"] = true
+	}
+	if cp.Servername != "" {
+		p["servername"] = cp.Servername
+	}
+	if cp.SkipCertVerify {
+		p["skip-cert-verify"] = true
+	}
+	if cp.Flow != "" {
+		p["flow"] = cp.Flow
+	}
+	if cp.ClientFingerprint != "" {
+		p["client-fingerprint"] = cp.ClientFingerprint
+	}
+	if cp.RealityOpts != nil {
+		p["reality-opts"] = map[string]any{
+			"public-key": cp.RealityOpts.PublicKey,
+			"short-id":   cp.RealityOpts.ShortID,
+		}
+	}
+	if cp.Network != "" {
+		p["network"] = cp.Network
+	}
+	if cp.WSOpts != nil {
+		opts := map[string]any{}
+		if cp.WSOpts.Path != "" {
+			opts["path"] = cp.WSOpts.Path
+		}
+		if cp.WSOpts.Headers != nil && cp.WSOpts.Headers.Host != "" {
+			opts["headers"] = map[string]any{"Host": cp.WSOpts.Headers.Host}
+		}
+		p["ws-opts"] = opts
+	}
+	if cp.GrpcOpts != nil {
+		p["grpc-opts"] = map[string]any{"grpc-service-name": cp.GrpcOpts.GrpcServiceName}
+	}
+	if cp.XHTTPOpts != nil {
+		xh := map[string]any{}
+		if cp.XHTTPOpts.Path != "" {
+			xh["path"] = cp.XHTTPOpts.Path
+		}
+		if cp.XHTTPOpts.Mode != "" {
+			xh["mode"] = cp.XHTTPOpts.Mode
+		}
+		p["xhttp-opts"] = xh
+	}
+	// TLS without an explicit servername (self-signed test cert): mihomo needs a
+	// name to present + we skip verification, matching buildVLESSClashProxy.
+	if cp.TLS && cp.Servername == "" {
+		p["servername"] = "localhost"
+		p["skip-cert-verify"] = true
+	}
+	return p
 }
 
 type vlessMatrixCase struct {

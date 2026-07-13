@@ -258,6 +258,15 @@ func ConvertTrojanForTest(spec contracts.SubscriptionSpec) *ClashProxy {
 	return (&ClashConverter{}).convertTrojan(spec)
 }
 
+// ConvertVLessForTest exposes convertVLess to integration tests for the same
+// reason as ConvertVMessForTest. VLESS is the converter's most complex path
+// (reality/vision/xhttp) and previously had no ForTest seam, so its system
+// matrix built the client proxy by hand and never exercised the real
+// GetUserSubscriptions→convertVLess chain.
+func ConvertVLessForTest(spec contracts.SubscriptionSpec) *ClashProxy {
+	return (&ClashConverter{}).convertVLess(spec)
+}
+
 // ConvertSSForTest exposes convertShadowsocks to integration tests for the
 // same reason as ConvertVMessForTest: system tests can exercise the real
 // subscription→converter chain without fetching the external Clash template.
