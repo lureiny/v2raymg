@@ -74,6 +74,17 @@ type SubscriptionConfig struct {
 	// RemoteURLs is a list of remote subscription URLs to fetch and merge.
 	// Each URL should return a base64-encoded list of proxy URIs (common format).
 	RemoteURLs []string `yaml:"remote_urls" json:"remote_urls"`
+
+	// ClashTemplateURLs is the ordered list of external Clash sub-converter
+	// template services queried (with a throwaway node) to obtain a full Clash
+	// config skeleton (proxy-groups/rules) that generated proxies are injected
+	// into. They are tried in order; the first that responds wins. Each entry
+	// must contain a single "%s" placeholder, replaced with the URL-encoded
+	// trigger subscription. There is deliberately no built-in default — the
+	// recommended public services live in config.example.yaml. When this list is
+	// empty (or every URL fails), /sub degrades to a built-in minimal template
+	// instead of failing the request.
+	ClashTemplateURLs []string `yaml:"clash_template_urls" json:"clash_template_urls"`
 	// EnableUserInfoHeader controls whether the /sub response carries the
 	// Subscription-Userinfo header (upload/download/total/expire). Default: true.
 	// When enabled, upload/download are aggregated from all target nodes; total
@@ -237,14 +248,14 @@ func DefaultClusterUserConfig() ClusterUserConfig {
 // It is loaded from a YAML or JSON file and used to initialize all subsystems.
 type AppConfig struct {
 	// NodeType is the node role: "center" or "end". Default: "end".
-	NodeType     string                         `yaml:"node_type"    json:"node_type"`
-	Log          LogConfig                      `yaml:"log"          json:"log"`
-	Store        StoreConfig                    `yaml:"store"        json:"store"`
-	Forward      forward.PortAllocatorConfig    `yaml:"forward"      json:"forward"`
-	CertMgmt     certmgmtservice.Config         `yaml:"cert_mgmt"    json:"cert_mgmt"`
-	Containers   container.ContainerMgrConfig   `yaml:"containers"   json:"containers"`
-	Subscription SubscriptionConfig             `yaml:"subscription" json:"subscription"`
-	EndNode      EndNodeConfig                  `yaml:"end_node"     json:"end_node"`
-	CenterNode   CenterNodeConfig               `yaml:"center_node"  json:"center_node"`
-	ClusterUser  ClusterUserConfig              `yaml:"cluster_user" json:"cluster_user"`
+	NodeType     string                       `yaml:"node_type"    json:"node_type"`
+	Log          LogConfig                    `yaml:"log"          json:"log"`
+	Store        StoreConfig                  `yaml:"store"        json:"store"`
+	Forward      forward.PortAllocatorConfig  `yaml:"forward"      json:"forward"`
+	CertMgmt     certmgmtservice.Config       `yaml:"cert_mgmt"    json:"cert_mgmt"`
+	Containers   container.ContainerMgrConfig `yaml:"containers"   json:"containers"`
+	Subscription SubscriptionConfig           `yaml:"subscription" json:"subscription"`
+	EndNode      EndNodeConfig                `yaml:"end_node"     json:"end_node"`
+	CenterNode   CenterNodeConfig             `yaml:"center_node"  json:"center_node"`
+	ClusterUser  ClusterUserConfig            `yaml:"cluster_user" json:"cluster_user"`
 }

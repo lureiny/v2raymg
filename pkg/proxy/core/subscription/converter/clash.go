@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -43,13 +44,40 @@ func parseTuicHeartbeatMs(s string) int {
 	return 0
 }
 
-// subConverterURLs 是外部 Clash 模板服务的备用 URL 列表。
-// 用一个假节点触发，拉回完整的 Clash 配置骨架（包含 proxy-groups、rules 等）。
-var subConverterURLs = []string{
-	"https://sub.xeton.dev/sub?target=clash&new_name=true&url=%s",
-	"https://api.dler.io/sub?target=clash&new_name=true&url=%s",
-	"https://sub.maoxiongnet.com/sub?target=clash&new_name=true&url=%s",
-	"https://sub.id9.cc/sub?target=clash&new_name=true&url=%s",
+// clashTemplateURLs 是外部 Clash 模板服务的 URL 列表，用一个假节点触发，拉回完整的
+// Clash 配置骨架（proxy-groups、rules 等）。这里**故意不硬编码任何默认值** —— 推荐的
+// 公共服务地址放在 config.example.yaml 里，运行时由 SetClashTemplateURLs 从
+// subscription.clash_template_urls 注入。列表为空（或全部失败）时，fetchClashTemplate
+// 返回 error，ConvertWithOptions 回退到内置极简模板，/sub 不会因此整体失败。
+var (
+	clashTemplateMu   sync.RWMutex
+	clashTemplateURLs []string
+)
+
+// SetClashTemplateURLs 配置外部 Clash 模板服务列表。由启动流程用 app config 的
+// subscription.clash_template_urls 调用一次。空白项会被丢弃；传入空列表（或全为空白）
+// 是合法的，表示 /sub 始终使用内置极简回退模板。每个 URL 必须包含一个 "%s" 占位符，
+// 在抓取时替换为 URL 编码后的触发订阅；不含占位符的项会被跳过（并打 warning），而不是
+// 生成一个畸形 URL。
+func SetClashTemplateURLs(urls []string) {
+	cleaned := make([]string, 0, len(urls))
+	for _, u := range urls {
+		if s := strings.TrimSpace(u); s != "" {
+			cleaned = append(cleaned, s)
+		}
+	}
+	clashTemplateMu.Lock()
+	clashTemplateURLs = cleaned
+	clashTemplateMu.Unlock()
+}
+
+// clashTemplateURLsSnapshot 返回配置列表的副本，使调用方在做网络 IO 时不持锁。
+func clashTemplateURLsSnapshot() []string {
+	clashTemplateMu.RLock()
+	defer clashTemplateMu.RUnlock()
+	out := make([]string, len(clashTemplateURLs))
+	copy(out, clashTemplateURLs)
+	return out
 }
 
 // fetchClashTemplateFn is a seam so tests can force the external fetch to fail
@@ -753,8 +781,19 @@ type NodeMap map[string]yaml.Node
 // fetchClashTemplate 从外部服务拉取 Clash 配置骨架。
 // 用一个假 SS 节点触发，返回包含 proxy-groups/rules 等字段的完整模板。
 func fetchClashTemplate() (NodeMap, error) {
+	urls := clashTemplateURLsSnapshot()
+	if len(urls) == 0 {
+		// 没有配置任何模板源（subscription.clash_template_urls 为空）。这不是硬错误：
+		// 调用方 ConvertWithOptions 会捕获这个 error 并回退到内置极简模板。
+		return nil, fmt.Errorf("no clash template sources configured (subscription.clash_template_urls empty)")
+	}
 	errMsg := ""
-	for _, tmpl := range subConverterURLs {
+	for _, tmpl := range urls {
+		if !strings.Contains(tmpl, "%s") {
+			log.Warnf("clash: template URL %q missing %%s placeholder; skipping", tmpl)
+			errMsg += "|missing %s placeholder: " + tmpl
+			continue
+		}
 		reqURL := fmt.Sprintf(tmpl, url.QueryEscape(clashFakeSub))
 		data, err := httpGet(reqURL)
 		if err != nil {

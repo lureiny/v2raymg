@@ -16,18 +16,18 @@ import (
 	"github.com/lureiny/v2raymg/pkg/http/auth"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/appconfig"
+	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/hysteria" // register hysteria factory
+	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/mihomo"   // register mihomo factory
+	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/snell"    // register snell factory
+	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/xray"     // register xray factory
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription"
+	converter "github.com/lureiny/v2raymg/pkg/proxy/core/subscription/converter" // register converters + configure clash template URLs
 	"github.com/lureiny/v2raymg/pkg/proxy/forward"
 	"github.com/lureiny/v2raymg/pkg/proxy/usermanager"
 	"github.com/lureiny/v2raymg/pkg/rpc/server"
 	"github.com/lureiny/v2raymg/pkg/store"
 	"github.com/lureiny/v2raymg/pkg/store/migrations"
-	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/hysteria"         // register hysteria factory
-	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/mihomo"          // register mihomo factory
-	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/snell"           // register snell factory
-	_ "github.com/lureiny/v2raymg/pkg/proxy/containers/xray"            // register xray factory
-	_ "github.com/lureiny/v2raymg/pkg/proxy/core/subscription/converter" // register converters
 	"github.com/spf13/cobra"
 )
 
@@ -88,6 +88,12 @@ func startServer(cmd *cobra.Command, args []string) {
 
 	logger := cfg.Log.ApplyToLogger()
 	log.SetDefault(logger)
+
+	// Configure the external Clash sub-converter template services used when
+	// building /sub Clash configs (subscription.clash_template_urls). An empty
+	// list is valid — /sub then always uses the built-in minimal fallback
+	// template rather than failing.
+	converter.SetClashTemplateURLs(cfg.Subscription.ClashTemplateURLs)
 
 	if strings.EqualFold(cfg.NodeType, "center") {
 		runCenterNode(cfg)
@@ -305,4 +311,3 @@ func convertStaticNodes(nodes []appconfig.StaticNodeConfig) []cluster.StaticNode
 	}
 	return out
 }
-
