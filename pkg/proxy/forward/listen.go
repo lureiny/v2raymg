@@ -122,12 +122,27 @@ func describeEndpoints(eps []listenEndpoint) string {
 // listenTCP binds a TCP listener on address using the "tcp"+family network
 // ("tcp", "tcp4", or "tcp6"). See listenEndpoint.family for why the family is
 // pinned for wildcard binds.
+//
+// A pinned family ("4"/"6") binds exactly that family with no fallback: dual
+// stack wildcards rely on this so a failed best-effort half is skipped by
+// multiRelay instead of silently double-binding the sibling family, and an
+// explicit single-stack choice must fail rather than switch stacks. An
+// unpinned bind delegates to listenDualStack, which keeps the kernel
+// dual-stack + IPv4-fallback semantics for wildcard hosts (and is a plain
+// bind for specific IPs).
 func listenTCP(address, family string) (net.Listener, error) {
+	if family == "" {
+		return listenDualStack(address)
+	}
 	return net.Listen("tcp"+family, address)
 }
 
 // listenUDP binds a UDP packet connection on address using the "udp"+family
-// network ("udp", "udp4", or "udp6").
+// network ("udp", "udp4", or "udp6"). Family semantics match listenTCP:
+// pinned = exact, unpinned = best-effort dual-stack via listenPacketDualStack.
 func listenUDP(address, family string) (net.PacketConn, error) {
+	if family == "" {
+		return listenPacketDualStack(address)
+	}
 	return net.ListenPacket("udp"+family, address)
 }
