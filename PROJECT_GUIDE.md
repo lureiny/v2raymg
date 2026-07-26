@@ -73,7 +73,24 @@ Makefile                   # build / build-full (full_dns tag) / proto
    - **转发监听默认双栈** — 转发规则未指定时默认同时监听 IPv4(`0.0.0.0`)+ IPv6(`[::]`,`tcp6/udp6` 即 `IPV6_V6ONLY`)。全局默认由 `forward.listen_stack`(`dual`/`ipv4`/`ipv6`,默认 `dual`)控制;单规则可用 `ForwardRule.ListenAddr`(具体 IP 字面量,IPv6 自动加方括号)或 `ForwardRule.ListenStack` 覆盖。双栈下**两半都是 best-effort**:纯 IPv4 主机跳过 `[::]`、纯 IPv6 主机跳过 `0.0.0.0`,只要有一个协议族能绑就照常启动,两个都绑不上才失败(见 `pkg/proxy/forward/listen.go` + `relay_multi.go`)
 7. **持久化走 SQLite** — user/inbound/node_groups 全部落 SQLite,DB 操作通过 `pkg/store/manager` 的 `Provider` + `Tx` 抽象
 8. **集群通信走 gRPC** — center/end 节点间协议定义在 `pkg/rpc/proto/rpc_server.proto`,运行时通过 cobra 启动的 server 暴露;默认加密已切到 GCM(老 CBC 回退已移除)
+   - **end↔end 心跳的节点目录走摘要增量同步** — 心跳不再每轮回带全量 `nodesMap`(那是每节点 O(N²)/轮)。两端各带一个 `nodes_sum`(对广告集合的 SHA-256),稳态只比摘要;不一致时客户端**同一轮立刻**再发一次心跳并在 `HeartBeatReq.nodes` 里带上全量,服务端合并后回带自己的全量,一次往返双向收敛。
+     - **广告集合 S(X) 只有一个定义点** `cluster.Cluster.GetAdvertisedNodes()`(过滤 `IsCompleteRegister()`,**包含节点自身**),摘要/响应回带/推送 payload 三处必须都从它取 —— 各自写过滤条件会导致永不收敛
+     - **摘要必须排序后折叠**(`cluster.ComputeNodesSum`,只折 name/host/port/cluster_name,不折任何运行期状态)。不排序会让已收敛的两端算出不同摘要,变成永久假性不一致,比不做还差
+     - 请求里的 `nodes_sum` 只用于**识别旧节点**(空=旧节点,服务端照旧回全量),不参与分歧判定
+     - 杀手开关 `end_node.cluster.node_sum_sync`(默认 true);关闭后该节点既不发摘要也不回摘要、无条件回全量,可单节点灰度回滚
+     - center↔end 路径**未改**,center 仍每轮回全量
 9. **单元测试必须补全** — 每个可测模块对应 `*_test.go`;系统测试在 `pkg/proxy/systemtest/`(部分需 `-tags=integration` + 真实 xray 二进制)
+10. **新增 HTTP 接口 / 集群行为必须补集群集成测试(强制,CI 卡)** — 落点是
+    `pkg/proxy/systemtest/cluster_e2e_api_test.go`(真实 1 center + 3 end 四进程,真 gRPC,全程走 HTTP API)。
+    - 加了路由却没补用例 → `pkg/http/route_coverage_test.go`(**无 build tag,默认 CI 就跑**)直接失败,
+      报错里会写清楚要改哪两个文件
+    - 只把路由加进 `pkg/http/testdata/e2e_covered_routes.txt` 却没真调用 → 集群套件的 `route_coverage` 子测试失败
+    - 两侧对咬,所以既不能漏测、也不能靠改清单蒙混过关
+    - **为什么必须是集成测试**:进程内直调 RPC handler 会绕过加密 codec、`checkReplay`、`dest_method` 绑定,
+      集群面的真实故障(如补齐轮被判成重放)在单测里永远看不见
+    - 断言分层:纯集群/用户面用 `requireOK`(必须 200);成功依赖 CI 给不了的环境(ACME、release tag、
+      运行中的代理内核)用 `requireRouted`(只拒绝「gin 没路由到」和「handler 崩了」)
+    - 跨节点接口断言**另外两个节点确实生效**,不能只断言 200 —— 扇出只打到本节点也会返回 200
 
 > **新增 container 必读** — `docs/container-design-principles.md` 把上述 #1/#3/#4/#5 落成三条可操作的 container 开发原则,并给出"底层是否支持多 inbound / 是否有运行时 API"的适配模式矩阵(A/B/C)。接入新代理内核前必须读完并在设计文档里声明模式。
 
@@ -147,6 +164,13 @@ go test ./pkg/proxy/systemtest -run TestDegradedLocalSocks5ProxyChain -v
 
 # 系统测试(真实 xray,需 XRAY_BIN 环境变量)
 XRAY_BIN=/path/to/xray go test ./pkg/proxy/systemtest -tags=integration -v
+
+# 集群回归套件(1 center + 3 end 四进程,全接口;CI 的 cluster-e2e job 跑的就是这条)
+# 不需要外网/代理二进制,约 1 分钟
+go test ./pkg/proxy/systemtest -tags=integration -run TestClusterE2E -v -timeout 20m
+
+# 路由覆盖守卫(无 tag,默认 CI 就跑;新增路由没补集成用例会红)
+go test ./pkg/http -run TestRouteCoverage -v
 ```
 
 `pkg/proxy/systemtest/README.md` 里仍写的是 `./pkg/proxyrefactor/...`,是历史残留,实际路径应当是 `./pkg/proxy/...`。

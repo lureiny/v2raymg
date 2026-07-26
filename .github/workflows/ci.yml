@@ -70,3 +70,29 @@ jobs:
             ./pkg/proxy/tools/process/... \
             ./pkg/certmgmt/... \
             ./pkg/collecter/...
+
+  # Multi-node regression: a real 1-center + 3-end cluster of v2raymg
+  # subprocesses talking real gRPC, driven entirely through the HTTP API.
+  #
+  # This is the ONLY coverage of the cluster plane end to end — the in-process
+  # unit tests call the RPC handlers directly and therefore skip the encryption
+  # codec, the anti-replay check and the method binding. Every HTTP route must
+  # have a case here; pkg/http/route_coverage_test.go (which runs in build-test
+  # above, untagged) fails the build when a route is added without one.
+  #
+  # Separate job so it runs in parallel and a cluster flake never masks a unit
+  # failure. No external binaries or network are required: proxy containers are
+  # optional here and a container that fails to start is non-fatal for the server.
+  cluster-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Cluster e2e (1 center + 3 end nodes)
+        run: go test -tags=integration ./pkg/proxy/systemtest/ -run 'TestClusterE2E' -v -timeout 20m

@@ -1,0 +1,70 @@
+# Routes covered by the cluster integration suite.
+#
+# This file is the contract between two tests:
+#
+#   pkg/http/route_coverage_test.go              (no build tag — runs in default CI)
+#     fails when a registered route is MISSING here, or when a line here refers to
+#     a route that no longer exists.
+#
+#   pkg/proxy/systemtest/cluster_e2e_api_test.go (TestClusterE2E_FullAPI)
+#     fails when a line here was never actually called during the run.
+#
+# So a new endpoint cannot ship without integration coverage, and a line cannot be
+# added here to silence the guard without a case that really exercises it.
+#
+# Format: "METHOD /path" using gin's route template (":name", "*wildcard").
+# Get the authoritative list from:
+#   go test ./pkg/http -run TestRouteCoverage_EveryRoute -v
+#
+# Run the integration suite with:
+#   go test ./pkg/proxy/systemtest -tags=integration -run TestClusterE2E -v -timeout 20m
+
+# --- public (no authentication) ---
+POST /api/login
+POST /api/authHysteria2
+GET /sub
+GET /help/*relativePath
+
+# --- authenticated user scope ---
+GET /api/status
+GET /api/user
+GET /api/profile
+POST /api/logout
+POST /api/rotateInboundPort
+POST /api/rotateAllPorts
+POST /api/user/reset-token
+PUT /api/profile/password
+
+# --- admin scope: users ---
+POST /api/user
+PUT /api/user
+DELETE /api/user
+POST /api/user/reset
+POST /api/user/reset-traffic
+PUT /api/user/:name/role
+PUT /api/user/:name/bandwidth
+PUT /api/user/:name/client-limit
+
+# --- admin scope: inbounds ---
+GET /api/inbound
+POST /api/inbound
+GET /api/inbounds
+DELETE /api/inbounds
+POST /api/inbound/fast
+
+# --- admin scope: certificates ---
+GET /api/getCerts
+POST /api/cert
+POST /api/cert/transfer
+DELETE /api/cert
+
+# --- admin scope: cluster / node control ---
+GET /api/node
+GET /api/containers
+GET /api/metrics
+PUT /api/gateway
+PUT /api/pingCheck
+POST /api/update
+POST /api/copyUserBetweenNodes
+GET /api/node/:name/groups
+PUT /api/node/:name/groups

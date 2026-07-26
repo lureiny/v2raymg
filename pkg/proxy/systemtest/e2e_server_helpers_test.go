@@ -43,13 +43,22 @@ var shutdownSignal = syscall.SIGTERM
 var (
 	v2raymgBinOnce sync.Once
 	v2raymgBinPath string
+	v2raymgBinDir  string // package-scoped; outlives any single test's TempDir
 	v2raymgBinErr  error
 )
 
 // ensureV2raymgBin returns a path to a usable v2raymg binary.
 // Resolution order:
 //  1. V2RAYMG_BIN env var — used as-is if the file exists.
-//  2. Otherwise: `go build -o <tmpDir>/v2raymg .` from the module root.
+//  2. Otherwise: build once per test-binary run and reuse.
+//
+// The tmpDir argument is ignored for the build location. It used to be the target,
+// which was a trap: the sync.Once caches the path, but a t.TempDir() belongs to
+// whichever test called first and is deleted when that test ends — so every
+// subsequent test in the package got a cached path to a file that no longer
+// existed ("fork/exec .../v2raymg: no such file or directory"). It only stayed
+// invisible while the package had a single e2e test. The build now goes to a
+// package-scoped directory removed by TestMain.
 func ensureV2raymgBin(t *testing.T, tmpDir string) string {
 	t.Helper()
 	if env := os.Getenv("V2RAYMG_BIN"); env != "" {
@@ -60,14 +69,18 @@ func ensureV2raymgBin(t *testing.T, tmpDir string) string {
 	}
 
 	v2raymgBinOnce.Do(func() {
-		// Locate module root relative to this test file's package directory.
-		// The module root is 3 levels up from pkg/proxy/systemtest.
 		moduleRoot, err := findModuleRoot()
 		if err != nil {
 			v2raymgBinErr = fmt.Errorf("locate module root: %w", err)
 			return
 		}
-		binPath := filepath.Join(tmpDir, "v2raymg")
+		dir, err := os.MkdirTemp("", "v2raymg-e2e-bin-")
+		if err != nil {
+			v2raymgBinErr = fmt.Errorf("create binary dir: %w", err)
+			return
+		}
+		v2raymgBinDir = dir
+		binPath := filepath.Join(dir, "v2raymg")
 		cmd := exec.Command("go", "build", "-o", binPath, ".")
 		cmd.Dir = moduleRoot
 		out, err := cmd.CombinedOutput()
@@ -82,6 +95,16 @@ func ensureV2raymgBin(t *testing.T, tmpDir string) string {
 		t.Fatalf("ensureV2raymgBin: %v", v2raymgBinErr)
 	}
 	return v2raymgBinPath
+}
+
+// TestMain removes the shared binary directory after the whole package has run.
+// It does nothing else, so `-run` filtering behaves exactly as before.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if v2raymgBinDir != "" {
+		_ = os.RemoveAll(v2raymgBinDir)
+	}
+	os.Exit(code)
 }
 
 // findModuleRoot walks up from this source file's compiled path looking for go.mod.
@@ -107,7 +130,52 @@ func findModuleRoot() (string, error) {
 type e2eServerOpts struct {
 	Dir      string // temp dir for configs, DB, logs
 	HttpPort int    // HTTP management API port
-	RpcPort  int    // gRPC cluster port (required for server start, not used in tests)
+	RpcPort  int    // gRPC cluster port
+
+	// ---- node identity / cluster wiring ----
+	// Zero values keep the single-node behaviour these helpers had before the
+	// cluster suite was added: one standalone end node named "e2e-test".
+
+	// NodeType is "end" (default) or "center". A center node runs ONLY the gRPC
+	// directory server — cmd.runCenterNode starts no HTTP server, no store and no
+	// containers — so the center branch below writes a completely different config.
+	NodeType string
+	// NodeName must be unique per cluster; it is the key the whole node directory
+	// is indexed by.
+	NodeName string
+	// ClusterName / ClusterToken join this node to a cluster. ClusterToken is
+	// LOAD-BEARING even for a lone node: appconfig.Validate rejects any end node
+	// with rpc_port >= 1000 and a token shorter than 16 chars, so leaving it empty
+	// makes the server exit at startup.
+	ClusterName  string
+	ClusterToken string
+	// CenterToken, when set on both sides, wraps the end->center channel in an AES
+	// envelope. Empty keeps that channel in plaintext.
+	CenterToken string
+	// CenterHost / CenterPort point an end node at its center for node discovery.
+	// Empty host = fully decentralised (static peers only).
+	CenterHost string
+	CenterPort int
+	// ClusterTokens is the center-side map of cluster name -> token. A heartbeat is
+	// accepted only if its cluster is listed here and the token matches.
+	ClusterTokens map[string]string
+	// HeartbeatIntervalSec overrides the 10s default. Cluster tests set 1 so
+	// multi-round convergence assertions finish in seconds instead of minutes.
+	HeartbeatIntervalSec int
+	// NodeSumSync toggles node-directory delta sync; nil keeps the default (on).
+	// Set to false to exercise the rollback path / legacy-peer handling.
+	NodeSumSync *bool
+	// ClusterUserEnabled turns on the cluster-user sync layer. It also gates route
+	// registration: /api/node/:name/groups only exists when this is on, so the
+	// cluster suite enables it to cover those two endpoints.
+	ClusterUserEnabled bool
+	// EnablePrometheus registers GET /api/metrics.
+	EnablePrometheus bool
+	// LogLevel defaults to "info". Cluster tests set "debug" because the
+	// node-directory reconcile is logged at debug, and an assertion that it
+	// happened would otherwise pass vacuously against a log that can never
+	// contain the line.
+	LogLevel string
 
 	// Xray container — required
 	XrayBin      string // path to xray binary; empty → auto_download
@@ -142,6 +210,43 @@ type e2eServerOpts struct {
 // enabled=false so the server skips them cleanly.
 func generateE2EConfig(t *testing.T, opts e2eServerOpts) string {
 	t.Helper()
+
+	if opts.NodeName == "" {
+		opts.NodeName = "e2e-test"
+	}
+	if opts.ClusterName == "" {
+		opts.ClusterName = e2eClusterName
+	}
+	// Never leave this empty: Validate rejects an end node that has RPC enabled
+	// (rpc_port >= 1000) and a cluster token under 16 chars, and the server then
+	// exits before binding anything.
+	if opts.ClusterToken == "" {
+		opts.ClusterToken = e2eClusterToken
+	}
+	if opts.LogLevel == "" {
+		opts.LogLevel = "info"
+	}
+
+	// A center node runs only the gRPC directory server, so its config shares
+	// nothing with an end node's — no store, no containers, no HTTP.
+	if strings.EqualFold(opts.NodeType, "center") {
+		return writeE2EConfigFile(t, opts.Dir, map[string]any{
+			"node_type": "center",
+			"log": map[string]any{
+				"level":  opts.LogLevel,
+				"format": "text",
+				"output": "stdout",
+			},
+			"center_node": map[string]any{
+				"name":           opts.NodeName,
+				"listen":         "127.0.0.1",
+				"proxy_host":     "127.0.0.1",
+				"rpc_port":       opts.RpcPort,
+				"cluster_tokens": opts.ClusterTokens,
+				"center_token":   opts.CenterToken,
+			},
+		})
+	}
 
 	// ---- build container list ----
 	type containerEntry struct {
@@ -227,10 +332,28 @@ func generateE2EConfig(t *testing.T, opts e2eServerOpts) string {
 		fwdMax = 50000
 	}
 
+	clusterSection := map[string]any{
+		"name":  opts.ClusterName,
+		"token": opts.ClusterToken,
+	}
+	if opts.CenterHost != "" {
+		clusterSection["center_node_host"] = opts.CenterHost
+		clusterSection["center_node_port"] = opts.CenterPort
+	}
+	if opts.CenterToken != "" {
+		clusterSection["center_token"] = opts.CenterToken
+	}
+	if opts.HeartbeatIntervalSec > 0 {
+		clusterSection["heartbeat_interval_sec"] = opts.HeartbeatIntervalSec
+	}
+	if opts.NodeSumSync != nil {
+		clusterSection["node_sum_sync"] = *opts.NodeSumSync
+	}
+
 	cfg := map[string]any{
 		"node_type": "end",
 		"log": map[string]any{
-			"level":  "info",
+			"level":  opts.LogLevel,
 			"format": "text",
 			"output": "stdout",
 		},
@@ -246,7 +369,7 @@ func generateE2EConfig(t *testing.T, opts e2eServerOpts) string {
 			"containers": containers,
 		},
 		"end_node": map[string]any{
-			"name":              "e2e-test",
+			"name":              opts.NodeName,
 			"proxy_host":        "127.0.0.1",
 			"listen":            "127.0.0.1",
 			"http_listen":       "127.0.0.1",
@@ -255,20 +378,29 @@ func generateE2EConfig(t *testing.T, opts e2eServerOpts) string {
 			"http_token":        e2eHTTPToken,
 			"jwt_secret":        "e2e-jwt-secret-this-is-32-chars!",
 			"jwt_expire_hours":  24,
-			"enable_prometheus": false,
+			"enable_prometheus": opts.EnablePrometheus,
 			"only_gateway":      false,
+			"cluster":           clusterSection,
 		},
 		"cluster_user": map[string]any{
-			"enabled": false,
+			"enabled":              opts.ClusterUserEnabled,
+			"sync_interval_sec":    1,
+			"bootstrap_from_local": true,
+			"default_group":        "default",
 		},
 	}
 
+	return writeE2EConfigFile(t, opts.Dir, cfg)
+}
+
+// writeE2EConfigFile marshals a config map to <dir>/config.yaml and returns the path.
+func writeE2EConfigFile(t *testing.T, dir string, cfg map[string]any) string {
+	t.Helper()
 	body, err := yaml.Marshal(cfg)
 	if err != nil {
 		t.Fatalf("marshal e2e config: %v", err)
 	}
-
-	configPath := filepath.Join(opts.Dir, "config.yaml")
+	configPath := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(configPath, body, 0o644); err != nil {
 		t.Fatalf("write e2e config: %v", err)
 	}
@@ -277,6 +409,15 @@ func generateE2EConfig(t *testing.T, opts e2eServerOpts) string {
 
 // e2eHTTPToken is the X-Token used for all HTTP API calls in E2E tests.
 const e2eHTTPToken = "e2e-test-token-static"
+
+const (
+	// e2eClusterName is the cluster every E2E node joins unless overridden.
+	e2eClusterName = "e2e-cluster"
+	// e2eClusterToken is the shared cluster secret. It must be at least 16 chars:
+	// appconfig.Validate refuses to start an end node that has RPC enabled with a
+	// shorter one, and the token is also the HKDF input keying all end<->end RPC.
+	e2eClusterToken = "e2e-cluster-token-0123456789"
+)
 
 // ---------------------------------------------------------------------------
 // Server lifecycle
@@ -288,6 +429,13 @@ type e2eServer struct {
 	baseURL string // http://127.0.0.1:<httpPort>
 	token   string // X-Token header value
 	dir     string // temp dir (configs, DB)
+	// name is the node name; blank for the legacy single-node helper. Cluster
+	// assertions index nodes by it, so failures name the offending node.
+	name string
+	// logs captures stdout+stderr while the process runs. Cluster tests read it
+	// live (e.g. to assert node-directory reconciles stop once settled), hence the
+	// mutex-guarded buffer rather than a bare bytes.Buffer.
+	logs *syncBuffer
 
 	mu      sync.Mutex
 	stopped bool // SIGTERM already sent (for idempotent shutdown)
@@ -439,45 +587,60 @@ func (s *e2eServer) shutdown() {
 
 // apiPost sends an authenticated POST request and returns the response body.
 func (s *e2eServer) apiPost(path string, body any) (int, []byte, error) {
-	b, err := json.Marshal(body)
-	if err != nil {
-		return 0, nil, fmt.Errorf("marshal body: %w", err)
+	return s.apiDo(http.MethodPost, path, nil, body)
+}
+
+// apiGet sends an authenticated GET request.
+func (s *e2eServer) apiGet(path string, params url.Values) (int, []byte, error) {
+	return s.apiDo(http.MethodGet, path, params, nil)
+}
+
+// apiPut / apiDelete complete the verb set the API actually uses (several
+// cluster-wide mutations are PUT, and both user and cert deletion are DELETE).
+func (s *e2eServer) apiPut(path string, body any) (int, []byte, error) {
+	return s.apiDo(http.MethodPut, path, nil, body)
+}
+
+func (s *e2eServer) apiDelete(path string, body any) (int, []byte, error) {
+	return s.apiDo(http.MethodDelete, path, nil, body)
+}
+
+// apiDo is the single request path for every authenticated API call, so route
+// coverage can be recorded in exactly one place. Every call is attributed to its
+// gin route template (not the concrete path), which is what the coverage guard in
+// pkg/http/route_coverage_test.go compares against.
+func (s *e2eServer) apiDo(method, path string, params url.Values, body any) (int, []byte, error) {
+	recordRouteHit(method, path)
+
+	var reader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return 0, nil, fmt.Errorf("marshal body: %w", err)
+		}
+		reader = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(http.MethodPost, s.baseURL+path, bytes.NewReader(b))
+
+	u := s.baseURL + path
+	if len(params) > 0 {
+		u += "?" + params.Encode()
+	}
+	req, err := http.NewRequest(method, u, reader)
 	if err != nil {
 		return 0, nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("X-Token", s.token)
 
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, respBody, nil
-}
-
-// apiGet sends an authenticated GET request.
-func (s *e2eServer) apiGet(path string, params url.Values) (int, []byte, error) {
-	u := s.baseURL + path
-	if len(params) > 0 {
-		u += "?" + params.Encode()
-	}
-	req, err := http.NewRequest(http.MethodGet, u, nil)
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("X-Token", s.token)
-
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, body, nil
 }
 
 // addUser creates the given user on the server.
