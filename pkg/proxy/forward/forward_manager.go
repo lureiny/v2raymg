@@ -1,9 +1,11 @@
 package forward
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/lureiny/v2raymg/pkg/log"
@@ -140,6 +142,20 @@ func NewDefaultForwardManager(allocCfg PortAllocatorConfig) (*DefaultForwardMana
 	}, nil
 }
 
+// addRuleBindAttempts caps how many ports AddRule will try when the kernel
+// reports the chosen one as already in use. Collisions are rare and independent,
+// so a handful of attempts makes the practical failure probability negligible
+// while keeping a genuinely exhausted range from spinning.
+const addRuleBindAttempts = 5
+
+// isAddrInUse reports whether err (or anything it wraps) is EADDRINUSE. The bind
+// error arrives wrapped several layers deep — net.OpError -> os.SyscallError ->
+// syscall.Errno, and for dual-stack rules additionally through multiRelay's
+// errors.Join — so this must go through the chain rather than compare directly.
+func isAddrInUse(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE)
+}
+
 // AddRule adds a forwarding rule, allocates a port, and starts the relay.
 //
 // Lifecycle intent:
@@ -163,10 +179,13 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 		return nil, fmt.Errorf("forward_manager: rule %q already exists", key)
 	}
 
-	// Allocate port
+	// Allocate port. pinnedPort records whether the CALLER chose it: a pinned port
+	// is part of the request and must never be silently substituted, so the bind
+	// retry below is only allowed for auto-allocated ports.
+	pinnedPort := rule.ListenPort != 0
 	var port uint32
 	var err error
-	if rule.ListenPort != 0 {
+	if pinnedPort {
 		if err = m.allocator.AllocateSpecific(rule.ListenPort); err != nil {
 			return nil, fmt.Errorf("forward_manager: %w", err)
 		}
@@ -207,17 +226,6 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 	userBandwidthLim = userLimiter
 	limiterUp = userLimiter.UploadLimiter()
 	limiterDown = userLimiter.DownloadLimiter()
-
-	// Resolve the set of sockets to bind for this rule. A specific ListenAddr or
-	// a single-stack wildcard yields one endpoint; the default dual-stack yields
-	// two (IPv4 wildcard + best-effort IPv6 wildcard).
-	endpoints, err := resolveListenEndpoints(rule.ListenAddr, rule.ListenStack, m.defaultListenStack, port)
-	if err != nil {
-		m.allocator.Release(port)
-		m.traffic.Remove(key)
-		return nil, fmt.Errorf("forward_manager: %w", err)
-	}
-	listenDesc := describeEndpoints(endpoints)
 
 	// Determine effective client limit config with priority: rule > stored config > default
 	var effectiveMaxClients int
@@ -321,25 +329,81 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 		}
 	}
 
-	// A single endpoint uses a plain relay (bind failure is fatal). Multiple
-	// endpoints (dual-stack) use a multiRelay so the best-effort IPv6 half can
-	// be skipped on IPv6-disabled hosts without failing the rule.
-	var relay Relay
-	if len(endpoints) == 1 {
-		relay = buildRelay(endpoints[0])
-	} else {
-		children := make([]relayChild, 0, len(endpoints))
-		for _, ep := range endpoints {
-			children = append(children, relayChild{relay: buildRelay(ep), optional: ep.optional})
+	// Bind the relay, moving to a different port when the kernel says the chosen
+	// one is already taken.
+	//
+	// PortAllocator only tracks the ports IT has handed out; it never asks the OS.
+	// So any port in the configured range may already be held by something else on
+	// the host — and that is not hypothetical: the default range (10000-60000)
+	// straddles Linux's ephemeral range (32768-60999), so any outbound connection
+	// on the box can be sitting on a port the allocator believes is free. Without
+	// this retry a single collision fails the rule outright and the user just gets
+	// no forward. It was also the root cause of a long-standing CI flake.
+	//
+	// Ports that failed to bind stay ALLOCATED for the whole loop, so a retry
+	// cannot draw the same one again; they are released together on return.
+	var (
+		relay      Relay
+		listenDesc string
+		heldPorts  []uint32
+	)
+	defer func() {
+		for _, p := range heldPorts {
+			m.allocator.Release(p)
 		}
-		relay = newMultiRelay(children)
-	}
+	}()
 
-	if err := relay.Start(); err != nil {
-		m.allocator.Release(port)
-		m.traffic.Remove(key)
-		log.Debug("[ForwardManager] relay start failed", "key", key, "listen", listenDesc, "target", rule.TargetAddr, "network", rule.ResolvedNetwork(), "err", err)
-		return nil, fmt.Errorf("forward_manager: relay start: %w", err)
+	for attempt := 1; ; attempt++ {
+		// Endpoints embed the port, so they are rebuilt for every attempt. A
+		// specific ListenAddr or single-stack wildcard yields one endpoint; the
+		// default dual-stack yields two (IPv4 + best-effort IPv6).
+		endpoints, epErr := resolveListenEndpoints(rule.ListenAddr, rule.ListenStack, m.defaultListenStack, port)
+		if epErr != nil {
+			m.allocator.Release(port)
+			m.traffic.Remove(key)
+			return nil, fmt.Errorf("forward_manager: %w", epErr)
+		}
+		listenDesc = describeEndpoints(endpoints)
+
+		// A single endpoint uses a plain relay (bind failure is fatal). Multiple
+		// endpoints (dual-stack) use a multiRelay so the best-effort IPv6 half can
+		// be skipped on IPv6-disabled hosts without failing the rule.
+		if len(endpoints) == 1 {
+			relay = buildRelay(endpoints[0])
+		} else {
+			children := make([]relayChild, 0, len(endpoints))
+			for _, ep := range endpoints {
+				children = append(children, relayChild{relay: buildRelay(ep), optional: ep.optional})
+			}
+			relay = newMultiRelay(children)
+		}
+
+		startErr := relay.Start()
+		if startErr == nil {
+			break
+		}
+
+		// Give up when the port was the caller's choice (substituting it would
+		// violate the request), when the failure is not a conflict (a bad address
+		// or a permission problem will not fix itself elsewhere), or when the
+		// attempts are exhausted.
+		if pinnedPort || !isAddrInUse(startErr) || attempt >= addRuleBindAttempts {
+			m.allocator.Release(port)
+			m.traffic.Remove(key)
+			log.Debug("[ForwardManager] relay start failed", "key", key, "listen", listenDesc, "target", rule.TargetAddr, "network", rule.ResolvedNetwork(), "attempts", attempt, "err", startErr)
+			return nil, fmt.Errorf("forward_manager: relay start: %w", startErr)
+		}
+
+		heldPorts = append(heldPorts, port)
+		nextPort, allocErr := m.allocator.Allocate()
+		if allocErr != nil {
+			m.traffic.Remove(key)
+			return nil, fmt.Errorf("forward_manager: relay start: %w (no alternative port available: %v)", startErr, allocErr)
+		}
+		log.Warn("[ForwardManager] listen port already in use, retrying on another",
+			"key", key, "port", port, "next_port", nextPort, "attempt", attempt, "err", startErr)
+		port = nextPort
+		rule.ListenPort = port
 	}
 
 	m.rules[key] = &managedRule{

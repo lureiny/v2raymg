@@ -1,6 +1,7 @@
 package forward
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -34,12 +35,21 @@ func newMultiRelay(children []relayChild) *multiRelay {
 // already-started child and returns the error. An optional child failing is
 // logged and skipped (e.g. binding [::] on an IPv6-disabled host). Start
 // succeeds as long as at least one child came up.
+//
+// When every child is optional and every one fails, the returned error WRAPS all
+// of them. That matters beyond diagnostics: AddRule decides whether to retry on a
+// different port by testing the chain for EADDRINUSE, so discarding the children's
+// errors here would silently disable the retry for every dual-stack rule. It also
+// made a real CI failure undiagnosable — a bare "no listener could be started"
+// cannot distinguish a port conflict from a host with no IPv6 stack.
 func (m *multiRelay) Start() error {
+	var optionalErrs []error
 	for _, c := range m.children {
 		if err := c.relay.Start(); err != nil {
 			if c.optional {
 				log.Warn("[ForwardManager] optional listener unavailable, skipping",
 					"addr", c.relay.ListenAddr(), "err", err)
+				optionalErrs = append(optionalErrs, fmt.Errorf("%s: %w", c.relay.ListenAddr(), err))
 				continue
 			}
 			for _, s := range m.started {
@@ -51,7 +61,7 @@ func (m *multiRelay) Start() error {
 		m.started = append(m.started, c.relay)
 	}
 	if len(m.started) == 0 {
-		return fmt.Errorf("no listener could be started")
+		return fmt.Errorf("no listener could be started: %w", errors.Join(optionalErrs...))
 	}
 	return nil
 }
