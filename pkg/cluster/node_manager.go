@@ -77,10 +77,9 @@ func (nm *NodeManager) LoadStaticNode(nodes []StaticNode) error {
 			)
 			(*nm.nodes)[node.Name] = &Node{
 				Node: &proto.Node{
-					Name:        node.Name,
-					Port:        node.Port,
-					Host:        node.Host,
-					ClusterName: localNode.ClusterName,
+					Name: node.Name,
+					Port: node.Port,
+					Host: node.Host,
 				},
 				isLocal:    true,
 				CreateTime: time.Now().Unix(),

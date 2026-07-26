@@ -4,10 +4,10 @@
 
 ## 项目概述
 
-v2raymg 是一个 Go 语言编写的**多节点代理管理服务**,底层支持 xray/hysteria/snell/mihomo 等代理内核。采用 center/end 双角色集群架构:
+v2raymg 是一个 Go 语言编写的**多节点代理管理服务**,底层支持 xray/hysteria/snell/mihomo 等代理内核。集群是**去中心的对等结构**(2026-07 移除了 center node):
 
-- **Center Node** — 集群协调层,负责节点发现、状态同步、跨节点用户编排
-- **End Node** — 实际运行代理容器(xray/hysteria/snell/mihomo),对外暴露 HTTP 管理 API 和 gRPC 集群通信
+- **End Node** — 唯一的节点角色。运行代理容器(xray/hysteria/snell/mihomo),对外暴露 HTTP 管理 API,节点之间用 gRPC 互相注册、同步用户与节点目录
+- **发现** — 靠 `end_node.cluster.static_nodes` 播种 + 节点间目录传播,并把动态发现的节点持久化到本地 DB 以抗重启
 
 核心能力:用户/inbound CRUD、订阅生成与多格式转换、证书自动签发(ACME)、端口转发与流量统计、节点集群、配置热更新、自动升级二进制。
 
@@ -43,11 +43,11 @@ pkg/
     tools/                 # 通用工具(process/binary_swapper/checksum/downloader/github_release_client)
   rpc/                     # 集群 gRPC
     proto/                 # rpc_server.proto + 生成的 pb
-    server/                # end/center node server + 各业务 RPC handler
+    server/                # end node server + 各业务 RPC handler
     client/                # end_node rpc client
   http/                    # HTTP API(gin)与各路 handler(user/inbound/cert/sub/bound/node/rotate...)
   cluster/                 # 节点管理、发现、cluster_manager
-  store/                   # SQLite 持久化(user_store/inbound_store/node_groups_store + migrations)
+  store/                   # SQLite 持久化(user/inbound/node_groups/cluster_nodes + migrations)
   xrayapi/                 # xray 特定 API 封装(grpc/hotreload/hotupdate/internalproto/reality/types)
   certmgmt/                # 证书管理(domain + lego 封装 + service)
   collecter/               # 节点信息/ping 采集
@@ -72,16 +72,21 @@ Makefile                   # build / build-full (full_dns tag) / proto
 6. **ForwardManager 全局单例** — container 通过 `WithForwardManager(fm)` 显式注入,缺省回退到进程级单例;inbound 继承 container 实例,不单独注入
    - **转发监听默认双栈** — 转发规则未指定时默认同时监听 IPv4(`0.0.0.0`)+ IPv6(`[::]`,`tcp6/udp6` 即 `IPV6_V6ONLY`)。全局默认由 `forward.listen_stack`(`dual`/`ipv4`/`ipv6`,默认 `dual`)控制;单规则可用 `ForwardRule.ListenAddr`(具体 IP 字面量,IPv6 自动加方括号)或 `ForwardRule.ListenStack` 覆盖。双栈下**两半都是 best-effort**:纯 IPv4 主机跳过 `[::]`、纯 IPv6 主机跳过 `0.0.0.0`,只要有一个协议族能绑就照常启动,两个都绑不上才失败(见 `pkg/proxy/forward/listen.go` + `relay_multi.go`)
 7. **持久化走 SQLite** — user/inbound/node_groups 全部落 SQLite,DB 操作通过 `pkg/store/manager` 的 `Provider` + `Tx` 抽象
-8. **集群通信走 gRPC** — center/end 节点间协议定义在 `pkg/rpc/proto/rpc_server.proto`,运行时通过 cobra 启动的 server 暴露;默认加密已切到 GCM(老 CBC 回退已移除)
-   - **end↔end 心跳的节点目录走摘要增量同步** — 心跳不再每轮回带全量 `nodesMap`(那是每节点 O(N²)/轮)。两端各带一个 `nodes_sum`(对广告集合的 SHA-256),稳态只比摘要;不一致时客户端**同一轮立刻**再发一次心跳并在 `HeartBeatReq.nodes` 里带上全量,服务端合并后回带自己的全量,一次往返双向收敛。
-     - **广告集合 S(X) 只有一个定义点** `cluster.Cluster.GetAdvertisedNodes()`(过滤 `IsCompleteRegister()`,**包含节点自身**),摘要/响应回带/推送 payload 三处必须都从它取 —— 各自写过滤条件会导致永不收敛
-     - **摘要必须排序后折叠**(`cluster.ComputeNodesSum`,只折 name/host/port/cluster_name,不折任何运行期状态)。不排序会让已收敛的两端算出不同摘要,变成永久假性不一致,比不做还差
-     - 请求里的 `nodes_sum` 只用于**识别旧节点**(空=旧节点,服务端照旧回全量),不参与分歧判定
-     - 杀手开关 `end_node.cluster.node_sum_sync`(默认 true);关闭后该节点既不发摘要也不回摘要、无条件回全量,可单节点灰度回滚
-     - center↔end 路径**未改**,center 仍每轮回全量
+8. **集群通信走 gRPC,无 center node** — 节点间协议定义在 `pkg/rpc/proto/rpc_server.proto`;默认加密已切到 GCM(老 CBC 回退已移除)
+   - **center node 已于 2026-07 彻底移除**。它唯一的作用是发现,而 `static_nodes` 覆盖了同样的能力且更好:静态节点带 `isLocal`、**永不被 60s 超时回收**,注册又是双向的(种子立刻通过 `RegisterNode` 认识加入者,不必等自己下一跳)。同时 center 是集群面**唯一一条默认明文的链路**,还携带集群主密钥。旧配置里的 `node_type: center` / `center_node` / `center_node_host` / `center_token` 一律忽略并在启动时逐条 WARN
+   - **cluster name 也一并移除** —— token 才是唯一的成员边界。`recvHeartBeatTime` 只在 `AuthAndTouch`(校验 token)和 `RegisterNode` 推进,`reportHeartBeatTime` 要求我方注册被接受,所以 `IsCompleteRegister()` 为真 ⟹ 双向 token 认证已过 ⟹ 同集群。名字是冗余的第二因子,只会因笔误误拒合法节点。`Node.cluster_name` 在 proto 里保留为 `reserved 3`
+   - **`static_nodes` 是唯一的入网途径**,为空且开了 RPC 时启动会 WARN。单机部署合法,所以只警告不报错
+   - **动态发现的节点会持久化到 DB**(`cluster_nodes` 表)。语义:内存 = 配置 static node + DB 动态节点;static **不入库**;只有 `IsCompleteRegister()` 才写;内存回收即删库,两者严格一致,无独立 TTL。写入靠 `filter()` ticker 里的周期对账(只写差异,稳态零写),不用事件钩子
+     - **加载时只设 `CreateTime`,绝不碰心跳时间戳** —— `IsCompleteRegister()` 不校验任何 token,改心跳时间戳会让刚加载的节点被误判为已认证并混进广告集合被广播出去
+     - 删除判据是"内存中完全不存在",**不是**"失去 IsCompleteRegister" —— 后者会误删还在被重试的活节点
+     - 恢复性:宕机节点自己不跑 GC,它的 DB 是冻结的,所以带着旧列表回来主动注册即可被对端重新接纳。只要不是全体永久失联最终必然收敛,且真死的节点会被彻底清掉
+   - **end↔end 心跳的节点目录走摘要增量同步** — 心跳不再每轮回带全量 `nodesMap`。两端各带 `nodes_sum`,稳态只比摘要;不一致时客户端同一轮立刻再发一次心跳带上全量,服务端合并后回带自己的全量,一次往返双向收敛
+     - **广告集合 S(X) 只有一个定义点** `cluster.Cluster.GetAdvertisedNodes()`(过滤 `IsCompleteRegister()`,**包含节点自身**),摘要/响应回带/推送 payload 三处必须都从它取
+     - **摘要必须排序后折叠**(`cluster.ComputeNodesSum`,只折 name/host/port,不折任何运行期状态)。不排序会让已收敛的两端算出不同摘要,变成永久假性不一致
+     - 请求里的 `nodes_sum` 只用于识别旧节点,不参与分歧判定;杀手开关 `end_node.cluster.node_sum_sync`(默认 true)
 9. **单元测试必须补全** — 每个可测模块对应 `*_test.go`;系统测试在 `pkg/proxy/systemtest/`(部分需 `-tags=integration` + 真实 xray 二进制)
 10. **新增 HTTP 接口 / 集群行为必须补集群集成测试(强制,CI 卡)** — 落点是
-    `pkg/proxy/systemtest/cluster_e2e_api_test.go`(真实 1 center + 3 end 四进程,真 gRPC,全程走 HTTP API)。
+    `pkg/proxy/systemtest/cluster_e2e_api_test.go`(3 个真实 end node 进程,真 gRPC,全程走 HTTP API)。
     - 加了路由却没补用例 → `pkg/http/route_coverage_test.go`(**无 build tag,默认 CI 就跑**)直接失败,
       报错里会写清楚要改哪两个文件
     - 只把路由加进 `pkg/http/testdata/e2e_covered_routes.txt` 却没真调用 → 集群套件的 `route_coverage` 子测试失败
@@ -165,7 +170,7 @@ go test ./pkg/proxy/systemtest -run TestDegradedLocalSocks5ProxyChain -v
 # 系统测试(真实 xray,需 XRAY_BIN 环境变量)
 XRAY_BIN=/path/to/xray go test ./pkg/proxy/systemtest -tags=integration -v
 
-# 集群回归套件(1 center + 3 end 四进程,全接口;CI 的 cluster-e2e job 跑的就是这条)
+# 集群回归套件(3 个真实 end node 进程,全接口;CI 的 cluster-e2e job 跑的就是这条)
 # 不需要外网/代理二进制,约 1 分钟
 go test ./pkg/proxy/systemtest -tags=integration -run TestClusterE2E -v -timeout 20m
 

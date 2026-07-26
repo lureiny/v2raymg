@@ -8,12 +8,12 @@ package systemtest
 // (ensureV2raymgBin, generateE2EConfig, the e2eServer HTTP wrappers). The pieces
 // that are genuinely different for a cluster:
 //
-//   - a CENTER node is a different kind of process. cmd.runCenterNode starts only
-//     the gRPC directory server — no HTTP, no store, no containers — so it cannot
-//     be probed with waitReady (/api/status does not exist) and does not fit the
-//     e2eServer HTTP shape at all.
-//   - end nodes must share a cluster name + token, and each needs a unique node
-//     name and its own ports/data dir.
+//   - every node after the first is seeded with the first one as a static peer.
+//     Static peers are the only bootstrap path since the center node was removed,
+//     and they are never reclaimed by the node timeout, so this mirrors how a real
+//     cluster is wired.
+//   - end nodes share a cluster token, and each needs a unique node name and its
+//     own ports/data dir.
 //   - "converged" is a cluster-wide predicate, not a per-process one: every node
 //     must see every other node before assertions about fan-out mean anything.
 
@@ -29,6 +29,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // ---------------------------------------------------------------------------
@@ -71,34 +73,6 @@ func (s *syncBuffer) countLines(substr string) int {
 }
 
 // ---------------------------------------------------------------------------
-// Center node
-// ---------------------------------------------------------------------------
-
-// e2eCenter is the center-node process. Deliberately NOT an e2eServer: a center
-// exposes no HTTP API, so every e2eServer method would be a trap.
-type e2eCenter struct {
-	cmd  *exec.Cmd
-	port int
-	logs *syncBuffer
-
-	mu      sync.Mutex
-	stopped bool
-}
-
-func (c *e2eCenter) addr() string { return fmt.Sprintf("127.0.0.1:%d", c.port) }
-
-func (c *e2eCenter) shutdown() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.stopped || c.cmd.Process == nil {
-		return
-	}
-	c.stopped = true
-	_ = c.cmd.Process.Signal(shutdownSignal)
-	_ = c.cmd.Wait()
-}
-
-// ---------------------------------------------------------------------------
 // Cluster
 // ---------------------------------------------------------------------------
 
@@ -107,9 +81,6 @@ type clusterOpts struct {
 	// "converges within a couple of rounds" assertion takes seconds; production
 	// default is 10.
 	HeartbeatIntervalSec int
-	// CenterToken, when set, wraps the end->center channel in an AES envelope on
-	// both sides.
-	CenterToken string
 	// XrayBin / MihomoBin are resolved ONCE by the caller and shared by every end
 	// node, so a 3-node cluster does not download the same binary three times.
 	// Empty XrayBin makes each node fall back to auto_download.
@@ -125,76 +96,31 @@ type e2eCluster struct {
 	tmpDir string
 	bin    string // compiled v2raymg binary, shared by all nodes
 	opts   clusterOpts
-	center *e2eCenter
 	ends   []*e2eServer
 }
 
-// startE2ECluster compiles the binary and brings up the center node. End nodes are
-// added one at a time with addEndNode, which is what the cluster-discovery
-// assertions depend on.
+// startE2ECluster compiles the shared binary. No node is started yet: end nodes
+// are added one at a time with addEndNode, which is what the discovery assertions
+// depend on.
 func startE2ECluster(t *testing.T, tmpDir string, opts clusterOpts) *e2eCluster {
 	t.Helper()
 
 	if opts.HeartbeatIntervalSec == 0 {
 		opts.HeartbeatIntervalSec = 1
 	}
-
-	c := &e2eCluster{
+	return &e2eCluster{
 		t:      t,
 		tmpDir: tmpDir,
 		bin:    ensureV2raymgBin(t, tmpDir),
 		opts:   opts,
 	}
-
-	dir := filepath.Join(tmpDir, "center")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir center dir: %v", err)
-	}
-	port, err := freeTCPPort()
-	if err != nil {
-		t.Fatalf("freeTCPPort center rpc: %v", err)
-	}
-
-	configPath := generateE2EConfig(t, e2eServerOpts{
-		Dir:      dir,
-		NodeType: "center",
-		NodeName: "e2e-center",
-		RpcPort:  port,
-		LogLevel: "debug",
-		// A center serves potentially many clusters; only listed ones are accepted.
-		ClusterTokens: map[string]string{e2eClusterName: e2eClusterToken},
-		CenterToken:   opts.CenterToken,
-	})
-
-	logs := &syncBuffer{}
-	cmd := exec.Command(c.bin, "server", "--conf", configPath)
-	cmd.Stdout = logs
-	cmd.Stderr = logs
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start center node: %v", err)
-	}
-	c.center = &e2eCenter{cmd: cmd, port: port, logs: logs}
-
-	t.Cleanup(func() {
-		c.center.shutdown()
-		if t.Failed() {
-			t.Logf("center logs:\n%s", truncate(logs.String(), 8000))
-		}
-	})
-
-	// A center has no HTTP endpoint to poll, so readiness is "the gRPC port
-	// accepts a connection".
-	if err := waitPort(c.center.addr(), 30*time.Second); err != nil {
-		t.Fatalf("center never listened on %s: %v\nlogs:\n%s",
-			c.center.addr(), err, truncate(logs.String(), 4000))
-	}
-	t.Logf("center ready at %s", c.center.addr())
-	return c
 }
 
-// addEndNode starts one more end node pointed at the center and waits until it
-// serves HTTP. It does NOT wait for cluster convergence — callers assert that
-// explicitly with waitConverged so the discovery path is actually under test.
+// addEndNode starts one more end node and waits until it serves HTTP. Every node
+// after the first is seeded with the first as a static peer — the first has none,
+// and learns the others from their inbound registrations. It does NOT wait for
+// cluster convergence; callers assert that explicitly with waitConverged so the
+// discovery path is actually under test.
 func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 	t.Helper()
 
@@ -228,35 +154,42 @@ func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 	// such a collision now, but a test suite should not lean on that.
 	fwdBase := 25000 + idx*600
 
+	// The first node is the seed and has no static peers of its own; every later
+	// node points at it. That is enough to build the whole mesh: the seed learns
+	// each joiner from its inbound RegisterNode, and the directory propagates from
+	// there to everyone else.
+	var staticPeers []staticPeer
+	if len(c.ends) > 0 {
+		seed := c.ends[0]
+		staticPeers = []staticPeer{{Name: seed.name, Host: "127.0.0.1", Port: seed.rpcPort}}
+	}
+
 	configPath := generateE2EConfig(t, e2eServerOpts{
-		Dir:                  dir,
-		NodeName:             name,
-		HttpPort:             httpPort,
-		RpcPort:              rpcPort,
-		ClusterName:          e2eClusterName,
-		ClusterToken:         e2eClusterToken,
+		Dir:          dir,
+		NodeName:     name,
+		HttpPort:     httpPort,
+		RpcPort:      rpcPort,
+		ClusterToken: e2eClusterToken,
+		StaticPeers:  staticPeers,
 		// The node-directory reconcile logs at debug; without this the
 		// "reconciles happen, then stop" assertion could never see the line and
 		// would pass vacuously.
-		LogLevel: "debug",
-		CenterToken:          c.opts.CenterToken,
-		CenterHost:           "127.0.0.1",
-		CenterPort:           c.center.port,
+		LogLevel:             "debug",
 		HeartbeatIntervalSec: c.opts.HeartbeatIntervalSec,
 		// Node-groups routes are only registered when the cluster-user layer is on,
 		// so the suite cannot cover them otherwise.
 		ClusterUserEnabled: true,
 		EnablePrometheus:   true,
 		NodeSumSync:        c.opts.NodeSumSync,
-		XrayBin:              c.opts.XrayBin,
-		XrayGRPCPort:         xrayGRPCPort,
-		XrayConfFile:         filepath.Join(dir, "xray.json"),
-		MihomoBin:            c.opts.MihomoBin,
-		MihomoAPIPort:        mihomoAPIPort,
-		MihomoDataDir:        mihomoDataDir,
-		MihomoConf:           filepath.Join(dir, "mihomo.yaml"),
-		FwdMinPort:           fwdBase,
-		FwdMaxPort:           fwdBase + 500,
+		XrayBin:            c.opts.XrayBin,
+		XrayGRPCPort:       xrayGRPCPort,
+		XrayConfFile:       filepath.Join(dir, "xray.json"),
+		MihomoBin:          c.opts.MihomoBin,
+		MihomoAPIPort:      mihomoAPIPort,
+		MihomoDataDir:      mihomoDataDir,
+		MihomoConf:         filepath.Join(dir, "mihomo.yaml"),
+		FwdMinPort:         fwdBase,
+		FwdMaxPort:         fwdBase + 500,
 	})
 
 	logs := &syncBuffer{}
@@ -273,6 +206,8 @@ func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 		token:   e2eHTTPToken,
 		dir:     dir,
 		name:    name,
+		rpcPort: rpcPort,
+		cfgPath: configPath,
 		logs:    logs,
 	}
 	c.ends = append(c.ends, srv)
@@ -422,4 +357,68 @@ func (c *e2eCluster) waitFanoutReady(t *testing.T, timeout time.Duration) {
 		t.Errorf("node %s cannot fan out to %v", node, miss)
 	}
 	t.Fatalf("cluster fan-out not ready within %s (mutual registration incomplete)", timeout)
+}
+
+// restartWithoutStaticPeers stops a node, strips end_node.cluster.static_nodes
+// from its config, and starts it again on the same data directory.
+//
+// This is the test lever for the persisted directory. With no static peers and no
+// center, a restarted node has exactly one way to know whom to dial: the rows it
+// wrote to its own database before going down. If it converges again, that path
+// worked.
+func (c *e2eCluster) restartWithoutStaticPeers(t *testing.T, s *e2eServer) {
+	t.Helper()
+
+	s.shutdown()
+
+	raw, err := os.ReadFile(s.cfgPath)
+	if err != nil {
+		t.Fatalf("read %s config: %v", s.name, err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse %s config: %v", s.name, err)
+	}
+	endNode, _ := doc["end_node"].(map[string]any)
+	if endNode == nil {
+		t.Fatalf("%s config has no end_node section", s.name)
+	}
+	cl, _ := endNode["cluster"].(map[string]any)
+	if cl == nil {
+		t.Fatalf("%s config has no end_node.cluster section", s.name)
+	}
+	if _, had := cl["static_nodes"]; !had {
+		t.Fatalf("%s had no static_nodes to strip; the test would prove nothing", s.name)
+	}
+	delete(cl, "static_nodes")
+
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		t.Fatalf("re-marshal %s config: %v", s.name, err)
+	}
+	if err := os.WriteFile(s.cfgPath, out, 0o644); err != nil {
+		t.Fatalf("rewrite %s config: %v", s.name, err)
+	}
+
+	logs := &syncBuffer{}
+	cmd := exec.Command(c.bin, "server", "--conf", s.cfgPath)
+	cmd.Stdout = logs
+	cmd.Stderr = logs
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("restart %s: %v", s.name, err)
+	}
+	s.cmd = cmd
+	s.logs = logs
+	s.stopped = false
+	t.Cleanup(func() {
+		s.shutdown()
+		if t.Failed() {
+			t.Logf("%s logs after restart:\n%s", s.name, truncate(logs.String(), 8000))
+		}
+	})
+
+	if err := s.waitReady(60 * time.Second); err != nil {
+		t.Fatalf("%s did not come back: %v\nlogs:\n%s", s.name, err, truncate(logs.String(), 6000))
+	}
+	t.Logf("%s restarted with no static peers", s.name)
 }

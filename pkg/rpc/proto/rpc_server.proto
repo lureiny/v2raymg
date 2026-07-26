@@ -167,7 +167,14 @@ message HeartBeatReq {
 message Node {
     string host = 1;
     int32 port = 2;
-    string cluster_name = 3;
+    // 3 was cluster_name, removed 2026-07. The cluster token is the only real
+    // membership boundary: recvHeartBeatTime only advances through AuthAndTouch
+    // (which verifies the token) and RegisterNode, and reportHeartBeatTime
+    // requires our own registration to have been accepted, so a node that is
+    // fully registered has necessarily proved possession of the cluster token.
+    // The name was a second, redundant factor that could only ever cause
+    // false mismatches. The field number stays reserved so it is never reused.
+    reserved 3;
     string name = 4;
 }
 
@@ -184,10 +191,6 @@ message HeartBeatRsp {
     // client compares it against its own sum and, on a mismatch, immediately
     // issues one reconcile heartbeat carrying its full node map.
     bytes nodes_sum = 5;
-}
-
-message Nodes {
-    map<string, Nodes> nodes = 1;
 }
 
 message RegisterNodeReq {
@@ -606,29 +609,9 @@ message GetContainersRsp {
     repeated string containers = 3;
 }
 
-message GetClutersReq {
-    string cluster_name = 1;
-}
-
-message GetClutersRsp {
-    repeated string cluster_names = 1;
-}
-
-message GetNodesReq {
-    string cluster_name = 1;
-}
-
-message GetNodesRsp {
-    string cluster_name = 1;
-    map<string, Node> nodesMap = 2;
-}
-
-service CenterNodeAdmin {
-    rpc GetCluters(GetClutersReq) returns (GetClutersRsp) {}
-    rpc GetNodes(GetNodesReq) returns (GetNodesRsp) {}
-}
-
-service CenterNodeAccess {
-    rpc HeartBeat(HeartBeatReq) returns (HeartBeatRsp) {}
-    rpc RegisterNode(RegisterNodeReq) returns (RegisterNodeRsp) {}
-}
+// The center node was removed in 2026-07. Discovery is handled entirely by
+// static_nodes plus end<->end directory propagation: a static peer is never
+// reclaimed by the node timeout and registration is bidirectional, so it seeds
+// the cluster at least as well as a center did. The center was also the only
+// default-plaintext channel in the cluster plane, and since the RPC hardening it
+// carried the cluster token itself, so removing it closes that exposure.

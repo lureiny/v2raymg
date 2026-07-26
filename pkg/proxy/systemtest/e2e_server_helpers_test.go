@@ -136,29 +136,18 @@ type e2eServerOpts struct {
 	// Zero values keep the single-node behaviour these helpers had before the
 	// cluster suite was added: one standalone end node named "e2e-test".
 
-	// NodeType is "end" (default) or "center". A center node runs ONLY the gRPC
-	// directory server — cmd.runCenterNode starts no HTTP server, no store and no
-	// containers — so the center branch below writes a completely different config.
-	NodeType string
 	// NodeName must be unique per cluster; it is the key the whole node directory
 	// is indexed by.
 	NodeName string
-	// ClusterName / ClusterToken join this node to a cluster. ClusterToken is
-	// LOAD-BEARING even for a lone node: appconfig.Validate rejects any end node
-	// with rpc_port >= 1000 and a token shorter than 16 chars, so leaving it empty
-	// makes the server exit at startup.
-	ClusterName  string
+	// ClusterToken joins this node to a cluster and is the ONLY membership
+	// boundary. It is LOAD-BEARING even for a lone node: appconfig.Validate
+	// rejects any end node with rpc_port >= 1000 and a token shorter than 16
+	// chars, so leaving it empty makes the server exit at startup.
 	ClusterToken string
-	// CenterToken, when set on both sides, wraps the end->center channel in an AES
-	// envelope. Empty keeps that channel in plaintext.
-	CenterToken string
-	// CenterHost / CenterPort point an end node at its center for node discovery.
-	// Empty host = fully decentralised (static peers only).
-	CenterHost string
-	CenterPort int
-	// ClusterTokens is the center-side map of cluster name -> token. A heartbeat is
-	// accepted only if its cluster is listed here and the token matches.
-	ClusterTokens map[string]string
+	// StaticPeers seeds discovery. Since the center node was removed this is the
+	// only bootstrap path: a node with none can be found (a peer that knows it
+	// registers inbound) but can never initiate.
+	StaticPeers []staticPeer
 	// HeartbeatIntervalSec overrides the 10s default. Cluster tests set 1 so
 	// multi-round convergence assertions finish in seconds instead of minutes.
 	HeartbeatIntervalSec int
@@ -214,9 +203,6 @@ func generateE2EConfig(t *testing.T, opts e2eServerOpts) string {
 	if opts.NodeName == "" {
 		opts.NodeName = "e2e-test"
 	}
-	if opts.ClusterName == "" {
-		opts.ClusterName = e2eClusterName
-	}
 	// Never leave this empty: Validate rejects an end node that has RPC enabled
 	// (rpc_port >= 1000) and a cluster token under 16 chars, and the server then
 	// exits before binding anything.
@@ -225,27 +211,6 @@ func generateE2EConfig(t *testing.T, opts e2eServerOpts) string {
 	}
 	if opts.LogLevel == "" {
 		opts.LogLevel = "info"
-	}
-
-	// A center node runs only the gRPC directory server, so its config shares
-	// nothing with an end node's — no store, no containers, no HTTP.
-	if strings.EqualFold(opts.NodeType, "center") {
-		return writeE2EConfigFile(t, opts.Dir, map[string]any{
-			"node_type": "center",
-			"log": map[string]any{
-				"level":  opts.LogLevel,
-				"format": "text",
-				"output": "stdout",
-			},
-			"center_node": map[string]any{
-				"name":           opts.NodeName,
-				"listen":         "127.0.0.1",
-				"proxy_host":     "127.0.0.1",
-				"rpc_port":       opts.RpcPort,
-				"cluster_tokens": opts.ClusterTokens,
-				"center_token":   opts.CenterToken,
-			},
-		})
 	}
 
 	// ---- build container list ----
@@ -260,11 +225,11 @@ func generateE2EConfig(t *testing.T, opts e2eServerOpts) string {
 			Type:    "xray",
 			Enabled: true,
 			Config: map[string]any{
-				"binary_path":    opts.XrayBin,
-				"config_file":    opts.XrayConfFile,
-				"grpc_port":      opts.XrayGRPCPort,
-				"auto_download":  opts.XrayBin == "",
-				"debug":          false,
+				"binary_path":   opts.XrayBin,
+				"config_file":   opts.XrayConfFile,
+				"grpc_port":     opts.XrayGRPCPort,
+				"auto_download": opts.XrayBin == "",
+				"debug":         false,
 			},
 		},
 		{
@@ -333,15 +298,14 @@ func generateE2EConfig(t *testing.T, opts e2eServerOpts) string {
 	}
 
 	clusterSection := map[string]any{
-		"name":  opts.ClusterName,
 		"token": opts.ClusterToken,
 	}
-	if opts.CenterHost != "" {
-		clusterSection["center_node_host"] = opts.CenterHost
-		clusterSection["center_node_port"] = opts.CenterPort
-	}
-	if opts.CenterToken != "" {
-		clusterSection["center_token"] = opts.CenterToken
+	if len(opts.StaticPeers) > 0 {
+		peers := make([]map[string]any, 0, len(opts.StaticPeers))
+		for _, p := range opts.StaticPeers {
+			peers = append(peers, map[string]any{"name": p.Name, "host": p.Host, "port": p.Port})
+		}
+		clusterSection["static_nodes"] = peers
 	}
 	if opts.HeartbeatIntervalSec > 0 {
 		clusterSection["heartbeat_interval_sec"] = opts.HeartbeatIntervalSec
@@ -410,9 +374,14 @@ func writeE2EConfigFile(t *testing.T, dir string, cfg map[string]any) string {
 // e2eHTTPToken is the X-Token used for all HTTP API calls in E2E tests.
 const e2eHTTPToken = "e2e-test-token-static"
 
+// staticPeer is one entry of end_node.cluster.static_nodes.
+type staticPeer struct {
+	Name string
+	Host string
+	Port int
+}
+
 const (
-	// e2eClusterName is the cluster every E2E node joins unless overridden.
-	e2eClusterName = "e2e-cluster"
 	// e2eClusterToken is the shared cluster secret. It must be at least 16 chars:
 	// appconfig.Validate refuses to start an end node that has RPC enabled with a
 	// shorter one, and the token is also the HKDF input keying all end<->end RPC.
@@ -432,6 +401,10 @@ type e2eServer struct {
 	// name is the node name; blank for the legacy single-node helper. Cluster
 	// assertions index nodes by it, so failures name the offending node.
 	name string
+	// rpcPort is this node's gRPC port, used to seed later nodes' static_nodes.
+	rpcPort int
+	// cfgPath is this node's config file, so a test can restart it with changes.
+	cfgPath string
 	// logs captures stdout+stderr while the process runs. Cluster tests read it
 	// live (e.g. to assert node-directory reconciles stop once settled), hence the
 	// mutex-guarded buffer rather than a bare bytes.Buffer.
@@ -882,14 +855,14 @@ func applyTransportVLess(p map[string]any, n *codec.VLessNode) {
 
 func vmessNodeToProxy(n *codec.VMessNode) map[string]any {
 	p := map[string]any{
-		"name":     n.NodeName,
-		"type":     "vmess",
-		"server":   n.Host,
-		"port":     n.Port,
-		"uuid":     n.UUID,
-		"alterId":  n.AlterId,
-		"cipher":   "auto",
-		"udp":      true,
+		"name":    n.NodeName,
+		"type":    "vmess",
+		"server":  n.Host,
+		"port":    n.Port,
+		"uuid":    n.UUID,
+		"alterId": n.AlterId,
+		"cipher":  "auto",
+		"udp":     true,
 	}
 	if n.Security == "tls" {
 		p["tls"] = true
@@ -1099,4 +1072,3 @@ func snellNodeToProxy(n *codec.SnellNode) map[string]any {
 	}
 	return p
 }
-

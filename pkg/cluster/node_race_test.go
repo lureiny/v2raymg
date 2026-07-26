@@ -14,7 +14,7 @@ import (
 // filter loop). Without per-Node locking, -race reports the unsynchronized
 // int64/string field access; with the accessor locks the run is clean.
 func TestNode_ConcurrentFieldAccess(t *testing.T) {
-	n := &cluster.Node{Node: &proto.Node{Name: "n1", Host: "10.0.0.1", Port: 2000, ClusterName: "c1"}}
+	n := &cluster.Node{Node: &proto.Node{Name: "n1", Host: "10.0.0.1", Port: 2000}}
 	const iters = 2000
 	var wg sync.WaitGroup
 

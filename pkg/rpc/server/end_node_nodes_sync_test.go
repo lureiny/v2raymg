@@ -27,7 +27,7 @@ func testNodeIdentity(name string) (string, int32) {
 
 func testProtoNode(name string) *proto.Node {
 	host, port := testNodeIdentity(name)
-	return &proto.Node{Name: name, Host: host, Port: port, ClusterName: "c1"}
+	return &proto.Node{Name: name, Host: host, Port: port}
 }
 
 // newNodesSyncServer builds an EndNodeServer backed by a real cluster manager
@@ -38,7 +38,7 @@ func newNodesSyncServer(t *testing.T, selfName string, peers ...string) *EndNode
 
 	selfHost, selfPort := testNodeIdentity(selfName)
 	mgr, _, err := cluster.NewEndNodeClusterManagerFromConfig(
-		cluster.ClusterInitConfig{ClusterName: "c1", ClusterToken: "cluster-token-abcdef01"},
+		cluster.ClusterInitConfig{ClusterToken: "cluster-token-abcdef01"},
 		cluster.NodeInitConfig{Name: selfName, Host: selfHost, Port: selfPort},
 	)
 	if err != nil {
@@ -148,7 +148,7 @@ func TestHeartBeat_ReconcileMergesAndReturnsDirectory(t *testing.T) {
 	s := newNodesSyncServer(t, "self", "peer-1")
 
 	pushed := map[string]*proto.Node{
-		"peer-9": {Name: "peer-9", Host: "10.0.0.9", Port: 2009, ClusterName: "c1"},
+		"peer-9": {Name: "peer-9", Host: "10.0.0.9", Port: 2009},
 	}
 	if s.clusterState.Get("peer-9") != nil {
 		t.Fatal("precondition: peer-9 must be unknown before the reconcile")
@@ -172,17 +172,20 @@ func TestHeartBeat_ReconcileMergesAndReturnsDirectory(t *testing.T) {
 
 // TestHeartBeat_ReconcileRejectsUntrustworthyNodes: the reconcile path lets a
 // cluster member write into our directory through the request, which the response
-// path never allowed. Structurally incomplete entries and entries belonging to a
-// different cluster must be dropped.
+// path never allowed. Structurally incomplete entries must be dropped.
+//
+// There is no longer a cluster-name check here: the sender has already proved
+// possession of the cluster token to reach this handler, and it only advertises
+// peers it completed bidirectional auth with, so everything reachable through
+// this path is by construction in the same cluster.
 func TestHeartBeat_ReconcileRejectsUntrustworthyNodes(t *testing.T) {
 	s := newNodesSyncServer(t, "self", "peer-1")
 
 	pushed := map[string]*proto.Node{
-		"foreign":    {Name: "foreign", Host: "10.0.0.8", Port: 2008, ClusterName: "other-cluster"},
-		"no-host":    {Name: "no-host", Port: 2007, ClusterName: "c1"},
-		"low-port":   {Name: "low-port", Host: "10.0.0.7", Port: 80, ClusterName: "c1"},
-		"no-cluster": {Name: "no-cluster", Host: "10.0.0.6", Port: 2006},
-		"good":       {Name: "good", Host: "10.0.0.5", Port: 2005, ClusterName: "c1"},
+		"no-host":  {Name: "no-host", Port: 2007},
+		"low-port": {Name: "low-port", Host: "10.0.0.7", Port: 80},
+		"no-name":  {Host: "10.0.0.6", Port: 2006},
+		"good":     {Name: "good", Host: "10.0.0.5", Port: 2005},
 	}
 
 	if _, err := s.HeartBeat(context.Background(),
@@ -190,7 +193,7 @@ func TestHeartBeat_ReconcileRejectsUntrustworthyNodes(t *testing.T) {
 		t.Fatalf("HeartBeat: %v", err)
 	}
 
-	for _, name := range []string{"foreign", "no-host", "low-port", "no-cluster"} {
+	for _, name := range []string{"no-host", "low-port", "no-name"} {
 		if s.clusterState.Get(name) != nil {
 			t.Errorf("node %q should have been rejected but was merged", name)
 		}
@@ -212,7 +215,7 @@ func TestHeartBeat_ReconcileLeavesUserSyncUntouched(t *testing.T) {
 	}
 
 	pushed := map[string]*proto.Node{
-		"peer-9": {Name: "peer-9", Host: "10.0.0.9", Port: 2009, ClusterName: "c1"},
+		"peer-9": {Name: "peer-9", Host: "10.0.0.9", Port: 2009},
 	}
 	rsp, err := s.HeartBeat(context.Background(),
 		heartbeatFrom("peer-1", []byte("a-different-digest-entirely-32by"), pushed))

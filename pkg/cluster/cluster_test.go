@@ -14,10 +14,9 @@ import (
 func makeNode(name, host string, port int32, clusterName string) *cluster.Node {
 	return &cluster.Node{
 		Node: &proto.Node{
-			Name:        name,
-			Host:        host,
-			Port:        port,
-			ClusterName: clusterName,
+			Name: name,
+			Host: host,
+			Port: port,
 		},
 	}
 }
@@ -117,24 +116,21 @@ func newTestCluster(name, token string) *cluster.Cluster {
 	return c
 }
 
+// IsSameCluster is token-only since the cluster name was removed: the token is
+// also the HKDF input for every end<->end RPC key, so a peer that presents it can
+// already read and write the user plane — a second name factor added nothing and
+// could only reject legitimate peers over a typo.
+
 func TestCluster_IsSameCluster_Match(t *testing.T) {
 	c := newTestCluster("mycluster", "mytoken")
-	if err := c.IsSameCluster("mycluster", "mytoken"); err != nil {
+	if err := c.IsSameCluster("mytoken"); err != nil {
 		t.Errorf("expected nil, got %v", err)
-	}
-}
-
-func TestCluster_IsSameCluster_WrongName(t *testing.T) {
-	c := newTestCluster("mycluster", "mytoken")
-	err := c.IsSameCluster("other", "mytoken")
-	if err == nil {
-		t.Error("expected error for wrong cluster name")
 	}
 }
 
 func TestCluster_IsSameCluster_WrongToken(t *testing.T) {
 	c := newTestCluster("mycluster", "mytoken")
-	err := c.IsSameCluster("mycluster", "badtoken")
+	err := c.IsSameCluster("badtoken")
 	if err == nil {
 		t.Error("expected error for wrong token")
 	}
@@ -208,10 +204,9 @@ func TestNodeManager_LoadStaticNode_FiltersSameHostPort(t *testing.T) {
 	// Set up global local node
 	localNode := cluster.GetLocalNode()
 	localNode.Node = proto.Node{
-		Name:        "local",
-		Host:        "10.0.0.1",
-		Port:        3000,
-		ClusterName: "c1",
+		Name: "local",
+		Host: "10.0.0.1",
+		Port: 3000,
 	}
 
 	c := newTestCluster("c1", "tok")
@@ -233,10 +228,9 @@ func TestNodeManager_LoadStaticNode_FiltersSameHostPort(t *testing.T) {
 func TestNodeManager_LoadStaticNode_FiltersSameName(t *testing.T) {
 	localNode := cluster.GetLocalNode()
 	localNode.Node = proto.Node{
-		Name:        "local",
-		Host:        "10.0.0.1",
-		Port:        3000,
-		ClusterName: "c1",
+		Name: "local",
+		Host: "10.0.0.1",
+		Port: 3000,
 	}
 
 	c := newTestCluster("c1", "tok")
@@ -263,7 +257,6 @@ func TestEndNodeClusterManager_GetClusterToken(t *testing.T) {
 
 func TestNewEndNodeClusterManagerFromConfig(t *testing.T) {
 	clusterCfg := cluster.ClusterInitConfig{
-		ClusterName:  "testcluster",
 		ClusterToken: "testtoken",
 		StaticNodes:  nil,
 	}
@@ -277,9 +270,8 @@ func TestNewEndNodeClusterManagerFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEndNodeClusterManagerFromConfig: %v", err)
 	}
-	if mgr.Name != "testcluster" {
-		t.Errorf("cluster name: got %q, want %q", mgr.Name, "testcluster")
-	}
+	// mgr.Name is no longer derived from config: the cluster name was removed and
+	// the token is the only membership identifier.
 	if mgr.Token != "testtoken" {
 		t.Errorf("cluster token: got %q, want %q", mgr.Token, "testtoken")
 	}

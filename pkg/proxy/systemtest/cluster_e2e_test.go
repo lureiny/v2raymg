@@ -4,8 +4,9 @@ package systemtest
 
 // cluster_e2e_test.go — the multi-node regression suite.
 //
-// Topology: 1 center node + 3 end nodes, each a real v2raymg subprocess talking
-// real gRPC over the encrypted cluster codec. This is the only place the cluster
+// Topology: 3 end nodes, each a real v2raymg subprocess talking real gRPC over
+// the encrypted cluster codec. The first node is the static seed for the others;
+// there is no center node any more. This is the only place the cluster
 // plane is exercised end to end: the handler-level unit tests call HeartBeat in
 // process and therefore skip the encryption codec, the anti-replay check and the
 // method binding entirely.
@@ -24,7 +25,7 @@ import (
 )
 
 // TestClusterE2E_Smoke is the cheapest possible proof that the orchestration
-// works: center up, one end node up, and that node sees itself in the directory.
+// works: one end node up, seeing itself in the directory.
 // Everything else in this file depends on it, so it runs without containers or
 // downloads and fails fast with full logs.
 func TestClusterE2E_Smoke(t *testing.T) {
@@ -57,8 +58,8 @@ func TestClusterE2E_ThreeNodeConvergence(t *testing.T) {
 
 	for i := 1; i <= 3; i++ {
 		c.addEndNode(t)
-		// Generous relative to a 1s heartbeat: discovery needs a beat to the center
-		// and a beat between peers, and CI machines stall.
+		// Generous relative to a 1s heartbeat: discovery needs a registration round
+		// plus a directory exchange, and CI machines stall.
 		c.waitConverged(t, 45*time.Second)
 		t.Logf("converged with %d end node(s)", i)
 	}
@@ -152,22 +153,42 @@ func TestClusterE2E_MixedSumSync(t *testing.T) {
 	}
 }
 
-// TestClusterE2E_CenterTokenEnvelope runs the end->center channel wrapped in the
-// dedicated AES envelope. A mismatch between the two sides makes the center unable
-// to decrypt the heartbeat, so nodes would never be discovered — convergence here
-// is the proof the envelope is wired correctly on both ends.
-func TestClusterE2E_CenterTokenEnvelope(t *testing.T) {
+// TestClusterE2E_PersistedDirectorySurvivesRestart is the regression for the
+// persisted node directory.
+//
+// A three-node cluster converges, then one node is restarted with its
+// static_nodes stripped. With no static peers and no center, the only way that
+// node can name its peers is the rows it wrote to its own database while it was
+// registered — so re-convergence proves the persist/load path end to end.
+//
+// Honest limitation: the surviving peers still know the restarted node and will
+// register inbound, so this does not isolate "the restarted node initiated the
+// contact". That direction is pinned by the reconcile/load unit tests in
+// pkg/rpc/server (TestReconcileNodeStore_*, TestLoadedNodeIsNotTreatedAsRegistered);
+// what this case adds is that the whole chain works against real processes.
+func TestClusterE2E_PersistedDirectorySurvivesRestart(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	c := startE2ECluster(t, tmpDir, clusterOpts{
 		HeartbeatIntervalSec: 1,
-		CenterToken:          "e2e-center-envelope-token-0123456",
 		XrayBin:              os.Getenv("XRAY_BIN"),
 	})
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 3; i++ {
 		c.addEndNode(t)
 	}
-
 	c.waitConverged(t, 60*time.Second)
 	c.waitFanoutReady(t, 60*time.Second)
+
+	// The reconcile pass runs on the filter ticker (20s), so give it a turn to
+	// write the directory out before killing the node.
+	time.Sleep(25 * time.Second)
+
+	victim := c.ends[2] // not the seed, so it has static peers to strip
+	c.restartWithoutStaticPeers(t, victim)
+
+	c.waitConverged(t, 60*time.Second)
+	if known := victim.knownNodes(t); len(known) != 3 {
+		t.Errorf("%s sees %d nodes after restarting with no static peers, want 3: %v",
+			victim.name, len(known), known)
+	}
 }

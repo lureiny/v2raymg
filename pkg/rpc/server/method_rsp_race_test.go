@@ -15,8 +15,8 @@ import (
 // name, forcing authRemoteNode into the reflect-write failure branch.
 type stubClusterState struct{}
 
-func (stubClusterState) GetClusterToken() string            { return "" }
-func (stubClusterState) IsSameCluster(string, string) error { return nil }
+func (stubClusterState) GetClusterToken() string    { return "" }
+func (stubClusterState) IsSameCluster(string) error { return nil }
 func (stubClusterState) AuthRemoteNode(node **cluster.Node) error {
 	return fmt.Errorf("denied %s", (*node).GetName())
 }
@@ -30,9 +30,9 @@ func (stubClusterState) GetProtoNodesWithFilter(cluster.NodeFilter) map[string]*
 func (stubClusterState) GetAdvertisedNodes() (map[string]*proto.Node, []byte) {
 	return nil, nil
 }
-func (stubClusterState) Filter(cluster.NodeFilter)                    {}
-func (stubClusterState) AddToWrongNodeList(*cluster.Node)             {}
-func (stubClusterState) DeleteFromWrongTokenNodeList(string)          {}
+func (stubClusterState) Filter(cluster.NodeFilter)                     {}
+func (stubClusterState) AddToWrongNodeList(*cluster.Node)              {}
+func (stubClusterState) DeleteFromWrongTokenNodeList(string)           {}
 func (stubClusterState) GetNodeFromWrongNodeList(string) *cluster.Node { return nil }
 
 // TestNewEmptyRsp_DistinctInstances proves newEmptyRsp mints a fresh response

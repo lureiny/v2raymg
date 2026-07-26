@@ -29,7 +29,6 @@ var localNode = cluster.GetLocalNode()
 type EndNodeServer struct {
 	proto.UnimplementedEndNodeAccessServer
 	cfg         appconfig.EndNodeConfig
-	centerNode  *cluster.Node
 	certManager CertManager
 
 	// ServerConfig fields (inlined from server.ServerConfig)
@@ -40,6 +39,9 @@ type EndNodeServer struct {
 
 	// injected cluster state
 	clusterState ClusterState
+	// nodeStore persists discovered peers; nil disables persistence entirely
+	// (used by tests that build a server directly).
+	nodeStore NodeStore
 
 	// injected metric collectors
 	nodeMetricCol  NodeMetricCollector
@@ -50,7 +52,6 @@ type EndNodeServer struct {
 	userMgr      *usermanager.UserManager
 	containerMgr *container.ContainerMgr
 	subMgr       *subscription.Manager
-
 }
 
 const (
@@ -109,29 +110,29 @@ var methodRspMap = map[string]interface{}{
 	"RegisterNode":         &proto.RegisterNodeRsp{},
 	"SetGatewayModel":      &proto.SetGatewayModelRsp{},
 	"SetPingCheck":         &proto.SetPingCheckRsp{},
-	"AddInbound":              &proto.InboundOpRsp{},
-	"TransferInbound":         &proto.InboundOpRsp{},
-	"CopyInbound":             &proto.InboundOpRsp{},
-	"CopyUser":                &proto.InboundOpRsp{},
-	"GetInbound":              &proto.GetInboundRsp{},
-	"ListInbound":             &proto.ListInboundRsp{},
-	"DeleteInboundByName":     &proto.InboundOpRsp{},
-	"UpdateProxy":             &proto.UpdateProxyRsp{},
-	"AddAdaptiveConfig":       &proto.AdaptiveRsp{},
-	"DeleteAdaptiveConfig":    &proto.AdaptiveRsp{},
-	"Adaptive":                &proto.AdaptiveRsp{},
+	"AddInbound":           &proto.InboundOpRsp{},
+	"TransferInbound":      &proto.InboundOpRsp{},
+	"CopyInbound":          &proto.InboundOpRsp{},
+	"CopyUser":             &proto.InboundOpRsp{},
+	"GetInbound":           &proto.GetInboundRsp{},
+	"ListInbound":          &proto.ListInboundRsp{},
+	"DeleteInboundByName":  &proto.InboundOpRsp{},
+	"UpdateProxy":          &proto.UpdateProxyRsp{},
+	"AddAdaptiveConfig":    &proto.AdaptiveRsp{},
+	"DeleteAdaptiveConfig": &proto.AdaptiveRsp{},
+	"Adaptive":             &proto.AdaptiveRsp{},
 	"FastAddInbound":       &proto.FastAddInboundRsp{},
 	"ObtainNewCert":        &proto.ObtainNewCertRsp{},
 	"TransferCert":         &proto.TransferCertRsp{},
 	"GetCerts":             &proto.GetCertsRsp{},
 	"DeleteCert":           &proto.DeleteCertRsp{},
-	"GetPingMetric":           &proto.GetPingMetricRsp{},
-	"GetNodeMetric":           &proto.GetNodeMetricRsp{},
-	"GetNodeGroups":           &proto.GetNodeGroupsRsp{},
-	"SetNodeGroups":           &proto.SetNodeGroupsRsp{},
-	"UpsertClusterUsers":      &proto.UpsertClusterUsersRsp{},
-	"GetStatus":               &proto.GetStatusRsp{},
-	"GetContainers":           &proto.GetContainersRsp{},
+	"GetPingMetric":        &proto.GetPingMetricRsp{},
+	"GetNodeMetric":        &proto.GetNodeMetricRsp{},
+	"GetNodeGroups":        &proto.GetNodeGroupsRsp{},
+	"SetNodeGroups":        &proto.SetNodeGroupsRsp{},
+	"UpsertClusterUsers":   &proto.UpsertClusterUsersRsp{},
+	"GetStatus":            &proto.GetStatusRsp{},
+	"GetContainers":        &proto.GetContainersRsp{},
 }
 
 // newEmptyRsp returns a fresh, per-call response instance for the given method.
@@ -217,8 +218,10 @@ func (s *EndNodeServer) Init(
 	statsCol BandwidthStatsCollector,
 	pingCol PingCollector,
 	nodeMetricCol NodeMetricCollector,
+	nodeStore NodeStore,
 ) {
 	s.cfg = cfg
+	s.nodeStore = nodeStore
 	s.certManager = certManager
 	s.clusterState = clusterState
 	s.userMgr = userMgr
@@ -234,15 +237,7 @@ func (s *EndNodeServer) Init(
 	s.Name = cfg.Name
 
 	InitNetSpeedMonitor(cfg.MonitorInterfaces)
-
-	s.centerNode = &cluster.Node{
-		Node: &proto.Node{
-			Host: cfg.Cluster.CenterNodeHost,
-			Port: int32(cfg.Cluster.CenterNodePort),
-		},
-	}
 }
-
 
 func (s *EndNodeServer) filter() {
 	timeTicker := time.NewTicker(clearInvalidNodeInterval)
@@ -252,6 +247,61 @@ func (s *EndNodeServer) filter() {
 		s.clusterState.Filter(func(n *cluster.Node) bool {
 			return n.IsValid() || n.IsLocal()
 		})
+		// Right after eviction, so a node dropped from memory is dropped from the
+		// database in the same tick and the two never drift apart.
+		s.reconcileNodeStore()
+	}
+}
+
+// reconcileNodeStore makes the persisted directory match the in-memory one.
+//
+// A reconcile rather than write hooks scattered through the register/heartbeat
+// paths: it writes only on an actual difference (so it is naturally incremental —
+// a steady cluster writes nothing at all), needs no per-node "已持久化" flag, does
+// not require a callback inside the concurrency-sensitive NodeManager.Filter, and
+// retries by itself if a write failed on the previous tick.
+//
+// Two asymmetric rules, and the asymmetry is deliberate:
+//
+//   - INSERT only what is IsCompleteRegister(). That means bidirectional token
+//     auth has actually completed, so every stored row is a peer this node
+//     verified itself. Persisting merely-advertised entries would turn directory
+//     poisoning from something a restart clears into something that survives one.
+//   - DELETE only what is absent from memory ENTIRELY, not what has merely lost
+//     IsCompleteRegister(). A peer that can still reach us while we cannot reach
+//     it is unregistered but very much alive and still being retried; forgetting
+//     its address would be the exact failure this persistence exists to prevent.
+//
+// Static peers are skipped: they come from the config file on every start and are
+// never evicted, so storing them would only add a staler second source.
+func (s *EndNodeServer) reconcileNodeStore() {
+	if s.nodeStore == nil {
+		return
+	}
+
+	inMemory := s.clusterState.GetAllNode()
+
+	for name, n := range inMemory {
+		if name == s.Name || n.IsLocal() || !n.IsCompleteRegister() {
+			continue
+		}
+		if err := s.nodeStore.Upsert(n.GetName(), n.GetHost(), n.GetPort()); err != nil {
+			log.Warn("persist cluster node failed", "node", name, "err", err)
+		}
+	}
+
+	persisted, err := s.nodeStore.ListNames()
+	if err != nil {
+		log.Warn("read persisted cluster nodes failed", "err", err)
+		return
+	}
+	for _, name := range persisted {
+		if _, ok := inMemory[name]; ok {
+			continue
+		}
+		if err := s.nodeStore.Delete(name); err != nil {
+			log.Warn("drop persisted cluster node failed", "node", name, "err", err)
+		}
 	}
 }
 
@@ -282,12 +332,10 @@ func (s *EndNodeServer) Serve(lis net.Listener) {
 	encoding.RegisterCodec(rpc.NewEncryptMessageCodec(s.cfg.Cluster.Token))
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(s.unaryServerInterceptor()))
 	proto.RegisterEndNodeAccessServer(grpcServer, s)
-	go s.heartBeatAndRegisterToNodeOrCenterNode()
+	go s.heartBeatAndRegisterToEndNode()
 	go s.filter()
 	log.Info("server listening", "addr", lis.Addr())
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Error("rpc server exited", "err", err.Error(), "host", s.Host, "port", s.Port)
 	}
 }
-
-

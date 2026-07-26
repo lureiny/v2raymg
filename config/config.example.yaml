@@ -1,7 +1,8 @@
 # v2raymg configuration
 # Copy to config.yaml and modify.
 
-# Node role: "center" or "end". Default: "end".
+# Node role. Only "end" exists — the center node was removed; see the note at the
+# bottom of this file. Kept so old configs still parse.
 node_type: end
 
 log:
@@ -158,9 +159,11 @@ end_node:
       #   source: https://example.com/ping_nodes.yaml
       #   update_interval: 300   # seconds; only effective for "remote" type
   cluster:
-    name: my-cluster
-    token: cluster-secret
-    # How often this node heartbeats to every peer and to the center (seconds).
+    # The shared secret. It authenticates cluster members AND keys (via HKDF) all
+    # end<->end gRPC traffic, so it is the ONLY membership boundary — there is no
+    # cluster name any more. Must be at least 16 characters and genuinely random.
+    token: cluster-secret-please-change-me
+    # How often this node heartbeats to every peer (seconds).
     # Default 10 when unset; valid range 1-30. This is the clock the whole cluster
     # plane runs on — node liveness, directory convergence and cluster-user sync
     # all advance one step per interval. Raise it to cut chatter on large clusters,
@@ -174,12 +177,22 @@ end_node:
     # the previous always-full-directory behaviour; safe to flip one node at a
     # time, since a peer that receives no digest falls back automatically.
     node_sum_sync: true
-    center_node_host: ""
-    center_node_port: 0
+    # Static peers seed discovery. Since the center node was removed this is the
+    # ONLY bootstrap path, and it is strictly better than the center was: a static
+    # peer is never reclaimed by the 60s node timeout, and registration is
+    # bidirectional so the seed learns the joining node immediately.
+    #
+    # One or two stable peers is enough — the rest of the directory propagates
+    # between nodes, and discovered peers are persisted to the database so a
+    # restart does not lose them. A node with no static peers and an empty
+    # database cannot discover anyone (it can still be found by a peer that
+    # already knows it); the server warns about this at startup.
     static_nodes: []
+    #  - name: seed-1
+    #    host: 10.0.0.1
+    #    port: 9090
 
-# Center Node configuration (effective when node_type=center)
-center_node:
-  name: center
-  listen: 0.0.0.0
-  rpc_port: 9090
+# The center node was removed. Use end_node.cluster.static_nodes for discovery.
+# A config still carrying node_type: center, center_node:, center_node_host,
+# center_token or cluster.name starts as a normal end node and warns about each
+# ignored key at startup.

@@ -28,10 +28,9 @@ func TestReqToMultiEndNodeServer_ConcurrentResultWrites(t *testing.T) {
 	for i := 0; i < n; i++ {
 		nd := &cluster.Node{
 			Node: &proto.Node{
-				Name:        fmt.Sprintf("node-%d", i),
-				Host:        "127.0.0.1",
-				Port:        1, // nothing listens on :1 → fast connection refused
-				ClusterName: "c",
+				Name: fmt.Sprintf("node-%d", i),
+				Host: "127.0.0.1",
+				Port: 1, // nothing listens on :1 → fast connection refused
 			},
 			CreateTime: now,
 		}
@@ -43,7 +42,7 @@ func TestReqToMultiEndNodeServer_ConcurrentResultWrites(t *testing.T) {
 	}
 
 	local := &cluster.LocalNode{
-		Node:  proto.Node{Name: "local", Host: "127.0.0.1", Port: 2, ClusterName: "c"},
+		Node:  proto.Node{Name: "local", Host: "127.0.0.1", Port: 2},
 		Token: "tok",
 	}
 	c := NewEndNodeClient(nodes, local)

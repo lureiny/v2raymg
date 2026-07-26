@@ -71,8 +71,8 @@ jobs:
             ./pkg/certmgmt/... \
             ./pkg/collecter/...
 
-  # Multi-node regression: a real 1-center + 3-end cluster of v2raymg
-  # subprocesses talking real gRPC, driven entirely through the HTTP API.
+  # Multi-node regression: a real 3-node cluster of v2raymg subprocesses talking
+  # real gRPC, driven entirely through the HTTP API.
   #
   # This is the ONLY coverage of the cluster plane end to end — the in-process
   # unit tests call the RPC handlers directly and therefore skip the encryption
@@ -94,5 +94,5 @@ jobs:
         with:
           go-version: "1.24"
 
-      - name: Cluster e2e (1 center + 3 end nodes)
+      - name: Cluster e2e (3-node cluster)
         run: go test -tags=integration ./pkg/proxy/systemtest/ -run 'TestClusterE2E' -v -timeout 20m

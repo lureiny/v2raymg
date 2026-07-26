@@ -47,11 +47,13 @@ func (cluster *Cluster) AddToWrongNodeList(node *Node) {
 	cluster.WrongTokenNode.Add(node.Name, node)
 }
 
-// IsSameCluster 根据clusterName和token验证该配置是否与本节点配置相同
-func (cluster *Cluster) IsSameCluster(clusterName, token string) error {
-	if cluster.Name != clusterName {
-		return fmt.Errorf("wrong cluster")
-	}
+// IsSameCluster verifies that a peer belongs to this cluster.
+//
+// The shared token is the whole test. It is also the HKDF input for every
+// end<->end RPC key, so a peer that presents the right token can already read
+// and write the user plane — there is nothing a second, cosmetic cluster-name
+// factor could add, and it could only ever reject legitimate peers over a typo.
+func (cluster *Cluster) IsSameCluster(token string) error {
 	if cluster.Token != token {
 		return fmt.Errorf("wrong token")
 	}
@@ -125,7 +127,7 @@ func (cluster *Cluster) AuthRemoteNode(node **Node) error {
 	if n := cluster.NodeManager.Get((*node).Name); n == nil {
 		return fmt.Errorf("node not exist")
 	} else if !(*node).Compare(n) {
-		// node的meta info指 host+port+cluster+name, 这四个值可以指定唯一一个node
+		// node的meta info指 host+port+name, 这三个值可以指定唯一一个node
 		return fmt.Errorf("there at least two node with same name[%s], but have different meta info.", n.GetName())
 	} else if err := n.AuthAndTouch((*node).GetInToken()); err != nil {
 		// 验证 token 与心跳未超时, 通过则原子刷新收到心跳时间 (check-then-act 在 Node 内加锁完成)

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
+	"time"
 
 	"github.com/lureiny/v2raymg/pkg/buildinfo"
 	certmgmtservice "github.com/lureiny/v2raymg/pkg/certmgmt/service"
@@ -25,6 +25,7 @@ import (
 	converter "github.com/lureiny/v2raymg/pkg/proxy/core/subscription/converter" // register converters + configure clash template URLs
 	"github.com/lureiny/v2raymg/pkg/proxy/forward"
 	"github.com/lureiny/v2raymg/pkg/proxy/usermanager"
+	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 	"github.com/lureiny/v2raymg/pkg/rpc/server"
 	"github.com/lureiny/v2raymg/pkg/store"
 	"github.com/lureiny/v2raymg/pkg/store/migrations"
@@ -89,23 +90,17 @@ func startServer(cmd *cobra.Command, args []string) {
 	logger := cfg.Log.ApplyToLogger()
 	log.SetDefault(logger)
 
+	for _, w := range appconfig.WarnRuntimeConfig(cfg) {
+		log.Warn("config", "warning", w)
+	}
+
 	// Configure the external Clash sub-converter template services used when
 	// building /sub Clash configs (subscription.clash_template_urls). An empty
 	// list is valid — /sub then always uses the built-in minimal fallback
 	// template rather than failing.
 	converter.SetClashTemplateURLs(cfg.Subscription.ClashTemplateURLs)
 
-	if strings.EqualFold(cfg.NodeType, "center") {
-		runCenterNode(cfg)
-	} else {
-		runEndNode(cfg)
-	}
-}
-
-func runCenterNode(cfg *appconfig.AppConfig) {
-	server := &server.CenterNodeServer{}
-	server.Init(cfg.CenterNode)
-	server.Start() // blocks
+	runEndNode(cfg)
 }
 
 func runEndNode(cfg *appconfig.AppConfig) {
@@ -146,7 +141,6 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	// 6. Cluster Manager + LocalNode
 	clusterMgr, localNode, err := cluster.NewEndNodeClusterManagerFromConfig(
 		cluster.ClusterInitConfig{
-			ClusterName:  cfg.EndNode.Cluster.Name,
 			ClusterToken: cfg.EndNode.Cluster.Token,
 			StaticNodes:  convertStaticNodes(cfg.EndNode.Cluster.StaticNodes),
 		},
@@ -200,6 +194,14 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	})
 	nodeMetricCol := collecter.DefaultNodeCollector()
 
+	// 8b. Persisted node directory. Loaded BEFORE the heartbeat loop starts so the
+	// first round already retries the peers this node knew when it went down —
+	// which is the whole point: peers drop an unreachable node (address included)
+	// after cluster.NodeTimeOut, so without this a restart longer than a minute
+	// leaves the node isolated.
+	nodeStore := store.NewSQLiteClusterNodesStore(storeMgr.DB())
+	loadPersistedNodes(nodeStore, clusterMgr)
+
 	// 9. End Node RPC Server
 	rpcServer := server.GetEndNodeServer()
 	rpcServer.Init(
@@ -212,6 +214,7 @@ func runEndNode(cfg *appconfig.AppConfig) {
 		statsCol,
 		pingCol,
 		nodeMetricCol,
+		nodeStoreAdapter{nodeStore},
 	)
 
 	// 9a. Cluster sync — enable on UserManager when configured.
@@ -310,4 +313,58 @@ func convertStaticNodes(nodes []appconfig.StaticNodeConfig) []cluster.StaticNode
 		}
 	}
 	return out
+}
+
+// nodeStoreAdapter adapts the SQLite store to the narrow interface the RPC layer
+// declares, so pkg/rpc/server never imports pkg/store.
+type nodeStoreAdapter struct {
+	s *store.SQLiteClusterNodesStore
+}
+
+func (a nodeStoreAdapter) ListNames() ([]string, error) {
+	nodes, err := a.s.List()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		names = append(names, n.Name)
+	}
+	return names, nil
+}
+
+func (a nodeStoreAdapter) Upsert(name, host string, port int32) error {
+	return a.s.Upsert(store.ClusterNode{Name: name, Host: host, Port: port})
+}
+
+func (a nodeStoreAdapter) Delete(name string) error { return a.s.Delete(name) }
+
+// loadPersistedNodes seeds the in-memory directory from the database.
+//
+// Only CreateTime is stamped — deliberately NOT the heartbeat timestamps.
+// IsValid() accepts a node whose CreateTime is recent, so the node gets a full
+// NodeTimeOut window to be re-registered; but IsCompleteRegister() requires both
+// heartbeat timestamps and does NOT verify any token, so back-dating those would
+// make a freshly loaded peer look authenticated and put it straight into the set
+// this node advertises to others — publishing a peer it has not talked to yet.
+func loadPersistedNodes(st *store.SQLiteClusterNodesStore, clusterMgr *cluster.EndNodeClusterManager) {
+	nodes, err := st.List()
+	if err != nil {
+		log.Error("load persisted cluster nodes failed", "err", err)
+		return
+	}
+	loaded := 0
+	for _, n := range nodes {
+		if clusterMgr.Get(n.Name) != nil {
+			continue // already present as a static peer; config wins
+		}
+		clusterMgr.Add(&cluster.Node{
+			Node:       &proto.Node{Name: n.Name, Host: n.Host, Port: n.Port},
+			CreateTime: time.Now().Unix(),
+		})
+		loaded++
+	}
+	if loaded > 0 {
+		log.Info("loaded persisted cluster nodes", "count", loaded)
+	}
 }

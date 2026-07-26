@@ -12,17 +12,17 @@ import (
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
-func protoNode(name, host string, port int32, clusterName string) *proto.Node {
-	return &proto.Node{Name: name, Host: host, Port: port, ClusterName: clusterName}
+func protoNode(name, host string, port int32) *proto.Node {
+	return &proto.Node{Name: name, Host: host, Port: port}
 }
 
 func sampleNodes() []*proto.Node {
 	return []*proto.Node{
-		protoNode("node-a", "10.0.0.1", 2000, "c1"),
-		protoNode("node-b", "10.0.0.2", 2001, "c1"),
-		protoNode("node-c", "10.0.0.3", 2002, "c1"),
-		protoNode("node-d", "10.0.0.4", 2003, "c1"),
-		protoNode("node-e", "10.0.0.5", 2004, "c1"),
+		protoNode("node-a", "10.0.0.1", 2000),
+		protoNode("node-b", "10.0.0.2", 2001),
+		protoNode("node-c", "10.0.0.3", 2002),
+		protoNode("node-d", "10.0.0.4", 2003),
+		protoNode("node-e", "10.0.0.5", 2004),
 	}
 }
 
@@ -56,17 +56,16 @@ func TestComputeNodesSum_OrderIndependent(t *testing.T) {
 }
 
 // TestComputeNodesSum_EveryIdentityFieldMatters asserts the digest distinguishes
-// a change in any of the four fields that uniquely identify a node (the same
+// a change in any of the three fields that uniquely identify a node (the same
 // "meta info" Node.Compare enforces). A field that did not flip the sum would be
 // a silent divergence the heartbeat could never detect.
 func TestComputeNodesSum_EveryIdentityFieldMatters(t *testing.T) {
 	base, _ := cluster.ComputeNodesSum(sampleNodes())
 
 	mutations := map[string]func(*proto.Node){
-		"name":         func(n *proto.Node) { n.Name = "node-z" },
-		"host":         func(n *proto.Node) { n.Host = "10.9.9.9" },
-		"port":         func(n *proto.Node) { n.Port = 9999 },
-		"cluster_name": func(n *proto.Node) { n.ClusterName = "c2" },
+		"name": func(n *proto.Node) { n.Name = "node-z" },
+		"host": func(n *proto.Node) { n.Host = "10.9.9.9" },
+		"port": func(n *proto.Node) { n.Port = 9999 },
 	}
 	for field, mutate := range mutations {
 		nodes := sampleNodes()
@@ -82,7 +81,7 @@ func TestComputeNodesSum_EveryIdentityFieldMatters(t *testing.T) {
 func TestComputeNodesSum_MembershipMatters(t *testing.T) {
 	base, baseCount := cluster.ComputeNodesSum(sampleNodes())
 
-	added := append(sampleNodes(), protoNode("node-f", "10.0.0.6", 2005, "c1"))
+	added := append(sampleNodes(), protoNode("node-f", "10.0.0.6", 2005))
 	gotAdd, addCount := cluster.ComputeNodesSum(added)
 	if bytes.Equal(gotAdd, base) {
 		t.Error("adding a node did not change the sum")
@@ -137,8 +136,8 @@ func TestComputeNodesSum_SkipsNilEntries(t *testing.T) {
 // --- Cluster.GetAdvertisedNodes ---
 
 // completeNode builds a node that satisfies IsCompleteRegister().
-func completeNode(name, host string, port int32, clusterName string) *cluster.Node {
-	n := &cluster.Node{Node: protoNode(name, host, port, clusterName)}
+func completeNode(name, host string, port int32) *cluster.Node {
+	n := &cluster.Node{Node: protoNode(name, host, port)}
 	n.SetRecvHeartBeatTime(time.Now().Unix())
 	n.SetReportHeartBeatTime(time.Now().Unix())
 	return n
@@ -159,7 +158,7 @@ func TestGetAdvertisedNodes_IncludesSelf(t *testing.T) {
 	for _, self := range names {
 		c := newTestCluster("c1", "token")
 		for i, name := range names {
-			c.Add(completeNode(name, "10.0.0.1", int32(2000+i), "c1"))
+			c.Add(completeNode(name, "10.0.0.1", int32(2000+i)))
 		}
 		nodes, sum := c.GetAdvertisedNodes()
 		if _, ok := nodes[self]; !ok {
@@ -185,15 +184,15 @@ func TestGetAdvertisedNodes_IncludesSelf(t *testing.T) {
 // the filter the heartbeat response used before this change.
 func TestGetAdvertisedNodes_ExcludesIncompleteRegistration(t *testing.T) {
 	c := newTestCluster("c1", "token")
-	c.Add(completeNode("node-a", "10.0.0.1", 2000, "c1"))
+	c.Add(completeNode("node-a", "10.0.0.1", 2000))
 
 	// Only one direction of the registration completed.
-	halfway := &cluster.Node{Node: protoNode("node-b", "10.0.0.2", 2001, "c1")}
+	halfway := &cluster.Node{Node: protoNode("node-b", "10.0.0.2", 2001)}
 	halfway.SetRecvHeartBeatTime(time.Now().Unix())
 	c.Add(halfway)
 
 	// Never registered at all.
-	c.Add(&cluster.Node{Node: protoNode("node-c", "10.0.0.3", 2002, "c1")})
+	c.Add(&cluster.Node{Node: protoNode("node-c", "10.0.0.3", 2002)})
 
 	nodes, _ := c.GetAdvertisedNodes()
 	if len(nodes) != 1 {
@@ -211,7 +210,7 @@ func TestGetAdvertisedNodes_ExcludesIncompleteRegistration(t *testing.T) {
 func TestGetAdvertisedNodes_RuntimeStateDoesNotAffectSum(t *testing.T) {
 	build := func(mutate func(*cluster.Node)) []byte {
 		c := newTestCluster("c1", "token")
-		n := completeNode("node-a", "10.0.0.1", 2000, "c1")
+		n := completeNode("node-a", "10.0.0.1", 2000)
 		mutate(n)
 		c.Add(n)
 		_, sum := c.GetAdvertisedNodes()
@@ -243,7 +242,7 @@ func TestGetAdvertisedNodes_RuntimeStateDoesNotAffectSum(t *testing.T) {
 func TestGetAdvertisedNodes_ConcurrentWithMembershipChurn(t *testing.T) {
 	c := newTestCluster("c1", "token")
 	for i := 0; i < 8; i++ {
-		c.Add(completeNode(string(rune('a'+i)), "10.0.0.1", int32(2000+i), "c1"))
+		c.Add(completeNode(string(rune('a'+i)), "10.0.0.1", int32(2000+i)))
 	}
 
 	const iters = 500
@@ -267,7 +266,7 @@ func TestGetAdvertisedNodes_ConcurrentWithMembershipChurn(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < iters; i++ {
-			c.Add(completeNode("churn", "10.0.9.9", 2999, "c1"))
+			c.Add(completeNode("churn", "10.0.9.9", 2999))
 			if n := c.Get("a"); n != nil {
 				n.SetRecvHeartBeatTime(time.Now().Unix())
 			}
@@ -290,7 +289,7 @@ func TestGetAdvertisedNodes_ConcurrentWithMembershipChurn(t *testing.T) {
 // own node, but the same node is also read by the filter loop and HTTP fan-out,
 // so the counter has to go through the node mutex like every other runtime field.
 func TestNode_NodesSumMismatchStreak_Concurrent(t *testing.T) {
-	n := &cluster.Node{Node: protoNode("peer-1", "10.0.0.1", 2000, "c1")}
+	n := &cluster.Node{Node: protoNode("peer-1", "10.0.0.1", 2000)}
 	const iters = 2000
 	var wg sync.WaitGroup
 
@@ -327,7 +326,7 @@ func TestNode_NodesSumMismatchStreak_Concurrent(t *testing.T) {
 func TestGetAdvertisedNodes_MapAndSumAreOneSnapshot(t *testing.T) {
 	c := newTestCluster("c1", "token")
 	for i, name := range []string{"node-a", "node-b", "node-c"} {
-		c.Add(completeNode(name, "10.0.0.1", int32(2000+i), "c1"))
+		c.Add(completeNode(name, "10.0.0.1", int32(2000+i)))
 	}
 
 	nodes, sum := c.GetAdvertisedNodes()

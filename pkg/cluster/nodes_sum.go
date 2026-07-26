@@ -24,11 +24,11 @@ import (
 //   - Each field is written with a 4-byte big-endian length prefix (same scheme
 //     as usermanager/sync.ComputeHash) so no concatenation of field values can
 //     collide with a different split.
-//   - Only the four identity fields are folded: name, host, port, cluster_name.
-//     These are exactly the "meta info" that Node.Compare treats as uniquely
-//     identifying a node. Per-node runtime state (in/out token, heartbeat
-//     timestamps, CreateTime, isLocal) MUST NOT be folded in — it is local to
-//     each observer and would make the sums differ forever.
+//   - Only the three identity fields are folded: name, host, port. These are
+//     exactly the "meta info" that Node.Compare treats as uniquely identifying a
+//     node. Per-node runtime state (in/out token, heartbeat timestamps,
+//     CreateTime, isLocal) MUST NOT be folded in — it is local to each observer
+//     and would make the sums differ forever.
 //
 // An empty set yields the SHA-256 of the empty input (a real 32-byte value),
 // never a nil/empty slice: an empty sum on the wire is the sentinel for
@@ -49,10 +49,7 @@ func ComputeNodesSum(nodes []*proto.Node) (sum []byte, count int) {
 		if a.GetHost() != b.GetHost() {
 			return a.GetHost() < b.GetHost()
 		}
-		if a.GetPort() != b.GetPort() {
-			return a.GetPort() < b.GetPort()
-		}
-		return a.GetClusterName() < b.GetClusterName()
+		return a.GetPort() < b.GetPort()
 	})
 
 	h := sha256.New()
@@ -66,7 +63,6 @@ func ComputeNodesSum(nodes []*proto.Node) (sum []byte, count int) {
 		writeField(n.GetName())
 		writeField(n.GetHost())
 		writeField(strconv.FormatInt(int64(n.GetPort()), 10))
-		writeField(n.GetClusterName())
 	}
 	return h.Sum(nil), len(sorted)
 }

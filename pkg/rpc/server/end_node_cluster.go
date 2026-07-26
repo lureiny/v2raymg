@@ -8,13 +8,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	commonrpc "github.com/lureiny/v2raymg/pkg/common/rpc"
-	rpcClient "github.com/lureiny/v2raymg/pkg/rpc/client"
 	"github.com/lureiny/v2raymg/pkg/cluster"
 	"github.com/lureiny/v2raymg/pkg/log"
-	grpc "google.golang.org/grpc"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	usync "github.com/lureiny/v2raymg/pkg/proxy/usermanager/sync"
+	rpcClient "github.com/lureiny/v2raymg/pkg/rpc/client"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 	pb "google.golang.org/protobuf/proto"
 )
@@ -39,13 +37,12 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 		return registerNodeRsp, nil
 	}
 
-	if err := s.clusterState.IsSameCluster(node.GetClusterName(), clusterToken); err != nil {
+	if err := s.clusterState.IsSameCluster(clusterToken); err != nil {
 		errMsg := err.Error()
 		log.Info("cluster mismatch",
 			"err", errMsg,
 			"src_host", node.Host, "src_port", node.Port,
-			"local_cluster", localNode.ClusterName,
-			"registered_cluster", node.GetClusterName(),
+			"src_name", node.Name,
 		)
 		s.clusterState.AddToWrongNodeList(&cluster.Node{
 			Node:       node,
@@ -79,7 +76,7 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 			n.SetInToken(token)
 			log.Info("register node update",
 				"src_host", node.Host, "src_port", node.Port,
-				"src_name", nodeName, "cluster", node.ClusterName,
+				"src_name", nodeName,
 			)
 		}
 		n.SetRecvHeartBeatTime(time.Now().Unix())
@@ -94,7 +91,7 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 		s.clusterState.Add(newNode)
 		log.Info("register node new",
 			"src_host", node.Host, "src_port", node.Port,
-			"src_name", nodeName, "cluster", node.ClusterName,
+			"src_name", nodeName,
 		)
 	}
 	registerNodeRsp.Data = []byte(token)
@@ -471,47 +468,6 @@ func (s *EndNodeServer) registerOrHeartBeatToEndNode() {
 	wg.Wait()
 }
 
-func (s *EndNodeServer) heartbeatToCenterNode() {
-	if s.centerNode.Host == "" || s.centerNode.Port <= 1000 {
-		return
-	}
-	conn, err := s.centerNode.GetGrpcClientConn()
-	if err != nil {
-		log.Error("heartbeat to center node failed",
-			"err", fmt.Sprintf("did not connect > %v", err),
-			"center_host", s.centerNode.Host,
-		)
-		return
-	}
-	c := proto.NewCenterNodeAccessClient(conn)
-	// Authenticate to the center with the cluster token (was empty = anyone
-	// could forge a heartbeat). The center validates it against its configured
-	// per-cluster tokens. dest_node is "" since the center has no node name
-	// known to the end. When CenterToken is configured the whole exchange is
-	// wrapped in an AES envelope keyed by that token (separate from the cluster
-	// token), so the node directory and the inner cluster token are hidden from
-	// on-path observers; the center still authenticates membership via the inner
-	// cluster token. Empty CenterToken keeps the channel plaintext (legacy).
-	heartBeatReq := &proto.HeartBeatReq{
-		NodeAuthInfo: rpcClient.NewNodeAuthInfo(s.clusterState.GetClusterToken(), &localNode.Node, ""),
-	}
-	var centerOpts []grpc.CallOption
-	if ct := s.cfg.Cluster.CenterToken; ct != "" {
-		centerOpts = append(centerOpts, grpc.ForceCodec(commonrpc.NewEncryptMessageCodec(ct)))
-	}
-	rsp, err := c.HeartBeat(rpcClient.NewContext(), heartBeatReq, centerOpts...)
-	if err != nil {
-		log.Error("heartbeat to center node failed",
-			"err", fmt.Sprintf("heartbeat failed > %v", err),
-			"center_host", s.centerNode.Host, "center_port", s.centerNode.Port,
-		)
-	} else {
-		// The center path is unchanged by the end<->end delta sync: the center
-		// still returns its full directory on every heartbeat.
-		mergeRemoteNodes(rsp.GetNodesMap(), s, "Center")
-	}
-}
-
 // mergeRemoteNodes folds a peer-supplied node directory into the local cluster
 // view. It takes the raw map rather than a HeartBeatRsp because there are now two
 // sources: the heartbeat response (a peer answering our request) and the request
@@ -547,18 +503,7 @@ func mergeRemoteNodes(nodes map[string]*proto.Node, s *EndNodeServer, remoteServ
 				log.Warn("skip incomplete node from remote",
 					"remote_server_type", remoteServerType,
 					"node_host", remoteNode.GetHost(), "node_port", remoteNode.GetPort(),
-					"node_name", remoteNode.GetName(), "node_cluster", remoteNode.GetClusterName(),
-				)
-				continue
-			}
-			// RegisterNode gates on IsSameCluster, so every node that entered the
-			// directory the normal way carries our cluster name; a peer-supplied
-			// entry that does not is either a bug or cross-cluster contamination.
-			if localNode.ClusterName != "" && remoteNode.GetClusterName() != localNode.ClusterName {
-				log.Warn("skip node from remote with foreign cluster",
-					"remote_server_type", remoteServerType,
 					"node_name", remoteNode.GetName(),
-					"node_cluster", remoteNode.GetClusterName(), "local_cluster", localNode.ClusterName,
 				)
 				continue
 			}
@@ -651,12 +596,11 @@ func protoClusterUserSyncToUser(p *proto.ClusterUserSync) *contracts.User {
 	return u
 }
 
-func (s *EndNodeServer) heartBeatAndRegisterToNodeOrCenterNode() {
-	log.Info("start heartbeat to center and end node or register to end node")
+func (s *EndNodeServer) heartBeatAndRegisterToEndNode() {
+	log.Info("start heartbeat/registration loop to end nodes")
 	defer log.Info("heartbeat and register exit")
 	ticker := time.NewTicker(s.heartbeatInterval())
 	for {
-		s.heartbeatToCenterNode()
 		s.registerOrHeartBeatToEndNode()
 		<-ticker.C
 	}

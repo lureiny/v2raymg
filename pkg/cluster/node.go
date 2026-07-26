@@ -22,7 +22,7 @@ const NodeTimeOut int64 = 60
 // mutable runtime fields below are therefore unexported and guarded by mu;
 // all reads/writes must go through the accessor methods so the compiler forces
 // every call site through the lock. The embedded *proto.Node identity fields
-// (Host/Port/Name/ClusterName), CreateTime and isLocal are written only at
+// (Host/Port/Name), CreateTime and isLocal are written only at
 // construction (before the node is published via NodeManager.Add, which
 // establishes a happens-before edge) and are treated as read-only afterwards.
 //
@@ -142,14 +142,17 @@ func (n *Node) AuthAndTouch(inToken string) error {
 	return nil
 }
 
-// 比较两个node是否相同, 相同返回true
+// Compare reports whether two nodes are the same instance. Identity is
+// host+port+name; the cluster name used to be part of it but was removed with
+// the field — the cluster token is the only membership boundary that means
+// anything, and a node that is registered has already proved it.
 func (n1 *Node) Compare(n2 *Node) bool {
-	return n1.Host == n2.Host && n1.Port == n2.Port && n1.ClusterName == n2.ClusterName && n1.Name == n2.Name
+	return n1.Host == n2.Host && n1.Port == n2.Port && n1.Name == n2.Name
 }
 
-// 比较cluster node与proto node是否相同, 相同返回true
+// CompareWithProtoNode is Compare against a wire-level node.
 func (n1 *Node) CompareWithProtoNode(n2 *proto.Node) bool {
-	return n1.Host == n2.Host && n1.Port == n2.Port && n1.ClusterName == n2.ClusterName && n1.Name == n2.Name
+	return n1.Host == n2.Host && n1.Port == n2.Port && n1.Name == n2.Name
 }
 
 // GetGrpcClientConn returns a lazily-established gRPC client connection to this
@@ -225,8 +228,9 @@ func (node *Node) RegisteredLocal() bool {
 	return node.inToken != "" && node.recvHeartBeatTime+NodeTimeOut > time.Now().Unix()
 }
 
+// IsComplete reports whether a node carries enough identity to be usable.
 func (node *Node) IsComplete() bool {
-	return node.Host != "" && node.Port > 1000 && node.ClusterName != "" && node.Name != ""
+	return node.Host != "" && node.Port > 1000 && node.Name != ""
 }
 
 type StaticNode struct {

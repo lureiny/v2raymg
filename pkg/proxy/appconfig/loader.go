@@ -19,8 +19,8 @@ import (
 // Used for detection and migration only.
 type legacyConfig struct {
 	Cert struct {
-		DNSProvider string `yaml:"dns_provider"`
-		Email       string `yaml:"email"`
+		DNSProvider string            `yaml:"dns_provider"`
+		Email       string            `yaml:"email"`
 		Secrets     map[string]string `yaml:"secrets"`
 	} `yaml:"cert"`
 	Cluster struct {
@@ -40,9 +40,9 @@ type legacyConfig struct {
 	} `yaml:"proxy"`
 	Server struct {
 		Http struct {
-			Port               int    `yaml:"port"`
-			SupportPrometheus  bool   `yaml:"support_prometheus"`
-			Token              string `yaml:"token"`
+			Port              int    `yaml:"port"`
+			SupportPrometheus bool   `yaml:"support_prometheus"`
+			Token             string `yaml:"token"`
 		} `yaml:"http"`
 		IcmpPingCheck bool   `yaml:"icmp_ping_check"`
 		Listen        string `yaml:"listen"`
@@ -116,11 +116,10 @@ func migrateLegacyConfig(old *legacyConfig) *AppConfig {
 	cfg.EndNode.EnablePrometheus = old.Server.Http.SupportPrometheus
 	cfg.EndNode.OnlyGateway = old.Server.Rpc.OnlyGateway
 
-	// cluster
-	cfg.EndNode.Cluster.Name = old.Cluster.Name
+	// cluster. The legacy `name` and `center_node` keys are intentionally dropped:
+	// the center node was removed in 2026-07 and the cluster name was a redundant
+	// second membership factor. warnRemovedClusterKeys tells the operator.
 	cfg.EndNode.Cluster.Token = old.Cluster.Token
-	cfg.EndNode.Cluster.CenterNodeHost = old.Cluster.CenterNode.Host
-	cfg.EndNode.Cluster.CenterNodePort = old.Cluster.CenterNode.Port
 
 	return cfg
 }
@@ -159,10 +158,19 @@ func LoadFromFile(path string) (*AppConfig, error) {
 
 	ext := strings.ToLower(filepath.Ext(path))
 
-	// For YAML, detect legacy format first
+	// For YAML, decode a raw view once: it drives legacy detection AND the
+	// removed-key warnings, which cannot use the struct because those fields no
+	// longer exist. Warnings go to stderr because the logger is not configured
+	// until after Validate, and they must be visible before any error they explain.
 	if ext == ".yaml" || ext == ".yml" {
 		var raw map[string]interface{}
-		if err := yaml.Unmarshal(data, &raw); err == nil && isLegacyConfig(raw) {
+		rawErr := yaml.Unmarshal(data, &raw)
+		if rawErr == nil {
+			for _, w := range WarnRemovedConfig(raw) {
+				fmt.Fprintf(os.Stderr, "[appconfig] WARNING: %s\n", w)
+			}
+		}
+		if rawErr == nil && isLegacyConfig(raw) {
 			// Parse as legacy and migrate
 			var old legacyConfig
 			if err := yaml.Unmarshal(data, &old); err != nil {
@@ -215,7 +223,7 @@ func applyRuntimeDefaults(cfg *AppConfig) error {
 	// The secret is only used to sign in-memory session tokens; each restart
 	// with a new secret simply invalidates existing sessions (users re-login).
 	// This allows old configs to upgrade without modification.
-	if !strings.EqualFold(cfg.NodeType, "center") && cfg.EndNode.JWTSecret == "" {
+	if cfg.EndNode.JWTSecret == "" {
 		secret, err := generateRandomSecret(32)
 		if err != nil {
 			return fmt.Errorf("appconfig: generate jwt_secret: %w", err)
@@ -320,21 +328,11 @@ func Validate(cfg *AppConfig) error {
 		}
 	}
 
-	// Cluster tokens are the RPC encryption key (via HKDF) and the center's
-	// auth secret. A short token derives a low-entropy key; require a floor.
-	// (Length is not entropy — operators must still use a random token.)
+	// The cluster token is the RPC encryption key (via HKDF). A short token derives
+	// a low-entropy key; require a floor. (Length is not entropy — operators must
+	// still use a random token.)
 	const minClusterTokenLen = 16
-	if strings.EqualFold(cfg.NodeType, "center") {
-		for cn, tok := range cfg.CenterNode.ClusterTokens {
-			if len(tok) < minClusterTokenLen {
-				return fmt.Errorf("appconfig: center_node.cluster_tokens[%q] must be >= %d chars", cn, minClusterTokenLen)
-			}
-		}
-		// center_token encrypts the end->center channel; empty keeps it plaintext.
-		if t := cfg.CenterNode.CenterToken; t != "" && len(t) < minClusterTokenLen {
-			return fmt.Errorf("appconfig: center_node.center_token must be >= %d chars when set", minClusterTokenLen)
-		}
-	} else {
+	{
 		enabledCount := 0
 		for _, c := range cfg.Containers.Containers {
 			if c.Enabled {
@@ -348,10 +346,6 @@ func Validate(cfg *AppConfig) error {
 		if cfg.EndNode.RpcPort >= 1000 && len(cfg.EndNode.Cluster.Token) < minClusterTokenLen {
 			return fmt.Errorf("appconfig: end_node.cluster.token must be >= %d chars when rpc is enabled", minClusterTokenLen)
 		}
-		// center_token, when set, encrypts the end->center channel; empty = plaintext.
-		if t := cfg.EndNode.Cluster.CenterToken; t != "" && len(t) < minClusterTokenLen {
-			return fmt.Errorf("appconfig: end_node.cluster.center_token must be >= %d chars when set", minClusterTokenLen)
-		}
 		// 0 means "unset" and falls back to the built-in default; a negative or
 		// over-long interval is a misconfiguration. Peers expire after
 		// cluster.NodeTimeOut (60s) without a beat, so an interval at or beyond
@@ -362,4 +356,62 @@ func Validate(cfg *AppConfig) error {
 	}
 
 	return nil
+}
+
+// WarnRemovedConfig reports configuration that no longer does anything, so an
+// operator upgrading an old file learns why their cluster behaves differently
+// instead of debugging silence. It takes the RAW decoded document because the
+// removed keys have no struct fields left to inspect.
+//
+// Deliberately warnings, not errors: refusing to start would turn a cosmetic
+// leftover key into an outage. The one case that still fails is a former center
+// node, which has no containers configured and so trips the "at least one
+// container" rule in Validate — the warning below is emitted first, which is
+// what makes that error interpretable.
+func WarnRemovedConfig(raw map[string]any) []string {
+	var warnings []string
+	add := func(format string, args ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	}
+
+	if v, ok := raw["node_type"]; ok {
+		if s, _ := v.(string); strings.EqualFold(s, "center") {
+			add("node_type: center — the center node was removed; this process will " +
+				"start as an end node. Use end_node.cluster.static_nodes for discovery.")
+		}
+	}
+	if _, ok := raw["center_node"]; ok {
+		add("center_node: — the center node was removed; this section is ignored.")
+	}
+	if endNode, ok := raw["end_node"].(map[string]any); ok {
+		if cl, ok := endNode["cluster"].(map[string]any); ok {
+			for _, key := range []string{"center_node_host", "center_node_port", "center_token"} {
+				if _, ok := cl[key]; ok {
+					add("end_node.cluster.%s — the center node was removed; this key is "+
+						"ignored. Use end_node.cluster.static_nodes instead.", key)
+				}
+			}
+			if _, ok := cl["name"]; ok {
+				add("end_node.cluster.name — removed; the cluster token is now the only " +
+					"membership boundary, so the name was a redundant second factor.")
+			}
+		}
+	}
+	return warnings
+}
+
+// WarnRuntimeConfig reports settings that are valid but likely a mistake.
+func WarnRuntimeConfig(cfg *AppConfig) []string {
+	var warnings []string
+	// static_nodes is the only bootstrap path now that the center is gone. A node
+	// with none can still be *found* (a peer that knows it will register inbound)
+	// but can never initiate discovery itself, and on a cold start with an empty
+	// persisted directory it is simply isolated.
+	if cfg.EndNode.RpcPort >= 1000 && len(cfg.EndNode.Cluster.StaticNodes) == 0 {
+		warnings = append(warnings,
+			"end_node.cluster.static_nodes is empty: this node cannot discover any peer "+
+				"on its own. Configure at least one reachable peer unless this is a "+
+				"single-node deployment.")
+	}
+	return warnings
 }

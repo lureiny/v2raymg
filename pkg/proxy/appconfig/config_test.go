@@ -188,8 +188,8 @@ func TestValidate_MinPortGEMaxPort(t *testing.T) {
 
 func TestValidate_NoEnabledContainer(t *testing.T) {
 	tests := []struct {
-		name     string
-		entries  []container.ContainerEntry
+		name    string
+		entries []container.ContainerEntry
 	}{
 		{
 			name:    "empty list",
@@ -278,31 +278,6 @@ func TestValidate_JWTSecretTooShort_NowAllowed(t *testing.T) {
 	cfg.Forward.MaxPort = 60000
 	cfg.Containers.Containers = makeContainers(1)
 	cfg.EndNode.JWTSecret = "short"
-
-	require.NoError(t, Validate(cfg))
-}
-
-func TestValidate_CenterNode_NoJWTSecretRequired(t *testing.T) {
-	// center nodes must not be blocked by end_node.jwt_secret absence.
-	cfg := &AppConfig{}
-	cfg.NodeType = "center"
-	cfg.Store.DSN = "/tmp/test.db"
-	cfg.Forward.MinPort = 10000
-	cfg.Forward.MaxPort = 60000
-	cfg.Containers.Containers = makeContainers(1)
-	// EndNode.JWTSecret intentionally absent
-
-	require.NoError(t, Validate(cfg))
-}
-
-func TestValidate_CenterNode_NoContainerRequired(t *testing.T) {
-	// center nodes do not need any enabled container.
-	cfg := &AppConfig{}
-	cfg.NodeType = "center"
-	cfg.Store.DSN = "/tmp/test.db"
-	cfg.Forward.MinPort = 10000
-	cfg.Forward.MaxPort = 60000
-	// Containers intentionally empty
 
 	require.NoError(t, Validate(cfg))
 }

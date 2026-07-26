@@ -43,7 +43,7 @@ var All = []store.Migration{
 	},
 	{
 		Version: 3,
-		SQL: `ALTER TABLE users ADD COLUMN port_mappings TEXT NOT NULL DEFAULT '{}'`,
+		SQL:     `ALTER TABLE users ADD COLUMN port_mappings TEXT NOT NULL DEFAULT '{}'`,
 	},
 	{
 		Version: 4,
@@ -101,15 +101,15 @@ ALTER TABLE users ADD COLUMN login_password TEXT NOT NULL DEFAULT '';`,
 	},
 	{
 		Version: 8,
-		SQL: `CREATE INDEX IF NOT EXISTS idx_cluster_users_target_group ON cluster_users(target_group)`,
+		SQL:     `CREATE INDEX IF NOT EXISTS idx_cluster_users_target_group ON cluster_users(target_group)`,
 	},
 	{
 		Version: 9,
-		SQL: `CREATE INDEX IF NOT EXISTS idx_cluster_users_updated_at_us ON cluster_users(updated_at_us)`,
+		SQL:     `CREATE INDEX IF NOT EXISTS idx_cluster_users_updated_at_us ON cluster_users(updated_at_us)`,
 	},
 	{
 		Version: 10,
-		SQL: `CREATE INDEX IF NOT EXISTS idx_cluster_users_group_deleted ON cluster_users(target_group, deleted)`,
+		SQL:     `CREATE INDEX IF NOT EXISTS idx_cluster_users_group_deleted ON cluster_users(target_group, deleted)`,
 	},
 	{
 		Version: 11,
@@ -134,5 +134,14 @@ CREATE INDEX IF NOT EXISTS idx_users_target_group ON users(target_group);`,
 	{
 		Version: 14,
 		SQL:     `ALTER TABLE users RENAME COLUMN password TO auth_token;`,
+	},
+	{
+		Version: 15,
+		SQL: `CREATE TABLE IF NOT EXISTS cluster_nodes (
+    name       TEXT PRIMARY KEY,
+    host       TEXT NOT NULL,
+    port       INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+)`,
 	},
 }

@@ -10,8 +10,6 @@ import (
 
 // ClusterInitConfig carries the information needed to bootstrap an EndNodeClusterManager.
 type ClusterInitConfig struct {
-	// ClusterName is the shared cluster identifier.
-	ClusterName string
 	// ClusterToken is the shared secret for authentication and gRPC encryption.
 	ClusterToken string
 	// StaticNodes is an optional list of known peers for bootstrapping without a center node.
@@ -20,9 +18,9 @@ type ClusterInitConfig struct {
 
 // NodeInitConfig carries the local node's identity.
 type NodeInitConfig struct {
-	Name      string
-	Host      string
-	Port      int32
+	Name string
+	Host string
+	Port int32
 }
 
 // NewEndNodeClusterManagerFromConfig creates an EndNodeClusterManager, initialises the
@@ -32,15 +30,13 @@ func NewEndNodeClusterManagerFromConfig(clusterCfg ClusterInitConfig, nodeCfg No
 	localNode := GetLocalNode()
 	localNode.Token = uuid.New().String()
 	localNode.Node = proto.Node{
-		Host:        nodeCfg.Host,
-		Port:        nodeCfg.Port,
-		ClusterName: clusterCfg.ClusterName,
-		Name:        nodeCfg.Name,
+		Host: nodeCfg.Host,
+		Port: nodeCfg.Port,
+		Name: nodeCfg.Name,
 	}
 
 	mgr := &EndNodeClusterManager{}
 	mgr.Init()
-	mgr.Name = clusterCfg.ClusterName
 	mgr.Token = clusterCfg.ClusterToken
 
 	// Register the local node with permanent heartbeat timestamps so it is
@@ -78,6 +74,6 @@ func (m *EndNodeClusterManager) GetClusterToken() string {
 }
 
 // IsSameCluster checks whether the given clusterName and token match this cluster.
-func (m *EndNodeClusterManager) IsSameCluster(clusterName, token string) error {
-	return m.Cluster.IsSameCluster(clusterName, token)
+func (m *EndNodeClusterManager) IsSameCluster(token string) error {
+	return m.Cluster.IsSameCluster(token)
 }

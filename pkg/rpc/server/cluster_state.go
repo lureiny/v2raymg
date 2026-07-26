@@ -12,8 +12,10 @@ type ClusterState interface {
 	// GetClusterToken returns the shared cluster token used for authentication.
 	GetClusterToken() string
 
-	// IsSameCluster verifies that the given clusterName and token match the local cluster.
-	IsSameCluster(clusterName, token string) error
+	// IsSameCluster verifies that a peer's shared token matches the local cluster.
+	// The token is the only membership boundary — it is also the HKDF input for
+	// every end<->end RPC key — so nothing else needs checking.
+	IsSameCluster(token string) error
 
 	// AuthRemoteNode validates a remote node's token and updates its heartbeat time.
 	AuthRemoteNode(node **cluster.Node) error
@@ -51,4 +53,19 @@ type ClusterState interface {
 
 	// GetNodeFromWrongNodeList returns a node from the wrong-token list, or nil.
 	GetNodeFromWrongNodeList(nodeName string) *cluster.Node
+}
+
+// NodeStore persists the dynamically discovered part of the node directory.
+//
+// Declared here rather than imported from pkg/store so the RPC layer keeps
+// depending on a behaviour, not on SQLite — the same reason ClusterState exists.
+type NodeStore interface {
+	// ListNames returns the names of every persisted peer. Only names are needed:
+	// the reconcile pass uses them solely to find rows with no in-memory
+	// counterpart.
+	ListNames() ([]string, error)
+	// Upsert records a peer that has completed bidirectional registration.
+	Upsert(name, host string, port int32) error
+	// Delete removes a peer that is no longer in the in-memory directory.
+	Delete(name string) error
 }

@@ -51,11 +51,10 @@ func (handler *NodeHandler) handlerFunc(c *gin.Context) {
 			groups = []string{}
 		}
 		result = append(result, gin.H{
-			"name":         n.GetName(),
-			"host":         n.GetHost(),
-			"port":         n.GetPort(),
-			"cluster_name": n.GetClusterName(),
-			"groups":       groups,
+			"name":   n.GetName(),
+			"host":   n.GetHost(),
+			"port":   n.GetPort(),
+			"groups": groups,
 		})
 	}
 	c.JSON(200, result)

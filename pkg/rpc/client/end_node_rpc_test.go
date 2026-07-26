@@ -16,7 +16,7 @@ import (
 // and carry the token/node/dest as given. Reusing a nonce across calls would be
 // rejected downstream as a replay, so uniqueness is the load-bearing property.
 func TestNewNodeAuthInfo_FieldsAndFreshNonce(t *testing.T) {
-	node := &proto.Node{Name: "n1", ClusterName: "c1"}
+	node := &proto.Node{Name: "n1"}
 	ai := NewNodeAuthInfo("tok", node, "dest-node")
 
 	if ai.GetToken() != "tok" {

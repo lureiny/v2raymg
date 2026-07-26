@@ -4,7 +4,7 @@ package systemtest
 
 // cluster_e2e_api_test.go — TestClusterE2E_FullAPI
 //
-// Walks the entire HTTP surface against a real 1-center + 3-end cluster. For any
+// Walks the entire HTTP surface against a real 3-node cluster. For any
 // endpoint that fans out over the cluster the assertion is not "returned 200" but
 // "the OTHER two nodes actually observe the effect" — a fan-out that silently
 // reached only the local node would still return 200.

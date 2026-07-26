@@ -108,19 +108,13 @@ type StaticNodeConfig struct {
 
 // ClusterConfig holds cluster membership and authentication configuration.
 type ClusterConfig struct {
-	// Name is the cluster name. All nodes in the same cluster must share this value.
-	Name string `yaml:"name" json:"name"`
-	// Token is the shared secret used to authenticate cluster members and encrypt gRPC traffic.
+	// Token is the shared secret that both authenticates cluster members and keys
+	// (via HKDF) all end<->end gRPC traffic. It is the ONLY membership boundary —
+	// the former `name` field was a second, cosmetic factor and was removed in
+	// 2026-07 along with the center node.
 	Token string `yaml:"token" json:"token"`
-	// CenterToken is the shared secret that encrypts the end->center channel
-	// (the heartbeat/discovery envelope). It is SEPARATE from Token — the center
-	// channel therefore never carries the end<->end key, so sniffing or leaking
-	// CenterToken does not compromise the user-management plane. All end nodes
-	// reporting to the same center must share this value. Empty keeps the center
-	// channel in plaintext (legacy / decentralized mode).
-	CenterToken string `yaml:"center_token" json:"center_token"`
-	// HeartbeatIntervalSec is how often this node heartbeats to every cluster peer
-	// and to the center. Default 10s when unset (0).
+	// HeartbeatIntervalSec is how often this node heartbeats to every cluster peer.
+	// Default 10s when unset (0).
 	//
 	// It is the clock the whole cluster plane runs on: node liveness
 	// (cluster.NodeTimeOut, 60s), directory convergence, and cluster-user sync all
@@ -140,17 +134,16 @@ type ClusterConfig struct {
 	// which is safe to do on one node at a time: a peer that receives no digest
 	// is treated as legacy and keeps getting the full directory.
 	NodeSumSync bool `yaml:"node_sum_sync" json:"node_sum_sync"`
-	// CenterNodeHost is the optional center node host for initial node discovery.
-	// Leave empty to operate in fully decentralized mode.
-	CenterNodeHost string `yaml:"center_node_host" json:"center_node_host"`
-	// CenterNodePort is the center node gRPC port.
-	CenterNodePort int `yaml:"center_node_port" json:"center_node_port"`
-	// StaticNodes is an optional list of known peer nodes for bootstrapping discovery
-	// without a center node.
+	// StaticNodes seeds discovery. It is the ONLY bootstrap path since the center
+	// node was removed in 2026-07, and it is strictly better than the center was:
+	// a static peer is never reclaimed by the node timeout (see Node.isLocal), and
+	// registration is bidirectional, so a seed learns the joining node at once
+	// rather than on its own next tick. A node with no static peers and an empty
+	// persisted directory can never discover anyone.
 	StaticNodes []StaticNodeConfig `yaml:"static_nodes" json:"static_nodes"`
 }
 
-// NodeConfig holds configuration shared by both EndNode and CenterNode.
+// NodeConfig holds the node identity and listen configuration.
 type NodeConfig struct {
 	// Listen is the network interface to bind (e.g. "0.0.0.0" or "127.0.0.1").
 	Listen string `yaml:"listen" json:"listen"`
@@ -225,23 +218,6 @@ type EndNodeConfig struct {
 	MonitorInterfaces []string `yaml:"monitor_interfaces" json:"monitor_interfaces"`
 }
 
-// CenterNodeConfig holds Center Node specific configuration.
-type CenterNodeConfig struct {
-	NodeConfig `yaml:",inline"`
-	// ClusterTokens maps cluster name -> shared token. A center may serve
-	// multiple clusters with different tokens; a heartbeat is accepted only if
-	// its cluster name is listed here and its token matches. An empty map means
-	// no cluster is authorized (all heartbeats rejected).
-	ClusterTokens map[string]string `yaml:"cluster_tokens" json:"cluster_tokens"`
-	// CenterToken is the shared secret used to encrypt every end->center channel
-	// (the AES envelope over heartbeat/discovery). All end nodes that report to
-	// this center must be configured with the same value. It is orthogonal to
-	// ClusterTokens: the per-cluster tokens still authenticate cluster membership
-	// inside the envelope, so cluster isolation is preserved. Empty keeps the
-	// center channel in plaintext (legacy).
-	CenterToken string `yaml:"center_token" json:"center_token"`
-}
-
 // ClusterUserConfig controls the ClusterUser sync layer and placement controller behaviour.
 type ClusterUserConfig struct {
 	// Enabled enables the ClusterUser sync layer and placement controller. Default: true.
@@ -277,6 +253,5 @@ type AppConfig struct {
 	Containers   container.ContainerMgrConfig `yaml:"containers"   json:"containers"`
 	Subscription SubscriptionConfig           `yaml:"subscription" json:"subscription"`
 	EndNode      EndNodeConfig                `yaml:"end_node"     json:"end_node"`
-	CenterNode   CenterNodeConfig             `yaml:"center_node"  json:"center_node"`
 	ClusterUser  ClusterUserConfig            `yaml:"cluster_user" json:"cluster_user"`
 }
