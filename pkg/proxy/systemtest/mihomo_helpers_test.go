@@ -94,8 +94,13 @@ func startMihomoContainer(t *testing.T, tmpDir, binaryPath string) *mihomoTestRi
 	// above the 10000 floor used by production defaults so a leaked test
 	// ForwardManager won't collide with a real one on the same host.
 	fwdMgr, err := forward.NewDefaultForwardManager(forward.PortAllocatorConfig{
-		MinPort: 40000,
-		MaxPort: 50000,
+	// Port window deliberately BELOW the Linux ephemeral range (32768-60999).
+	// PortAllocator does not ask the OS whether a port is free, so a pool that
+	// overlaps the ephemeral range collides with outbound connections made by
+	// other tests running in parallel — that was a real CI flake. AddRule now
+	// retries past a collision, but tests should not depend on that.
+		MinPort: 24000,
+		MaxPort: 24999,
 	})
 	if err != nil {
 		t.Fatalf("NewDefaultForwardManager: %v", err)

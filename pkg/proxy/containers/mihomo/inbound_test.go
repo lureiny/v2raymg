@@ -20,8 +20,13 @@ import (
 func newTestUserManager(t *testing.T) (*usermanager.UserManager, *forward.DefaultForwardManager) {
 	t.Helper()
 	fwdMgr, err := forward.NewDefaultForwardManager(forward.PortAllocatorConfig{
-		MinPort: 40000,
-		MaxPort: 50000,
+	// Port window deliberately BELOW the Linux ephemeral range (32768-60999).
+	// PortAllocator does not ask the OS whether a port is free, so a pool that
+	// overlaps the ephemeral range collides with outbound connections made by
+	// other tests running in parallel — that was a real CI flake. AddRule now
+	// retries past a collision, but tests should not depend on that.
+		MinPort: 23000,
+		MaxPort: 23999,
 	})
 	if err != nil {
 		t.Fatalf("NewDefaultForwardManager: %v", err)

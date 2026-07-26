@@ -15,8 +15,8 @@ import (
 func newSyncRuntimeTestManager(t *testing.T) (*UserManager, *forward.DefaultForwardManager) {
 	t.Helper()
 	fwdMgr, err := forward.NewDefaultForwardManager(forward.PortAllocatorConfig{
-		MinPort: 30000,
-		MaxPort: 40000,
+		MinPort: 22000,
+		MaxPort: 22999,
 	})
 	if err != nil {
 		t.Fatalf("NewDefaultForwardManager: %v", err)
@@ -312,8 +312,8 @@ func TestNewUserManagerWithStore_RehydratesRuntimeSideEffects(t *testing.T) {
 	}
 
 	fwdMgr, err := forward.NewDefaultForwardManager(forward.PortAllocatorConfig{
-		MinPort: 30000,
-		MaxPort: 40000,
+		MinPort: 22000,
+		MaxPort: 22999,
 	})
 	if err != nil {
 		t.Fatalf("NewDefaultForwardManager: %v", err)

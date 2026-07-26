@@ -208,7 +208,10 @@ func TestRotateUserPortForInbound_PreferredPort(t *testing.T) {
 		t.Fatalf("GetBindPort: %v", err)
 	}
 
-	const wantPort uint32 = 35000
+	// Must sit inside the test forward pool (22000-22999), which is deliberately
+	// kept below the Linux ephemeral range — see the pool definition in
+	// testhelper_test.go.
+	const wantPort uint32 = 22500
 	newPort, err := mgr.RotateUserPortForInbound("eve", contracts.ContainerXray, "vless-in", wantPort)
 	if err != nil {
 		t.Fatalf("RotateUserPortForInbound with preferred port: %v", err)

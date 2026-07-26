@@ -221,7 +221,12 @@ func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 
 	// Each node needs its own forward port window; overlapping windows across
 	// three co-hosted nodes would produce spurious bind conflicts.
-	fwdBase := 41000 + idx*1000
+	//
+	// Kept BELOW the Linux ephemeral range (32768-60999): PortAllocator never asks
+	// the OS whether a port is free, so a pool inside that range collides with
+	// outbound connections from anything else on the machine. AddRule retries past
+	// such a collision now, but a test suite should not lean on that.
+	fwdBase := 25000 + idx*600
 
 	configPath := generateE2EConfig(t, e2eServerOpts{
 		Dir:                  dir,
@@ -251,7 +256,7 @@ func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 		MihomoDataDir:        mihomoDataDir,
 		MihomoConf:           filepath.Join(dir, "mihomo.yaml"),
 		FwdMinPort:           fwdBase,
-		FwdMaxPort:           fwdBase + 800,
+		FwdMaxPort:           fwdBase + 500,
 	})
 
 	logs := &syncBuffer{}
