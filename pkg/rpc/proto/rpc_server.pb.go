@@ -1101,10 +1101,26 @@ func (x *ClusterUserSync) GetHash() string {
 }
 
 type HeartBeatReq struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeAuthInfo  *NodeAuthInfo          `protobuf:"bytes,1,opt,name=node_auth_info,json=nodeAuthInfo,proto3" json:"node_auth_info,omitempty"`
-	UserDigests   []*UserDigest          `protobuf:"bytes,2,rep,name=user_digests,json=userDigests,proto3" json:"user_digests,omitempty"`  // 本节点持有的 user 摘要列表（cluster_user.enabled=true 时填充）
-	TimestampUs   int64                  `protobuf:"varint,3,opt,name=timestamp_us,json=timestampUs,proto3" json:"timestamp_us,omitempty"` // 发起心跳的时间（微秒），用于防重放和流量特征消除
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	NodeAuthInfo *NodeAuthInfo          `protobuf:"bytes,1,opt,name=node_auth_info,json=nodeAuthInfo,proto3" json:"node_auth_info,omitempty"`
+	UserDigests  []*UserDigest          `protobuf:"bytes,2,rep,name=user_digests,json=userDigests,proto3" json:"user_digests,omitempty"`  // 本节点持有的 user 摘要列表（cluster_user.enabled=true 时填充）
+	TimestampUs  int64                  `protobuf:"varint,3,opt,name=timestamp_us,json=timestampUs,proto3" json:"timestamp_us,omitempty"` // 发起心跳的时间（微秒），用于防重放和流量特征消除
+	// Node-directory delta sync (added 2026-07). The heartbeat response used to
+	// carry the full node directory on every tick, making it O(N^2) bytes per
+	// node per round. Now each side sends only a digest of its advertised node
+	// set and the full map is exchanged only when the digests disagree.
+	//
+	// nodes_sum: ComputeNodesSum over this node's advertised set (which INCLUDES
+	// itself — see Cluster.GetAdvertisedNodes). Empty means "not provided", i.e.
+	// a legacy peer, and the server then answers with the full nodesMap exactly
+	// as it did before. It is NOT used to decide a mismatch server-side;
+	// reconciliation is driven entirely by the client.
+	NodesSum []byte `protobuf:"bytes,4,opt,name=nodes_sum,json=nodesSum,proto3" json:"nodes_sum,omitempty"`
+	// nodes: populated ONLY on a reconcile heartbeat — the extra call a client
+	// makes immediately after seeing the response's nodes_sum differ from its
+	// own. The server merges these and answers with its own full nodesMap, so
+	// one reconcile exchange converges both directions.
+	Nodes         map[string]*Node `protobuf:"bytes,5,rep,name=nodes,proto3" json:"nodes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1158,6 +1174,20 @@ func (x *HeartBeatReq) GetTimestampUs() int64 {
 		return x.TimestampUs
 	}
 	return 0
+}
+
+func (x *HeartBeatReq) GetNodesSum() []byte {
+	if x != nil {
+		return x.NodesSum
+	}
+	return nil
+}
+
+func (x *HeartBeatReq) GetNodes() map[string]*Node {
+	if x != nil {
+		return x.Nodes
+	}
+	return nil
 }
 
 type Node struct {
@@ -1229,13 +1259,21 @@ func (x *Node) GetName() string {
 }
 
 type HeartBeatRsp struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Code             int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
-	Msg              string                 `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
-	NodesMap         map[string]*Node       `protobuf:"bytes,3,rep,name=nodesMap,proto3" json:"nodesMap,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	NeedClusterUsers []string               `protobuf:"bytes,4,rep,name=need_cluster_users,json=needClusterUsers,proto3" json:"need_cluster_users,omitempty"` // 对端需要我补发完整 payload 的用户名列表
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Code  int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
+	Msg   string                 `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
+	// Full node directory. Since the 2026-07 delta sync this is populated ONLY
+	// when the peer is legacy (request carried no nodes_sum) or when the request
+	// is a reconcile heartbeat (it carried nodes). A steady-state heartbeat
+	// leaves it empty and carries nodes_sum alone.
+	NodesMap         map[string]*Node `protobuf:"bytes,3,rep,name=nodesMap,proto3" json:"nodesMap,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	NeedClusterUsers []string         `protobuf:"bytes,4,rep,name=need_cluster_users,json=needClusterUsers,proto3" json:"need_cluster_users,omitempty"` // 对端需要我补发完整 payload 的用户名列表
+	// ComputeNodesSum over this node's advertised set. Always populated. The
+	// client compares it against its own sum and, on a mismatch, immediately
+	// issues one reconcile heartbeat carrying its full node map.
+	NodesSum      []byte `protobuf:"bytes,5,opt,name=nodes_sum,json=nodesSum,proto3" json:"nodes_sum,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *HeartBeatRsp) Reset() {
@@ -1292,6 +1330,13 @@ func (x *HeartBeatRsp) GetNodesMap() map[string]*Node {
 func (x *HeartBeatRsp) GetNeedClusterUsers() []string {
 	if x != nil {
 		return x.NeedClusterUsers
+	}
+	return nil
+}
+
+func (x *HeartBeatRsp) GetNodesSum() []byte {
+	if x != nil {
+		return x.NodesSum
 	}
 	return nil
 }
@@ -5219,21 +5264,28 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\rupdated_at_us\x18\x03 \x01(\x03R\vupdatedAtUs\x12\x1f\n" +
 	"\vorigin_node\x18\x04 \x01(\tR\n" +
 	"originNode\x12\x12\n" +
-	"\x04hash\x18\x05 \x01(\tR\x04hash\"\xa2\x01\n" +
+	"\x04hash\x18\x05 \x01(\tR\x04hash\"\xbc\x02\n" +
 	"\fHeartBeatReq\x129\n" +
 	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x124\n" +
 	"\fuser_digests\x18\x02 \x03(\v2\x11.proto.UserDigestR\vuserDigests\x12!\n" +
-	"\ftimestamp_us\x18\x03 \x01(\x03R\vtimestampUs\"e\n" +
+	"\ftimestamp_us\x18\x03 \x01(\x03R\vtimestampUs\x12\x1b\n" +
+	"\tnodes_sum\x18\x04 \x01(\fR\bnodesSum\x124\n" +
+	"\x05nodes\x18\x05 \x03(\v2\x1e.proto.HeartBeatReq.NodesEntryR\x05nodes\x1aE\n" +
+	"\n" +
+	"NodesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12!\n" +
+	"\x05value\x18\x02 \x01(\v2\v.proto.NodeR\x05value:\x028\x01\"e\n" +
 	"\x04Node\x12\x12\n" +
 	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\x12!\n" +
 	"\fcluster_name\x18\x03 \x01(\tR\vclusterName\x12\x12\n" +
-	"\x04name\x18\x04 \x01(\tR\x04name\"\xeb\x01\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\"\x88\x02\n" +
 	"\fHeartBeatRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
 	"\x03msg\x18\x02 \x01(\tR\x03msg\x12=\n" +
 	"\bnodesMap\x18\x03 \x03(\v2!.proto.HeartBeatRsp.NodesMapEntryR\bnodesMap\x12,\n" +
-	"\x12need_cluster_users\x18\x04 \x03(\tR\x10needClusterUsers\x1aH\n" +
+	"\x12need_cluster_users\x18\x04 \x03(\tR\x10needClusterUsers\x12\x1b\n" +
+	"\tnodes_sum\x18\x05 \x01(\fR\bnodesSum\x1aH\n" +
 	"\rNodesMapEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12!\n" +
 	"\x05value\x18\x02 \x01(\v2\v.proto.NodeR\x05value:\x028\x01\"~\n" +
@@ -5603,7 +5655,7 @@ func file_rpc_server_proto_rawDescGZIP() []byte {
 }
 
 var file_rpc_server_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_rpc_server_proto_msgTypes = make([]protoimpl.MessageInfo, 86)
+var file_rpc_server_proto_msgTypes = make([]protoimpl.MessageInfo, 87)
 var file_rpc_server_proto_goTypes = []any{
 	(BuilderType)(0),               // 0: proto.BuilderType
 	(*User)(nil),                   // 1: proto.User
@@ -5687,11 +5739,12 @@ var file_rpc_server_proto_goTypes = []any{
 	(*GetClutersRsp)(nil),          // 79: proto.GetClutersRsp
 	(*GetNodesReq)(nil),            // 80: proto.GetNodesReq
 	(*GetNodesRsp)(nil),            // 81: proto.GetNodesRsp
-	nil,                            // 82: proto.HeartBeatRsp.NodesMapEntry
-	nil,                            // 83: proto.Nodes.NodesEntry
-	nil,                            // 84: proto.FastAddInboundReq.ExtraParamsEntry
-	nil,                            // 85: proto.RotateAllPortsRsp.PortsEntry
-	nil,                            // 86: proto.GetNodesRsp.NodesMapEntry
+	nil,                            // 82: proto.HeartBeatReq.NodesEntry
+	nil,                            // 83: proto.HeartBeatRsp.NodesMapEntry
+	nil,                            // 84: proto.Nodes.NodesEntry
+	nil,                            // 85: proto.FastAddInboundReq.ExtraParamsEntry
+	nil,                            // 86: proto.RotateAllPortsRsp.PortsEntry
+	nil,                            // 87: proto.GetNodesRsp.NodesMapEntry
 }
 var file_rpc_server_proto_depIdxs = []int32{
 	15,  // 0: proto.NodeAuthInfo.node:type_name -> proto.Node
@@ -5706,144 +5759,146 @@ var file_rpc_server_proto_depIdxs = []int32{
 	1,   // 9: proto.ClusterUserSync.user:type_name -> proto.User
 	2,   // 10: proto.HeartBeatReq.node_auth_info:type_name -> proto.NodeAuthInfo
 	12,  // 11: proto.HeartBeatReq.user_digests:type_name -> proto.UserDigest
-	82,  // 12: proto.HeartBeatRsp.nodesMap:type_name -> proto.HeartBeatRsp.NodesMapEntry
-	83,  // 13: proto.Nodes.nodes:type_name -> proto.Nodes.NodesEntry
-	2,   // 14: proto.RegisterNodeReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 15: proto.GetBandwidthStatsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	21,  // 16: proto.GetBandwidthStatsRsp.stats:type_name -> proto.Stats
-	2,   // 17: proto.InboundOpReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 18: proto.TransferInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 19: proto.CopyInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 20: proto.CopyUserReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 21: proto.GetInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 22: proto.ListInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	30,  // 23: proto.ListInboundRsp.inbounds:type_name -> proto.InboundInfo
-	2,   // 24: proto.DeleteInboundByNameReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 25: proto.UpdateProxyReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 26: proto.AdaptiveOpReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 27: proto.AdaptiveReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 28: proto.SetGatewayModelReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 29: proto.ObtainNewCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 30: proto.FastAddInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	0,   // 31: proto.FastAddInboundReq.inboundBuilderType:type_name -> proto.BuilderType
-	0,   // 32: proto.FastAddInboundReq.streamBuilderType:type_name -> proto.BuilderType
-	84,  // 33: proto.FastAddInboundReq.extra_params:type_name -> proto.FastAddInboundReq.ExtraParamsEntry
-	2,   // 34: proto.TransferCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 35: proto.GetCertsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	47,  // 36: proto.GetCertsRsp.certs:type_name -> proto.Cert
-	2,   // 37: proto.DeleteCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	53,  // 38: proto.PingMetric.results:type_name -> proto.PingResult
-	2,   // 39: proto.GetPingMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	52,  // 40: proto.GetPingMetricRsp.metric:type_name -> proto.PingMetric
-	2,   // 41: proto.SetPingCheckReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 42: proto.GetNodeMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	58,  // 43: proto.GetNodeMetricRsp.node_metrics:type_name -> proto.NodeMetrics
-	2,   // 44: proto.GetStatusReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	61,  // 45: proto.GetStatusRsp.status:type_name -> proto.NodeStatus
-	2,   // 46: proto.GetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 47: proto.SetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 48: proto.UpsertClusterUsersReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	13,  // 49: proto.UpsertClusterUsersReq.users:type_name -> proto.ClusterUserSync
-	2,   // 50: proto.RotateInboundPortReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 51: proto.RotateAllPortsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	85,  // 52: proto.RotateAllPortsRsp.ports:type_name -> proto.RotateAllPortsRsp.PortsEntry
-	2,   // 53: proto.ResetAuthTokenReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,   // 54: proto.GetContainersReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	86,  // 55: proto.GetNodesRsp.nodesMap:type_name -> proto.GetNodesRsp.NodesMapEntry
-	15,  // 56: proto.HeartBeatRsp.NodesMapEntry.value:type_name -> proto.Node
-	17,  // 57: proto.Nodes.NodesEntry.value:type_name -> proto.Nodes
-	15,  // 58: proto.GetNodesRsp.NodesMapEntry.value:type_name -> proto.Node
-	3,   // 59: proto.EndNodeAccess.GetUsers:input_type -> proto.GetUsersReq
-	6,   // 60: proto.EndNodeAccess.GetProfile:input_type -> proto.GetProfileReq
-	8,   // 61: proto.EndNodeAccess.AddUsers:input_type -> proto.UserOpReq
-	8,   // 62: proto.EndNodeAccess.DeleteUsers:input_type -> proto.UserOpReq
-	8,   // 63: proto.EndNodeAccess.UpdateUsers:input_type -> proto.UserOpReq
-	8,   // 64: proto.EndNodeAccess.ResetUser:input_type -> proto.UserOpReq
-	8,   // 65: proto.EndNodeAccess.ResetUserTraffic:input_type -> proto.UserOpReq
-	74,  // 66: proto.EndNodeAccess.ResetAuthToken:input_type -> proto.ResetAuthTokenReq
-	70,  // 67: proto.EndNodeAccess.RotateInboundPort:input_type -> proto.RotateInboundPortReq
-	72,  // 68: proto.EndNodeAccess.RotateAllPorts:input_type -> proto.RotateAllPortsReq
-	10,  // 69: proto.EndNodeAccess.GetSub:input_type -> proto.GetSubReq
-	20,  // 70: proto.EndNodeAccess.GetBandWidthStats:input_type -> proto.GetBandwidthStatsReq
-	14,  // 71: proto.EndNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
-	18,  // 72: proto.EndNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
-	39,  // 73: proto.EndNodeAccess.SetGatewayModel:input_type -> proto.SetGatewayModelReq
-	56,  // 74: proto.EndNodeAccess.SetPingCheck:input_type -> proto.SetPingCheckReq
-	23,  // 75: proto.EndNodeAccess.AddInbound:input_type -> proto.InboundOpReq
-	25,  // 76: proto.EndNodeAccess.TransferInbound:input_type -> proto.TransferInboundReq
-	26,  // 77: proto.EndNodeAccess.CopyInbound:input_type -> proto.CopyInboundReq
-	27,  // 78: proto.EndNodeAccess.CopyUser:input_type -> proto.CopyUserReq
-	28,  // 79: proto.EndNodeAccess.GetInbound:input_type -> proto.GetInboundReq
-	31,  // 80: proto.EndNodeAccess.ListInbound:input_type -> proto.ListInboundReq
-	33,  // 81: proto.EndNodeAccess.DeleteInboundByName:input_type -> proto.DeleteInboundByNameReq
-	34,  // 82: proto.EndNodeAccess.UpdateProxy:input_type -> proto.UpdateProxyReq
-	36,  // 83: proto.EndNodeAccess.AddAdaptiveConfig:input_type -> proto.AdaptiveOpReq
-	36,  // 84: proto.EndNodeAccess.DeleteAdaptiveConfig:input_type -> proto.AdaptiveOpReq
-	37,  // 85: proto.EndNodeAccess.Adaptive:input_type -> proto.AdaptiveReq
-	43,  // 86: proto.EndNodeAccess.FastAddInbound:input_type -> proto.FastAddInboundReq
-	41,  // 87: proto.EndNodeAccess.ObtainNewCert:input_type -> proto.ObtainNewCertReq
-	45,  // 88: proto.EndNodeAccess.TransferCert:input_type -> proto.TransferCertReq
-	48,  // 89: proto.EndNodeAccess.GetCerts:input_type -> proto.GetCertsReq
-	50,  // 90: proto.EndNodeAccess.DeleteCert:input_type -> proto.DeleteCertReq
-	54,  // 91: proto.EndNodeAccess.GetPingMetric:input_type -> proto.GetPingMetricReq
-	59,  // 92: proto.EndNodeAccess.GetNodeMetric:input_type -> proto.GetNodeMetricReq
-	64,  // 93: proto.EndNodeAccess.GetNodeGroups:input_type -> proto.GetNodeGroupsReq
-	66,  // 94: proto.EndNodeAccess.SetNodeGroups:input_type -> proto.SetNodeGroupsReq
-	68,  // 95: proto.EndNodeAccess.UpsertClusterUsers:input_type -> proto.UpsertClusterUsersReq
-	62,  // 96: proto.EndNodeAccess.GetStatus:input_type -> proto.GetStatusReq
-	76,  // 97: proto.EndNodeAccess.GetContainers:input_type -> proto.GetContainersReq
-	78,  // 98: proto.CenterNodeAdmin.GetCluters:input_type -> proto.GetClutersReq
-	80,  // 99: proto.CenterNodeAdmin.GetNodes:input_type -> proto.GetNodesReq
-	14,  // 100: proto.CenterNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
-	18,  // 101: proto.CenterNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
-	4,   // 102: proto.EndNodeAccess.GetUsers:output_type -> proto.GetUsersRsp
-	7,   // 103: proto.EndNodeAccess.GetProfile:output_type -> proto.GetProfileRsp
-	9,   // 104: proto.EndNodeAccess.AddUsers:output_type -> proto.UserOpRsp
-	9,   // 105: proto.EndNodeAccess.DeleteUsers:output_type -> proto.UserOpRsp
-	9,   // 106: proto.EndNodeAccess.UpdateUsers:output_type -> proto.UserOpRsp
-	9,   // 107: proto.EndNodeAccess.ResetUser:output_type -> proto.UserOpRsp
-	9,   // 108: proto.EndNodeAccess.ResetUserTraffic:output_type -> proto.UserOpRsp
-	75,  // 109: proto.EndNodeAccess.ResetAuthToken:output_type -> proto.ResetAuthTokenRsp
-	71,  // 110: proto.EndNodeAccess.RotateInboundPort:output_type -> proto.RotateInboundPortRsp
-	73,  // 111: proto.EndNodeAccess.RotateAllPorts:output_type -> proto.RotateAllPortsRsp
-	11,  // 112: proto.EndNodeAccess.GetSub:output_type -> proto.GetSubRsp
-	22,  // 113: proto.EndNodeAccess.GetBandWidthStats:output_type -> proto.GetBandwidthStatsRsp
-	16,  // 114: proto.EndNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
-	19,  // 115: proto.EndNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
-	40,  // 116: proto.EndNodeAccess.SetGatewayModel:output_type -> proto.SetGatewayModelRsp
-	57,  // 117: proto.EndNodeAccess.SetPingCheck:output_type -> proto.SetPingCheckRsp
-	24,  // 118: proto.EndNodeAccess.AddInbound:output_type -> proto.InboundOpRsp
-	24,  // 119: proto.EndNodeAccess.TransferInbound:output_type -> proto.InboundOpRsp
-	24,  // 120: proto.EndNodeAccess.CopyInbound:output_type -> proto.InboundOpRsp
-	24,  // 121: proto.EndNodeAccess.CopyUser:output_type -> proto.InboundOpRsp
-	29,  // 122: proto.EndNodeAccess.GetInbound:output_type -> proto.GetInboundRsp
-	32,  // 123: proto.EndNodeAccess.ListInbound:output_type -> proto.ListInboundRsp
-	24,  // 124: proto.EndNodeAccess.DeleteInboundByName:output_type -> proto.InboundOpRsp
-	35,  // 125: proto.EndNodeAccess.UpdateProxy:output_type -> proto.UpdateProxyRsp
-	38,  // 126: proto.EndNodeAccess.AddAdaptiveConfig:output_type -> proto.AdaptiveRsp
-	38,  // 127: proto.EndNodeAccess.DeleteAdaptiveConfig:output_type -> proto.AdaptiveRsp
-	38,  // 128: proto.EndNodeAccess.Adaptive:output_type -> proto.AdaptiveRsp
-	44,  // 129: proto.EndNodeAccess.FastAddInbound:output_type -> proto.FastAddInboundRsp
-	42,  // 130: proto.EndNodeAccess.ObtainNewCert:output_type -> proto.ObtainNewCertRsp
-	46,  // 131: proto.EndNodeAccess.TransferCert:output_type -> proto.TransferCertRsp
-	49,  // 132: proto.EndNodeAccess.GetCerts:output_type -> proto.GetCertsRsp
-	51,  // 133: proto.EndNodeAccess.DeleteCert:output_type -> proto.DeleteCertRsp
-	55,  // 134: proto.EndNodeAccess.GetPingMetric:output_type -> proto.GetPingMetricRsp
-	60,  // 135: proto.EndNodeAccess.GetNodeMetric:output_type -> proto.GetNodeMetricRsp
-	65,  // 136: proto.EndNodeAccess.GetNodeGroups:output_type -> proto.GetNodeGroupsRsp
-	67,  // 137: proto.EndNodeAccess.SetNodeGroups:output_type -> proto.SetNodeGroupsRsp
-	69,  // 138: proto.EndNodeAccess.UpsertClusterUsers:output_type -> proto.UpsertClusterUsersRsp
-	63,  // 139: proto.EndNodeAccess.GetStatus:output_type -> proto.GetStatusRsp
-	77,  // 140: proto.EndNodeAccess.GetContainers:output_type -> proto.GetContainersRsp
-	79,  // 141: proto.CenterNodeAdmin.GetCluters:output_type -> proto.GetClutersRsp
-	81,  // 142: proto.CenterNodeAdmin.GetNodes:output_type -> proto.GetNodesRsp
-	16,  // 143: proto.CenterNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
-	19,  // 144: proto.CenterNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
-	102, // [102:145] is the sub-list for method output_type
-	59,  // [59:102] is the sub-list for method input_type
-	59,  // [59:59] is the sub-list for extension type_name
-	59,  // [59:59] is the sub-list for extension extendee
-	0,   // [0:59] is the sub-list for field type_name
+	82,  // 12: proto.HeartBeatReq.nodes:type_name -> proto.HeartBeatReq.NodesEntry
+	83,  // 13: proto.HeartBeatRsp.nodesMap:type_name -> proto.HeartBeatRsp.NodesMapEntry
+	84,  // 14: proto.Nodes.nodes:type_name -> proto.Nodes.NodesEntry
+	2,   // 15: proto.RegisterNodeReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 16: proto.GetBandwidthStatsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	21,  // 17: proto.GetBandwidthStatsRsp.stats:type_name -> proto.Stats
+	2,   // 18: proto.InboundOpReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 19: proto.TransferInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 20: proto.CopyInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 21: proto.CopyUserReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 22: proto.GetInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 23: proto.ListInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	30,  // 24: proto.ListInboundRsp.inbounds:type_name -> proto.InboundInfo
+	2,   // 25: proto.DeleteInboundByNameReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 26: proto.UpdateProxyReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 27: proto.AdaptiveOpReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 28: proto.AdaptiveReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 29: proto.SetGatewayModelReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 30: proto.ObtainNewCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 31: proto.FastAddInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	0,   // 32: proto.FastAddInboundReq.inboundBuilderType:type_name -> proto.BuilderType
+	0,   // 33: proto.FastAddInboundReq.streamBuilderType:type_name -> proto.BuilderType
+	85,  // 34: proto.FastAddInboundReq.extra_params:type_name -> proto.FastAddInboundReq.ExtraParamsEntry
+	2,   // 35: proto.TransferCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 36: proto.GetCertsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	47,  // 37: proto.GetCertsRsp.certs:type_name -> proto.Cert
+	2,   // 38: proto.DeleteCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	53,  // 39: proto.PingMetric.results:type_name -> proto.PingResult
+	2,   // 40: proto.GetPingMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	52,  // 41: proto.GetPingMetricRsp.metric:type_name -> proto.PingMetric
+	2,   // 42: proto.SetPingCheckReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 43: proto.GetNodeMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	58,  // 44: proto.GetNodeMetricRsp.node_metrics:type_name -> proto.NodeMetrics
+	2,   // 45: proto.GetStatusReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	61,  // 46: proto.GetStatusRsp.status:type_name -> proto.NodeStatus
+	2,   // 47: proto.GetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 48: proto.SetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 49: proto.UpsertClusterUsersReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	13,  // 50: proto.UpsertClusterUsersReq.users:type_name -> proto.ClusterUserSync
+	2,   // 51: proto.RotateInboundPortReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 52: proto.RotateAllPortsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	86,  // 53: proto.RotateAllPortsRsp.ports:type_name -> proto.RotateAllPortsRsp.PortsEntry
+	2,   // 54: proto.ResetAuthTokenReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,   // 55: proto.GetContainersReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	87,  // 56: proto.GetNodesRsp.nodesMap:type_name -> proto.GetNodesRsp.NodesMapEntry
+	15,  // 57: proto.HeartBeatReq.NodesEntry.value:type_name -> proto.Node
+	15,  // 58: proto.HeartBeatRsp.NodesMapEntry.value:type_name -> proto.Node
+	17,  // 59: proto.Nodes.NodesEntry.value:type_name -> proto.Nodes
+	15,  // 60: proto.GetNodesRsp.NodesMapEntry.value:type_name -> proto.Node
+	3,   // 61: proto.EndNodeAccess.GetUsers:input_type -> proto.GetUsersReq
+	6,   // 62: proto.EndNodeAccess.GetProfile:input_type -> proto.GetProfileReq
+	8,   // 63: proto.EndNodeAccess.AddUsers:input_type -> proto.UserOpReq
+	8,   // 64: proto.EndNodeAccess.DeleteUsers:input_type -> proto.UserOpReq
+	8,   // 65: proto.EndNodeAccess.UpdateUsers:input_type -> proto.UserOpReq
+	8,   // 66: proto.EndNodeAccess.ResetUser:input_type -> proto.UserOpReq
+	8,   // 67: proto.EndNodeAccess.ResetUserTraffic:input_type -> proto.UserOpReq
+	74,  // 68: proto.EndNodeAccess.ResetAuthToken:input_type -> proto.ResetAuthTokenReq
+	70,  // 69: proto.EndNodeAccess.RotateInboundPort:input_type -> proto.RotateInboundPortReq
+	72,  // 70: proto.EndNodeAccess.RotateAllPorts:input_type -> proto.RotateAllPortsReq
+	10,  // 71: proto.EndNodeAccess.GetSub:input_type -> proto.GetSubReq
+	20,  // 72: proto.EndNodeAccess.GetBandWidthStats:input_type -> proto.GetBandwidthStatsReq
+	14,  // 73: proto.EndNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
+	18,  // 74: proto.EndNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
+	39,  // 75: proto.EndNodeAccess.SetGatewayModel:input_type -> proto.SetGatewayModelReq
+	56,  // 76: proto.EndNodeAccess.SetPingCheck:input_type -> proto.SetPingCheckReq
+	23,  // 77: proto.EndNodeAccess.AddInbound:input_type -> proto.InboundOpReq
+	25,  // 78: proto.EndNodeAccess.TransferInbound:input_type -> proto.TransferInboundReq
+	26,  // 79: proto.EndNodeAccess.CopyInbound:input_type -> proto.CopyInboundReq
+	27,  // 80: proto.EndNodeAccess.CopyUser:input_type -> proto.CopyUserReq
+	28,  // 81: proto.EndNodeAccess.GetInbound:input_type -> proto.GetInboundReq
+	31,  // 82: proto.EndNodeAccess.ListInbound:input_type -> proto.ListInboundReq
+	33,  // 83: proto.EndNodeAccess.DeleteInboundByName:input_type -> proto.DeleteInboundByNameReq
+	34,  // 84: proto.EndNodeAccess.UpdateProxy:input_type -> proto.UpdateProxyReq
+	36,  // 85: proto.EndNodeAccess.AddAdaptiveConfig:input_type -> proto.AdaptiveOpReq
+	36,  // 86: proto.EndNodeAccess.DeleteAdaptiveConfig:input_type -> proto.AdaptiveOpReq
+	37,  // 87: proto.EndNodeAccess.Adaptive:input_type -> proto.AdaptiveReq
+	43,  // 88: proto.EndNodeAccess.FastAddInbound:input_type -> proto.FastAddInboundReq
+	41,  // 89: proto.EndNodeAccess.ObtainNewCert:input_type -> proto.ObtainNewCertReq
+	45,  // 90: proto.EndNodeAccess.TransferCert:input_type -> proto.TransferCertReq
+	48,  // 91: proto.EndNodeAccess.GetCerts:input_type -> proto.GetCertsReq
+	50,  // 92: proto.EndNodeAccess.DeleteCert:input_type -> proto.DeleteCertReq
+	54,  // 93: proto.EndNodeAccess.GetPingMetric:input_type -> proto.GetPingMetricReq
+	59,  // 94: proto.EndNodeAccess.GetNodeMetric:input_type -> proto.GetNodeMetricReq
+	64,  // 95: proto.EndNodeAccess.GetNodeGroups:input_type -> proto.GetNodeGroupsReq
+	66,  // 96: proto.EndNodeAccess.SetNodeGroups:input_type -> proto.SetNodeGroupsReq
+	68,  // 97: proto.EndNodeAccess.UpsertClusterUsers:input_type -> proto.UpsertClusterUsersReq
+	62,  // 98: proto.EndNodeAccess.GetStatus:input_type -> proto.GetStatusReq
+	76,  // 99: proto.EndNodeAccess.GetContainers:input_type -> proto.GetContainersReq
+	78,  // 100: proto.CenterNodeAdmin.GetCluters:input_type -> proto.GetClutersReq
+	80,  // 101: proto.CenterNodeAdmin.GetNodes:input_type -> proto.GetNodesReq
+	14,  // 102: proto.CenterNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
+	18,  // 103: proto.CenterNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
+	4,   // 104: proto.EndNodeAccess.GetUsers:output_type -> proto.GetUsersRsp
+	7,   // 105: proto.EndNodeAccess.GetProfile:output_type -> proto.GetProfileRsp
+	9,   // 106: proto.EndNodeAccess.AddUsers:output_type -> proto.UserOpRsp
+	9,   // 107: proto.EndNodeAccess.DeleteUsers:output_type -> proto.UserOpRsp
+	9,   // 108: proto.EndNodeAccess.UpdateUsers:output_type -> proto.UserOpRsp
+	9,   // 109: proto.EndNodeAccess.ResetUser:output_type -> proto.UserOpRsp
+	9,   // 110: proto.EndNodeAccess.ResetUserTraffic:output_type -> proto.UserOpRsp
+	75,  // 111: proto.EndNodeAccess.ResetAuthToken:output_type -> proto.ResetAuthTokenRsp
+	71,  // 112: proto.EndNodeAccess.RotateInboundPort:output_type -> proto.RotateInboundPortRsp
+	73,  // 113: proto.EndNodeAccess.RotateAllPorts:output_type -> proto.RotateAllPortsRsp
+	11,  // 114: proto.EndNodeAccess.GetSub:output_type -> proto.GetSubRsp
+	22,  // 115: proto.EndNodeAccess.GetBandWidthStats:output_type -> proto.GetBandwidthStatsRsp
+	16,  // 116: proto.EndNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
+	19,  // 117: proto.EndNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
+	40,  // 118: proto.EndNodeAccess.SetGatewayModel:output_type -> proto.SetGatewayModelRsp
+	57,  // 119: proto.EndNodeAccess.SetPingCheck:output_type -> proto.SetPingCheckRsp
+	24,  // 120: proto.EndNodeAccess.AddInbound:output_type -> proto.InboundOpRsp
+	24,  // 121: proto.EndNodeAccess.TransferInbound:output_type -> proto.InboundOpRsp
+	24,  // 122: proto.EndNodeAccess.CopyInbound:output_type -> proto.InboundOpRsp
+	24,  // 123: proto.EndNodeAccess.CopyUser:output_type -> proto.InboundOpRsp
+	29,  // 124: proto.EndNodeAccess.GetInbound:output_type -> proto.GetInboundRsp
+	32,  // 125: proto.EndNodeAccess.ListInbound:output_type -> proto.ListInboundRsp
+	24,  // 126: proto.EndNodeAccess.DeleteInboundByName:output_type -> proto.InboundOpRsp
+	35,  // 127: proto.EndNodeAccess.UpdateProxy:output_type -> proto.UpdateProxyRsp
+	38,  // 128: proto.EndNodeAccess.AddAdaptiveConfig:output_type -> proto.AdaptiveRsp
+	38,  // 129: proto.EndNodeAccess.DeleteAdaptiveConfig:output_type -> proto.AdaptiveRsp
+	38,  // 130: proto.EndNodeAccess.Adaptive:output_type -> proto.AdaptiveRsp
+	44,  // 131: proto.EndNodeAccess.FastAddInbound:output_type -> proto.FastAddInboundRsp
+	42,  // 132: proto.EndNodeAccess.ObtainNewCert:output_type -> proto.ObtainNewCertRsp
+	46,  // 133: proto.EndNodeAccess.TransferCert:output_type -> proto.TransferCertRsp
+	49,  // 134: proto.EndNodeAccess.GetCerts:output_type -> proto.GetCertsRsp
+	51,  // 135: proto.EndNodeAccess.DeleteCert:output_type -> proto.DeleteCertRsp
+	55,  // 136: proto.EndNodeAccess.GetPingMetric:output_type -> proto.GetPingMetricRsp
+	60,  // 137: proto.EndNodeAccess.GetNodeMetric:output_type -> proto.GetNodeMetricRsp
+	65,  // 138: proto.EndNodeAccess.GetNodeGroups:output_type -> proto.GetNodeGroupsRsp
+	67,  // 139: proto.EndNodeAccess.SetNodeGroups:output_type -> proto.SetNodeGroupsRsp
+	69,  // 140: proto.EndNodeAccess.UpsertClusterUsers:output_type -> proto.UpsertClusterUsersRsp
+	63,  // 141: proto.EndNodeAccess.GetStatus:output_type -> proto.GetStatusRsp
+	77,  // 142: proto.EndNodeAccess.GetContainers:output_type -> proto.GetContainersRsp
+	79,  // 143: proto.CenterNodeAdmin.GetCluters:output_type -> proto.GetClutersRsp
+	81,  // 144: proto.CenterNodeAdmin.GetNodes:output_type -> proto.GetNodesRsp
+	16,  // 145: proto.CenterNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
+	19,  // 146: proto.CenterNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
+	104, // [104:147] is the sub-list for method output_type
+	61,  // [61:104] is the sub-list for method input_type
+	61,  // [61:61] is the sub-list for extension type_name
+	61,  // [61:61] is the sub-list for extension extendee
+	0,   // [0:61] is the sub-list for field type_name
 }
 
 func init() { file_rpc_server_proto_init() }
@@ -5857,7 +5912,7 @@ func file_rpc_server_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_rpc_server_proto_rawDesc), len(file_rpc_server_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   86,
+			NumMessages:   87,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

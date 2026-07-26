@@ -146,6 +146,22 @@ message HeartBeatReq {
     NodeAuthInfo node_auth_info = 1;
     repeated UserDigest user_digests = 2;  // 本节点持有的 user 摘要列表（cluster_user.enabled=true 时填充）
     int64 timestamp_us = 3;  // 发起心跳的时间（微秒），用于防重放和流量特征消除
+    // Node-directory delta sync (added 2026-07). The heartbeat response used to
+    // carry the full node directory on every tick, making it O(N^2) bytes per
+    // node per round. Now each side sends only a digest of its advertised node
+    // set and the full map is exchanged only when the digests disagree.
+    //
+    // nodes_sum: ComputeNodesSum over this node's advertised set (which INCLUDES
+    // itself — see Cluster.GetAdvertisedNodes). Empty means "not provided", i.e.
+    // a legacy peer, and the server then answers with the full nodesMap exactly
+    // as it did before. It is NOT used to decide a mismatch server-side;
+    // reconciliation is driven entirely by the client.
+    bytes nodes_sum = 4;
+    // nodes: populated ONLY on a reconcile heartbeat — the extra call a client
+    // makes immediately after seeing the response's nodes_sum differ from its
+    // own. The server merges these and answers with its own full nodesMap, so
+    // one reconcile exchange converges both directions.
+    map<string, Node> nodes = 5;
 }
 
 message Node {
@@ -158,8 +174,16 @@ message Node {
 message HeartBeatRsp {
     int32 code = 1;
     string msg = 2;
+    // Full node directory. Since the 2026-07 delta sync this is populated ONLY
+    // when the peer is legacy (request carried no nodes_sum) or when the request
+    // is a reconcile heartbeat (it carried nodes). A steady-state heartbeat
+    // leaves it empty and carries nodes_sum alone.
     map<string, Node> nodesMap = 3;
     repeated string need_cluster_users = 4;  // 对端需要我补发完整 payload 的用户名列表
+    // ComputeNodesSum over this node's advertised set. Always populated. The
+    // client compares it against its own sum and, on a mismatch, immediately
+    // issues one reconcile heartbeat carrying its full node map.
+    bytes nodes_sum = 5;
 }
 
 message Nodes {

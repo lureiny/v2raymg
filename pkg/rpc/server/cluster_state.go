@@ -33,6 +33,13 @@ type ClusterState interface {
 	// GetProtoNodesWithFilter returns nodes matching the filter as proto.Node map.
 	GetProtoNodesWithFilter(f cluster.NodeFilter) map[string]*proto.Node
 
+	// GetAdvertisedNodes returns the node set advertised to peers plus its digest,
+	// both from one snapshot. This is the single definition of the advertised set:
+	// the heartbeat sends the digest every tick, returns the map on a mismatch, and
+	// pushes the map when reconciling — all three must be the same set or peers
+	// never converge. See cluster.Cluster.GetAdvertisedNodes.
+	GetAdvertisedNodes() (map[string]*proto.Node, []byte)
+
 	// Filter removes nodes that do not satisfy the predicate.
 	Filter(f cluster.NodeFilter)
 

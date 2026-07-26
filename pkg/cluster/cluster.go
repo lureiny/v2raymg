@@ -69,6 +69,40 @@ func (cluster *Cluster) GetProtoNodesWithFilter(f NodeFilter) map[string]*proto.
 	return nodeMap
 }
 
+// GetAdvertisedNodes returns the node set this node advertises to its peers,
+// together with its ComputeNodesSum digest — both derived from ONE snapshot so
+// the map and the sum always correspond.
+//
+// This is the single definition point of the advertised set S(X). The heartbeat
+// path uses it in three places (the sum sent every tick, the full map returned
+// on a mismatch, and the full map pushed to a peer); if any of them computed the
+// set with its own predicate, two nodes could advertise a sum for one set while
+// exchanging a different one and never converge.
+//
+// The predicate is IsCompleteRegister() alone — deliberately WITHOUT the
+// "name != self" exclusion the raw heartbeat response used to apply. The local
+// node must be part of its own advertised set: otherwise A folds "everything
+// except A" and B folds "everything except B", so their sums never match even
+// when both hold the identical cluster view, and the mismatch path would run
+// forever. The local node is registered with sentinel heartbeat timestamps (see
+// InitEndNodeCluster), so IsCompleteRegister() is always true for it.
+//
+// IsCompleteRegister() is symmetric across a pair: it asserts "I received their
+// heartbeat" and "I reported to them", which are the same two facts observed
+// from either side. Hence B ∈ S(A) ⟺ A ∈ S(B), which is what makes converged
+// peers agree on the sum.
+func (cluster *Cluster) GetAdvertisedNodes() (map[string]*proto.Node, []byte) {
+	nodeMap := cluster.GetProtoNodesWithFilter(func(node *Node) bool {
+		return node.IsCompleteRegister()
+	})
+	list := make([]*proto.Node, 0, len(nodeMap))
+	for _, n := range nodeMap {
+		list = append(list, n)
+	}
+	sum, _ := ComputeNodesSum(list)
+	return nodeMap, sum
+}
+
 // GetNodesWithFilter 获取cluster Node列表, 返回满足过滤条件的node集合
 func (cluster *Cluster) GetNodesWithFilter(f NodeFilter) []*Node {
 	return cluster.NodeManager.GetNodesWithFilter(f)

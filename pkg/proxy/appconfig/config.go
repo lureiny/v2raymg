@@ -119,6 +119,27 @@ type ClusterConfig struct {
 	// reporting to the same center must share this value. Empty keeps the center
 	// channel in plaintext (legacy / decentralized mode).
 	CenterToken string `yaml:"center_token" json:"center_token"`
+	// HeartbeatIntervalSec is how often this node heartbeats to every cluster peer
+	// and to the center. Default 10s when unset (0).
+	//
+	// It is the clock the whole cluster plane runs on: node liveness
+	// (cluster.NodeTimeOut, 60s), directory convergence, and cluster-user sync all
+	// advance one step per interval. Raising it cuts steady-state chatter on large
+	// clusters at the cost of slower failure detection — do not raise it past
+	// NodeTimeOut/2 or peers will expire between beats. Integration tests drop it
+	// to 1s so multi-round convergence assertions finish in seconds.
+	HeartbeatIntervalSec int `yaml:"heartbeat_interval_sec" json:"heartbeat_interval_sec"`
+	// NodeSumSync enables node-directory delta sync on the end<->end heartbeat.
+	// When on (the default), a heartbeat carries only a digest of the sender's
+	// node set and the full directory is exchanged just once per disagreement,
+	// instead of on every tick — the difference between O(N) and O(1) bytes per
+	// heartbeat, i.e. O(N^2) and O(N) per node per round.
+	//
+	// Turning it off restores the previous behaviour on both sides (this node
+	// stops sending a digest, and answers every heartbeat with the full map),
+	// which is safe to do on one node at a time: a peer that receives no digest
+	// is treated as legacy and keeps getting the full directory.
+	NodeSumSync bool `yaml:"node_sum_sync" json:"node_sum_sync"`
 	// CenterNodeHost is the optional center node host for initial node discovery.
 	// Leave empty to operate in fully decentralized mode.
 	CenterNodeHost string `yaml:"center_node_host" json:"center_node_host"`

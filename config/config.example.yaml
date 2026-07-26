@@ -160,6 +160,20 @@ end_node:
   cluster:
     name: my-cluster
     token: cluster-secret
+    # How often this node heartbeats to every peer and to the center (seconds).
+    # Default 10 when unset; valid range 1-30. This is the clock the whole cluster
+    # plane runs on — node liveness, directory convergence and cluster-user sync
+    # all advance one step per interval. Raise it to cut chatter on large clusters,
+    # but never past half of the 60s node timeout or healthy peers expire between
+    # beats.
+    heartbeat_interval_sec: 10
+    # Node-directory delta sync on the end<->end heartbeat. When on (default), a
+    # heartbeat carries only a digest of the sender's node set and the full
+    # directory is exchanged just once per disagreement, instead of on every
+    # tick — O(1) rather than O(N) bytes per heartbeat. Set to false to restore
+    # the previous always-full-directory behaviour; safe to flip one node at a
+    # time, since a peer that receives no digest falls back automatically.
+    node_sum_sync: true
     center_node_host: ""
     center_node_port: 0
     static_nodes: []

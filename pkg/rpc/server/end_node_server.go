@@ -54,13 +54,34 @@ type EndNodeServer struct {
 }
 
 const (
-	heartbeatInterval        = 10 * time.Second
+	// defaultHeartbeatInterval is used when end_node.cluster.heartbeat_interval_sec
+	// is unset. See EndNodeServer.heartbeatInterval.
+	defaultHeartbeatInterval = 10 * time.Second
 	clearInvalidNodeInterval = 20 * time.Second
 	heartbeatMaxDriftUs      = 30 * 1000 * 1000 // 30 seconds in microseconds
+
+	// Node-directory reconcile damping. A healthy disagreement clears in one
+	// round, so once a peer has disagreed for this many consecutive rounds the
+	// gap is structural (something one side will never merge) and we stop paying
+	// for it every tick, retrying only every nodesReconcileBackoffRounds rounds
+	// — at the 10s heartbeat interval, roughly once a minute.
+	nodesReconcileStreakLimit   = 3
+	nodesReconcileBackoffRounds = 6
 )
 
 func GetEndNodeServer() *EndNodeServer {
 	return endNodeServer
+}
+
+// heartbeatInterval returns the configured cluster heartbeat period, falling back
+// to defaultHeartbeatInterval when unset. appconfig.Validate bounds the configured
+// value to 1..30s; the fallback here also covers servers built directly in tests,
+// which leave cfg zero-valued.
+func (s *EndNodeServer) heartbeatInterval() time.Duration {
+	if sec := s.cfg.Cluster.HeartbeatIntervalSec; sec > 0 {
+		return time.Duration(sec) * time.Second
+	}
+	return defaultHeartbeatInterval
 }
 
 var methodPrefixLen = len("/proto.EndNodeAccess/")

@@ -140,6 +140,8 @@ func defaultAppConfig() *AppConfig {
 	cfg.EndNode.Ping.TCPPingInterval = 5
 	cfg.EndNode.Ping.TCPPingTimeout = 1
 	cfg.EndNode.JWTExpireHours = 24
+	cfg.EndNode.Cluster.NodeSumSync = true
+	cfg.EndNode.Cluster.HeartbeatIntervalSec = 10
 	cfg.ClusterUser = DefaultClusterUserConfig()
 	cfg.Subscription.EnableUserInfoHeader = true
 	return cfg
@@ -349,6 +351,13 @@ func Validate(cfg *AppConfig) error {
 		// center_token, when set, encrypts the end->center channel; empty = plaintext.
 		if t := cfg.EndNode.Cluster.CenterToken; t != "" && len(t) < minClusterTokenLen {
 			return fmt.Errorf("appconfig: end_node.cluster.center_token must be >= %d chars when set", minClusterTokenLen)
+		}
+		// 0 means "unset" and falls back to the built-in default; a negative or
+		// over-long interval is a misconfiguration. Peers expire after
+		// cluster.NodeTimeOut (60s) without a beat, so an interval at or beyond
+		// half that would let a healthy node be reclaimed between heartbeats.
+		if v := cfg.EndNode.Cluster.HeartbeatIntervalSec; v < 0 || v > 30 {
+			return fmt.Errorf("appconfig: end_node.cluster.heartbeat_interval_sec must be between 1 and 30 (0 = default 10), got %d", v)
 		}
 	}
 

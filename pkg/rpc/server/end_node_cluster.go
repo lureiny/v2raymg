@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	context "context"
 	"fmt"
 	"sync"
@@ -126,11 +127,44 @@ func (s *EndNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.Heart
 		log.Error("heartbeat failed", "err", fmt.Sprintf("node[%s] has been drop", heartBeatReq.GetNodeAuthInfo().Node.GetName()))
 		return heartBeatRsp, nil
 	}
-	heartBeatRsp.NodesMap = s.clusterState.GetProtoNodesWithFilter(
-		func(node *cluster.Node) bool {
-			return node.Name != s.Name && node.IsCompleteRegister()
-		},
-	)
+	// Node-directory delta sync. This response used to carry the full node map on
+	// every tick, which is O(N) bytes per heartbeat and therefore O(N^2) per node
+	// per round. Now the digest goes out every time and the full map only when it
+	// can actually be needed:
+	//
+	//   1. reconcile heartbeat (request carries nodes) — the peer already found a
+	//      mismatch; merge what it sent and answer with our full map so the single
+	//      extra round trip converges BOTH directions;
+	//   2. legacy peer (request carries no nodes_sum) — it cannot compare digests,
+	//      so keep doing exactly what we did before or it never learns new nodes;
+	//   3. steady state — digest only.
+	//
+	// The digest is never used here to decide a mismatch: reconciliation is driven
+	// entirely by the client, so this stays a single mechanism.
+	//
+	// Map and digest come from one snapshot: the map we return must be exactly the
+	// set the digest was computed over, or the peer merges a set that does not
+	// match the sum it was told and burns an extra reconcile round every tick.
+	advertised, nodesSum := s.clusterState.GetAdvertisedNodes()
+	if !s.cfg.Cluster.NodeSumSync {
+		// Kill switch: withhold the digest AND always answer with the full map, so
+		// peers classify us as legacy and never reconcile against us either. That
+		// makes this a complete rollback rather than a half-disabled state, and it
+		// is safe to flip one node at a time.
+		heartBeatRsp.NodesMap = advertised
+	} else {
+		heartBeatRsp.NodesSum = nodesSum
+		switch {
+		case len(heartBeatReq.GetNodes()) > 0:
+			// Merging cannot grow the advertised set (freshly learned nodes have no
+			// heartbeat timestamps yet, so IsCompleteRegister is false for them), so
+			// the snapshot above stays accurate for this response.
+			mergeRemoteNodes(heartBeatReq.GetNodes(), s, "EndReconcile")
+			heartBeatRsp.NodesMap = advertised
+		case len(heartBeatReq.GetNodesSum()) == 0:
+			heartBeatRsp.NodesMap = advertised
+		}
+	}
 
 	// Cluster user digest comparison (only when feature is enabled).
 	if s.userMgr.IsClusterEnabled() {
@@ -211,7 +245,13 @@ func (s *EndNodeServer) registerToEndNode(node *cluster.Node, wg *sync.WaitGroup
 	}
 }
 
-func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGroup, ch chan struct{}) {
+// heartbeatToEndNode sends one heartbeat to a peer. advertised/advertisedSum are
+// this round's node-directory snapshot, computed once by the caller and shared by
+// every peer in the round — the advertised set does not depend on the peer, and
+// the map and its digest must stay paired (we advertise the digest now and may
+// push the very same map a moment later).
+func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGroup, ch chan struct{},
+	advertised map[string]*proto.Node, advertisedSum []byte) {
 	defer func() {
 		wg.Done()
 		<-ch
@@ -229,6 +269,10 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 	nodeAuthInfo := rpcClient.NewNodeAuthInfo(node.GetOutToken(), &localNode.Node, node.GetName())
 	heartBeatMsg := &proto.HeartBeatReq{
 		TimestampUs: time.Now().UnixMicro(),
+		// Digest of our advertised node set. Also the capability signal: a peer
+		// that receives no sum treats us as legacy and keeps returning the full
+		// directory, so an unupgraded fleet member still converges.
+		NodesSum: advertisedSum,
 	}
 	if s.userMgr.IsClusterEnabled() {
 		localDigests := s.userMgr.ListDigests()
@@ -270,7 +314,10 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 		)
 	} else {
 		node.SetReportHeartBeatTime(time.Now().Unix())
-		addRemoteNode(heartBeatRsp, s, "End")
+		// Empty in steady state; populated when the peer is answering a reconcile
+		// heartbeat or still treats us as legacy.
+		mergeRemoteNodes(heartBeatRsp.GetNodesMap(), s, "End")
+		s.reconcileNodesWithPeer(node, c, heartBeatRsp.GetNodesSum(), advertised, advertisedSum)
 
 		// Push full user payloads to the remote node for any users it requested.
 		if s.userMgr.IsClusterEnabled() {
@@ -299,9 +346,104 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 	}
 }
 
+// reconcileNodesWithPeer performs the node-directory reconcile for one peer when
+// the digests disagree: it immediately re-sends the heartbeat with our full node
+// map attached. The peer merges it and answers with its own full map, so a single
+// extra round trip converges both directions.
+//
+// Doing this in the same round rather than flagging the peer and pushing on the
+// next tick is what keeps the mechanism stateless — no per-peer flag has to live
+// on cluster.Node (where every mutable field must go through the mutex and
+// survive the peer being reclaimed and rebuilt by filter() between rounds). It
+// also mirrors the cluster-user catch-up directly above: same shape, one extra
+// authenticated call issued right after the heartbeat that revealed the gap.
+//
+// The reconcile response is merged but never compared again, so a peer costs at
+// most two heartbeats per round and a permanent disagreement cannot self-sustain
+// a loop.
+func (s *EndNodeServer) reconcileNodesWithPeer(node *cluster.Node, c proto.EndNodeAccessClient,
+	peerSum []byte, advertised map[string]*proto.Node, advertisedSum []byte) {
+	if !s.cfg.Cluster.NodeSumSync {
+		return
+	}
+	if len(peerSum) == 0 {
+		// Legacy peer: it cannot compute a digest and has already returned its
+		// full directory, which the caller merged. Nothing left to reconcile.
+		return
+	}
+	if bytes.Equal(peerSum, advertisedSum) {
+		node.ResetNodesSumMismatch()
+		return
+	}
+
+	// Damping. A disagreement normally clears in one round, so a streak means the
+	// gap cannot be closed by exchanging directories — the peer advertises a node
+	// we refuse to merge (wrong-token list), or vice versa. Reconciling every
+	// round then costs two full directories per round indefinitely, which is
+	// worse than the unconditional full map this replaced. After a few rounds,
+	// drop to roughly one attempt per minute; correctness is unaffected because
+	// the digest is only ever a hint.
+	if streak := node.BumpNodesSumMismatch(); streak > nodesReconcileStreakLimit &&
+		streak%nodesReconcileBackoffRounds != 0 {
+		log.Debug("heartbeat: node directory still diverged, backing off",
+			"dst_name", node.Name, "streak", streak)
+		return
+	}
+
+	// user_digests is deliberately left empty: this call exists only to settle the
+	// node directory, and re-sending the per-user digest list would double that
+	// payload on exactly the ticks that are already the expensive ones. The server
+	// reads an empty digest list as "nothing to compare" and returns no
+	// need_cluster_users, so the user-sync path is unaffected.
+	reconcileMsg := &proto.HeartBeatReq{
+		TimestampUs: time.Now().UnixMicro(),
+		NodesSum:    advertisedSum,
+		Nodes:       advertised,
+	}
+	reqData, err := pb.Marshal(reconcileMsg)
+	if err != nil {
+		log.Error("heartbeat: marshal node reconcile failed", "dst_name", node.Name, "err", err)
+		return
+	}
+	// Fresh NodeAuthInfo (new nonce) — reusing the heartbeat's would be a
+	// duplicate nonce and checkReplay would drop this call as a replay.
+	reconcileAuth := rpcClient.NewNodeAuthInfo(node.GetOutToken(), &localNode.Node, node.GetName())
+	rsp, err := rpcClient.ReqHeartBeat(rpcClient.NewContext(), reqData, c, reconcileAuth, s.clusterState.GetClusterToken())
+	if err != nil {
+		// The peer answered the heartbeat a moment ago, so a failure here is not
+		// evidence that it is down: log and let the next round retry rather than
+		// invalidating the token.
+		log.Error("heartbeat: node reconcile failed", "dst_name", node.Name, "err", err)
+		return
+	}
+	reconcileRsp, ok := rsp.(*proto.HeartBeatRsp)
+	if !ok || reconcileRsp == nil {
+		log.Error("heartbeat: node reconcile failed", "dst_name", node.Name, "err", "unexpected nil response")
+		return
+	}
+	if reconcileRsp.GetCode() != 0 {
+		log.Error("heartbeat: node reconcile rejected", "dst_name", node.Name, "err", reconcileRsp.GetMsg())
+		return
+	}
+	mergeRemoteNodes(reconcileRsp.GetNodesMap(), s, "EndReconcile")
+	log.Debug("heartbeat: reconciled node directory", "dst_name", node.Name,
+		"pushed", len(advertised), "received", len(reconcileRsp.GetNodesMap()))
+}
+
 func (s *EndNodeServer) registerOrHeartBeatToEndNode() {
 	ch := make(chan struct{}, 10)
 	wg := sync.WaitGroup{}
+	// One node-directory snapshot for the whole round: the advertised set does not
+	// vary by peer, and every peer must be told a digest that matches the map we
+	// would push it moments later.
+	advertised, advertisedSum := s.clusterState.GetAdvertisedNodes()
+	if !s.cfg.Cluster.NodeSumSync {
+		// Kill switch: withhold the digest so peers classify us as legacy and keep
+		// answering with their full directory. Combined with the server-side
+		// branch this restores the pre-optimisation behaviour in both directions,
+		// and it is safe to flip on one node at a time.
+		advertisedSum = nil
+	}
 	for _, node := range s.clusterState.GetAllNode() {
 		if node.Name == s.Name {
 			continue
@@ -323,7 +465,7 @@ func (s *EndNodeServer) registerOrHeartBeatToEndNode() {
 		if !node.RegisteredRemote() {
 			go s.registerToEndNode(node, &wg, ch)
 		} else {
-			go s.heartbeatToEndNode(node, &wg, ch)
+			go s.heartbeatToEndNode(node, &wg, ch, advertised, advertisedSum)
 		}
 	}
 	wg.Wait()
@@ -364,12 +506,30 @@ func (s *EndNodeServer) heartbeatToCenterNode() {
 			"center_host", s.centerNode.Host, "center_port", s.centerNode.Port,
 		)
 	} else {
-		addRemoteNode(rsp, s, "Center")
+		// The center path is unchanged by the end<->end delta sync: the center
+		// still returns its full directory on every heartbeat.
+		mergeRemoteNodes(rsp.GetNodesMap(), s, "Center")
 	}
 }
 
-func addRemoteNode(rsp *proto.HeartBeatRsp, s *EndNodeServer, remoteServerType string) {
-	for key, remoteNode := range rsp.NodesMap {
+// mergeRemoteNodes folds a peer-supplied node directory into the local cluster
+// view. It takes the raw map rather than a HeartBeatRsp because there are now two
+// sources: the heartbeat response (a peer answering our request) and the request
+// of a reconcile heartbeat (a peer pushing its view to us). Both arrive from an
+// authenticated cluster member and get identical treatment.
+//
+// The merge is add-only and never rewrites an existing entry: a node whose meta
+// info changed is rejected by AuthRemoteNode's Compare and ages out of the
+// advertised set within NodeTimeOut instead.
+//
+// Entries are validated before being trusted. Until this change nothing checked
+// them, because the only source was a peer's own response; the reconcile path
+// lets a member write into our directory through the request as well, so both
+// paths now require a structurally complete node in our own cluster. Rejections
+// log at Warn — a legitimate peer never sends one, so silence is the expected
+// steady state.
+func mergeRemoteNodes(nodes map[string]*proto.Node, s *EndNodeServer, remoteServerType string) {
+	for key, remoteNode := range nodes {
 		remoteNodeName := remoteNode.GetName()
 		if node := s.clusterState.Get(key); node == nil && remoteNode.Name != localNode.Name {
 			if wrongNode := s.clusterState.GetNodeFromWrongNodeList(remoteNodeName); wrongNode != nil {
@@ -379,14 +539,34 @@ func addRemoteNode(rsp *proto.HeartBeatRsp, s *EndNodeServer, remoteServerType s
 				)
 				continue
 			}
+			candidate := &cluster.Node{
+				Node:       remoteNode,
+				CreateTime: time.Now().Unix(),
+			}
+			if !candidate.IsComplete() {
+				log.Warn("skip incomplete node from remote",
+					"remote_server_type", remoteServerType,
+					"node_host", remoteNode.GetHost(), "node_port", remoteNode.GetPort(),
+					"node_name", remoteNode.GetName(), "node_cluster", remoteNode.GetClusterName(),
+				)
+				continue
+			}
+			// RegisterNode gates on IsSameCluster, so every node that entered the
+			// directory the normal way carries our cluster name; a peer-supplied
+			// entry that does not is either a bug or cross-cluster contamination.
+			if localNode.ClusterName != "" && remoteNode.GetClusterName() != localNode.ClusterName {
+				log.Warn("skip node from remote with foreign cluster",
+					"remote_server_type", remoteServerType,
+					"node_name", remoteNode.GetName(),
+					"node_cluster", remoteNode.GetClusterName(), "local_cluster", localNode.ClusterName,
+				)
+				continue
+			}
 			log.Info("add node from remote",
 				"remote_server_type", remoteServerType,
 				"node_host", remoteNode.GetHost(), "node_port", remoteNode.GetPort(), "node_name", remoteNode.GetName(),
 			)
-			s.clusterState.Add(&cluster.Node{
-				Node:       remoteNode,
-				CreateTime: time.Now().Unix(),
-			})
+			s.clusterState.Add(candidate)
 		}
 	}
 }
@@ -474,7 +654,7 @@ func protoClusterUserSyncToUser(p *proto.ClusterUserSync) *contracts.User {
 func (s *EndNodeServer) heartBeatAndRegisterToNodeOrCenterNode() {
 	log.Info("start heartbeat to center and end node or register to end node")
 	defer log.Info("heartbeat and register exit")
-	ticker := time.NewTicker(heartbeatInterval)
+	ticker := time.NewTicker(s.heartbeatInterval())
 	for {
 		s.heartbeatToCenterNode()
 		s.registerOrHeartBeatToEndNode()

@@ -41,6 +41,13 @@ type Node struct {
 	recvHeartBeatTime   int64  // 上次获取该节点心跳的时间 (原 GetHeartBeatTime 字段)
 	reportHeartBeatTime int64  // 上次上报到该节点的时间
 	grpcClientConn      *grpc.ClientConn
+	// nodesSumMismatchRounds counts consecutive heartbeat rounds in which this
+	// peer's node-directory digest differed from ours. It exists purely to damp
+	// a disagreement that cannot be resolved — e.g. the peer advertises a node
+	// that sits in our wrong-token list and can never be merged — where
+	// reconciling every round would ship two full directories forever, worse
+	// than the unconditional full map this scheme replaced.
+	nodesSumMismatchRounds int32
 }
 
 // --- accessors for the mu-guarded runtime fields ---
@@ -57,6 +64,23 @@ func (n *Node) SetInToken(v string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.inToken = v
+}
+
+// BumpNodesSumMismatch records one more consecutive round of node-directory
+// disagreement with this peer and returns the new streak length.
+func (n *Node) BumpNodesSumMismatch() int32 {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.nodesSumMismatchRounds++
+	return n.nodesSumMismatchRounds
+}
+
+// ResetNodesSumMismatch clears the disagreement streak; called as soon as this
+// peer's node-directory digest matches ours again.
+func (n *Node) ResetNodesSumMismatch() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.nodesSumMismatchRounds = 0
 }
 
 // GetOutToken returns the token the local node uses to access this remote node.

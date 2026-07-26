@@ -27,6 +27,9 @@ func (stubClusterState) GetAllNode() map[string]*cluster.Node { return nil }
 func (stubClusterState) GetProtoNodesWithFilter(cluster.NodeFilter) map[string]*proto.Node {
 	return nil
 }
+func (stubClusterState) GetAdvertisedNodes() (map[string]*proto.Node, []byte) {
+	return nil, nil
+}
 func (stubClusterState) Filter(cluster.NodeFilter)                    {}
 func (stubClusterState) AddToWrongNodeList(*cluster.Node)             {}
 func (stubClusterState) DeleteFromWrongTokenNodeList(string)          {}
