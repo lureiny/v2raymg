@@ -76,6 +76,29 @@ Makefile                   # build / build-full (full_dns tag) / proto
    - **center node 已于 2026-07 彻底移除**。它唯一的作用是发现,而 `static_nodes` 覆盖了同样的能力且更好:静态节点带 `isLocal`、**永不被 60s 超时回收**,注册又是双向的(种子立刻通过 `RegisterNode` 认识加入者,不必等自己下一跳)。同时 center 是集群面**唯一一条默认明文的链路**,还携带集群主密钥。旧配置里的 `node_type: center` / `center_node` / `center_node_host` / `center_token` 一律忽略并在启动时逐条 WARN
    - **cluster name 也一并移除** —— token 才是唯一的成员边界。`recvHeartBeatTime` 只在 `AuthAndTouch`(校验 token)和 `RegisterNode` 推进,`reportHeartBeatTime` 要求我方注册被接受,所以 `IsCompleteRegister()` 为真 ⟹ 双向 token 认证已过 ⟹ 同集群。名字是冗余的第二因子,只会因笔误误拒合法节点。`Node.cluster_name` 在 proto 里保留为 `reserved 3`
    - **`static_nodes` 是唯一的入网途径**,为空且开了 RPC 时启动会 WARN。单机部署合法,所以只警告不报错
+   - **节点目录按 `node_id` 索引,不按名字(2.8)** —— `node_id` 是首次启动随机生成、持久化在本地
+     DB 的 UUID(`local_node_identity` 单行表),节点自维护,**没有任何配置项**(复制配置开第二个节点
+     必须产生新身份;克隆 data 目录才会克隆身份,那是明确不支持的操作)。name / host / port 全部降为
+     **可变属性** —— 改配置重启只是同一条目的原地更新,不再是"陌生人跟自己的旧条目抢位置"
+     - **改地址必须整体替换条目,绝不能就地改 `Host`**。两个理由:身份字段发布后是只读契约
+       (`ComputeNodesSum` 和 gRPC 序列化都无锁读同一个 `*proto.Node`),而且 `grpc.Dial` 在拨号时
+       就把地址钉死,就地改完流量照旧打旧地址。替换时必须显式 `Close()` 旧连接
+     - **注册一律接受,不因身份/地址不符而拒绝**。拒绝在结构上无解:该撤回旧声明的那个实例已经不存在了。
+       "感知顶替"改由告警承担(`node address changed` / `node identity replaced` / `absorbed stale entries`
+       / `two live nodes claim the same address`)。只保留两条拒绝:对端声称**我们的** `node_id`(拷贝了
+       data 目录)、对端声称**我们的** name
+     - **`node_id` 唯一的盲区是"删库但不改配置"** —— 同名同址换了身份。堵法是每个响应都带上
+       **应答方身份**(`RegisterNodeRsp` / `HeartBeatRsp` 的 `responder_node_id`),调用方发现地址被别的
+       身份接管就立刻**置脏(tombstone)**旧 id
+     - **置脏期内拒绝一切 gossip 更新,但不拒绝该节点自己的直接注册**,且**不立即回收**
+       (`DirtyNodeTTL = 3×NodeTimeOut = 180s`)。立即回收没用:各节点发现时间不同,没察觉的对端会
+       立刻把脏数据 gossip 回来,add-only 合并还会给它盖上全新 `CreateTime` 无限续命
+     - **`ComputeNodesSum` 不折入 `node_id`** —— 折了会让 2.7 与 2.8 对同一成员集算出不同摘要,
+       混部集群永久不收敛。同理**心跳线上的 `nodesMap` 仍以 name 为 key**:2.7 的合并逻辑拿 wire key
+       去自己的 name 索引里查,换成 id 会每轮 miss 并把每个条目覆写成无 token 的副本
+     - 未知身份的条目(static 种子 / 迁移过来的旧行 / 2.7 对端)用 `addr:host:port` 占位键暂存,
+       首次交互后升级为真 id。**空 `node_id` 是常态,不是错误**
+     - 名字不再保证唯一。`?target=` 同时接受 name 与 `node_id`,`/api/node` 用 `duplicate_name` 标记歧义
    - **动态发现的节点会持久化到 DB**(`cluster_nodes` 表)。语义:内存 = 配置 static node + DB 动态节点;static **不入库**;只有 `IsCompleteRegister()` 才写;内存回收即删库,两者严格一致,无独立 TTL。写入靠 `filter()` ticker 里的周期对账(只写差异,稳态零写),不用事件钩子
      - **加载时只设 `CreateTime`,绝不碰心跳时间戳** —— `IsCompleteRegister()` 不校验任何 token,改心跳时间戳会让刚加载的节点被误判为已认证并混进广告集合被广播出去
      - 删除判据是"内存中完全不存在",**不是**"失去 IsCompleteRegister" —— 后者会误删还在被重试的活节点

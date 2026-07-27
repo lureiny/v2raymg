@@ -27,7 +27,20 @@ func testNodeIdentity(name string) (string, int32) {
 
 func testProtoNode(name string) *proto.Node {
 	host, port := testNodeIdentity(name)
-	return &proto.Node{Name: name, Host: host, Port: port}
+	// The id is derived from the name too, so every view of a node agrees on it.
+	// It is deliberately absent from ComputeNodesSum, so adding it here must not
+	// change any digest assertion in this file — TestNodesSumIgnoresNodeID pins that.
+	return &proto.Node{Name: name, Host: host, Port: port, NodeId: name + "-id"}
+}
+
+// findByName locates a directory entry the way an operator would, by the name
+// they typed. Tests cannot use ClusterState.Get for this any more: the directory
+// is keyed by identity, and an entry learned from a pre-2.8 peer (no id) is filed
+// under a provisional address key rather than under either.
+func findByName(t *testing.T, s *EndNodeServer, name string) *cluster.Node {
+	t.Helper()
+	n, _ := s.clusterState.(*cluster.EndNodeClusterManager).FindByName(name)
+	return n
 }
 
 // newNodesSyncServer builds an EndNodeServer backed by a real cluster manager
@@ -39,7 +52,7 @@ func newNodesSyncServer(t *testing.T, selfName string, peers ...string) *EndNode
 	selfHost, selfPort := testNodeIdentity(selfName)
 	mgr, _, err := cluster.NewEndNodeClusterManagerFromConfig(
 		cluster.ClusterInitConfig{ClusterToken: "cluster-token-abcdef01"},
-		cluster.NodeInitConfig{Name: selfName, Host: selfHost, Port: selfPort},
+		cluster.NodeInitConfig{Name: selfName, Host: selfHost, Port: selfPort, ID: selfName + "-id"},
 	)
 	if err != nil {
 		t.Fatalf("init cluster manager: %v", err)
@@ -150,7 +163,7 @@ func TestHeartBeat_ReconcileMergesAndReturnsDirectory(t *testing.T) {
 	pushed := map[string]*proto.Node{
 		"peer-9": {Name: "peer-9", Host: "10.0.0.9", Port: 2009},
 	}
-	if s.clusterState.Get("peer-9") != nil {
+	if findByName(t, s, "peer-9") != nil {
 		t.Fatal("precondition: peer-9 must be unknown before the reconcile")
 	}
 
@@ -159,7 +172,7 @@ func TestHeartBeat_ReconcileMergesAndReturnsDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HeartBeat: %v", err)
 	}
-	if s.clusterState.Get("peer-9") == nil {
+	if findByName(t, s, "peer-9") == nil {
 		t.Error("reconcile did not merge the pushed node")
 	}
 	if len(rsp.GetNodesMap()) == 0 {
@@ -194,11 +207,11 @@ func TestHeartBeat_ReconcileRejectsUntrustworthyNodes(t *testing.T) {
 	}
 
 	for _, name := range []string{"no-host", "low-port", "no-name"} {
-		if s.clusterState.Get(name) != nil {
+		if findByName(t, s, name) != nil {
 			t.Errorf("node %q should have been rejected but was merged", name)
 		}
 	}
-	if s.clusterState.Get("good") == nil {
+	if findByName(t, s, "good") == nil {
 		t.Error("a valid pushed node was rejected")
 	}
 }

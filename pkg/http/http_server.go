@@ -110,17 +110,27 @@ func (s *HttpServer) Serve(lis net.Listener) {
 }
 
 // GetTargetNodes returns the nodes to route an HTTP request to based on the target param.
+//
+// target matches a node name or, since the directory became identity-keyed, a
+// node_id. Names remain the everyday way to address a node and the key of every
+// fan-out response, but they are operator-supplied and no longer guaranteed
+// unique — two nodes misconfigured with the same one now coexist instead of one
+// being refused registration. Accepting the id gives a caller an unambiguous
+// handle for exactly that case; /api/node reports it alongside the name.
 func (s *HttpServer) GetTargetNodes(target string) []*cluster.Node {
 	if target == "" {
 		target = s.Name
 	}
 	if target == "all" {
 		return s.clusterNodes.GetNodesWithFilter(func(n *cluster.Node) bool {
-			return n.Name == s.Name || n.IsValid()
+			return n.IsSelf() || n.IsValid()
 		})
 	}
 	return s.clusterNodes.GetNodesWithFilter(func(n *cluster.Node) bool {
-		return n.IsValid() && n.Name == target
+		if !n.IsValid() && !n.IsSelf() {
+			return false
+		}
+		return n.GetName() == target || (n.GetNodeId() != "" && n.GetNodeId() == target)
 	})
 }
 

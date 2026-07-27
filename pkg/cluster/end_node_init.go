@@ -21,6 +21,12 @@ type NodeInitConfig struct {
 	Name string
 	Host string
 	Port int32
+	// ID is this node's permanent identity, read from (or minted into) the local
+	// database by store.LocalIdentityStore. It is what lets peers recognise this
+	// node across a rename, a move, or a port change. Empty only in tests and in
+	// deployments running without persistence, which then fall back to the
+	// pre-2.8 name/address matching.
+	ID string
 }
 
 // NewEndNodeClusterManagerFromConfig creates an EndNodeClusterManager, initialises the
@@ -29,10 +35,16 @@ type NodeInitConfig struct {
 func NewEndNodeClusterManagerFromConfig(clusterCfg ClusterInitConfig, nodeCfg NodeInitConfig) (*EndNodeClusterManager, *LocalNode, error) {
 	localNode := GetLocalNode()
 	localNode.Token = uuid.New().String()
+	// Every outbound request carries &localNode.Node (see rpcClient.NewNodeAuthInfo),
+	// and the directory entry below embeds the same pointer, so writing the id
+	// here is the only place it needs to be set — it propagates to registrations,
+	// heartbeats and the advertised set for free. It must be written before Serve
+	// starts, since from then on the value is read unlocked by other goroutines.
 	localNode.Node = proto.Node{
-		Host: nodeCfg.Host,
-		Port: nodeCfg.Port,
-		Name: nodeCfg.Name,
+		Host:   nodeCfg.Host,
+		Port:   nodeCfg.Port,
+		Name:   nodeCfg.Name,
+		NodeId: nodeCfg.ID,
 	}
 
 	mgr := &EndNodeClusterManager{}
@@ -48,6 +60,7 @@ func NewEndNodeClusterManagerFromConfig(clusterCfg ClusterInitConfig, nodeCfg No
 	// Set*/Touch accessors here, which would overwrite the sentinels with now().
 	mgr.Add(&Node{
 		Node:                &localNode.Node,
+		isSelf:              true,
 		inToken:             localNode.Token,
 		outToken:            localNode.Token,
 		reportHeartBeatTime: math.MaxInt64 - NodeTimeOut,

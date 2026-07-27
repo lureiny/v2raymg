@@ -954,11 +954,20 @@ Trojan+TLS 需要提供证书来源(`cert_file/key_file`、`certificate/key`、`
     "name": "node1",
     "host": "192.168.1.1",
     "port": 62789,
-    "cluster_name": "default",
+    "node_id": "7f3a1c2e-...",
+    "duplicate_name": false,
     "groups": ["default", "hk"]
   }
 ]
 ```
+
+- `node_id`（2.8 新增）是节点的真实身份：首次启动随机生成并持久化在该节点本地 DB，**不可配置**。
+  它跨改名、换 host、换端口保持不变，集群目录就是按它索引的。为空表示该节点尚未与我们完成过
+  一次交互（例如刚从配置读入的 `static_nodes` 种子），或对端版本低于 2.8。
+- `duplicate_name`（2.8 新增）为 true 表示另有条目使用了同一个 `name`。目录改为按身份索引后，
+  重名节点不再互相拒绝注册而是共存，因此 `?target=<name>` 在这种情况下是有歧义的 ——
+  所有接受 `target` 的接口都同时接受 `node_id`，可用它精确指定。
+- `cluster_name` 字段已于 2026-07 随 cluster name 一并移除。
 
 ---
 

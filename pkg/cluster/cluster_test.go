@@ -217,11 +217,16 @@ func TestNodeManager_LoadStaticNode_FiltersSameHostPort(t *testing.T) {
 	if err := c.LoadStaticNode(nodes); err != nil {
 		t.Fatalf("LoadStaticNode: %v", err)
 	}
-	if c.HaveNode("peer1") {
+	// Static peers are filed provisionally, by address: the config supplies a
+	// name but nothing has confirmed it, and the name may well be a typo.
+	if c.FindByAddr("10.0.0.1", 3000) != nil {
 		t.Error("expected peer1 filtered (same host+port)")
 	}
-	if !c.HaveNode("peer2") {
+	if c.FindByAddr("10.0.0.2", 3000) == nil {
 		t.Error("expected peer2 loaded")
+	}
+	if !c.HaveNode(cluster.ProvisionalKey("10.0.0.2", 3000)) {
+		t.Error("expected peer2 filed under its provisional address key")
 	}
 }
 
@@ -240,7 +245,7 @@ func TestNodeManager_LoadStaticNode_FiltersSameName(t *testing.T) {
 	if err := c.LoadStaticNode(nodes); err != nil {
 		t.Fatalf("LoadStaticNode: %v", err)
 	}
-	if c.HaveNode("local") {
+	if n, _ := c.FindByName("local"); n != nil {
 		t.Error("expected same-name node filtered")
 	}
 }
@@ -264,6 +269,7 @@ func TestNewEndNodeClusterManagerFromConfig(t *testing.T) {
 		Name: "node1",
 		Host: "10.0.0.1",
 		Port: 5000,
+		ID:   "node1-id",
 	}
 
 	mgr, localNode, err := cluster.NewEndNodeClusterManagerFromConfig(clusterCfg, nodeCfg)
@@ -281,10 +287,18 @@ func TestNewEndNodeClusterManagerFromConfig(t *testing.T) {
 	if localNode.Name != "node1" {
 		t.Errorf("localNode.Name: got %q, want %q", localNode.Name, "node1")
 	}
-	// Local node should be registered and permanently valid
-	n := mgr.Get("node1")
+	if localNode.GetNodeId() != "node1-id" {
+		t.Errorf("localNode.NodeId: got %q, want %q", localNode.GetNodeId(), "node1-id")
+	}
+	// The local node is filed under its identity, and every outbound request
+	// carries the same *proto.Node, so writing the id once propagates it.
+	n := mgr.Get("node1-id")
 	if n == nil {
-		t.Fatal("expected local node registered in cluster")
+		t.Fatal("expected local node registered in cluster under its node_id")
+	}
+	if !n.IsSelf() {
+		t.Error("local node must be flagged isSelf: address de-duplication and name " +
+			"resolution both exempt it")
 	}
 	if n.GetRecvHeartBeatTime() != math.MaxInt64-cluster.NodeTimeOut {
 		t.Errorf("expected permanent heartbeat, got %d", n.GetRecvHeartBeatTime())

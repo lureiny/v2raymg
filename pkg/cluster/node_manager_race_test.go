@@ -9,10 +9,16 @@ import (
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
+// newRaceTestNode builds a node whose directory key equals `name`. The id is set
+// because the directory is keyed by identity: a node with no id would be filed
+// under a provisional address key instead, and these nodes carry no address, so
+// every one of them would collide on the same key and the tests would stop
+// exercising concurrent access to distinct entries.
 func newRaceTestNode(name string) *cluster.Node {
 	return &cluster.Node{
 		Node: &proto.Node{
-			Name: name,
+			Name:   name,
+			NodeId: name,
 		},
 	}
 }
@@ -35,7 +41,7 @@ func TestNodeManagerConcurrentGetAddDelete(t *testing.T) {
 			for i := 0; i < iters; i++ {
 				key := fmt.Sprintf("n%d", i%16)
 				if i%2 == 0 {
-					nm.Add(key, newRaceTestNode(key))
+					nm.Add(newRaceTestNode(key))
 				} else {
 					nm.Delete(key)
 				}
@@ -63,7 +69,7 @@ func TestNodeManagerGetAllNodeConcurrentIterate(t *testing.T) {
 	nm := cluster.NewNodeManager()
 	for i := 0; i < 16; i++ {
 		key := fmt.Sprintf("seed%d", i)
-		nm.Add(key, newRaceTestNode(key))
+		nm.Add(newRaceTestNode(key))
 	}
 
 	const iters = 2000
@@ -80,7 +86,7 @@ func TestNodeManagerGetAllNodeConcurrentIterate(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < iters; i++ {
 			key := fmt.Sprintf("n%d", i%16)
-			nm.Add(key, newRaceTestNode(key))
+			nm.Add(newRaceTestNode(key))
 			nm.Delete(key)
 		}
 	}()
@@ -100,7 +106,7 @@ func TestNodeManagerFilterConcurrentWithReads(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < iters; i++ {
 			key := fmt.Sprintf("n%d", i%8)
-			nm.Add(key, newRaceTestNode(key))
+			nm.Add(newRaceTestNode(key))
 			nm.Filter(func(n *cluster.Node) bool {
 				// 只读构造后不再变化的 Name 字段, 不触碰共享可变字段
 				return n.Name != "n0"
@@ -125,7 +131,7 @@ func TestNodeManagerFilterConcurrentWithReads(t *testing.T) {
 // 调用方修改返回的 map 不得影响内部状态。
 func TestNodeManagerGetAllNodeReturnsCopy(t *testing.T) {
 	nm := cluster.NewNodeManager()
-	nm.Add("a", newRaceTestNode("a"))
+	nm.Add(newRaceTestNode("a"))
 
 	m := nm.GetAllNode()
 	delete(m, "a")

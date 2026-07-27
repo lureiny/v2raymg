@@ -17,7 +17,7 @@ import (
 // rejected downstream as a replay, so uniqueness is the load-bearing property.
 func TestNewNodeAuthInfo_FieldsAndFreshNonce(t *testing.T) {
 	node := &proto.Node{Name: "n1"}
-	ai := NewNodeAuthInfo("tok", node, "dest-node")
+	ai := NewNodeAuthInfo("tok", node, &proto.Node{Name: "dest-node", NodeId: "dest-id"})
 
 	if ai.GetToken() != "tok" {
 		t.Errorf("token = %q, want tok", ai.GetToken())
@@ -27,6 +27,12 @@ func TestNewNodeAuthInfo_FieldsAndFreshNonce(t *testing.T) {
 	}
 	if ai.GetDestNode() != "dest-node" {
 		t.Errorf("dest = %q, want dest-node", ai.GetDestNode())
+	}
+	// The identity binding is the one that still holds when two nodes are
+	// misconfigured with the same name, which the identity-keyed directory now
+	// permits rather than refusing outright.
+	if ai.GetDestNodeId() != "dest-id" {
+		t.Errorf("dest node id = %q, want dest-id", ai.GetDestNodeId())
 	}
 	if len(ai.GetNonce()) != 16 {
 		t.Fatalf("nonce length = %d, want 16", len(ai.GetNonce()))
@@ -42,7 +48,7 @@ func TestNewNodeAuthInfo_FieldsAndFreshNonce(t *testing.T) {
 	const n = 200
 	seen := make(map[string]struct{}, n)
 	for i := 0; i < n; i++ {
-		nonce := NewNodeAuthInfo("tok", node, "dest").GetNonce()
+		nonce := NewNodeAuthInfo("tok", node, &proto.Node{Name: "dest"}).GetNonce()
 		key := hex.EncodeToString(nonce)
 		if _, dup := seen[key]; dup {
 			t.Fatalf("duplicate nonce produced on iteration %d: %s", i, key)
@@ -95,7 +101,7 @@ func TestReqAddUsers_StampsAuthAndMapsResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal req: %v", err)
 	}
-	auth := NewNodeAuthInfo("tok", &proto.Node{Name: "n1"}, "dst")
+	auth := NewNodeAuthInfo("tok", &proto.Node{Name: "n1"}, &proto.Node{Name: "dst"})
 
 	// success: rsp code 0 -> nil error, and the req must carry the auth info.
 	m := &mockEndNodeAccessClient{addUsers: func(*proto.UserOpReq) (*proto.UserOpRsp, error) {

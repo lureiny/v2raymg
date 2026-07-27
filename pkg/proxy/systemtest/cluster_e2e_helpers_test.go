@@ -236,8 +236,25 @@ func (c *e2eCluster) nodeNames() []string {
 	return out
 }
 
-// knownNodes reads one node's view of the cluster via GET /api/node.
-func (s *e2eServer) knownNodes(t *testing.T) map[string]bool {
+// e2eNodeView is one row of GET /api/node.
+//
+// Host, Port and NodeID are parsed, not discarded. The helper used to keep only
+// the name, which made the whole suite blind to a node splitting into two
+// entries at different addresses, or to a peer whose address was never updated —
+// the exact failures the identity-keyed directory exists to prevent.
+type e2eNodeView struct {
+	Name          string `json:"name"`
+	Host          string `json:"host"`
+	Port          int32  `json:"port"`
+	NodeID        string `json:"node_id"`
+	DuplicateName bool   `json:"duplicate_name"`
+}
+
+func (v e2eNodeView) addr() string { return fmt.Sprintf("%s:%d", v.Host, v.Port) }
+
+// knownNodes reads one node's view of the cluster via GET /api/node, keyed by
+// node name.
+func (s *e2eServer) knownNodes(t *testing.T) map[string]e2eNodeView {
 	t.Helper()
 	code, body, err := s.apiGet("/api/node", nil)
 	if err != nil {
@@ -246,19 +263,15 @@ func (s *e2eServer) knownNodes(t *testing.T) map[string]bool {
 	if code != 200 {
 		t.Fatalf("%s GET /api/node: status %d body %s", s.name, code, truncate(string(body), 500))
 	}
-	// The handler returns a bare array of {name, host, port, cluster_name, groups}.
+	// The handler returns a bare array of {name, host, port, node_id, groups}.
 	var raw struct {
-		Data []struct {
-			Name string `json:"name"`
-		} `json:"data"`
+		Data []e2eNodeView `json:"data"`
 	}
-	var list []struct {
-		Name string `json:"name"`
-	}
-	out := map[string]bool{}
+	var list []e2eNodeView
+	out := map[string]e2eNodeView{}
 	if err := json.Unmarshal(body, &list); err == nil && len(list) > 0 {
 		for _, n := range list {
-			out[n.Name] = true
+			out[n.Name] = n
 		}
 		return out
 	}
@@ -266,12 +279,76 @@ func (s *e2eServer) knownNodes(t *testing.T) map[string]bool {
 	// reason the suite breaks if the handler is wrapped later.
 	if err := json.Unmarshal(body, &raw); err == nil {
 		for _, n := range raw.Data {
-			out[n.Name] = true
+			out[n.Name] = n
 		}
 		return out
 	}
 	t.Fatalf("%s GET /api/node: cannot parse body %s", s.name, truncate(string(body), 500))
 	return nil
+}
+
+// nodeCount reports how many directory entries a node reports, including
+// duplicates under the same name — so a caller can catch a split even when the
+// name map would collapse it.
+func (s *e2eServer) nodeCount(t *testing.T) int {
+	t.Helper()
+	code, body, err := s.apiGet("/api/node", nil)
+	if err != nil || code != 200 {
+		t.Fatalf("%s GET /api/node: code %d err %v", s.name, code, err)
+	}
+	var list []e2eNodeView
+	if err := json.Unmarshal(body, &list); err == nil {
+		return len(list)
+	}
+	var raw struct {
+		Data []e2eNodeView `json:"data"`
+	}
+	if err := json.Unmarshal(body, &raw); err == nil {
+		return len(raw.Data)
+	}
+	t.Fatalf("%s GET /api/node: cannot parse body %s", s.name, truncate(string(body), 500))
+	return 0
+}
+
+// waitPeerAddress blocks until every other node reports `peer` at wantAddr, and
+// fails if any node ever reports more than `wantEntries` directory rows on the
+// way — a duplicate would mean the peer split into two entries instead of
+// updating in place, which is precisely the regression identity keying prevents.
+func (c *e2eCluster) waitPeerAddress(t *testing.T, peer, wantAddr string, wantEntries int, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var last map[string]string
+
+	for time.Now().Before(deadline) {
+		last = map[string]string{}
+		ok := true
+		for _, s := range c.ends {
+			if s.stopped {
+				continue
+			}
+			if got := s.nodeCount(t); got > wantEntries {
+				t.Fatalf("%s reports %d directory entries, want at most %d: the peer split "+
+					"into duplicates instead of updating in place", s.name, got, wantEntries)
+			}
+			view, seen := s.knownNodes(t)[peer]
+			if !seen {
+				last[s.name] = "<absent>"
+				ok = false
+				continue
+			}
+			last[s.name] = view.addr()
+			if view.addr() != wantAddr {
+				ok = false
+			}
+		}
+		if ok {
+			t.Logf("all nodes see %s at %s", peer, wantAddr)
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s to be seen at %s; last view: %v", peer, wantAddr, last)
 }
 
 // waitConverged blocks until every end node sees every other end node in its
@@ -292,7 +369,7 @@ func (c *e2eCluster) waitConverged(t *testing.T, timeout time.Duration) {
 		for _, s := range c.ends {
 			known := s.knownNodes(t)
 			for _, w := range want {
-				if !known[w] {
+				if _, ok := known[w]; !ok {
 					missing[s.name] = append(missing[s.name], w)
 				}
 			}
@@ -368,6 +445,59 @@ func (c *e2eCluster) waitFanoutReady(t *testing.T, timeout time.Duration) {
 // worked.
 func (c *e2eCluster) restartWithoutStaticPeers(t *testing.T, s *e2eServer) {
 	t.Helper()
+	c.restartWithConfigEdit(t, s, "no static peers", func(endNode map[string]any) {
+		cl, _ := endNode["cluster"].(map[string]any)
+		if cl == nil {
+			t.Fatalf("%s config has no end_node.cluster section", s.name)
+		}
+		if _, had := cl["static_nodes"]; !had {
+			t.Fatalf("%s had no static_nodes to strip; the test would prove nothing", s.name)
+		}
+		delete(cl, "static_nodes")
+	})
+}
+
+// restartWithProxyHost restarts a node advertising a different address.
+//
+// proxy_host is what a node tells its peers to dial, so editing it is exactly
+// the operator action the identity-keyed directory is meant to survive. listen
+// widens to 0.0.0.0 because the new address is a different loopback IP;
+// 127.0.0.0/8 is entirely local on Linux, which makes this a real address change
+// without needing a second interface.
+func (c *e2eCluster) restartWithProxyHost(t *testing.T, s *e2eServer, host string) {
+	t.Helper()
+	c.restartWithConfigEdit(t, s, "proxy_host "+host, func(endNode map[string]any) {
+		endNode["proxy_host"] = host
+		endNode["listen"] = "0.0.0.0"
+	})
+}
+
+// restartWithFreshDatabase restarts a node after deleting its database, leaving
+// the config untouched.
+//
+// This is the one blind spot identity keying alone cannot cover: the node comes
+// back with the same name and the same address but a brand-new identity, which
+// is indistinguishable on the wire from an unrelated node claiming that address.
+// Peers must accept it and tombstone the identity it replaced.
+func (c *e2eCluster) restartWithFreshDatabase(t *testing.T, s *e2eServer) {
+	t.Helper()
+	dbPath := filepath.Join(s.dir, "data.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("%s has no database at %s to delete: %v", s.name, dbPath, err)
+	}
+	c.restartWithConfigEdit(t, s, "fresh database", func(map[string]any) {
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			if err := os.Remove(dbPath + suffix); err != nil && !os.IsNotExist(err) {
+				t.Fatalf("remove %s: %v", dbPath+suffix, err)
+			}
+		}
+	})
+}
+
+// restartWithConfigEdit stops a node, applies mutate to its end_node config
+// section, and starts it again on the same data directory.
+func (c *e2eCluster) restartWithConfigEdit(t *testing.T, s *e2eServer, what string, mutate func(endNode map[string]any)) {
+	t.Helper()
 
 	s.shutdown()
 
@@ -383,14 +513,7 @@ func (c *e2eCluster) restartWithoutStaticPeers(t *testing.T, s *e2eServer) {
 	if endNode == nil {
 		t.Fatalf("%s config has no end_node section", s.name)
 	}
-	cl, _ := endNode["cluster"].(map[string]any)
-	if cl == nil {
-		t.Fatalf("%s config has no end_node.cluster section", s.name)
-	}
-	if _, had := cl["static_nodes"]; !had {
-		t.Fatalf("%s had no static_nodes to strip; the test would prove nothing", s.name)
-	}
-	delete(cl, "static_nodes")
+	mutate(endNode)
 
 	out, err := yaml.Marshal(doc)
 	if err != nil {
@@ -420,5 +543,5 @@ func (c *e2eCluster) restartWithoutStaticPeers(t *testing.T, s *e2eServer) {
 	if err := s.waitReady(60 * time.Second); err != nil {
 		t.Fatalf("%s did not come back: %v\nlogs:\n%s", s.name, err, truncate(logs.String(), 6000))
 	}
-	t.Logf("%s restarted with no static peers", s.name)
+	t.Logf("%s restarted (%s)", s.name, what)
 }

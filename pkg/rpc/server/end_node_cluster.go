@@ -17,21 +17,52 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// RegisterNode files a peer into the local directory and hands back the token it
+// must present from then on.
+//
+// The peer is the authority on its own name, address and identity, so a
+// registration that disagrees with what we hold is applied, not refused. The
+// pre-2.8 code rejected any mismatch of the host+port+name triple (code 105),
+// which meant a node whose config had been edited could not rejoin until its
+// stale entry aged out — and could not age out at all while the cluster could
+// still reach the old address. Refusal is structurally unfixable here: the party
+// that would have to withdraw the stale claim is the instance that no longer
+// exists. What the old code bought — noticing a takeover — is now delivered by
+// reporting it (see the outcome logging below) rather than by blocking it.
+//
+// Two things are still refused, because both are unresolvable config errors that
+// silently corrupt addressing rather than transient disagreements:
+// a peer presenting OUR identity (a copied data directory) and a peer presenting
+// OUR name.
 func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto.RegisterNodeReq) (*proto.RegisterNodeRsp, error) {
-	registerNodeRsp := &proto.RegisterNodeRsp{}
+	registerNodeRsp := &proto.RegisterNodeRsp{
+		ResponderNodeId: localNode.Node.GetNodeId(),
+		ResponderName:   s.Name,
+	}
 	clusterToken := registerNodeReq.GetNodeAuthInfo().GetToken()
 	node := registerNodeReq.GetNodeAuthInfo().GetNode()
 
-	if node.Host == "" || node.Port <= 0 {
-		errMsg := "empty host or invalid port"
-		log.Error("register node failed", "err", errMsg, "src_host", node.Host, "src_port", node.Port)
+	if node.GetHost() == "" || node.GetPort() <= 0 || node.GetName() == "" {
+		errMsg := "empty host, empty name or invalid port"
+		log.Error("register node failed", "err", errMsg,
+			"src_host", node.GetHost(), "src_port", node.GetPort(), "src_name", node.GetName())
 		registerNodeRsp.Code = 100
 		registerNodeRsp.Msg = errMsg
 		return registerNodeRsp, nil
 	}
-	if node.Name == s.Name {
+	if id := node.GetNodeId(); id != "" && id == localNode.Node.GetNodeId() {
+		errMsg := "remote node presents this node's identity; a data directory was copied"
+		log.Error("register node failed", "err", errMsg,
+			"src_host", node.GetHost(), "src_port", node.GetPort(), "src_name", node.GetName(),
+			"node_id", id)
+		registerNodeRsp.Code = 103
+		registerNodeRsp.Msg = errMsg
+		return registerNodeRsp, nil
+	}
+	if node.GetName() == s.Name {
 		errMsg := "remote node has same name with local node"
-		log.Error("register node failed", "err", errMsg, "src_host", node.Host, "src_port", node.Port)
+		log.Error("register node failed", "err", errMsg,
+			"src_host", node.GetHost(), "src_port", node.GetPort())
 		registerNodeRsp.Code = 103
 		registerNodeRsp.Msg = errMsg
 		return registerNodeRsp, nil
@@ -41,8 +72,8 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 		errMsg := err.Error()
 		log.Info("cluster mismatch",
 			"err", errMsg,
-			"src_host", node.Host, "src_port", node.Port,
-			"src_name", node.Name,
+			"src_host", node.GetHost(), "src_port", node.GetPort(),
+			"src_name", node.GetName(),
 		)
 		s.clusterState.AddToWrongNodeList(&cluster.Node{
 			Node:       node,
@@ -53,53 +84,75 @@ func (s *EndNodeServer) RegisterNode(ctx context.Context, registerNodeReq *proto
 		return registerNodeRsp, nil
 	}
 
-	nodeName := node.Name
-	token := ""
-	s.clusterState.DeleteFromWrongTokenNodeList(nodeName)
+	s.clusterState.DeleteFromWrongTokenNodeList(node.GetName())
 
-	if n := s.clusterState.Get(nodeName); n != nil {
-		if !n.CompareWithProtoNode(node) {
-			errMsg := "repeated register, bug with different node"
-			log.Error("register node failed", "err", errMsg, "src_name", nodeName)
-			registerNodeRsp.Code = 105
-			registerNodeRsp.Msg = errMsg
-			return registerNodeRsp, nil
-		}
-		if n.RegisteredLocal() {
-			errMsg := "repeated register"
-			log.Error("register node failed", "err", errMsg, "src_name", nodeName)
-			registerNodeRsp.Code = 102
-			registerNodeRsp.Msg = errMsg
-			token = n.GetInToken()
-		} else {
-			token = uuid.New().String()
-			n.SetInToken(token)
-			log.Info("register node update",
-				"src_host", node.Host, "src_port", node.Port,
-				"src_name", nodeName,
-			)
-		}
-		n.SetRecvHeartBeatTime(time.Now().Unix())
-	} else {
-		token = uuid.New().String()
-		newNode := &cluster.Node{
-			Node:       node,
-			CreateTime: time.Now().Unix(),
-		}
-		newNode.SetInToken(token)
-		newNode.SetRecvHeartBeatTime(time.Now().Unix())
-		s.clusterState.Add(newNode)
-		log.Info("register node new",
-			"src_host", node.Host, "src_port", node.Port,
-			"src_name", nodeName,
-		)
+	res := s.clusterState.ResolveRegistration(node, uuid.New().String(), time.Now().Unix())
+	// Outside the directory lock: a stale connection is pinned to the address it
+	// was dialled with, so it has to go, but closing it under the lock would
+	// block every other directory reader on a network operation.
+	for _, conn := range res.RetiredConns {
+		_ = conn.Close()
 	}
-	registerNodeRsp.Data = []byte(token)
+	s.reportResolve(res, node)
+
+	registerNodeRsp.Data = []byte(res.Token)
+	if res.Repeat {
+		// Preserved verbatim for peers that predate this change: they treat 102
+		// as "already registered, reuse the token in Data".
+		registerNodeRsp.Code = 102
+		registerNodeRsp.Msg = "repeated register"
+	}
 	return registerNodeRsp, nil
 }
 
+// reportResolve turns a registration outcome into operator-visible signal. This
+// is where "a node was silently replaced" stops being silent: acceptance is
+// never in question, but every identity or address change is announced.
+func (s *EndNodeServer) reportResolve(res cluster.ResolveResult, claim *proto.Node) {
+	switch res.Outcome {
+	case cluster.ResolveNew:
+		log.Info("register node new",
+			"src_host", claim.GetHost(), "src_port", claim.GetPort(),
+			"src_name", claim.GetName(), "node_id", claim.GetNodeId())
+	case cluster.ResolveMoved:
+		log.Warn("node address changed",
+			"src_name", claim.GetName(), "node_id", claim.GetNodeId(),
+			"prev_host", res.PrevHost, "prev_port", res.PrevPort,
+			"new_host", claim.GetHost(), "new_port", claim.GetPort())
+	case cluster.ResolveRenamed:
+		log.Warn("node renamed",
+			"node_id", claim.GetNodeId(),
+			"prev_name", res.PrevName, "new_name", claim.GetName())
+	case cluster.ResolveReplaced:
+		log.Warn("node identity replaced",
+			"src_name", claim.GetName(),
+			"src_host", claim.GetHost(), "src_port", claim.GetPort(),
+			"prev_node_id", res.PrevNodeID, "new_node_id", claim.GetNodeId())
+	}
+	if len(res.Absorbed) > 0 {
+		log.Info("absorbed stale entries at the same address",
+			"src_name", claim.GetName(),
+			"src_host", claim.GetHost(), "src_port", claim.GetPort(),
+			"absorbed", res.Absorbed)
+	}
+	if len(res.LiveAddrRivals) > 0 {
+		log.Error("two live nodes claim the same address",
+			"src_name", claim.GetName(),
+			"host", claim.GetHost(), "port", claim.GetPort(),
+			"rivals", res.LiveAddrRivals)
+	}
+}
+
 func (s *EndNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.HeartBeatReq) (*proto.HeartBeatRsp, error) {
-	heartBeatRsp := &proto.HeartBeatRsp{}
+	heartBeatRsp := &proto.HeartBeatRsp{
+		// Answered on every heartbeat this handler produces, including its error
+		// paths: a caller holding a stale address needs to learn who actually lives
+		// there even — especially — when we are rejecting it. Requests turned away
+		// by the interceptor never reach here, so authRemoteNode stamps the same
+		// two fields onto the response it synthesises.
+		ResponderNodeId: localNode.Node.GetNodeId(),
+		ResponderName:   s.Name,
+	}
 
 	// Validate heartbeat timestamp (skip if 0 for backward compatibility).
 	if ts := heartBeatReq.GetTimestampUs(); ts != 0 {
@@ -117,11 +170,14 @@ func (s *EndNodeServer) HeartBeat(ctx context.Context, heartBeatReq *proto.Heart
 		}
 	}
 
-	node := s.clusterState.Get(heartBeatReq.GetNodeAuthInfo().Node.GetName())
+	// Resolved through LookupPeer (id, then address, then name) rather than by
+	// name alone, so a peer that was renamed or moved still finds its own entry.
+	claim := heartBeatReq.GetNodeAuthInfo().GetNode()
+	node := s.clusterState.LookupPeer(claim)
 	if node == nil {
 		heartBeatRsp.Code = 104
 		heartBeatRsp.Msg = "node has been drop"
-		log.Error("heartbeat failed", "err", fmt.Sprintf("node[%s] has been drop", heartBeatReq.GetNodeAuthInfo().Node.GetName()))
+		log.Error("heartbeat failed", "err", fmt.Sprintf("node[%s] has been drop", claim.GetName()))
 		return heartBeatRsp, nil
 	}
 	// Node-directory delta sync. This response used to carry the full node map on
@@ -207,7 +263,7 @@ func (s *EndNodeServer) registerToEndNode(node *cluster.Node, wg *sync.WaitGroup
 	}
 
 	c := proto.NewEndNodeAccessClient(conn)
-	nodeAuthInfo := rpcClient.NewNodeAuthInfo(s.clusterState.GetClusterToken(), &localNode.Node, node.GetName())
+	nodeAuthInfo := rpcClient.NewNodeAuthInfo(s.clusterState.GetClusterToken(), &localNode.Node, destBinding(node))
 	var registerNodeReq interface{} = &proto.RegisterNodeReq{}
 	reqData, _ := pb.Marshal(registerNodeReq.(pb.Message))
 	rsp, err := rpcClient.ReqRegisterNode(rpcClient.NewContext(), reqData, c, nodeAuthInfo, s.clusterState.GetClusterToken())
@@ -225,21 +281,118 @@ func (s *EndNodeServer) registerToEndNode(node *cluster.Node, wg *sync.WaitGroup
 		)
 		return
 	}
+	node, ok = s.assertResponder(node, registerRsp.GetResponderNodeId(), registerRsp.GetResponderName())
+	if !ok {
+		return
+	}
 	if registerRsp.GetCode() != 0 {
 		errMsg := registerRsp.GetMsg()
-		if !node.IsLocal() && registerRsp.GetCode() > 0 && registerRsp.GetCode() != 102 {
-			s.clusterState.Delete(node.GetName())
-			s.clusterState.AddToWrongNodeList(node)
+		// Which failures justify forgetting the peer, and which are about US.
+		// The old blanket rule (drop and blacklist on any code but 102) turned a
+		// local misconfiguration into cluster-wide amnesia: an empty proxy_host
+		// makes every peer answer 100, so one round wiped and blacklisted the
+		// entire directory.
+		switch registerRsp.GetCode() {
+		case 101:
+			// Wrong cluster token: the peer genuinely does not belong here.
+			if !node.IsLocal() {
+				s.clusterState.DeleteNode(node)
+				s.clusterState.AddToWrongNodeList(node)
+			}
+		case 103:
+			// The peer says we collide with it on name or identity. Unfixable
+			// without operator action, so stop dialling it, but do NOT blacklist:
+			// the wrong-token list is keyed by name, and this peer's name is ours.
+			if !node.IsLocal() {
+				s.clusterState.DeleteNode(node)
+			}
+			log.Error("register to end node rejected as a local config conflict",
+				"err", errMsg, "dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name)
+		case 100:
+			log.Error("peer rejected our own address as invalid; check end_node.proxy_host and end_node.name",
+				"err", errMsg, "dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name)
+		default:
+			// Includes 105 from a pre-2.8 peer, which still refuses a changed
+			// address. Keep retrying; its stale entry ages out within NodeTimeOut.
+			log.Warn("register to end node rejected, will retry",
+				"code", registerRsp.GetCode(), "err", errMsg,
+				"dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name)
 		}
-		log.Error("register to end node failed",
-			"err", errMsg, "dst_host", node.Host, "dst_port", node.Port, "dst_name", node.Name,
-		)
 	}
 	if len(registerRsp.GetData()) != 0 {
 		token := string(registerRsp.GetData())
 		node.SetOutToken(token)
 		node.SetReportHeartBeatTime(time.Now().Unix())
 	}
+}
+
+// destBinding returns what we can honestly assert about a peer for the
+// anti-replay destination binding.
+//
+// A static seed carries a name an operator typed into static_nodes and that
+// nothing has ever confirmed. Binding a request to it makes checkReplay on the
+// far side reject the call outright whenever that label is wrong — so a single
+// mistyped seed name used to be permanently unusable in the outbound direction,
+// and the ghost entry it left behind could only be cleaned up if the peer
+// happened to register to us first. Sending no binding for an unconfirmed seed
+// is the honest answer: we genuinely do not know who is at that address yet, and
+// the first response tells us (see assertResponder).
+//
+// Every other entry's name came from the peer's own registration, so it is
+// asserted normally. The nonce, timestamp and method bindings are unaffected
+// either way.
+func destBinding(node *cluster.Node) *proto.Node {
+	if node.IsLocal() && node.GetNodeId() == "" {
+		return nil
+	}
+	return node.Node
+}
+
+// assertResponder checks that the node answering at an entry's address is the
+// node that entry claims to be, and reports whether the caller may keep using it.
+//
+// Nothing in a response used to say who produced it, so a directory entry could
+// point at an address that had been taken over — by a rebuilt node with a fresh
+// identity, or by an unrelated cluster member that inherited the IP — and the
+// caller would keep registering to it happily. That is what kept the stale
+// entry's reportHeartBeatTime fresh, which kept IsValid true, which meant the
+// entry was never reclaimed: the one shape of this problem that does not
+// self-heal.
+//
+// On a mismatch the stale id is tombstoned (which also drops the entry), so
+// gossip cannot reintroduce it before the rest of the cluster notices.
+//
+// Returns the entry the caller must go on using. Adopting an identity REPLACES
+// the directory entry, so a caller that kept writing to the pointer it started
+// the round with would write the session it just negotiated into an object no
+// longer in the directory — losing it, and costing a whole extra round on every
+// static seed at startup.
+func (s *EndNodeServer) assertResponder(node *cluster.Node, responderID, responderName string) (*cluster.Node, bool) {
+	if responderID == "" {
+		return node, true // pre-2.8 peer: nothing to check against
+	}
+	known := node.GetNodeId()
+	if known == "" {
+		// A static seed or a replayed database row identifying itself for the
+		// first time. Adopt it now so it is not re-learned as a second entry.
+		if adopted, changed := s.clusterState.AdoptIdentity(node.GetHost(), node.GetPort(), responderID, responderName); changed {
+			log.Info("resolved provisional peer identity",
+				"dst_host", node.GetHost(), "dst_port", node.GetPort(),
+				"configured_name", node.GetName(), "reported_name", responderName,
+				"node_id", responderID)
+			return adopted, true
+		}
+		return node, true
+	}
+	if known == responderID {
+		return node, true
+	}
+	log.Warn("directory entry is stale: its address is answered by a different node",
+		"dst_host", node.GetHost(), "dst_port", node.GetPort(),
+		"expected_name", node.GetName(), "expected_node_id", known,
+		"actual_name", responderName, "actual_node_id", responderID)
+	s.clusterState.MarkDirty(known, time.Now().Unix())
+	return node, false
 }
 
 // heartbeatToEndNode sends one heartbeat to a peer. advertised/advertisedSum are
@@ -263,7 +416,7 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 	}
 
 	c := proto.NewEndNodeAccessClient(conn)
-	nodeAuthInfo := rpcClient.NewNodeAuthInfo(node.GetOutToken(), &localNode.Node, node.GetName())
+	nodeAuthInfo := rpcClient.NewNodeAuthInfo(node.GetOutToken(), &localNode.Node, destBinding(node))
 	heartBeatMsg := &proto.HeartBeatReq{
 		TimestampUs: time.Now().UnixMicro(),
 		// Digest of our advertised node set. Also the capability signal: a peer
@@ -303,6 +456,10 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 		)
 		return
 	}
+	node, ok = s.assertResponder(node, heartBeatRsp.GetResponderNodeId(), heartBeatRsp.GetResponderName())
+	if !ok {
+		return
+	}
 	if heartBeatRsp.GetCode() != 0 {
 		node.SetOutToken("")
 		node.SetReportHeartBeatTime(time.Now().Unix())
@@ -331,7 +488,7 @@ func (s *EndNodeServer) heartbeatToEndNode(node *cluster.Node, wg *sync.WaitGrou
 					upsertData, _ := pb.Marshal(&proto.UpsertClusterUsersReq{Users: toSend})
 					// Fresh NodeAuthInfo (new nonce) — reusing the heartbeat's
 					// would look like a replay and be rejected by the server.
-					upsertAuth := rpcClient.NewNodeAuthInfo(node.GetOutToken(), &localNode.Node, node.GetName())
+					upsertAuth := rpcClient.NewNodeAuthInfo(node.GetOutToken(), &localNode.Node, destBinding(node))
 					if _, err := rpcClient.ReqUpsertClusterUsers(rpcClient.NewContext(), upsertData, c, upsertAuth, s.clusterState.GetClusterToken()); err != nil {
 						log.Error("heartbeat: push cluster users failed", "dst_name", node.Name, "count", len(toSend), "err", err)
 					} else {
@@ -404,7 +561,7 @@ func (s *EndNodeServer) reconcileNodesWithPeer(node *cluster.Node, c proto.EndNo
 	}
 	// Fresh NodeAuthInfo (new nonce) — reusing the heartbeat's would be a
 	// duplicate nonce and checkReplay would drop this call as a replay.
-	reconcileAuth := rpcClient.NewNodeAuthInfo(node.GetOutToken(), &localNode.Node, node.GetName())
+	reconcileAuth := rpcClient.NewNodeAuthInfo(node.GetOutToken(), &localNode.Node, destBinding(node))
 	rsp, err := rpcClient.ReqHeartBeat(rpcClient.NewContext(), reqData, c, reconcileAuth, s.clusterState.GetClusterToken())
 	if err != nil {
 		// The peer answered the heartbeat a moment ago, so a failure here is not
@@ -442,7 +599,10 @@ func (s *EndNodeServer) registerOrHeartBeatToEndNode() {
 		advertisedSum = nil
 	}
 	for _, node := range s.clusterState.GetAllNode() {
-		if node.Name == s.Name {
+		// Skip by identity, not by name: a peer misconfigured with our name is
+		// still a different node and must keep being contacted, and our own entry
+		// is the only one flagged isSelf.
+		if node.IsSelf() {
 			continue
 		}
 		if node.IsLocal() {
@@ -474,9 +634,18 @@ func (s *EndNodeServer) registerOrHeartBeatToEndNode() {
 // of a reconcile heartbeat (a peer pushing its view to us). Both arrive from an
 // authenticated cluster member and get identical treatment.
 //
-// The merge is add-only and never rewrites an existing entry: a node whose meta
-// info changed is rejected by AuthRemoteNode's Compare and ages out of the
-// advertised set within NodeTimeOut instead.
+// The merge is add-only and never rewrites an existing entry. Gossip is a hint
+// about who exists, not evidence about where they live: only a node itself, over
+// an authenticated connection, may change its own address or name (see
+// RegisterNode). A peer that reconfigured is therefore learned from its own
+// registration, not from a third party repeating what it used to know.
+//
+// Identity comes from the message body, never from the map key. The key used to
+// be the lookup while the insert was keyed by node.Name, so a map whose key
+// disagreed with its body slipped past the "already known?" guard and then
+// overwrote an unrelated entry wholesale — tokens, heartbeat timestamps and
+// address included. Honest peers always agree (the advertised map is name-keyed
+// for exactly this reason), so a disagreement is discarded and reported.
 //
 // Entries are validated before being trusted. Until this change nothing checked
 // them, because the only source was a peer's own response; the reconcile path
@@ -485,34 +654,67 @@ func (s *EndNodeServer) registerOrHeartBeatToEndNode() {
 // log at Warn — a legitimate peer never sends one, so silence is the expected
 // steady state.
 func mergeRemoteNodes(nodes map[string]*proto.Node, s *EndNodeServer, remoteServerType string) {
+	now := time.Now().Unix()
 	for key, remoteNode := range nodes {
-		remoteNodeName := remoteNode.GetName()
-		if node := s.clusterState.Get(key); node == nil && remoteNode.Name != localNode.Name {
-			if wrongNode := s.clusterState.GetNodeFromWrongNodeList(remoteNodeName); wrongNode != nil {
-				log.Debug("skip add wrong node",
-					"remote_server_type", remoteServerType,
-					"node_host", remoteNode.GetHost(), "node_port", remoteNode.GetPort(), "node_name", remoteNode.GetName(),
-				)
-				continue
-			}
-			candidate := &cluster.Node{
-				Node:       remoteNode,
-				CreateTime: time.Now().Unix(),
-			}
-			if !candidate.IsComplete() {
-				log.Warn("skip incomplete node from remote",
-					"remote_server_type", remoteServerType,
-					"node_host", remoteNode.GetHost(), "node_port", remoteNode.GetPort(),
-					"node_name", remoteNode.GetName(),
-				)
-				continue
-			}
-			log.Info("add node from remote",
-				"remote_server_type", remoteServerType,
-				"node_host", remoteNode.GetHost(), "node_port", remoteNode.GetPort(), "node_name", remoteNode.GetName(),
-			)
-			s.clusterState.Add(candidate)
+		if remoteNode == nil {
+			continue
 		}
+		remoteNodeName := remoteNode.GetName()
+		if key != remoteNodeName {
+			log.Warn("skip node whose directory key disagrees with its body",
+				"remote_server_type", remoteServerType,
+				"key", key, "node_name", remoteNodeName,
+				"node_host", remoteNode.GetHost(), "node_port", remoteNode.GetPort(),
+			)
+			continue
+		}
+		// Never learn ourselves from someone else's view of us.
+		if remoteNodeName == localNode.Name ||
+			(remoteNode.GetNodeId() != "" && remoteNode.GetNodeId() == localNode.Node.GetNodeId()) {
+			continue
+		}
+		// A tombstoned id is one we watched get superseded at its own address.
+		// Peers that have not noticed yet keep advertising it; without this the
+		// add-only merge would reinsert it with a fresh CreateTime every round
+		// and it would never age out.
+		if s.clusterState.IsDirty(remoteNode.GetNodeId(), now) {
+			log.Debug("skip tombstoned node from remote",
+				"remote_server_type", remoteServerType,
+				"node_id", remoteNode.GetNodeId(), "node_name", remoteNodeName,
+			)
+			continue
+		}
+		if wrongNode := s.clusterState.GetNodeFromWrongNodeList(remoteNodeName); wrongNode != nil {
+			log.Debug("skip add wrong node",
+				"remote_server_type", remoteServerType,
+				"node_host", remoteNode.GetHost(), "node_port", remoteNode.GetPort(), "node_name", remoteNodeName,
+			)
+			continue
+		}
+		candidate := &cluster.Node{
+			Node:       remoteNode,
+			CreateTime: now,
+		}
+		if !candidate.IsComplete() {
+			log.Warn("skip incomplete node from remote",
+				"remote_server_type", remoteServerType,
+				"node_host", remoteNode.GetHost(), "node_port", remoteNode.GetPort(),
+				"node_name", remoteNodeName,
+			)
+			continue
+		}
+		// Add-only, and the check has to be atomic with the insert: a Lookup
+		// followed by an Add is two lock acquisitions, and a registration landing
+		// in between would be overwritten by a token-less gossip copy — silently
+		// destroying the session of a peer that had just completed its handshake.
+		if !s.clusterState.AddIfAbsent(candidate) {
+			continue
+		}
+		log.Info("add node from remote",
+			"remote_server_type", remoteServerType,
+			"node_host", remoteNode.GetHost(), "node_port", remoteNode.GetPort(),
+			"node_name", remoteNodeName, "node_id", remoteNode.GetNodeId(),
+		)
 	}
 }
 

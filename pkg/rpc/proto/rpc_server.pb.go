@@ -275,7 +275,14 @@ type NodeAuthInfo struct {
 	// transport cannot move a ciphertext to a sibling method that shares the same
 	// request type (e.g. ResetUserTraffic -> DeleteUsers, both UserOpReq). Added
 	// 2026-07; stamped by the client interceptor, checked in the server interceptor.
-	DestMethod    string `protobuf:"bytes,6,opt,name=dest_method,json=destMethod,proto3" json:"dest_method,omitempty"`
+	DestMethod string `protobuf:"bytes,6,opt,name=dest_method,json=destMethod,proto3" json:"dest_method,omitempty"`
+	// dest_node_id binds the request to the destination's node_id rather than
+	// its name (added 2026-07). Names are mutable and, since the directory is
+	// keyed by id, no longer guaranteed unique, so the name binding alone would
+	// weaken exactly when two nodes collide on a name. Empty when the sender
+	// does not know the destination's id yet; the server then falls back to the
+	// dest_node name check, which is what a pre-2.8 sender always relies on.
+	DestNodeId    string `protobuf:"bytes,7,opt,name=dest_node_id,json=destNodeId,proto3" json:"dest_node_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -348,6 +355,13 @@ func (x *NodeAuthInfo) GetDestNode() string {
 func (x *NodeAuthInfo) GetDestMethod() string {
 	if x != nil {
 		return x.DestMethod
+	}
+	return ""
+}
+
+func (x *NodeAuthInfo) GetDestNodeId() string {
+	if x != nil {
+		return x.DestNodeId
 	}
 	return ""
 }
@@ -1191,10 +1205,26 @@ func (x *HeartBeatReq) GetNodes() map[string]*Node {
 }
 
 type Node struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
-	Port          int32                  `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
-	Name          string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// host/port/name are all MUTABLE attributes of a node, not its identity.
+	// An operator may change any of them by editing the config and restarting.
+	Host string `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
+	Port int32  `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	Name string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	// node_id (added 2026-07) is the node's real identity: a random UUID minted
+	// on first start and persisted in the local database, so it survives
+	// restarts and config edits. It is the directory's primary key — a peer that
+	// changed its name, host or port is still the same node and overwrites its
+	// own entry in place, instead of racing a stale one that has to age out.
+	//
+	// Empty means "not yet known": a peer older than 2.8, or a statically
+	// configured seed we have not completed a handshake with yet. Such entries
+	// are held under a provisional address key until the first response tells us
+	// the real id. Empty is therefore NORMAL, not an error.
+	//
+	// Deliberately NOT folded into ComputeNodesSum: the digest must stay
+	// byte-compatible with 2.7 or mixed clusters would never converge.
+	NodeId        string `protobuf:"bytes,5,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1250,6 +1280,13 @@ func (x *Node) GetName() string {
 	return ""
 }
 
+func (x *Node) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
 type HeartBeatRsp struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Code  int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
@@ -1263,9 +1300,14 @@ type HeartBeatRsp struct {
 	// ComputeNodesSum over this node's advertised set. Always populated. The
 	// client compares it against its own sum and, on a mismatch, immediately
 	// issues one reconcile heartbeat carrying its full node map.
-	NodesSum      []byte `protobuf:"bytes,5,opt,name=nodes_sum,json=nodesSum,proto3" json:"nodes_sum,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	NodesSum []byte `protobuf:"bytes,5,opt,name=nodes_sum,json=nodesSum,proto3" json:"nodes_sum,omitempty"`
+	// Responder identity — see RegisterNodeRsp. Carried on every heartbeat so a
+	// stale directory entry is detected within one heartbeat interval rather
+	// than waiting for the node timeout.
+	ResponderNodeId string `protobuf:"bytes,6,opt,name=responder_node_id,json=responderNodeId,proto3" json:"responder_node_id,omitempty"`
+	ResponderName   string `protobuf:"bytes,7,opt,name=responder_name,json=responderName,proto3" json:"responder_name,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *HeartBeatRsp) Reset() {
@@ -1333,6 +1375,20 @@ func (x *HeartBeatRsp) GetNodesSum() []byte {
 	return nil
 }
 
+func (x *HeartBeatRsp) GetResponderNodeId() string {
+	if x != nil {
+		return x.ResponderNodeId
+	}
+	return ""
+}
+
+func (x *HeartBeatRsp) GetResponderName() string {
+	if x != nil {
+		return x.ResponderName
+	}
+	return ""
+}
+
 type RegisterNodeReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeAuthInfo  *NodeAuthInfo          `protobuf:"bytes,1,opt,name=node_auth_info,json=nodeAuthInfo,proto3" json:"node_auth_info,omitempty"`
@@ -1378,12 +1434,20 @@ func (x *RegisterNodeReq) GetNodeAuthInfo() *NodeAuthInfo {
 }
 
 type RegisterNodeRsp struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Code          int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
-	Msg           string                 `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
-	Data          []byte                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"` // end node 节点间注册返回token(string), 注册到center node返回[]Node
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Code  int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
+	Msg   string                 `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
+	Data  []byte                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"` // end node 节点间注册返回token(string)
+	// Responder identity (added 2026-07). Until now nothing in any response said
+	// WHO answered, so a caller could not tell that the address it holds for a
+	// peer now belongs to a different node — the case that arises when a node is
+	// rebuilt with a fresh database, or when its old IP is reassigned to another
+	// cluster member. The caller compares these against the directory entry it
+	// dialled and, on a mismatch, tombstones the stale id.
+	ResponderNodeId string `protobuf:"bytes,4,opt,name=responder_node_id,json=responderNodeId,proto3" json:"responder_node_id,omitempty"`
+	ResponderName   string `protobuf:"bytes,5,opt,name=responder_name,json=responderName,proto3" json:"responder_name,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RegisterNodeRsp) Reset() {
@@ -1435,6 +1499,20 @@ func (x *RegisterNodeRsp) GetData() []byte {
 		return x.Data
 	}
 	return nil
+}
+
+func (x *RegisterNodeRsp) GetResponderNodeId() string {
+	if x != nil {
+		return x.ResponderNodeId
+	}
+	return ""
+}
+
+func (x *RegisterNodeRsp) GetResponderName() string {
+	if x != nil {
+		return x.ResponderName
+	}
+	return ""
 }
 
 type GetBandwidthStatsReq struct {
@@ -4958,7 +5036,7 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\x05group\x18\r \x01(\tR\x05group\x12\x1d\n" +
 	"\n" +
 	"auth_token\x18\x0e \x01(\tR\tauthToken\x12.\n" +
-	"\x13login_password_hash\x18\x0f \x01(\tR\x11loginPasswordHashJ\x04\b\x04\x10\x05\"\xbc\x01\n" +
+	"\x13login_password_hash\x18\x0f \x01(\tR\x11loginPasswordHashJ\x04\b\x04\x10\x05\"\xde\x01\n" +
 	"\fNodeAuthInfo\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1f\n" +
 	"\x04node\x18\x02 \x01(\v2\v.proto.NodeR\x04node\x12!\n" +
@@ -4966,7 +5044,9 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\x05nonce\x18\x04 \x01(\fR\x05nonce\x12\x1b\n" +
 	"\tdest_node\x18\x05 \x01(\tR\bdestNode\x12\x1f\n" +
 	"\vdest_method\x18\x06 \x01(\tR\n" +
-	"destMethod\"i\n" +
+	"destMethod\x12 \n" +
+	"\fdest_node_id\x18\a \x01(\tR\n" +
+	"destNodeId\"i\n" +
 	"\vGetUsersReq\x129\n" +
 	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x12\x1f\n" +
 	"\vinclude_all\x18\x02 \x01(\bR\n" +
@@ -5038,26 +5118,31 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\n" +
 	"NodesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12!\n" +
-	"\x05value\x18\x02 \x01(\v2\v.proto.NodeR\x05value:\x028\x01\"H\n" +
+	"\x05value\x18\x02 \x01(\v2\v.proto.NodeR\x05value:\x028\x01\"a\n" +
 	"\x04Node\x12\x12\n" +
 	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\x12\x12\n" +
-	"\x04name\x18\x04 \x01(\tR\x04nameJ\x04\b\x03\x10\x04\"\x88\x02\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\x12\x17\n" +
+	"\anode_id\x18\x05 \x01(\tR\x06nodeIdJ\x04\b\x03\x10\x04\"\xdb\x02\n" +
 	"\fHeartBeatRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
 	"\x03msg\x18\x02 \x01(\tR\x03msg\x12=\n" +
 	"\bnodesMap\x18\x03 \x03(\v2!.proto.HeartBeatRsp.NodesMapEntryR\bnodesMap\x12,\n" +
 	"\x12need_cluster_users\x18\x04 \x03(\tR\x10needClusterUsers\x12\x1b\n" +
-	"\tnodes_sum\x18\x05 \x01(\fR\bnodesSum\x1aH\n" +
+	"\tnodes_sum\x18\x05 \x01(\fR\bnodesSum\x12*\n" +
+	"\x11responder_node_id\x18\x06 \x01(\tR\x0fresponderNodeId\x12%\n" +
+	"\x0eresponder_name\x18\a \x01(\tR\rresponderName\x1aH\n" +
 	"\rNodesMapEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12!\n" +
 	"\x05value\x18\x02 \x01(\v2\v.proto.NodeR\x05value:\x028\x01\"L\n" +
 	"\x0fRegisterNodeReq\x129\n" +
-	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\"K\n" +
+	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\"\x9e\x01\n" +
 	"\x0fRegisterNodeRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
 	"\x03msg\x18\x02 \x01(\tR\x03msg\x12\x12\n" +
-	"\x04data\x18\x03 \x01(\fR\x04data\"Q\n" +
+	"\x04data\x18\x03 \x01(\fR\x04data\x12*\n" +
+	"\x11responder_node_id\x18\x04 \x01(\tR\x0fresponderNodeId\x12%\n" +
+	"\x0eresponder_name\x18\x05 \x01(\tR\rresponderName\"Q\n" +
 	"\x14GetBandwidthStatsReq\x129\n" +
 	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\"\xcb\x01\n" +
 	"\x05Stats\x12\x12\n" +

@@ -22,9 +22,15 @@ const NodeTimeOut int64 = 60
 // mutable runtime fields below are therefore unexported and guarded by mu;
 // all reads/writes must go through the accessor methods so the compiler forces
 // every call site through the lock. The embedded *proto.Node identity fields
-// (Host/Port/Name), CreateTime and isLocal are written only at
+// (Host/Port/Name/NodeId), CreateTime and isLocal are written only at
 // construction (before the node is published via NodeManager.Add, which
 // establishes a happens-before edge) and are treated as read-only afterwards.
+//
+// That contract is why a peer which changed its address or name is handled by
+// building a REPLACEMENT node and swapping it into the directory, rather than
+// by assigning to Host/Name on the live one: ComputeNodesSum and the gRPC
+// marshaller both read those fields with no lock held, off the shared
+// *proto.Node that GetAdvertisedNodes hands out. See NodeManager.ResolveRegistration.
 //
 // mu is a leaf lock: methods holding it only touch this node's own fields and
 // never call back into NodeManager/ClusterManager. Compound predicates take a
@@ -34,6 +40,10 @@ type Node struct {
 	*proto.Node
 	CreateTime int64
 	isLocal    bool // 是否为从本地文件中加载的node, 本地节点是为了不使用中心节点的场景而设计的
+	// isSelf marks THIS process's own directory entry. Address de-duplication and
+	// name resolution must never touch it: it is the one entry whose identity is
+	// not a claim from the network but a local fact.
+	isSelf bool
 
 	mu                  sync.RWMutex
 	inToken             string // 远端节点访问本地节点时使用, 用于验证远端节点是否有权限访问本地节点
@@ -191,8 +201,68 @@ func (node *Node) GetGrpcClientConn() (*grpc.ClientConn, error) {
 	return conn, nil
 }
 
+// takeConn detaches this node's gRPC connection and hands it to the caller,
+// which becomes responsible for closing it.
+//
+// Needed because an address change is implemented by REPLACING the directory
+// entry, never by writing Host in place. Two reasons that is not optional:
+// the identity fields are published read-only (see the type comment) and are
+// read unlocked by ComputeNodesSum and by gRPC marshalling the shared
+// *proto.Node; and grpc.Dial pins its target at dial time, so a cached
+// connection keeps reaching the OLD address no matter what Host says. The
+// replacement therefore has to inherit nothing and the stale connection has to
+// be closed explicitly — which also fixes a pre-existing leak, since Delete and
+// Filter never closed the connections of the nodes they dropped.
+//
+// Safe to call while holding NodeManager's lock: mu is a leaf.
+func (n *Node) takeConn() *grpc.ClientConn {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	conn := n.grpcClientConn
+	n.grpcClientConn = nil
+	return conn
+}
+
+// CloseConn closes and clears this node's gRPC connection, if any.
+func (n *Node) CloseConn() {
+	if conn := n.takeConn(); conn != nil {
+		_ = conn.Close()
+	}
+}
+
+// handOffRuntimeTo moves every mutable runtime field to dst, which must not be
+// published yet, and transfers ownership of the gRPC connection.
+//
+// Used when an entry is re-filed under a new key without its address changing —
+// learning a provisional peer's real identity. The session (tokens, heartbeat
+// timestamps, digest-mismatch streak) belongs to the peer, not to the key it was
+// filed under, so losing it would tear down a working registration; and the
+// connection is still pointed at the right address, so it is moved rather than
+// closed.
+//
+// Deliberately NOT a general-purpose copy: the caller must not use it to fake
+// heartbeat timestamps onto an entry that has not actually completed a
+// handshake, since IsCompleteRegister verifies no token and would then admit an
+// unauthenticated peer into the advertised set.
+func (n *Node) handOffRuntimeTo(dst *Node) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	dst.inToken = n.inToken
+	dst.outToken = n.outToken
+	dst.recvHeartBeatTime = n.recvHeartBeatTime
+	dst.reportHeartBeatTime = n.reportHeartBeatTime
+	dst.nodesSumMismatchRounds = n.nodesSumMismatchRounds
+	dst.grpcClientConn = n.grpcClientConn
+	n.grpcClientConn = nil
+}
+
 func (n *Node) IsLocal() bool {
 	return n.isLocal
+}
+
+// IsSelf reports whether this entry is this process's own node.
+func (n *Node) IsSelf() bool {
+	return n.isSelf
 }
 
 // IsValid 有效返回true

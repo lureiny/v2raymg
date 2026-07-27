@@ -20,14 +20,47 @@ type ClusterState interface {
 	// AuthRemoteNode validates a remote node's token and updates its heartbeat time.
 	AuthRemoteNode(node **cluster.Node) error
 
-	// Get returns the node with the given name, or nil if not found.
-	Get(nodeName string) *cluster.Node
+	// Get returns the node filed under a directory key, or nil if not found.
+	// The key is a node_id, or a provisional address key for a peer that has not
+	// identified itself yet; use cluster.DirectoryKey to derive it from a node.
+	Get(key string) *cluster.Node
+
+	// LookupPeer finds the entry a peer's self-description refers to, resolving
+	// by identity first so a renamed or moved peer still matches its own entry.
+	LookupPeer(claim *proto.Node) *cluster.Node
+
+	// ResolveRegistration files a peer's self-description and reports what
+	// changed — new, unchanged, moved, renamed, or a different identity taking
+	// over an entry. It never refuses: the registering node is the authority on
+	// its own name, address and identity.
+	ResolveRegistration(claim *proto.Node, freshToken string, now int64) cluster.ResolveResult
+
+	// AdoptIdentity upgrades the provisional entry at an address to the identity
+	// that address reported, without stamping heartbeat timestamps.
+	AdoptIdentity(host string, port int32, nodeID, name string) (*cluster.Node, bool)
+
+	// MarkDirty tombstones a superseded node_id and drops its entry, so gossip
+	// cannot reintroduce it before the cluster has converged.
+	MarkDirty(nodeID string, now int64)
+
+	// IsDirty reports whether a node_id is currently tombstoned.
+	IsDirty(nodeID string, now int64) bool
 
 	// Add registers a node in the local cluster.
 	Add(node *cluster.Node)
 
-	// Delete removes a node from the local cluster.
-	Delete(nodeName string)
+	// AddIfAbsent files a node only when no existing entry already matches it,
+	// atomically. Gossip must use this rather than Lookup-then-Add: those are two
+	// lock acquisitions, and a registration landing in between would be
+	// overwritten, destroying the session of a peer that just handshook.
+	AddIfAbsent(node *cluster.Node) bool
+
+	// Delete removes the node filed under a directory key.
+	Delete(key string)
+
+	// DeleteNode removes an entry only if the directory still holds this exact
+	// node — a key recomputed from a stale pointer may belong to a different one.
+	DeleteNode(node *cluster.Node)
 
 	// GetAllNode returns all known nodes.
 	GetAllNode() map[string]*cluster.Node
@@ -59,13 +92,24 @@ type ClusterState interface {
 //
 // Declared here rather than imported from pkg/store so the RPC layer keeps
 // depending on a behaviour, not on SQLite — the same reason ClusterState exists.
+// PersistedNode is one stored peer, keyed by identity.
+//
+// Name is stored alongside the address purely so a restart can log and address
+// peers before they have said anything; it is not what identifies the row. Keying
+// by name was what made a renamed or moved peer accumulate a second row rather
+// than update its own.
+type PersistedNode struct {
+	NodeID string
+	Name   string
+	Host   string
+	Port   int32
+}
+
 type NodeStore interface {
-	// ListNames returns the names of every persisted peer. Only names are needed:
-	// the reconcile pass uses them solely to find rows with no in-memory
-	// counterpart.
-	ListNames() ([]string, error)
+	// List returns every persisted peer.
+	List() ([]PersistedNode, error)
 	// Upsert records a peer that has completed bidirectional registration.
-	Upsert(name, host string, port int32) error
+	Upsert(node PersistedNode) error
 	// Delete removes a peer that is no longer in the in-memory directory.
-	Delete(name string) error
+	Delete(nodeID string) error
 }

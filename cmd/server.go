@@ -139,6 +139,19 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	// 4. Container Manager (deferred to after certMgr init — see step 7)
 
 	// 6. Cluster Manager + LocalNode
+	//
+	// The node identity is minted into the database on first start and read back
+	// on every subsequent one. It is deliberately NOT configurable: peers key
+	// their directory by it, so an operator who copied a config file to stand up a
+	// second node would otherwise clone an identity and have two live nodes
+	// fighting over one directory slot. Tying it to the database instead means
+	// copying a config produces a genuinely new node, which is what was intended.
+	identityStore := store.NewLocalIdentityStore(storeMgr.DB())
+	localNodeID, err := identityStore.GetOrCreate()
+	if err != nil {
+		log.Error("init local node identity failed", "err", err)
+		os.Exit(1)
+	}
 	clusterMgr, localNode, err := cluster.NewEndNodeClusterManagerFromConfig(
 		cluster.ClusterInitConfig{
 			ClusterToken: cfg.EndNode.Cluster.Token,
@@ -148,12 +161,14 @@ func runEndNode(cfg *appconfig.AppConfig) {
 			Name: cfg.EndNode.Name,
 			Host: cfg.EndNode.ProxyHost,
 			Port: int32(cfg.EndNode.RpcPort),
+			ID:   localNodeID,
 		},
 	)
 	if err != nil {
 		log.Error("init cluster manager failed", "err", err)
 		os.Exit(1)
 	}
+	log.Info("local node identity", "node_id", localNodeID, "node_name", cfg.EndNode.Name)
 
 	// 7. Cert Manager + lifecycle context for background tasks
 	ctx, cancel := context.WithCancel(context.Background())
@@ -321,23 +336,23 @@ type nodeStoreAdapter struct {
 	s *store.SQLiteClusterNodesStore
 }
 
-func (a nodeStoreAdapter) ListNames() ([]string, error) {
+func (a nodeStoreAdapter) List() ([]server.PersistedNode, error) {
 	nodes, err := a.s.List()
 	if err != nil {
 		return nil, err
 	}
-	names := make([]string, 0, len(nodes))
+	out := make([]server.PersistedNode, 0, len(nodes))
 	for _, n := range nodes {
-		names = append(names, n.Name)
+		out = append(out, server.PersistedNode{NodeID: n.NodeID, Name: n.Name, Host: n.Host, Port: n.Port})
 	}
-	return names, nil
+	return out, nil
 }
 
-func (a nodeStoreAdapter) Upsert(name, host string, port int32) error {
-	return a.s.Upsert(store.ClusterNode{Name: name, Host: host, Port: port})
+func (a nodeStoreAdapter) Upsert(n server.PersistedNode) error {
+	return a.s.Upsert(store.ClusterNode{NodeID: n.NodeID, Name: n.Name, Host: n.Host, Port: n.Port})
 }
 
-func (a nodeStoreAdapter) Delete(name string) error { return a.s.Delete(name) }
+func (a nodeStoreAdapter) Delete(nodeID string) error { return a.s.Delete(nodeID) }
 
 // loadPersistedNodes seeds the in-memory directory from the database.
 //
@@ -347,24 +362,58 @@ func (a nodeStoreAdapter) Delete(name string) error { return a.s.Delete(name) }
 // heartbeat timestamps and does NOT verify any token, so back-dating those would
 // make a freshly loaded peer look authenticated and put it straight into the set
 // this node advertises to others — publishing a peer it has not talked to yet.
+//
+// Two sources. Identified rows come back keyed by node_id, so a peer that was
+// renamed or moved while we were down is still recognised as itself when it
+// registers. Seeds are the pre-2.8 rows drained by migration 16: they have no
+// identity, so they are filed provisionally by address and resolve to a real id
+// on the first exchange. Seeds are consumed once — nothing refreshes them, so
+// keeping them would resurrect addresses the cluster has moved on from.
 func loadPersistedNodes(st *store.SQLiteClusterNodesStore, clusterMgr *cluster.EndNodeClusterManager) {
+	now := time.Now().Unix()
+	loaded := 0
+
 	nodes, err := st.List()
 	if err != nil {
+		// Returning here matters: the seed table below is consumed destructively,
+		// so falling through on a transient read error would throw away the
+		// upgrade hints as well and leave the node with neither source.
 		log.Error("load persisted cluster nodes failed", "err", err)
 		return
 	}
-	loaded := 0
 	for _, n := range nodes {
-		if clusterMgr.Get(n.Name) != nil {
+		if clusterMgr.Get(n.NodeID) != nil || clusterMgr.FindByAddr(n.Host, n.Port) != nil {
 			continue // already present as a static peer; config wins
 		}
 		clusterMgr.Add(&cluster.Node{
-			Node:       &proto.Node{Name: n.Name, Host: n.Host, Port: n.Port},
-			CreateTime: time.Now().Unix(),
+			Node:       &proto.Node{Name: n.Name, Host: n.Host, Port: n.Port, NodeId: n.NodeID},
+			CreateTime: now,
 		})
 		loaded++
 	}
+
+	seeds, err := st.ListSeeds()
+	if err != nil {
+		log.Error("load cluster node seeds failed", "err", err)
+		return
+	}
+	for _, sd := range seeds {
+		if clusterMgr.FindByAddr(sd.Host, sd.Port) != nil {
+			continue
+		}
+		clusterMgr.Add(&cluster.Node{
+			Node:       &proto.Node{Name: sd.Name, Host: sd.Host, Port: sd.Port},
+			CreateTime: now,
+		})
+		loaded++
+	}
+	if len(seeds) > 0 {
+		if err := st.ClearSeeds(); err != nil {
+			log.Warn("clear cluster node seeds failed", "err", err)
+		}
+	}
+
 	if loaded > 0 {
-		log.Info("loaded persisted cluster nodes", "count", loaded)
+		log.Info("loaded persisted cluster nodes", "count", loaded, "seeds", len(seeds))
 	}
 }

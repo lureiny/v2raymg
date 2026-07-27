@@ -169,9 +169,26 @@ func (s *EndNodeServer) authRemoteNode(req interface{}, fullMethod string) (bool
 		rspValue := reflect.New(reflect.TypeOf(methodRspMap[fullMethod[methodPrefixLen:]]).Elem())
 		rspValue.Elem().FieldByName("Code").SetInt(400)
 		rspValue.Elem().FieldByName("Msg").SetString(errMsg)
+		// Stamp our identity on the rejection too, where the response type carries
+		// it. A caller holding a stale entry for this address is exactly the caller
+		// most likely to be rejected here, and the rejection is its only chance to
+		// learn who actually answers — the handler that would normally fill these
+		// in never runs.
+		setStringFieldIfPresent(rspValue.Elem(), "ResponderNodeId", localNode.Node.GetNodeId())
+		setStringFieldIfPresent(rspValue.Elem(), "ResponderName", s.Name)
 		return false, rspValue.Interface(), nodeAuthInfo.Node
 	}
 	return true, nil, nodeAuthInfo.Node
+}
+
+// setStringFieldIfPresent sets a string field by name when the struct has one,
+// so a single helper can stamp optional fields across the reflect-built
+// responses of every method.
+func setStringFieldIfPresent(v reflect.Value, name, value string) {
+	f := v.FieldByName(name)
+	if f.IsValid() && f.CanSet() && f.Kind() == reflect.String {
+		f.SetString(value)
+	}
 }
 
 // unaryServerInterceptor returns a gRPC unary interceptor bound to this server instance.
@@ -179,7 +196,8 @@ func (s *EndNodeServer) unaryServerInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, hander grpc.UnaryHandler) (interface{}, error) {
 		// Anti-replay: reject stale/duplicate/cross-node frames before any
 		// handler runs. Runs for every method (incl. RegisterNode).
-		if err := checkReplay(req, s.Name); err != nil {
+		isRegister := info.FullMethod[methodPrefixLen:] == "RegisterNode"
+		if err := checkReplay(req, s.Name, localNode.Node.GetNodeId(), isRegister); err != nil {
 			log.Error("rpc replay check failed", "api", info.FullMethod[methodPrefixLen:], "err", err)
 			return nil, fmt.Errorf("replay check failed: %w", err)
 		}
@@ -274,33 +292,68 @@ func (s *EndNodeServer) filter() {
 //
 // Static peers are skipped: they come from the config file on every start and are
 // never evicted, so storing them would only add a staler second source.
+//
+// Rows are keyed by node_id, matching the in-memory directory. That is what lets
+// the delete rule stay a plain set difference across a rename or a move: the key
+// an entry is filed under does not change when its name or address does, so a
+// reconfigured peer updates its own row instead of orphaning one under the old
+// name. A peer whose identity we do not know yet cannot be stored at all — there
+// is nothing to key it by — and does not need to be: it is either a static seed
+// (config is its source of truth) or an entry we have not completed a handshake
+// with, which the IsCompleteRegister rule already excludes.
 func (s *EndNodeServer) reconcileNodeStore() {
 	if s.nodeStore == nil {
 		return
 	}
 
 	inMemory := s.clusterState.GetAllNode()
+	inMemoryIDs := make(map[string]struct{}, len(inMemory))
+	unidentified := 0
 
-	for name, n := range inMemory {
-		if name == s.Name || n.IsLocal() || !n.IsCompleteRegister() {
+	for key, n := range inMemory {
+		id := n.GetNodeId()
+		if id != "" {
+			inMemoryIDs[id] = struct{}{}
+		}
+		if n.IsSelf() || n.IsLocal() || !n.IsCompleteRegister() {
 			continue
 		}
-		if err := s.nodeStore.Upsert(n.GetName(), n.GetHost(), n.GetPort()); err != nil {
-			log.Warn("persist cluster node failed", "node", name, "err", err)
+		if id == "" {
+			// A registered peer we cannot key. In practice this only happens
+			// against a pre-2.8 peer, which never sends an identity — so during a
+			// rolling upgrade those peers are absent from the persisted directory
+			// and this node falls back to static_nodes for them until they upgrade.
+			// Counted and reported rather than dropped silently.
+			unidentified++
+			continue
+		}
+		if err := s.nodeStore.Upsert(PersistedNode{
+			NodeID: id,
+			Name:   n.GetName(),
+			Host:   n.GetHost(),
+			Port:   n.GetPort(),
+		}); err != nil {
+			log.Warn("persist cluster node failed", "node", key, "err", err)
 		}
 	}
 
-	persisted, err := s.nodeStore.ListNames()
+	if unidentified > 0 {
+		log.Info("registered peers not persisted because they report no identity "+
+			"(pre-2.8 peers; static_nodes remains their only recovery path)",
+			"count", unidentified)
+	}
+
+	persisted, err := s.nodeStore.List()
 	if err != nil {
 		log.Warn("read persisted cluster nodes failed", "err", err)
 		return
 	}
-	for _, name := range persisted {
-		if _, ok := inMemory[name]; ok {
+	for _, row := range persisted {
+		if _, ok := inMemoryIDs[row.NodeID]; ok {
 			continue
 		}
-		if err := s.nodeStore.Delete(name); err != nil {
-			log.Warn("drop persisted cluster node failed", "node", name, "err", err)
+		if err := s.nodeStore.Delete(row.NodeID); err != nil {
+			log.Warn("drop persisted cluster node failed", "node", row.Name, "node_id", row.NodeID, "err", err)
 		}
 	}
 }

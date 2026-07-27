@@ -5,7 +5,12 @@ import (
 	"time"
 )
 
-// ClusterNode is one persisted peer: only the identity needed to dial it again.
+// ClusterNode is one persisted peer: the identity needed to recognise it again,
+// plus the address needed to dial it.
+//
+// NodeID is the primary key, not Name. Name, Host and Port are all mutable
+// config fields — a peer that was renamed or moved must update its own row
+// rather than accumulate a second one, and only the id survives those edits.
 //
 // Session state is deliberately absent. The in/out tokens are minted fresh by
 // each registration and would be meaningless after a restart, and the heartbeat
@@ -13,9 +18,23 @@ import (
 // until it actually completes a handshake, or it would be advertised to peers as
 // authenticated when nothing has been verified this run.
 type ClusterNode struct {
-	Name string
+	NodeID string
+	Name   string
+	Host   string
+	Port   int32
+}
+
+// ClusterSeed is an address-only bootstrap hint with no known identity.
+//
+// It exists solely to carry the pre-2.8 directory across the upgrade: those rows
+// were keyed by name and have no node_id, so they cannot become ClusterNodes.
+// They are replayed once, at the next boot, as provisional directory entries and
+// then cleared — without them a node whose config lists no static_nodes would be
+// orphaned by the first restart after upgrading.
+type ClusterSeed struct {
 	Host string
 	Port int32
+	Name string
 }
 
 // ClusterNodesStore persists the dynamically discovered part of the node
@@ -38,8 +57,12 @@ type ClusterNodesStore interface {
 	List() ([]ClusterNode, error)
 	// Upsert records a node that completed bidirectional registration.
 	Upsert(node ClusterNode) error
-	// Delete removes a node by name. Deleting an absent name is not an error.
-	Delete(name string) error
+	// Delete removes a node by id. Deleting an absent id is not an error.
+	Delete(nodeID string) error
+	// ListSeeds returns the one-shot upgrade hints, if any remain.
+	ListSeeds() ([]ClusterSeed, error)
+	// ClearSeeds drops every hint. Called once they have been loaded.
+	ClearSeeds() error
 	// Close releases any held resources.
 	Close() error
 }
@@ -57,7 +80,7 @@ func NewSQLiteClusterNodesStore(db *DB) *SQLiteClusterNodesStore {
 
 // List returns all persisted nodes, or an empty (non-nil) slice when there are none.
 func (s *SQLiteClusterNodesStore) List() ([]ClusterNode, error) {
-	rows, err := s.db.DB().Query(`SELECT name, host, port FROM cluster_nodes`)
+	rows, err := s.db.DB().Query(`SELECT node_id, name, host, port FROM cluster_nodes`)
 	if err != nil {
 		return nil, fmt.Errorf("SQLiteClusterNodesStore.List: %w", err)
 	}
@@ -66,7 +89,7 @@ func (s *SQLiteClusterNodesStore) List() ([]ClusterNode, error) {
 	nodes := []ClusterNode{}
 	for rows.Next() {
 		var n ClusterNode
-		if err := rows.Scan(&n.Name, &n.Host, &n.Port); err != nil {
+		if err := rows.Scan(&n.NodeID, &n.Name, &n.Host, &n.Port); err != nil {
 			return nil, fmt.Errorf("SQLiteClusterNodesStore.List scan: %w", err)
 		}
 		nodes = append(nodes, n)
@@ -77,27 +100,62 @@ func (s *SQLiteClusterNodesStore) List() ([]ClusterNode, error) {
 	return nodes, nil
 }
 
-// Upsert inserts or refreshes a node. It is keyed by name, so a peer that moved
-// to a new address overwrites its old row rather than accumulating a stale one.
+// Upsert inserts or refreshes a node. It is keyed by id, so a peer that was
+// renamed or moved to a new address overwrites its own row instead of leaving a
+// stale one behind under its old name.
 func (s *SQLiteClusterNodesStore) Upsert(node ClusterNode) error {
-	if node.Name == "" {
-		return fmt.Errorf("SQLiteClusterNodesStore.Upsert: empty node name")
+	if node.NodeID == "" {
+		return fmt.Errorf("SQLiteClusterNodesStore.Upsert: empty node id")
 	}
 	_, err := s.db.DB().Exec(`
-		INSERT INTO cluster_nodes (name, host, port, created_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(name) DO UPDATE SET host = excluded.host, port = excluded.port`,
-		node.Name, node.Host, node.Port, time.Now().Unix())
+		INSERT INTO cluster_nodes (node_id, name, host, port, created_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(node_id) DO UPDATE SET
+			name = excluded.name, host = excluded.host, port = excluded.port`,
+		node.NodeID, node.Name, node.Host, node.Port, time.Now().Unix())
 	if err != nil {
-		return fmt.Errorf("SQLiteClusterNodesStore.Upsert %q: %w", node.Name, err)
+		return fmt.Errorf("SQLiteClusterNodesStore.Upsert %q: %w", node.NodeID, err)
 	}
 	return nil
 }
 
-// Delete removes a node by name; absent names are a no-op.
-func (s *SQLiteClusterNodesStore) Delete(name string) error {
-	if _, err := s.db.DB().Exec(`DELETE FROM cluster_nodes WHERE name = ?`, name); err != nil {
-		return fmt.Errorf("SQLiteClusterNodesStore.Delete %q: %w", name, err)
+// Delete removes a node by id; absent ids are a no-op.
+func (s *SQLiteClusterNodesStore) Delete(nodeID string) error {
+	if _, err := s.db.DB().Exec(`DELETE FROM cluster_nodes WHERE node_id = ?`, nodeID); err != nil {
+		return fmt.Errorf("SQLiteClusterNodesStore.Delete %q: %w", nodeID, err)
+	}
+	return nil
+}
+
+// ListSeeds returns the pre-2.8 rows drained by migration 16, or an empty
+// (non-nil) slice once they have been consumed.
+func (s *SQLiteClusterNodesStore) ListSeeds() ([]ClusterSeed, error) {
+	rows, err := s.db.DB().Query(`SELECT host, port, name FROM cluster_seeds`)
+	if err != nil {
+		return nil, fmt.Errorf("SQLiteClusterNodesStore.ListSeeds: %w", err)
+	}
+	defer rows.Close()
+
+	seeds := []ClusterSeed{}
+	for rows.Next() {
+		var sd ClusterSeed
+		if err := rows.Scan(&sd.Host, &sd.Port, &sd.Name); err != nil {
+			return nil, fmt.Errorf("SQLiteClusterNodesStore.ListSeeds scan: %w", err)
+		}
+		seeds = append(seeds, sd)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("SQLiteClusterNodesStore.ListSeeds rows: %w", err)
+	}
+	return seeds, nil
+}
+
+// ClearSeeds drops every bootstrap hint. Seeds are a one-shot upgrade bridge:
+// keeping them would resurrect addresses the cluster has legitimately moved on
+// from, since nothing ever refreshes them.
+func (s *SQLiteClusterNodesStore) ClearSeeds() error {
+	if _, err := s.db.DB().Exec(`DELETE FROM cluster_seeds`); err != nil {
+		return fmt.Errorf("SQLiteClusterNodesStore.ClearSeeds: %w", err)
 	}
 	return nil
 }

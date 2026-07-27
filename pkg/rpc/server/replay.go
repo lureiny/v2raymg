@@ -50,11 +50,27 @@ func (c *nonceCache) seenOrAdd(nonce string, nowUs, windowUs int64) error {
 var serverNonceCache = newNonceCache()
 
 // checkReplay validates a request's anti-replay fields: a fresh timestamp within
-// the drift window, a destination-node binding (so a frame captured for another
-// node cannot be replayed here), and a non-duplicate nonce. selfName is this
-// server's node name; an empty dest_node is accepted for backward tolerance
-// within a coordinated upgrade but a mismatched non-empty dest is rejected.
-func checkReplay(req interface{}, selfName string) error {
+// the drift window, a destination binding (so a frame captured for another node
+// cannot be replayed here), and a non-duplicate nonce.
+//
+// The destination is checked against this node's identity first and its name
+// second. Both are tolerant of an empty value on the wire — a sender that has
+// not learned our id yet, or a peer older than the field — but a mismatched
+// non-empty value is rejected. The id check is the one that still holds when two
+// nodes are misconfigured with the same name, which the identity-keyed directory
+// permits rather than refusing outright.
+// isRegister exempts RegisterNode from the identity binding. That call is
+// precisely the one that REPAIRS a stale identity: a peer whose database was
+// rebuilt comes back with a new id, so everyone still holding the old one
+// addresses it by that old id. Enforcing the binding here would reject the
+// repair at the interceptor, the response carrying the responder's real identity
+// would never come back, and the tombstone path could never fire — the mechanism
+// would be unreachable in exactly the scenario it was written for.
+//
+// The exemption is narrow: RegisterNodeReq carries no payload beyond the auth
+// info, the request is still encrypted under the cluster token, and the nonce,
+// timestamp, dest_node name and dest_method bindings all still apply.
+func checkReplay(req interface{}, selfName, selfID string, isRegister bool) error {
 	carrier, ok := req.(authInfoCarrier)
 	if !ok || carrier.GetNodeAuthInfo() == nil {
 		return fmt.Errorf("missing node auth info")
@@ -74,6 +90,9 @@ func checkReplay(req interface{}, selfName string) error {
 		return fmt.Errorf("request timestamp out of window (drift %dms)", drift/1000)
 	}
 
+	if destID := ai.GetDestNodeId(); !isRegister && destID != "" && selfID != "" && destID != selfID {
+		return fmt.Errorf("request destined for node_id %q, not this node %q", destID, selfID)
+	}
 	if dest := ai.GetDestNode(); dest != "" && selfName != "" && dest != selfName {
 		return fmt.Errorf("request destined for %q, not this node %q", dest, selfName)
 	}

@@ -144,4 +144,37 @@ CREATE INDEX IF NOT EXISTS idx_users_target_group ON users(target_group);`,
     created_at INTEGER NOT NULL
 )`,
 	},
+	// Version 16: node identity. The directory used to be keyed by node name,
+	// which is a mutable config field — editing it (or the host/port) made a node
+	// look like a stranger to its own peers. Identity moves to a persisted random
+	// UUID, so any config edit is just an in-place update of an existing entry.
+	//
+	// cluster_nodes is rebuilt with node_id as the primary key. Existing rows
+	// predate the id, so they are drained into cluster_seeds and replayed once at
+	// the next boot as address-only bootstrap hints: dropping them outright would
+	// leave a node with no static_nodes orphaned on its first restart after the
+	// upgrade, which is exactly what persisting the directory exists to prevent.
+	{
+		Version: 16,
+		SQL: `CREATE TABLE IF NOT EXISTS local_node_identity (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    node_id    TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cluster_seeds (
+    host TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (host, port)
+);
+INSERT OR IGNORE INTO cluster_seeds (host, port, name) SELECT host, port, name FROM cluster_nodes;
+DROP TABLE cluster_nodes;
+CREATE TABLE cluster_nodes (
+    node_id    TEXT PRIMARY KEY,
+    name       TEXT NOT NULL DEFAULT '',
+    host       TEXT NOT NULL,
+    port       INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);`,
+	},
 }

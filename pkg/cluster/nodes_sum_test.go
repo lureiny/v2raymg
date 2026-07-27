@@ -342,3 +342,39 @@ func TestGetAdvertisedNodes_MapAndSumAreOneSnapshot(t *testing.T) {
 		t.Errorf("count = %d, want %d", count, len(nodes))
 	}
 }
+
+// TestComputeNodesSum_IgnoresNodeID is a wire-compatibility guard, not a
+// property test. node_id became the directory's primary key, but folding it into
+// the digest would make a v2.8 node and a v2.7 node compute different sums for
+// the identical membership — so every heartbeat would report a mismatch, every
+// round would ship two full directories, and a mixed cluster would never
+// converge. The digest must keep seeing exactly what 2.7 saw: name, host, port.
+func TestComputeNodesSum_IgnoresNodeID(t *testing.T) {
+	without := []*proto.Node{
+		protoNode("a", "10.0.0.1", 5000),
+		protoNode("b", "10.0.0.2", 5000),
+	}
+	with := []*proto.Node{
+		{Name: "a", Host: "10.0.0.1", Port: 5000, NodeId: "id-a"},
+		{Name: "b", Host: "10.0.0.2", Port: 5000, NodeId: "id-b"},
+	}
+
+	sumWithout, _ := cluster.ComputeNodesSum(without)
+	sumWith, _ := cluster.ComputeNodesSum(with)
+	if !bytes.Equal(sumWithout, sumWith) {
+		t.Fatalf("node_id changed the digest (%x vs %x); a v2.7 peer would never agree with a "+
+			"v2.8 one and the two would reconcile forever", sumWithout, sumWith)
+	}
+
+	// And two DIFFERENT identities at the same name/address still agree, which is
+	// what makes the takeover case a registration-time decision rather than a
+	// digest-level one.
+	other := []*proto.Node{
+		{Name: "a", Host: "10.0.0.1", Port: 5000, NodeId: "id-a-rebuilt"},
+		{Name: "b", Host: "10.0.0.2", Port: 5000, NodeId: "id-b"},
+	}
+	sumOther, _ := cluster.ComputeNodesSum(other)
+	if !bytes.Equal(sumWith, sumOther) {
+		t.Errorf("a changed node_id altered the digest (%x vs %x)", sumWith, sumOther)
+	}
+}

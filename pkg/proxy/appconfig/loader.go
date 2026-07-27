@@ -346,6 +346,20 @@ func Validate(cfg *AppConfig) error {
 		if cfg.EndNode.RpcPort >= 1000 && len(cfg.EndNode.Cluster.Token) < minClusterTokenLen {
 			return fmt.Errorf("appconfig: end_node.cluster.token must be >= %d chars when rpc is enabled", minClusterTokenLen)
 		}
+		// A node advertises end_node.name and end_node.proxy_host to its peers as
+		// its own address. Leaving either blank is not a soft failure: peers reject
+		// the registration outright, and this node used to react by deleting and
+		// blacklisting every peer that said so — wiping its whole directory in one
+		// round over its own misconfiguration. That reaction is now scoped, but an
+		// unusable address should never reach the cluster in the first place.
+		if cfg.EndNode.RpcPort >= 1000 {
+			if cfg.EndNode.Name == "" {
+				return fmt.Errorf("appconfig: end_node.name must be set when rpc is enabled")
+			}
+			if cfg.EndNode.ProxyHost == "" {
+				return fmt.Errorf("appconfig: end_node.proxy_host must be set when rpc is enabled; peers dial this address")
+			}
+		}
 		// 0 means "unset" and falls back to the built-in default; a negative or
 		// over-long interval is a misconfiguration. Peers expire after
 		// cluster.NodeTimeOut (60s) without a beat, so an interval at or beyond

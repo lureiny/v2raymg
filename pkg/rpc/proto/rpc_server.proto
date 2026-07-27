@@ -63,6 +63,13 @@ message NodeAuthInfo {
     // request type (e.g. ResetUserTraffic -> DeleteUsers, both UserOpReq). Added
     // 2026-07; stamped by the client interceptor, checked in the server interceptor.
     string dest_method = 6;
+    // dest_node_id binds the request to the destination's node_id rather than
+    // its name (added 2026-07). Names are mutable and, since the directory is
+    // keyed by id, no longer guaranteed unique, so the name binding alone would
+    // weaken exactly when two nodes collide on a name. Empty when the sender
+    // does not know the destination's id yet; the server then falls back to the
+    // dest_node name check, which is what a pre-2.8 sender always relies on.
+    string dest_node_id = 7;
 }
 
 message GetUsersReq {
@@ -165,6 +172,8 @@ message HeartBeatReq {
 }
 
 message Node {
+    // host/port/name are all MUTABLE attributes of a node, not its identity.
+    // An operator may change any of them by editing the config and restarting.
     string host = 1;
     int32 port = 2;
     // 3 was cluster_name, removed 2026-07. The cluster token is the only real
@@ -176,6 +185,20 @@ message Node {
     // false mismatches. The field number stays reserved so it is never reused.
     reserved 3;
     string name = 4;
+    // node_id (added 2026-07) is the node's real identity: a random UUID minted
+    // on first start and persisted in the local database, so it survives
+    // restarts and config edits. It is the directory's primary key — a peer that
+    // changed its name, host or port is still the same node and overwrites its
+    // own entry in place, instead of racing a stale one that has to age out.
+    //
+    // Empty means "not yet known": a peer older than 2.8, or a statically
+    // configured seed we have not completed a handshake with yet. Such entries
+    // are held under a provisional address key until the first response tells us
+    // the real id. Empty is therefore NORMAL, not an error.
+    //
+    // Deliberately NOT folded into ComputeNodesSum: the digest must stay
+    // byte-compatible with 2.7 or mixed clusters would never converge.
+    string node_id = 5;
 }
 
 message HeartBeatRsp {
@@ -191,6 +214,11 @@ message HeartBeatRsp {
     // client compares it against its own sum and, on a mismatch, immediately
     // issues one reconcile heartbeat carrying its full node map.
     bytes nodes_sum = 5;
+    // Responder identity — see RegisterNodeRsp. Carried on every heartbeat so a
+    // stale directory entry is detected within one heartbeat interval rather
+    // than waiting for the node timeout.
+    string responder_node_id = 6;
+    string responder_name = 7;
 }
 
 message RegisterNodeReq {
@@ -200,7 +228,15 @@ message RegisterNodeReq {
 message RegisterNodeRsp {
     int32 code = 1;
     string msg = 2;
-    bytes data  = 3;  // end node 节点间注册返回token(string), 注册到center node返回[]Node
+    bytes data  = 3;  // end node 节点间注册返回token(string)
+    // Responder identity (added 2026-07). Until now nothing in any response said
+    // WHO answered, so a caller could not tell that the address it holds for a
+    // peer now belongs to a different node — the case that arises when a node is
+    // rebuilt with a fresh database, or when its old IP is reassigned to another
+    // cluster member. The caller compares these against the directory entry it
+    // dialled and, on a mismatch, tombstones the stale id.
+    string responder_node_id = 4;
+    string responder_name = 5;
 }
 
 message GetBandwidthStatsReq {

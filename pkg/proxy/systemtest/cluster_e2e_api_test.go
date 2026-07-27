@@ -186,8 +186,19 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 		for _, s := range c.ends {
 			known := s.knownNodes(t)
 			for _, want := range c.nodeNames() {
-				if !known[want] {
+				view, ok := known[want]
+				if !ok {
 					t.Errorf("%s /api/node missing %q (have %v)", s.name, want, known)
+					continue
+				}
+				// Identity is what the directory is keyed by, so a blank one means
+				// this peer was never actually identified — it would be re-learned
+				// as a duplicate the moment anything about it changed.
+				if view.NodeID == "" {
+					t.Errorf("%s /api/node reports %q with no node_id", s.name, want)
+				}
+				if view.DuplicateName {
+					t.Errorf("%s /api/node reports %q as a duplicate name", s.name, want)
 				}
 			}
 		}

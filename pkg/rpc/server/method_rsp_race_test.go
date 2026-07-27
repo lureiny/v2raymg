@@ -21,9 +21,20 @@ func (stubClusterState) AuthRemoteNode(node **cluster.Node) error {
 	return fmt.Errorf("denied %s", (*node).GetName())
 }
 func (stubClusterState) Get(string) *cluster.Node             { return nil }
+func (stubClusterState) LookupPeer(*proto.Node) *cluster.Node { return nil }
+func (stubClusterState) MarkDirty(string, int64)              {}
+func (stubClusterState) IsDirty(string, int64) bool           { return false }
 func (stubClusterState) Add(*cluster.Node)                    {}
+func (stubClusterState) AddIfAbsent(*cluster.Node) bool       { return true }
 func (stubClusterState) Delete(string)                        {}
+func (stubClusterState) DeleteNode(*cluster.Node)             {}
 func (stubClusterState) GetAllNode() map[string]*cluster.Node { return nil }
+func (stubClusterState) ResolveRegistration(*proto.Node, string, int64) cluster.ResolveResult {
+	return cluster.ResolveResult{}
+}
+func (stubClusterState) AdoptIdentity(string, int32, string, string) (*cluster.Node, bool) {
+	return nil, false
+}
 func (stubClusterState) GetProtoNodesWithFilter(cluster.NodeFilter) map[string]*proto.Node {
 	return nil
 }
