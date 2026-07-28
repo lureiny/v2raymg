@@ -4,6 +4,37 @@
 > 对应的 annotated tag message 里(`git tag -l --format='%(contents)' v2.9.0`),
 > 这里只留"改了什么、升级要注意什么"。
 
+## 2026-07-28 — v2.9.1 管理 API 监听地址与 gRPC 解耦
+
+`end_node.http_listen` 一直存在,但它留空时的行为与文档相反:`config.go` 和
+`config.example.yaml` 都写着"回退到 listen",而代码自 `f3ebd40`(2026-03 重写)起
+实际用 `127.0.0.1`。分歧跨越六个版本没被发现 —— 解析是 `cmd/server.go` 里一行内联
+默认值,零测试。本次按文档语义统一:**留空继承 `listen`**。
+
+### Highlights
+
+- 解析收敛为 `EndNodeConfig.ResolveHTTPListen()`,带 9 个 case 的表驱动测试。
+  `http_listen` 与 `listen` 都为空时回退 `127.0.0.1`(绑空 host 等于绑所有网卡)
+- 新增 `HTTPListenIsInherited()`,把"继承来的暴露"与"显式配置的暴露"区分开
+- 启动日志三态:**因继承而对外可达 → WARN**(没人显式选择过)、显式对外可达 → INFO、
+  仅本机 → INFO。不用逐台翻配置就能从日志确认集群的暴露面
+- `config.example.yaml` / `PROJECT_GUIDE.md` 改为描述真实语义,并写清集群配法
+
+### ⚠️ 升级注意(行为变更)
+
+**升级前必须检查**:`end_node.listen` 为 `0.0.0.0`(或任何非 loopback 地址)且**未配置**
+`end_node.http_listen` 的节点,升级后管理 API 会从**仅本机变为对外可达**。
+
+处理方式:给所有不该对外提供管理 API 的节点显式加上
+
+```yaml
+end_node:
+  http_listen: 127.0.0.1
+```
+
+隐藏必须显式 —— 留空的方向是暴露。升级后这些节点的启动日志会打 WARN 点名该问题,
+但请在升级前就配好,不要依赖事后看日志。
+
 ## 2026-07-28 — v2.9.0 端口分配只剩一个权威
 
 线上 mihomo 报 `listen udp 127.0.0.1:10000: bind: address already in use`。10000

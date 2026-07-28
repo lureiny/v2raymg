@@ -277,9 +277,28 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	}
 
 	// 10. HTTP Server
-	httpListen := cfg.EndNode.HttpListen
-	if httpListen == "" {
-		httpListen = "127.0.0.1"
+	//
+	// http_listen overrides the management API's address on this node alone;
+	// unset means it inherits end_node.listen. See
+	// EndNodeConfig.ResolveHTTPListen.
+	//
+	// The logging below is not decoration. Inheriting a 0.0.0.0 listen publishes
+	// the management API, and a node that has never set http_listen reaches that
+	// state without anyone choosing it — so say so at boot, loudly, and only in
+	// that case. A node whose http_listen says 0.0.0.0 is doing what it was
+	// told and gets an info line instead.
+	httpListen := cfg.EndNode.ResolveHTTPListen()
+	switch {
+	case cfg.EndNode.HTTPIsPubliclyReachable() && cfg.EndNode.HTTPListenIsInherited():
+		log.Warn("http management API is reachable from outside this host, inherited from end_node.listen",
+			"http_listen", httpListen, "http_port", cfg.EndNode.HttpPort,
+			"hint", "set end_node.http_listen=127.0.0.1 on every node that should not publish the management API")
+	case cfg.EndNode.HTTPIsPubliclyReachable():
+		log.Info("http management API is reachable from outside this host (explicitly configured)",
+			"http_listen", httpListen, "http_port", cfg.EndNode.HttpPort)
+	default:
+		log.Info("http management API is loopback-only",
+			"http_listen", httpListen, "http_port", cfg.EndNode.HttpPort)
 	}
 	httpServer := http.NewHttpServer()
 	httpServer.Init(

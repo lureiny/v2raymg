@@ -144,8 +144,21 @@ containers:
 end_node:
   name: node-1
   proxy_host: example.com
+  # listen 是 gRPC 集群面的绑定地址。对端必须能连上,所以通常是 0.0.0.0。
   listen: 0.0.0.0
-  http_listen: 0.0.0.0   # HTTP server listen address (defaults to listen if empty)
+
+  # http_listen 只覆盖**管理 API** 的绑定地址,不影响上面的 gRPC。
+  # 留空则继承 listen(所以默认两者同址,与 2.9.x 之前一致)。
+  #
+  # 集群里通常只让一个节点对外提供管理 API,配法:
+  #   - 对外提供管理 API 的那台:留空(继承 listen)或显式写 0.0.0.0
+  #   - 其余每一台:显式写 127.0.0.1 —— **必须显式写**,留空会继承 0.0.0.0
+  #     从而把管理 API 挂到公网。它们仍通过 gRPC 正常参与集群
+  #
+  # 启动日志会说明当前节点属于哪种情况;当"因继承 listen 而对外可达"时打 WARN
+  # (这种暴露没有人显式选择过),显式配置的暴露只打 INFO。不用逐台翻配置就能
+  # 从日志确认暴露面。
+  http_listen: 0.0.0.0
   rpc_port: 9090
   http_port: 8080
   http_token: your-secret-token

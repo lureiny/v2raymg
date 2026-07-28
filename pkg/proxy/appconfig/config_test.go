@@ -369,6 +369,119 @@ containers:
 
 // --- HttpListen tests ---
 
+// The existing HttpListen tests below only cover PARSING. Resolution — what an
+// empty value actually becomes — used to be an inline default in cmd/server.go
+// with no test at all, which is how it drifted from its own documentation for
+// six releases. These pin it.
+func TestResolveHTTPListen(t *testing.T) {
+	cases := []struct {
+		name       string
+		listen     string
+		httpListen string
+		want       string
+		public     bool
+		inherited  bool
+	}{
+		{
+			name:   "unset inherits listen",
+			listen: "0.0.0.0", httpListen: "",
+			want: "0.0.0.0", public: true, inherited: true,
+		},
+		{
+			name:   "explicit loopback keeps the API off this node while gRPC binds all",
+			listen: "0.0.0.0", httpListen: "127.0.0.1",
+			want: "127.0.0.1", public: false, inherited: false,
+		},
+		{
+			name:   "explicit bind-all publishes the management API",
+			listen: "0.0.0.0", httpListen: "0.0.0.0",
+			want: "0.0.0.0", public: true, inherited: false,
+		},
+		{
+			name:   "explicit override wins over a loopback listen",
+			listen: "127.0.0.1", httpListen: "0.0.0.0",
+			want: "0.0.0.0", public: true, inherited: false,
+		},
+		{
+			name:   "inheriting a loopback listen stays private",
+			listen: "127.0.0.1", httpListen: "",
+			want: "127.0.0.1", public: false, inherited: true,
+		},
+		{
+			name:   "a specific interface IP is reachable from outside",
+			listen: "0.0.0.0", httpListen: "10.0.0.5",
+			want: "10.0.0.5", public: true, inherited: false,
+		},
+		{
+			name:   "IPv6 loopback is not public",
+			listen: "::", httpListen: "::1",
+			want: "::1", public: false, inherited: false,
+		},
+		{
+			name:   "IPv6 wildcard inherited is public",
+			listen: "::", httpListen: "",
+			want: "::", public: true, inherited: true,
+		},
+		{
+			// Nothing configured at all: binding an empty host would mean every
+			// interface, so fall back to loopback rather than to accident.
+			name:   "both empty falls back to loopback, not to every interface",
+			listen: "", httpListen: "",
+			want: "127.0.0.1", public: false, inherited: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &EndNodeConfig{}
+			cfg.Listen = tc.listen
+			cfg.HttpListen = tc.httpListen
+
+			assert.Equal(t, tc.want, cfg.ResolveHTTPListen())
+			assert.Equal(t, tc.public, cfg.HTTPIsPubliclyReachable())
+			assert.Equal(t, tc.inherited, cfg.HTTPListenIsInherited())
+		})
+	}
+}
+
+// The property the override exists for: setting http_listen must fully decide
+// the management API's address, whatever gRPC is doing. This is what lets one
+// node in a cluster publish the API while the rest keep it unreachable.
+func TestResolveHTTPListen_ExplicitOverrideAlwaysWins(t *testing.T) {
+	for _, listen := range []string{"0.0.0.0", "::", "10.0.0.5", "127.0.0.1", ""} {
+		cfg := &EndNodeConfig{}
+		cfg.Listen = listen
+		cfg.HttpListen = "127.0.0.1"
+
+		assert.Equal(t, "127.0.0.1", cfg.ResolveHTTPListen(),
+			"listen=%q must not override an explicit http_listen", listen)
+		assert.False(t, cfg.HTTPIsPubliclyReachable(),
+			"an explicit loopback http_listen must keep the API private (listen=%q)", listen)
+		assert.False(t, cfg.HTTPListenIsInherited())
+	}
+}
+
+// Inheriting a public listen is the upgrade hazard: a node that never set
+// http_listen goes from loopback-only to published. It must be reported as
+// inherited so the startup path can warn about exactly that case and stay quiet
+// about the node that was told to publish.
+func TestResolveHTTPListen_InheritedPublicIsDistinguishable(t *testing.T) {
+	inherited := &EndNodeConfig{}
+	inherited.Listen = "0.0.0.0"
+
+	explicit := &EndNodeConfig{}
+	explicit.Listen = "0.0.0.0"
+	explicit.HttpListen = "0.0.0.0"
+
+	assert.Equal(t, inherited.ResolveHTTPListen(), explicit.ResolveHTTPListen(),
+		"both bind the same address")
+	assert.True(t, inherited.HTTPIsPubliclyReachable())
+	assert.True(t, explicit.HTTPIsPubliclyReachable())
+
+	assert.True(t, inherited.HTTPListenIsInherited(), "nobody chose this exposure")
+	assert.False(t, explicit.HTTPListenIsInherited(), "this exposure was configured")
+}
+
 func TestLoadFromFile_HttpListen_Set(t *testing.T) {
 	content := `
 end_node:

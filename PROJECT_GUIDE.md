@@ -78,6 +78,10 @@ Makefile                   # build / build-full (full_dns tag) / proto
    - **管理端口进 `Reserved`**(rpc_port / http_port / xray grpc_port / hysteria traffic_stats_port / mihomo external_controller),由 `reservedManagementPorts` 自动加入。其中 **xray 的 62789 不能漏**:`killProcessOnPort` 会 SIGKILL 任何持有该端口的进程,只挡 `pid<=1`,不查名字也不排除自己 —— forward relay 一旦拿到它,启动 xray 就等于自杀
    - **`config.example.yaml` 的 key 必须带下划线**。2.8.x 之前写的是 `minport`/`maxport`/`userandom`,与 struct tag 不匹配被 yaml 静默丢弃,运维改端口范围从来没生效过
    - **转发监听默认双栈** — 转发规则未指定时默认同时监听 IPv4(`0.0.0.0`)+ IPv6(`[::]`,`tcp6/udp6` 即 `IPV6_V6ONLY`)。全局默认由 `forward.listen_stack`(`dual`/`ipv4`/`ipv6`,默认 `dual`)控制;单规则可用 `ForwardRule.ListenAddr`(具体 IP 字面量,IPv6 自动加方括号)或 `ForwardRule.ListenStack` 覆盖。双栈下**两半都是 best-effort**:纯 IPv4 主机跳过 `[::]`、纯 IPv6 主机跳过 `0.0.0.0`,只要有一个协议族能绑就照常启动,两个都绑不上才失败(见 `pkg/proxy/forward/listen.go` + `relay_multi.go`)
+   - **管理面可以与集群面分开监听** — gRPC 绑 `end_node.listen`(对端必须连得上,通常 `0.0.0.0`);HTTP 管理 API 绑 `end_node.http_listen`,**留空则继承 `listen`**(`EndNodeConfig.ResolveHTTPListen`;两者都空才回退 `127.0.0.1`,因为绑空 host 等于绑所有网卡)
+     - 用途:集群里通常只让**一个**节点对外提供管理 API。配法是**对外那台留空或写 `0.0.0.0`,其余每台显式写 `127.0.0.1`** —— 隐藏必须显式,留空不隐藏
+     - 因为默认是继承,**"忘记配"的方向是暴露而不是隐藏**。所以启动时区分两种可达:因继承 `listen` 而对外可达 → **WARN**(没人显式选择过这个暴露);显式配置的对外可达 → INFO。仅本机 → INFO
+     - **历史(2.9.1)**:`config.go` 与 `config.example.yaml` 一直写着"留空回退到 listen",而代码自 `f3ebd40` 起实际是 `127.0.0.1`,分歧跨越六个版本没人发现 —— 因为解析逻辑是 `cmd/server.go` 里的内联默认值且零测试。2.9.1 按文档语义统一为继承 `listen`,**这是行为变更**:升级前 `listen: 0.0.0.0` 且未配 `http_listen` 的节点,管理 API 从仅本机变为对外可达,必须在升级前给这些节点补 `http_listen: 127.0.0.1`。解析已收敛为带表驱动测试的函数,不要再改回内联
 7. **持久化走 SQLite** — user/inbound/node_groups 全部落 SQLite,DB 操作通过 `pkg/store/manager` 的 `Provider` + `Tx` 抽象
 8. **集群通信走 gRPC,无 center node** — 节点间协议定义在 `pkg/rpc/proto/rpc_server.proto`;默认加密已切到 GCM(老 CBC 回退已移除)
    - **center node 已于 2026-07 彻底移除**。它唯一的作用是发现,而 `static_nodes` 覆盖了同样的能力且更好:静态节点带 `isLocal`、**永不被 60s 超时回收**,注册又是双向的(种子立刻通过 `RegisterNode` 认识加入者,不必等自己下一跳)。同时 center 是集群面**唯一一条默认明文的链路**,还携带集群主密钥。旧配置里的 `node_type: center` / `center_node` / `center_node_host` / `center_token` 一律忽略并在启动时逐条 WARN

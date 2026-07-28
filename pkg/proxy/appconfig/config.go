@@ -204,9 +204,12 @@ type EndNodeConfig struct {
 	Ping PingConfig `yaml:"ping" json:"ping"`
 	// HttpPort is the HTTP management interface port.
 	HttpPort int `yaml:"http_port" json:"http_port"`
-	// HttpListen overrides the listen address for the HTTP server only.
-	// When empty, falls back to the shared Listen address.
-	// Use "127.0.0.1" to restrict HTTP to localhost while gRPC listens on 0.0.0.0.
+	// HttpListen is the listen address for the HTTP management server, chosen
+	// independently of the gRPC one so a cluster can expose the management API
+	// on a single node while every other node keeps it unreachable.
+	//
+	// When empty it is "127.0.0.1", NOT the shared Listen address — see
+	// ResolveHTTPListen for why the two differ deliberately.
 	HttpListen string `yaml:"http_listen" json:"http_listen"`
 	// HttpToken is the HTTP management interface authentication token.
 	HttpToken string `yaml:"http_token" json:"http_token"`
@@ -222,6 +225,56 @@ type EndNodeConfig struct {
 	// When empty, the interface with the default route is detected automatically.
 	// If auto-detection fails, all non-loopback interfaces are summed (fallback).
 	MonitorInterfaces []string `yaml:"monitor_interfaces" json:"monitor_interfaces"`
+}
+
+// defaultHTTPListen applies only when BOTH http_listen and listen are empty.
+// Binding an empty host would mean every interface, which is the wrong thing to
+// do by accident, so an unconfigured node keeps its management API local.
+const defaultHTTPListen = "127.0.0.1"
+
+// ResolveHTTPListen returns the address the HTTP management server binds.
+//
+// http_listen is a per-node override for the management API alone. When it is
+// unset the HTTP server inherits end_node.listen, so both listeners share a host
+// unless an operator separates them deliberately.
+//
+// To keep the management API off a node — the usual arrangement, where one node
+// in a cluster publishes the API and the rest do not — set http_listen to
+// 127.0.0.1 there. Leaving it unset on a node whose listen is 0.0.0.0 publishes
+// the management API on that node; the startup path warns when that happens by
+// inheritance rather than by explicit choice, since that is the case an operator
+// is most likely not to have intended.
+func (c *EndNodeConfig) ResolveHTTPListen() string {
+	if c.HttpListen != "" {
+		return c.HttpListen
+	}
+	if c.Listen != "" {
+		return c.Listen
+	}
+	return defaultHTTPListen
+}
+
+// HTTPListenIsInherited reports whether the HTTP listener took its address from
+// end_node.listen because http_listen was not set. Distinguishes "the operator
+// asked for this" from "the operator did not say", which is the difference
+// between an expected exposure and an accidental one.
+func (c *EndNodeConfig) HTTPListenIsInherited() bool {
+	return c.HttpListen == "" && c.Listen != ""
+}
+
+// HTTPIsPubliclyReachable reports whether the resolved HTTP listen address
+// accepts connections from outside this host. Used to log the management API's
+// exposure at startup: in a cluster where only one node is meant to publish it,
+// the useful question is "which nodes are exposed", and that should not require
+// reading every node's config to answer.
+func (c *EndNodeConfig) HTTPIsPubliclyReachable() bool {
+	switch c.ResolveHTTPListen() {
+	case "127.0.0.1", "::1", "localhost", "127.0.0.1/8":
+		return false
+	default:
+		// Includes 0.0.0.0, ::, and any specific non-loopback interface IP.
+		return true
+	}
 }
 
 // ClusterUserConfig controls the ClusterUser sync layer and placement controller behaviour.
