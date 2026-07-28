@@ -187,9 +187,17 @@ end_node:
     # restart does not lose them. A node with no static peers and an empty
     # database cannot discover anyone (it can still be found by a peer that
     # already knows it); the server warns about this at startup.
+    # Bootstrap addresses — host and port only.
+    #
+    # There is no name field: each node is identified by its own persistent id
+    # (minted into its database on first start) and reports its own name in the
+    # first response, so a label written here could only ever be an unverified
+    # guess. A leftover `name:` from an older config is accepted and silently
+    # ignored, so upgrading needs no edit.
     static_nodes: []
-    #  - name: seed-1
-    #    host: 10.0.0.1
+    #  - host: 10.0.0.1
+    #    port: 9090
+    #  - host: 10.0.0.2
     #    port: 9090
 
 # The center node was removed. Use end_node.cluster.static_nodes for discovery.

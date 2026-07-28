@@ -39,6 +39,11 @@ type ClusterState interface {
 	// that address reported, without stamping heartbeat timestamps.
 	AdoptIdentity(host string, port int32, nodeID, name string) (*cluster.Node, bool)
 
+	// RefreshName records a new name for an already-identified peer, keeping its
+	// session and directory key. Names are display and addressing labels now, but
+	// a stale one still makes ?target=<name> resolve on some nodes and not others.
+	RefreshName(nodeID, name string) (*cluster.Node, bool)
+
 	// MarkDirty tombstones a superseded node_id and drops its entry, so gossip
 	// cannot reintroduce it before the cluster has converged.
 	MarkDirty(nodeID string, now int64)

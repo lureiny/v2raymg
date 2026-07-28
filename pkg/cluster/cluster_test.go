@@ -211,8 +211,8 @@ func TestNodeManager_LoadStaticNode_FiltersSameHostPort(t *testing.T) {
 
 	c := newTestCluster("c1", "tok")
 	nodes := []cluster.StaticNode{
-		{Name: "peer1", Host: "10.0.0.1", Port: 3000}, // same host+port → filtered
-		{Name: "peer2", Host: "10.0.0.2", Port: 3000}, // different → loaded
+		{Host: "10.0.0.1", Port: 3000}, // same host+port → filtered
+		{Host: "10.0.0.2", Port: 3000}, // different → loaded
 	}
 	if err := c.LoadStaticNode(nodes); err != nil {
 		t.Fatalf("LoadStaticNode: %v", err)
@@ -230,7 +230,7 @@ func TestNodeManager_LoadStaticNode_FiltersSameHostPort(t *testing.T) {
 	}
 }
 
-func TestNodeManager_LoadStaticNode_FiltersSameName(t *testing.T) {
+func TestNodeManager_LoadStaticNode_SeedsCarryNoName(t *testing.T) {
 	localNode := cluster.GetLocalNode()
 	localNode.Node = proto.Node{
 		Name: "local",
@@ -239,14 +239,25 @@ func TestNodeManager_LoadStaticNode_FiltersSameName(t *testing.T) {
 	}
 
 	c := newTestCluster("c1", "tok")
-	nodes := []cluster.StaticNode{
-		{Name: "local", Host: "10.0.0.2", Port: 4000}, // same name → filtered
-	}
-	if err := c.LoadStaticNode(nodes); err != nil {
+	if err := c.LoadStaticNode([]cluster.StaticNode{{Host: "10.0.0.2", Port: 4000}}); err != nil {
 		t.Fatalf("LoadStaticNode: %v", err)
 	}
-	if n, _ := c.FindByName("local"); n != nil {
-		t.Error("expected same-name node filtered")
+
+	seed := c.FindByAddr("10.0.0.2", 4000)
+	if seed == nil {
+		t.Fatal("seed was not loaded")
+	}
+	// Nothing has told us who is at that address yet, so the entry must not claim
+	// to know. Presenting an operator's guess as a name would put it straight into
+	// /api/node and the logs as if it were fact.
+	if got := seed.GetName(); got != "" {
+		t.Errorf("seed name = %q, want empty until the peer reports its own", got)
+	}
+	if got := seed.GetNodeId(); got != "" {
+		t.Errorf("seed node_id = %q, want empty until the peer identifies itself", got)
+	}
+	if !seed.IsLocal() {
+		t.Error("a configured seed must be flagged isLocal so it is never evicted")
 	}
 }
 
@@ -321,11 +332,16 @@ func TestStaticNode_IsValide(t *testing.T) {
 		sn     cluster.StaticNode
 		expect bool
 	}{
-		{"valid peer", cluster.StaticNode{Name: "peer", Host: "10.0.0.2", Port: 4000}, true},
-		{"same host+port", cluster.StaticNode{Name: "peer", Host: "10.0.0.1", Port: 3000}, false},
-		{"same name", cluster.StaticNode{Name: "local", Host: "10.0.0.2", Port: 4000}, false},
-		{"empty host", cluster.StaticNode{Name: "peer", Host: "", Port: 4000}, false},
-		{"low port", cluster.StaticNode{Name: "peer", Host: "10.0.0.2", Port: 999}, false},
+		// A seed is an ADDRESS and carries no name, so host+port is the whole test.
+		// The old "same name as this node" case is gone with the field: filtering on
+		// a name only ever caught the one spelling of the mistake that matched
+		// exactly, and self-detection that works happens at runtime by comparing the
+		// responder's node_id (see EndNodeServer.assertResponder).
+		{"valid peer", cluster.StaticNode{Host: "10.0.0.2", Port: 4000}, true},
+		{"same host+port as this node", cluster.StaticNode{Host: "10.0.0.1", Port: 3000}, false},
+		{"same host, different port", cluster.StaticNode{Host: "10.0.0.1", Port: 4000}, true},
+		{"empty host", cluster.StaticNode{Host: "", Port: 4000}, false},
+		{"low port", cluster.StaticNode{Host: "10.0.0.2", Port: 999}, false},
 	}
 
 	for _, tt := range tests {

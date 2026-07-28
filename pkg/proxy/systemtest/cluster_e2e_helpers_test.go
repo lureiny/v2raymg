@@ -89,6 +89,10 @@ type clusterOpts struct {
 	// NodeSumSync overrides the node-directory delta sync setting on every end
 	// node; nil keeps the production default (on).
 	NodeSumSync *bool
+	// LegacySeedName emits a (deliberately wrong) `name:` key on every
+	// static_nodes entry, reproducing a config written before the field was
+	// dropped. It must be silently ignored and change nothing.
+	LegacySeedName string
 }
 
 type e2eCluster struct {
@@ -161,7 +165,11 @@ func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 	var staticPeers []staticPeer
 	if len(c.ends) > 0 {
 		seed := c.ends[0]
-		staticPeers = []staticPeer{{Name: seed.name, Host: "127.0.0.1", Port: seed.rpcPort}}
+		// Host and port only: a seed is an address, and the peer there reports its
+		// own name in the first response.
+		staticPeers = []staticPeer{{
+			Host: "127.0.0.1", Port: seed.rpcPort, LegacyName: c.opts.LegacySeedName,
+		}}
 	}
 
 	configPath := generateE2EConfig(t, e2eServerOpts{

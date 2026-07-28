@@ -209,12 +209,11 @@ func (nm *NodeManager) IsDirty(nodeID string, now int64) bool {
 
 // LoadStaticNode 加载本地配置文件中的node
 //
-// Static peers are filed provisionally, by address: the config supplies a name
-// but no identity, and the name may well be wrong — it is a label an operator
-// typed, not something the peer confirmed. The entry is upgraded to the real
-// identity (keeping isLocal, so it is still never evicted) as soon as the peer
-// registers or answers, which is also what stops a mistyped name from leaving a
-// permanent ghost entry in fan-out.
+// Static peers are filed provisionally, by address, and carry NO name: a seed is
+// an address to dial, and until the peer there answers we do not know who it is.
+// The entry is upgraded to the real identity and the peer's own name (keeping
+// isLocal, so it is still never evicted) as soon as that peer registers or
+// answers.
 func (nm *NodeManager) LoadStaticNode(nodes []StaticNode) error {
 	nm.lock.Lock()
 	defer nm.lock.Unlock()
@@ -229,11 +228,11 @@ func (nm *NodeManager) LoadStaticNode(nodes []StaticNode) error {
 			log.Info("Load Static Node",
 				"manager_name", nm.name,
 				"node", fmt.Sprintf("%s:%d", node.Host, node.Port),
-				"node_name", node.Name,
 			)
 			n := &Node{
+				// No name: we have an address and nothing else. The peer supplies
+				// its own in the first response.
 				Node: &proto.Node{
-					Name: node.Name,
 					Port: node.Port,
 					Host: node.Host,
 				},
@@ -677,9 +676,51 @@ func (nm *NodeManager) AdoptIdentity(host string, port int32, nodeID, name strin
 	return repl, true
 }
 
-// pickName prefers the name the peer reports over the one an operator typed into
-// static_nodes: the peer is the authority on what it calls itself, and a mistyped
-// seed name is otherwise indistinguishable from a real one.
+// RefreshName records a new name for an already-identified peer, keeping its
+// session and its directory key.
+//
+// A rename used to reach a peer only through that peer's own re-registration,
+// which happens when it restarts. Anyone who had merely learned it by gossip and
+// never handshaked with it kept the old label indefinitely — so ?target=<name>
+// worked on some nodes and not others. Every response carries the responder's
+// current name, so the outbound path can close that gap; it just has to act on
+// it rather than only reading it the first time.
+//
+// The key does not change (it is the identity), and neither does the address, so
+// this is a same-process update: the session carries over untouched. Callers
+// should only reach here when the name actually differs — a rename is rare, and
+// replacing the entry on every heartbeat would be absurd.
+func (nm *NodeManager) RefreshName(nodeID, name string) (*Node, bool) {
+	if nodeID == "" || name == "" {
+		return nil, false
+	}
+	nm.lock.Lock()
+	defer nm.lock.Unlock()
+
+	inc := (*nm.nodes)[nodeID]
+	if inc == nil || inc.GetName() == name || inc.isSelf {
+		return inc, false
+	}
+
+	repl := &Node{
+		Node: &proto.Node{
+			Name:   name,
+			Host:   inc.GetHost(),
+			Port:   inc.GetPort(),
+			NodeId: nodeID,
+		},
+		isLocal:    inc.IsLocal(),
+		CreateTime: inc.CreateTime,
+	}
+	inc.handOffRuntimeTo(repl)
+	(*nm.nodes)[nodeID] = repl
+	return repl, true
+}
+
+// pickName prefers the name the peer reports over whatever the entry already
+// holds. A static seed holds nothing, so the reported name simply wins; a row
+// replayed from the database holds the name that peer used last time, which is
+// the right fallback if a response somehow arrives without one.
 func pickName(reported, configured string) string {
 	if reported != "" {
 		return reported

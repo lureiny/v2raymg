@@ -28,9 +28,13 @@ func claim(name, id, host string, port int32) *proto.Node {
 func pinLocalNode(t *testing.T, name, host string, port int32) {
 	t.Helper()
 	ln := cluster.GetLocalNode()
-	saved := ln.Node
+	// Field by field: proto.Node embeds a MessageState containing a mutex, so
+	// copying the struct wholesale to save it would be a vet error.
+	prevName, prevHost, prevPort, prevID := ln.GetName(), ln.GetHost(), ln.GetPort(), ln.GetNodeId()
 	ln.Node = proto.Node{Name: name, Host: host, Port: port}
-	t.Cleanup(func() { ln.Node = saved })
+	t.Cleanup(func() {
+		ln.Node = proto.Node{Name: prevName, Host: prevHost, Port: prevPort, NodeId: prevID}
+	})
 }
 
 // resolvedManager returns a manager holding one fully-registered peer.
@@ -191,7 +195,7 @@ func TestResolveRegistration_EmptyIdIsNotAConflict(t *testing.T) {
 	pinLocalNode(t, "self", "10.99.99.99", 9999)
 	nm := cluster.NewNodeManager()
 	// A static seed: address only, no identity.
-	if err := nm.LoadStaticNode([]cluster.StaticNode{{Name: "seed", Host: "10.0.0.1", Port: 5000}}); err != nil {
+	if err := nm.LoadStaticNode([]cluster.StaticNode{{Host: "10.0.0.1", Port: 5000}}); err != nil {
 		t.Fatalf("LoadStaticNode: %v", err)
 	}
 
@@ -266,7 +270,7 @@ func TestResolveRegistration_LegacyClaimAtAReusedAddressDoesNotInherit(t *testin
 func TestResolveRegistration_AbsorbsStaleEntryAtSameAddress(t *testing.T) {
 	pinLocalNode(t, "self", "10.99.99.99", 9999)
 	nm := cluster.NewNodeManager()
-	if err := nm.LoadStaticNode([]cluster.StaticNode{{Name: "typo-name", Host: "10.0.0.1", Port: 5000}}); err != nil {
+	if err := nm.LoadStaticNode([]cluster.StaticNode{{Host: "10.0.0.1", Port: 5000}}); err != nil {
 		t.Fatalf("LoadStaticNode: %v", err)
 	}
 	// A different peer, with its own identity, registers from that same address.
@@ -437,7 +441,7 @@ func TestFilter_ExpiresTombstones(t *testing.T) {
 func TestAdoptIdentity_KeepsSessionAndDoesNotFakeHeartbeats(t *testing.T) {
 	pinLocalNode(t, "self", "10.99.99.99", 9999)
 	nm := cluster.NewNodeManager()
-	if err := nm.LoadStaticNode([]cluster.StaticNode{{Name: "seed", Host: "10.0.0.1", Port: 5000}}); err != nil {
+	if err := nm.LoadStaticNode([]cluster.StaticNode{{Host: "10.0.0.1", Port: 5000}}); err != nil {
 		t.Fatalf("LoadStaticNode: %v", err)
 	}
 	seed := nm.FindByAddr("10.0.0.1", 5000)
@@ -591,7 +595,7 @@ func TestFilter_ConcurrentAddIsNotLost(t *testing.T) {
 func TestMarkDirty_DemotesStaticSeedInsteadOfDeleting(t *testing.T) {
 	pinLocalNode(t, "self", "10.99.99.99", 9999)
 	nm := cluster.NewNodeManager()
-	if err := nm.LoadStaticNode([]cluster.StaticNode{{Name: "seed", Host: "10.0.0.1", Port: 5000}}); err != nil {
+	if err := nm.LoadStaticNode([]cluster.StaticNode{{Host: "10.0.0.1", Port: 5000}}); err != nil {
 		t.Fatalf("LoadStaticNode: %v", err)
 	}
 	if _, ok := nm.AdoptIdentity("10.0.0.1", 5000, "old-id", "seed"); !ok {
@@ -672,7 +676,7 @@ func TestAddIfAbsent_StoresGenuinelyNewNodes(t *testing.T) {
 func TestDeleteNode_IgnoresSupersededPointers(t *testing.T) {
 	pinLocalNode(t, "self", "10.99.99.99", 9999)
 	nm := cluster.NewNodeManager()
-	if err := nm.LoadStaticNode([]cluster.StaticNode{{Name: "seed", Host: "10.0.0.1", Port: 5000}}); err != nil {
+	if err := nm.LoadStaticNode([]cluster.StaticNode{{Host: "10.0.0.1", Port: 5000}}); err != nil {
 		t.Fatalf("LoadStaticNode: %v", err)
 	}
 	// A caller captured this pointer at the start of a heartbeat round. It is
@@ -687,7 +691,7 @@ func TestDeleteNode_IgnoresSupersededPointers(t *testing.T) {
 	// pointer computes now belongs to a live entry.
 	nm.MarkDirty("unrelated", time.Now().Unix())
 	nm.Delete(cluster.ProvisionalKey("10.0.0.1", 5000))
-	live := &cluster.Node{Node: &proto.Node{Name: "other", Host: "10.0.0.1", Port: 5000}}
+	live := &cluster.Node{Node: &proto.Node{Host: "10.0.0.1", Port: 5000}}
 	nm.Add(live)
 
 	nm.DeleteNode(stale)

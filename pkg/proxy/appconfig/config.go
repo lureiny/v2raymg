@@ -100,8 +100,14 @@ type SubscriptionConfig struct {
 }
 
 // StaticNodeConfig is a statically configured peer node used for initial cluster discovery.
+// StaticNodeConfig is one bootstrap address.
+//
+// There is no name field. A seed says WHERE to dial and nothing else: each node
+// is identified by its own persistent id, and it reports its own name in the
+// first response, so a label typed here could only ever be an unverified guess
+// presented as fact. A `name:` key left over in an existing config is accepted
+// and silently dropped — decoding is lenient, so upgrades need no edit.
 type StaticNodeConfig struct {
-	Name string `yaml:"name" json:"name"`
 	Host string `yaml:"host" json:"host"`
 	Port int32  `yaml:"port" json:"port"`
 }

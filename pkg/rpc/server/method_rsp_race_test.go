@@ -35,6 +35,9 @@ func (stubClusterState) ResolveRegistration(*proto.Node, string, int64) cluster.
 func (stubClusterState) AdoptIdentity(string, int32, string, string) (*cluster.Node, bool) {
 	return nil, false
 }
+func (stubClusterState) RefreshName(string, string) (*cluster.Node, bool) {
+	return nil, false
+}
 func (stubClusterState) GetProtoNodesWithFilter(cluster.NodeFilter) map[string]*proto.Node {
 	return nil
 }

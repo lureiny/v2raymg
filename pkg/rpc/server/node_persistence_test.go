@@ -112,7 +112,7 @@ func TestReconcileNodeStore_SkipsSelfAndStaticPeers(t *testing.T) {
 	s := persistenceServer(t, store)
 
 	if err := s.clusterState.(*cluster.EndNodeClusterManager).LoadStaticNode(
-		[]cluster.StaticNode{{Name: "static-peer", Host: "10.0.0.7", Port: 3003}}); err != nil {
+		[]cluster.StaticNode{{Host: "10.0.0.7", Port: 3003}}); err != nil {
 		t.Fatalf("LoadStaticNode: %v", err)
 	}
 	// Give it an identity and make it look fully registered, so only the isLocal
@@ -139,7 +139,7 @@ func TestReconcileNodeStore_SkipsPeersWithoutIdentity(t *testing.T) {
 	store := newFakeNodeStore()
 	s := persistenceServer(t, store)
 
-	anon := &cluster.Node{Node: &proto.Node{Name: "anon", Host: "10.0.0.6", Port: 3010}}
+	anon := &cluster.Node{Node: &proto.Node{Host: "10.0.0.6", Port: 3010}}
 	anon.SetRecvHeartBeatTime(time.Now().Unix())
 	anon.SetReportHeartBeatTime(time.Now().Unix())
 	s.clusterState.Add(anon)

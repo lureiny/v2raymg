@@ -303,7 +303,13 @@ func generateE2EConfig(t *testing.T, opts e2eServerOpts) string {
 	if len(opts.StaticPeers) > 0 {
 		peers := make([]map[string]any, 0, len(opts.StaticPeers))
 		for _, p := range opts.StaticPeers {
-			peers = append(peers, map[string]any{"name": p.Name, "host": p.Host, "port": p.Port})
+			peer := map[string]any{"host": p.Host, "port": p.Port}
+			if p.LegacyName != "" {
+				// Reproduces an un-migrated config: the key is no longer in the
+				// struct, so decoding must drop it rather than fail.
+				peer["name"] = p.LegacyName
+			}
+			peers = append(peers, peer)
 		}
 		clusterSection["static_nodes"] = peers
 	}
@@ -375,10 +381,13 @@ func writeE2EConfigFile(t *testing.T, dir string, cfg map[string]any) string {
 const e2eHTTPToken = "e2e-test-token-static"
 
 // staticPeer is one entry of end_node.cluster.static_nodes.
+// staticPeer is one static_nodes entry. There is no name: a seed says where to
+// dial and nothing else. LegacyName exists only so a test can emit the `name:`
+// key an un-migrated config still carries, and assert it is silently ignored.
 type staticPeer struct {
-	Name string
-	Host string
-	Port int
+	Host       string
+	Port       int
+	LegacyName string
 }
 
 const (

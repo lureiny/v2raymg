@@ -356,3 +356,51 @@ func TestClusterE2E_RebuiltNodeTakesOverItsAddress(t *testing.T) {
 			"what this design set out to make visible")
 	}
 }
+
+// TestClusterE2E_LegacySeedNameIsIgnored is the upgrade guard for dropping the
+// static_nodes name.
+//
+// A seed is an ADDRESS. Each node is identified by its own persistent id and
+// reports its own name in the first response, so a label written in the config
+// could only ever be an unverified guess presented as fact — the field is gone.
+// Configs written before that still carry `name:`, and they must keep working
+// with no edit: decoding is lenient, so the key is silently dropped.
+//
+// The label emitted here is deliberately WRONG. If it were still load-bearing
+// anywhere, nodes would end up mislabelled while still "converging" by count,
+// which is why the name assertions below matter more than the count.
+func TestClusterE2E_LegacySeedNameIsIgnored(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	c := startE2ECluster(t, tmpDir, clusterOpts{
+		HeartbeatIntervalSec: 1,
+		XrayBin:              os.Getenv("XRAY_BIN"),
+		LegacySeedName:       "a-stale-label-from-an-older-config",
+	})
+	for i := 0; i < 3; i++ {
+		c.addEndNode(t)
+	}
+
+	c.waitConverged(t, 45*time.Second)
+	c.waitFanoutReady(t, 45*time.Second)
+
+	for _, s := range c.ends {
+		known := s.knownNodes(t)
+		if len(known) != len(c.ends) {
+			t.Errorf("%s sees %d nodes, want %d: %v", s.name, len(known), len(c.ends), known)
+		}
+		if _, bogus := known["a-stale-label-from-an-older-config"]; bogus {
+			t.Errorf("%s adopted the label from the config; the seed name must be ignored", s.name)
+		}
+		for _, want := range c.nodeNames() {
+			view, ok := known[want]
+			if !ok {
+				t.Errorf("%s does not know %q by the name it reported over the wire", s.name, want)
+				continue
+			}
+			if view.NodeID == "" {
+				t.Errorf("%s knows %q but with no node_id", s.name, want)
+			}
+		}
+	}
+}

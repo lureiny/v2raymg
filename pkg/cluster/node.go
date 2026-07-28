@@ -303,18 +303,32 @@ func (node *Node) IsComplete() bool {
 	return node.Host != "" && node.Port > 1000 && node.Name != ""
 }
 
+// StaticNode is a configured bootstrap address — nothing more.
+//
+// There is deliberately no Name. A seed says where to dial, and until the peer
+// there answers we do not know who it is; carrying a label an operator typed
+// would mean presenting an unverified guess as fact in /api/node and in logs.
+// The peer reports its real name in its first response, and that is the only
+// name the entry ever holds. `name:` in static_nodes config is accepted and
+// silently dropped, so existing configs keep working untouched.
 type StaticNode struct {
-	Name string `json:"name,omitempty"`
 	Host string `json:"host,omitempty"`
 	Port int32  `json:"port,omitempty"`
 }
 
 // IsValide 判断静态节点是否有效.
 // 过滤条件：host+port 与本地节点完全相同（同一个实例），或 name 相同。
+// IsValide reports whether a configured seed is worth loading.
+//
+// There is no name to consult. Filtering on one could not do the job it appeared
+// to do anyway: it only caught an operator listing this node under its own exact
+// name, and missed the same mistake made under an alias. Self-detection that
+// actually works happens at runtime, by comparing the responder's node_id
+// against our own (see EndNodeServer.assertResponder); the host+port test here
+// is just a cheap first pass.
 func (sn *StaticNode) IsValide(node *Node) bool {
 	sameInstance := sn.Host == node.Host && sn.Port == node.Port
-	sameName := sn.Name == node.Name
-	return sn.Host != "" && sn.Port > 1000 && !sameInstance && !sameName
+	return sn.Host != "" && sn.Port > 1000 && !sameInstance
 }
 
 var globalLocalNode = &LocalNode{}

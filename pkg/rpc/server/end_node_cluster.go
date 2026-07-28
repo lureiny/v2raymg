@@ -371,6 +371,26 @@ func (s *EndNodeServer) assertResponder(node *cluster.Node, responderID, respond
 	if responderID == "" {
 		return node, true // pre-2.8 peer: nothing to check against
 	}
+	// A seed that turns out to be THIS node. static_nodes is a list of addresses
+	// an operator typed, and nothing stops one of them being our own — under an
+	// alias hostname, or simply a second way of spelling our own proxy_host, so
+	// the host+port check at load time misses it. Left alone, the entry adopts
+	// our own identity below and we heartbeat ourselves forever, because the
+	// heartbeat round skips only the entry flagged isSelf.
+	//
+	// This is also what replaces the old name-based self-filter in
+	// StaticNode.IsValide: asking who answered is authoritative, whereas
+	// comparing a configured label only ever caught the one spelling of the
+	// mistake that happened to match.
+	if responderID == localNode.Node.GetNodeId() {
+		log.Warn("a configured peer address resolves to this node itself; dropping it — "+
+			"check end_node.cluster.static_nodes",
+			"dst_host", node.GetHost(), "dst_port", node.GetPort(),
+			"node_id", responderID)
+		s.clusterState.DeleteNode(node)
+		return node, false
+	}
+
 	known := node.GetNodeId()
 	if known == "" {
 		// A static seed or a replayed database row identifying itself for the
@@ -385,6 +405,20 @@ func (s *EndNodeServer) assertResponder(node *cluster.Node, responderID, respond
 		return node, true
 	}
 	if known == responderID {
+		// Same node. Its NAME may still have drifted: a rename reaches a peer
+		// through that peer's own re-registration, so anyone who only ever
+		// learned this node by gossip would keep the old label indefinitely and
+		// ?target=<name> would resolve on some nodes but not others. Every
+		// response carries the current name, so close the gap here — only when it
+		// actually differs, since this replaces the directory entry.
+		if responderName != "" && responderName != node.GetName() {
+			if renamed, changed := s.clusterState.RefreshName(responderID, responderName); changed {
+				log.Info("peer reported a new name",
+					"node_id", responderID, "prev_name", node.GetName(), "new_name", responderName,
+					"dst_host", node.GetHost(), "dst_port", node.GetPort())
+				return renamed, true
+			}
+		}
 		return node, true
 	}
 	log.Warn("directory entry is stale: its address is answered by a different node",

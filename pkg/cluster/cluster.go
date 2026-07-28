@@ -61,6 +61,12 @@ func (cluster *Cluster) AdoptIdentity(host string, port int32, nodeID, name stri
 	return cluster.NodeManager.AdoptIdentity(host, port, nodeID, name)
 }
 
+// RefreshName records a new name for an already-identified peer, keeping its
+// session and its directory key.
+func (cluster *Cluster) RefreshName(nodeID, name string) (*Node, bool) {
+	return cluster.NodeManager.RefreshName(nodeID, name)
+}
+
 // MarkDirty tombstones a superseded node_id and drops its entry, so gossip
 // cannot reintroduce it before the cluster has converged.
 func (cluster *Cluster) MarkDirty(nodeID string, now int64) {

@@ -332,7 +332,7 @@ func TestMergeRemoteNodes_NeverLearnsSelf(t *testing.T) {
 func TestRegisterNode_DoesNotEvictStaticSeedsOnRejection(t *testing.T) {
 	s := newNodesSyncServer(t, "self")
 	if err := s.clusterState.(*cluster.EndNodeClusterManager).LoadStaticNode(
-		[]cluster.StaticNode{{Name: "seed", Host: "10.4.4.4", Port: 4444}}); err != nil {
+		[]cluster.StaticNode{{Host: "10.4.4.4", Port: 4444}}); err != nil {
 		t.Fatalf("LoadStaticNode: %v", err)
 	}
 	if s.clusterState.(*cluster.EndNodeClusterManager).FindByAddr("10.4.4.4", 4444) == nil {
@@ -362,7 +362,7 @@ func TestRegisterNode_DoesNotEvictStaticSeedsOnRejection(t *testing.T) {
 func TestDestBinding_OmitsUnconfirmedSeedName(t *testing.T) {
 	s := newNodesSyncServer(t, "self")
 	mgr := s.clusterState.(*cluster.EndNodeClusterManager)
-	if err := mgr.LoadStaticNode([]cluster.StaticNode{{Name: "typo", Host: "10.4.4.4", Port: 4444}}); err != nil {
+	if err := mgr.LoadStaticNode([]cluster.StaticNode{{Host: "10.4.4.4", Port: 4444}}); err != nil {
 		t.Fatalf("LoadStaticNode: %v", err)
 	}
 	seed := mgr.FindByAddr("10.4.4.4", 4444)
@@ -406,7 +406,7 @@ func TestDestBinding_AssertsRegisteredPeers(t *testing.T) {
 func TestAssertResponder_AdoptsProvisionalIdentity(t *testing.T) {
 	s := newNodesSyncServer(t, "self")
 	mgr := s.clusterState.(*cluster.EndNodeClusterManager)
-	if err := mgr.LoadStaticNode([]cluster.StaticNode{{Name: "typo", Host: "10.4.4.4", Port: 4444}}); err != nil {
+	if err := mgr.LoadStaticNode([]cluster.StaticNode{{Host: "10.4.4.4", Port: 4444}}); err != nil {
 		t.Fatalf("LoadStaticNode: %v", err)
 	}
 	seed := mgr.FindByAddr("10.4.4.4", 4444)
@@ -491,5 +491,106 @@ func TestAssertResponder_AcceptsMatchingIdentity(t *testing.T) {
 	}
 	if s.clusterState.IsDirty("peer-id", time.Now().Unix()) {
 		t.Error("a matching identity was tombstoned")
+	}
+}
+
+// TestAssertResponder_DropsASeedThatIsThisNode covers a config mistake nothing
+// used to catch reliably.
+//
+// static_nodes is a list of addresses an operator typed, and one of them may be
+// this node's own — under an alias hostname, or a second spelling of its own
+// proxy_host — in which case the host+port test at load time misses it. Left
+// alone the entry adopts OUR identity, and since the heartbeat round skips only
+// the entry flagged isSelf, the node would go on heartbeating itself forever.
+//
+// This is what replaces the name-based self-filter that used to live in
+// StaticNode.IsValide: asking who answered is authoritative, whereas comparing a
+// configured label only ever caught the one spelling that happened to match.
+func TestAssertResponder_DropsASeedThatIsThisNode(t *testing.T) {
+	s := newNodesSyncServer(t, "self")
+	mgr := s.clusterState.(*cluster.EndNodeClusterManager)
+	if err := mgr.LoadStaticNode(
+		[]cluster.StaticNode{{Host: "10.4.4.4", Port: 4444}}); err != nil {
+		t.Fatalf("LoadStaticNode: %v", err)
+	}
+	seed := mgr.FindByAddr("10.4.4.4", 4444)
+	if seed == nil {
+		t.Fatal("precondition: seed must be loaded")
+	}
+
+	// That address turns out to answer with OUR identity.
+	_, ok := s.assertResponder(seed, localNode.Node.GetNodeId(), "self")
+	if ok {
+		t.Error("assertResponder accepted an address that is this node itself")
+	}
+	if mgr.FindByAddr("10.4.4.4", 4444) != nil {
+		t.Error("the self-referencing seed was kept; the node would heartbeat itself forever")
+	}
+	// Our own entry is of course still filed under our own id — what must not have
+	// happened is the seed being ADOPTED under it, leaving a second entry carrying
+	// this node's identity that the heartbeat round would not skip.
+	if own := mgr.Get(localNode.Node.GetNodeId()); own == nil || !own.IsSelf() {
+		t.Error("this node's own directory entry was disturbed")
+	}
+	if countPeers(s) != 0 {
+		t.Errorf("directory holds %d peers, want 0: the only address configured was our own",
+			countPeers(s))
+	}
+}
+
+// TestAssertResponder_RefreshesADriftedName closes the gap that made names
+// resolve on some nodes and not others.
+//
+// A rename reaches a peer through that peer's own re-registration. Anyone who
+// only ever learned the node by gossip, and never handshook with it, kept the
+// old label indefinitely — so ?target=<name> succeeded on some nodes and failed
+// on others. Every response carries the responder's current name; acting on it
+// is what makes the label converge.
+func TestAssertResponder_RefreshesADriftedName(t *testing.T) {
+	s := newNodesSyncServer(t, "self")
+	mustRegister(t, s, claimNode("old-name", "peer-id", "10.0.0.1", 5000))
+	entry := s.clusterState.Get("peer-id")
+	entry.SetOutToken("session-token")
+
+	refreshed, ok := s.assertResponder(entry, "peer-id", "new-name")
+	if !ok {
+		t.Fatal("a mere rename was treated as a takeover")
+	}
+	if refreshed.GetName() != "new-name" {
+		t.Errorf("name = %q, want new-name", refreshed.GetName())
+	}
+	if findByName(t, s, "old-name") != nil {
+		t.Error("the old name still resolves; ?target= would stay ambiguous")
+	}
+	if findByName(t, s, "new-name") == nil {
+		t.Error("the new name does not resolve")
+	}
+	// Same address and same identity means the same process, so the session must
+	// survive: a rename is not a reason to re-register.
+	if got := refreshed.GetOutToken(); got != "session-token" {
+		t.Errorf("out token = %q, want it preserved across a rename", got)
+	}
+	if s.clusterState.Get("peer-id") != refreshed {
+		t.Error("the refreshed entry is not the one on file under its identity")
+	}
+	if count := countPeers(s); count != 1 {
+		t.Errorf("directory holds %d peers, want 1: a rename must not duplicate", count)
+	}
+}
+
+// TestAssertResponder_UnchangedNameDoesNotReplaceTheEntry: the refresh replaces
+// the directory entry, so it must fire only on an actual difference — doing it
+// every heartbeat would churn the directory and the digest for nothing.
+func TestAssertResponder_UnchangedNameDoesNotReplaceTheEntry(t *testing.T) {
+	s := newNodesSyncServer(t, "self")
+	mustRegister(t, s, claimNode("peer", "peer-id", "10.0.0.1", 5000))
+	before := s.clusterState.Get("peer-id")
+
+	got, ok := s.assertResponder(before, "peer-id", "peer")
+	if !ok {
+		t.Fatal("the steady-state path rejected a matching peer")
+	}
+	if got != before {
+		t.Error("the entry was replaced even though nothing changed")
 	}
 }

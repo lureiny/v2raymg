@@ -513,3 +513,44 @@ func TestLoadFromFile_LegacyMigration_FillsJWTAndNodeSources(t *testing.T) {
 	assert.NotEmpty(t, cfg.EndNode.JWTSecret, "migrated end node must get an auto jwt_secret")
 	assert.NotEmpty(t, cfg.EndNode.Ping.NodeSources, "migrated config must get default NodeSources")
 }
+
+// TestLoadFromFile_StaticNodeNameIsAcceptedAndIgnored is the upgrade guard for
+// dropping the seed name.
+//
+// static_nodes entries used to carry a `name:`. The field is gone from the
+// struct — a seed says WHERE to dial and nothing else, since the peer reports
+// its own name in the first response and a label typed here could only ever be
+// an unverified guess presented as fact. Decoding is lenient, so an existing
+// config keeps loading untouched and the leftover key is silently dropped.
+// If anyone ever switches this loader to strict decoding, this test is what
+// tells them they just broke every deployed config.
+func TestLoadFromFile_StaticNodeNameIsAcceptedAndIgnored(t *testing.T) {
+	content := `
+store:
+  dsn: /var/lib/v2raymg/data.db
+end_node:
+  name: node-1
+  proxy_host: 10.0.0.9
+  rpc_port: 9090
+  cluster:
+    token: cluster-token-abcdef01
+    static_nodes:
+      - name: a-label-from-an-older-config
+        host: 10.0.0.1
+        port: 9090
+      - host: 10.0.0.2
+        port: 9090
+`
+	path := filepath.Join(t.TempDir(), "conf.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	cfg, err := LoadFromFile(path)
+	require.NoError(t, err, "a config still carrying static_nodes[].name must keep loading")
+
+	seeds := cfg.EndNode.Cluster.StaticNodes
+	require.Len(t, seeds, 2)
+	assert.Equal(t, "10.0.0.1", seeds[0].Host)
+	assert.Equal(t, int32(9090), seeds[0].Port)
+	assert.Equal(t, "10.0.0.2", seeds[1].Host)
+	assert.Equal(t, int32(9090), seeds[1].Port)
+}

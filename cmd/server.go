@@ -322,7 +322,6 @@ func convertStaticNodes(nodes []appconfig.StaticNodeConfig) []cluster.StaticNode
 	out := make([]cluster.StaticNode, len(nodes))
 	for i, n := range nodes {
 		out[i] = cluster.StaticNode{
-			Name: n.Name,
 			Host: n.Host,
 			Port: n.Port,
 		}

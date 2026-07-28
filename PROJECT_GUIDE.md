@@ -99,6 +99,19 @@ Makefile                   # build / build-full (full_dns tag) / proto
      - 未知身份的条目(static 种子 / 迁移过来的旧行 / 2.7 对端)用 `addr:host:port` 占位键暂存,
        首次交互后升级为真 id。**空 `node_id` 是常态,不是错误**
      - 名字不再保证唯一。`?target=` 同时接受 name 与 `node_id`,`/api/node` 用 `duplicate_name` 标记歧义
+     - **`static_nodes[].name` 是可选的、纯装饰性的** —— 种子就是一个"要去拨的地址",
+       只有 host+port 是承重的。种子先按 `addr:host:port` 占位存,对端在第一次应答里
+       报出真实名字后由它覆盖。写错或不写都无所谓
+     - **自我识别靠"问出来",不靠猜名字**。`StaticNode.IsValide` 里那条按名字过滤本机的
+       判断已删除:它只能抓到"名字恰好跟自己一模一样"那一种拼法,换个别名或不写名字就漏。
+       现在由 `assertResponder` 比对**应答方 node_id 与本机 id**,命中即丢弃该种子并 WARN。
+       这条不是锦上添花 —— 漏过去的自引用种子会被 `AdoptIdentity` 装上本机自己的身份,
+       而心跳轮只跳过 `isSelf` 条目,于是节点会**永远给自己发心跳**
+     - **名字漂移在每次应答里收敛**。改名只会通过"该节点自己重新注册"传播到它 DB 里记得的
+       对端;仅靠 gossip 学到它、从未与它握过手的节点会一直留着旧标签,导致 `?target=<name>`
+       在一部分节点生效、另一部分不生效。`assertResponder` 现在在 id 相同但名字不同时原地
+       刷新(同址同身份 = 同一进程,会话原样保留,目录键是 id 也不变),且**只在真的不同时**
+       才替换条目 —— 每轮心跳都替换会白白搅动目录和摘要
    - **动态发现的节点会持久化到 DB**(`cluster_nodes` 表)。语义:内存 = 配置 static node + DB 动态节点;static **不入库**;只有 `IsCompleteRegister()` 才写;内存回收即删库,两者严格一致,无独立 TTL。写入靠 `filter()` ticker 里的周期对账(只写差异,稳态零写),不用事件钩子
      - **加载时只设 `CreateTime`,绝不碰心跳时间戳** —— `IsCompleteRegister()` 不校验任何 token,改心跳时间戳会让刚加载的节点被误判为已认证并混进广告集合被广播出去
      - 删除判据是"内存中完全不存在",**不是**"失去 IsCompleteRegister" —— 后者会误删还在被重试的活节点
