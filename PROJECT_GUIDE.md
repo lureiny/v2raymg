@@ -139,6 +139,11 @@ Makefile                   # build / build-full (full_dns tag) / proto
     - 断言分层:纯集群/用户面用 `requireOK`(必须 200);成功依赖 CI 给不了的环境(ACME、release tag、
       运行中的代理内核)用 `requireRouted`(只拒绝「gin 没路由到」和「handler 崩了」)
     - 跨节点接口断言**另外两个节点确实生效**,不能只断言 200 —— 扇出只打到本节点也会返回 200
+11. **每次发版必须写 `CHANGELOG.md`** — 格式 `## <日期> — <版本> <主题>`,最新在最上面。
+    v2.6.0–v2.8.1 曾漏记(2026-07-28 从 tag message 回填)。分工:**CHANGELOG 只写"改了什么、
+    升级要注意什么"**,完整的设计取舍和 why 留在 annotated tag message 里
+    (`git tag -a` 写长文,`git tag -l --format='%(contents)' <tag>` 可读回)。
+    两边都不写只写 commit message 的话,运维升级前无处可查。
 
 > **新增 container 必读** — `docs/container-design-principles.md` 把上述 #1/#3/#4/#5 落成三条可操作的 container 开发原则,并给出"底层是否支持多 inbound / 是否有运行时 API"的适配模式矩阵(A/B/C)。接入新代理内核前必须读完并在设计文档里声明模式。
 

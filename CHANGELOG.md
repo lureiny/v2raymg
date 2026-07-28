@@ -1,5 +1,119 @@
 # CHANGELOG.md
 
+> 从 v2.6.0 起,发布条目以 `## <日期> — <版本> <主题>` 开头。完整的设计取舍写在
+> 对应的 annotated tag message 里(`git tag -l --format='%(contents)' v2.9.0`),
+> 这里只留"改了什么、升级要注意什么"。
+
+## 2026-07-28 — v2.9.0 端口分配只剩一个权威
+
+线上 mihomo 报 `listen udp 127.0.0.1:10000: bind: address already in use`。10000
+不是运气不好,是硬编码的:`NewDefaultInbound` 把 `port=0` 换成 10000,所有不显式传
+端口的 inbound 都落在同一个地址,第一个绑上、其余静默失败(mihomo 接受配置、只在
+自己日志里报绑定错误,v2raymg 照样落库并广告该 listener)。
+
+### Highlights
+
+- **进程内只剩一个 `PortAllocator`**。用户侧 forward 端口与四个容器的 inbound
+  后端端口共用同一张分配表。此前有三个互不知情的决策者:forward 的分配器、xray 私有的
+  `generateRandomPort(4000,5000)`(1001 个取值、不查可用性、不与自己的 inbound 去重)、
+  以及 `port==0 → 10000` 的兜底常量
+- **抽签范围 ≠ 记账范围**。`min_port/max_port` 只约束 `Allocate()` 的随机抽签;
+  `AllocateSpecific()` 接受记账范围内任意端口。此前用抽签范围校验显式端口,导致范围外的
+  端口永远登记不进来(于是无人阻止 `Allocate()` 再发一次),也让收窄抽签范围变成破坏性变更
+- **显式端口绝不静默替换**。运维或持久化记录指定的端口要么拿到、要么报 `ErrPortInUse`,
+  与 forward 侧对 pinned `ListenPort` 的既有规则一致。只有 `port=0` 才抽签
+- **启动预扫**(`cmd/server.go` 第 2b 步):持久化 inbound 端口在任何容器构造之前认领。
+  放进容器只能保证单容器内有序,而生产上的撞车是跨容器的
+- **管理端口进 `Reserved`**(rpc / http / xray gRPC API / hysteria traffic-stats /
+  mihomo external-controller)。xray 的 62789 不能漏 —— `killProcessOnPort` 会 SIGKILL
+  任何持有该端口的进程,只挡 `pid > 1`,不看进程名也不排除自己
+- 删除 `forward.GlobalForwardManager` 死单例,改经 `container.BuildOptions.PortClaimer`
+  窄接口注入;删除 xray 中定义了却从未赋值/读取的 `ExecutorConfig.PortAllocator`
+- 修正 `config.example.yaml` / `config/test-endnode.yaml` 的 `minport`/`maxport`/
+  `userandom` 拼写 —— 与 yaml tag 不匹配、一直被静默丢弃,**从来没有人配置的端口范围真正生效过**
+
+### 升级注意
+
+- **无 proto / DB schema / 集群协议变更**,混部与滚动升级不受影响,现有配置文件不用改
+- 存量库里两条 inbound 撞同一端口(很常见:两个 `port=0` 都被改写成 10000)时,启动会打
+  ERROR 点名双方,**但不阻止启动**,行为与升级前一致 —— 只是从静默变成可见
+- 新建 xray inbound 的自动端口从 `[4000,5000]` 改为共享抽签范围;存量 inbound 恢复原端口
+  不受影响。注意 xray inbound 绑 `0.0.0.0`,与 mihomo/hysteria/snell 绑 loopback 不同
+- `FastAddInbound` 显式指定已占用端口时现在返回 `ErrPortInUse`,而非报告成功后绑不上
+- forward 端口恰好等于某 inbound 端口的用户会被重新分配一次,需重拉订阅。这类部署升级前
+  本来就是坏的(两者抢同一端口),等于把静默故障换成一次可见变更
+
+## 2026-07-28 — v2.8.1 种子只剩地址,名字一律从线上学
+
+`static_nodes[].name` 从配置结构里彻底移除。种子只回答"往哪儿拨";目录自 v2.8.0 起按节点
+自己的持久化身份索引,运维写在地址旁的标签从来不是任何东西的证据。
+
+### Highlights
+
+- YAML 解码是宽松模式,老配置里残留的 `name:` 被静默丢弃,**升级零改动**
+- 自我识别从"猜名字"换成"问出来":`assertResponder` 比对应答方 `node_id` 与本机 id。
+  原先按名字过滤只能抓到"名字恰好一模一样"那一种拼法,漏掉的自引用种子会被装上本机身份,
+  导致节点**永远给自己发心跳**
+- 名字漂移改为每次应答都收敛(id 相同、名字不同则原地刷新),不再只在首次注册时传播
+
+### 升级注意
+
+与 v2.8.0 完全兼容,可混合部署、可滚动升级。无 proto / schema / API 变更。种子在完成
+首次交互前 `/api/node` 里 `name` 为空(默认心跳 10s,最多空 10s)。
+
+## 2026-07-27 — v2.8.0 节点身份改由持久化 UUID 决定
+
+节点目录从按 name 索引改为按 `node_id` 索引 —— 首次启动随机生成、持久化在本地 DB
+(`local_node_identity` 单行表)的 UUID,节点自维护,**没有任何配置项**。name / host / port
+全部降为可变属性。
+
+### Highlights
+
+- 改地址是同一条目的原地替换,不再是"陌生人跟自己的旧条目抢位置"。换址后集群收敛从
+  ~80s(或旧地址仍可达时永不收敛)降到 ~5.5s
+- **注册一律接受**,不因身份/地址不符而拒绝 —— 该撤回旧声明的实例已经不存在了,拒绝在结构上
+  无解。"感知顶替"改由告警承担
+- "删库但不改配置"的盲区靠**应答方身份**堵住:每个响应带 `responder_node_id`,调用方发现
+  地址被别的身份接管就立刻置脏旧 id;置脏期拒绝 gossip 更新但不拒绝该节点自己的直接注册,
+  且不立即回收(`DirtyNodeTTL = 3×NodeTimeOut = 180s`)
+- migration 16:新增 `local_node_identity` / `cluster_seeds`,`cluster_nodes` 改以
+  `node_id` 为主键
+
+### 升级注意
+
+`ComputeNodesSum` 不折入 `node_id`、心跳线上的 `nodesMap` 仍以 name 为 key —— 与 v2.7
+保持 wire 兼容,**无需全集群同批升级**。proto 字段全部 additive。
+
+## 2026-07-26 — v2.7.0 移除 center node 与 cluster name
+
+`static_nodes` 是唯一的入网途径,动态发现的节点持久化到 `cluster_nodes` 表以抗重启。
+
+### Highlights
+
+- **center node 彻底移除**:它唯一的作用是发现,而 `static_nodes` 覆盖同样的能力且更好
+  (带 `isLocal`、永不被 60s 超时回收、注册双向)。同时 center 是集群面唯一一条默认明文的
+  链路,还携带集群主密钥
+- **cluster name 一并移除** —— token 才是唯一的成员边界,名字是只会误拒合法节点的冗余第二因子
+- 旧配置里的 `node_type: center` / `center_node` / `center_token` 一律忽略并在启动时逐条 WARN
+
+### 升级注意
+
+破坏性变更(`feat(cluster)!`):需全集群升级。`Node.cluster_name` 在 proto 里保留为 `reserved 3`。
+
+## 2026-07-26 — v2.6.0 心跳目录摘要增量同步 + 转发层双栈
+
+### Highlights
+
+- 心跳不再每轮回带全量 `nodesMap`:两端各带 `nodes_sum`,稳态只比摘要;不一致时一次往返双向收敛。
+  杀手开关 `end_node.cluster.node_sum_sync`(默认 true)
+- 摘要必须排序后折叠(`cluster.ComputeNodesSum`,只折 name/host/port,不折运行期状态)——
+  不排序会让已收敛的两端算出不同摘要,变成永久假性不一致
+- 转发监听默认双栈(IPv4 + IPv6),由 `forward.listen_stack` 控制;单规则可用
+  `ForwardRule.ListenAddr` / `ListenStack` 覆盖。双栈下两半都是 best-effort
+- `forward.AddRule` 在 bind 撞上 EADDRINUSE 时改到另一个端口重试(仅限自动分配的端口;
+  pinned 端口绝不静默替换)
+- 新增 1-center + 3-end 集群回归套件,CI 强制
+
 ## 2026-04-25 — Mihomo Protocol Expansion Phase 6 (TUIC)
 
 Adds TUIC v5 support to the mihomo container's structured `ProtocolParams`
