@@ -17,6 +17,9 @@ answers:
   - 端口绑定重启后还能恢复吗,PortMappings 是干什么的?
   - Forward 规则可以在 inbound 或 container 内部直接创建吗?
   - 怎么读取某个用户的累计流量和增量流量?
+  - inbound 的端口是谁分配的?会不会跟 forward 端口撞上?
+  - 显式指定的 inbound 端口被占了会怎样?会自动换一个吗?
+  - 重启后持久化的 inbound 端口是怎么保住的?
 tags:
   - module
   - proxy
@@ -33,8 +36,14 @@ layer: index
 
 ## 关键事实
 
-- **port-range-default**: 10000–65535
+- **port-authority**: 进程级唯一。forward 端口与**所有容器的 inbound 后端端口**共用同一张分配表(2.9 起)
+- **port-authority-injection**: `cmd/server.go` 只 new 一个 `DefaultForwardManager`,经 `container.BuildOptions.PortClaimer` 注入。`forward.GlobalForwardManager` 单例**已删除**
+- **port-range-default**: 10000–60000(`forward.min_port`/`max_port`,**只约束随机抽签**)
+- **port-bookkeeping-range**: 1024–65535(`AllocateSpecific` 的接受范围,与抽签范围解耦)
 - **port-alloc-strategy**: 随机分配(useRandom 强制开启)
+- **inbound-port-entry**: `container.ClaimInboundPort`(pkg/proxy/core/container/portclaim.go)
+- **inbound-port-explicit-policy**: 显式指定的端口冲突即报 `ErrPortInUse`,**绝不静默替换**
+- **inbound-port-startup-preclaim**: `cmd/server.go` 第 2b 步,早于任何容器构造/启动
 - **port-allocator-file**: pkg/proxy/forward/port_allocator.go:10
 - **forward-rule-file**: pkg/proxy/forward/types.go:18
 - **rule-key-format**: `{containerType}:{inboundTag}:{username}` 例 `xray:vmess-tcp:user@test.com`
@@ -53,11 +62,20 @@ layer: index
 
 ## 三大核心抽象
 
-### PortAllocator —— 端口池
+### PortAllocator —— 进程唯一的端口权威
 
-管理 `[minPort, maxPort]` 范围的端口分配/释放,维护 `allocated` 和 `reserved` 两个 map。默认强制随机分配(避免端口可预测)。支持 `AllocateSpecific(port)` 用于重启恢复时复用历史端口。
+维护 `allocated` 和 `reserved` 两个 map。**注意它管的不只是 forward 端口** —— 2.9 起,四个容器的 inbound 后端端口也记在同一张表里,所以两边永远不会拿到同一个端口。
 
-定义见 `pkg/proxy/forward/port_allocator.go:10`。
+有两个必须分清的范围:
+
+| 范围 | 谁受约束 | 值 |
+|---|---|---|
+| **抽签范围** | `Allocate()`(没人指定端口时随机挑) | `[min_port, max_port]`,默认 10000–60000 |
+| **记账范围** | `AllocateSpecific(port)`(显式指定 / 重启恢复) | `[1024, 65535]`,与抽签范围无关 |
+
+拆开的理由:如果 `AllocateSpecific` 也按抽签范围校验,范围外的存量端口就永远登记不进来,也就得不到保护;而且收窄抽签范围会变成破坏性变更 —— 存量 `PortMappings` 里超出新上限的端口恢复失败,回落自动分配,用户端口静默漂移,订阅全废。
+
+定义见 `pkg/proxy/forward/port_allocator.go`。
 
 ### ForwardRule —— 一条转发规则
 

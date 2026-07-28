@@ -19,12 +19,17 @@ type DefaultInbound struct {
 }
 
 // NewDefaultInbound creates a new DefaultInbound with default values.
+//
+// A zero port is NOT substituted. It used to become 10000, which meant every
+// caller that omitted a port silently landed on the same listener address —
+// the first one bound it and every later one failed, and because the proxy
+// cores report a bind failure only in their own logs, the failure was
+// invisible. Port selection belongs to the shared allocator
+// (container.ClaimInboundPort); a zero here now falls through to Validate,
+// which rejects it, so the mistake surfaces at the caller instead.
 func NewDefaultInbound(tag string, protocol contracts.Protocol, port uint32) *DefaultInbound {
 	if tag == "" {
 		tag = "default-inbound"
-	}
-	if port == 0 {
-		port = 10000
 	}
 	return &DefaultInbound{
 		tag_:        tag,

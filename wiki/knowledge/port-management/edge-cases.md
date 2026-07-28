@@ -11,7 +11,21 @@ A: 不会。`forwardMgr` 用 `RuleKey = "{ct}:{tag}:{user}"` 做幂等;第二次
 
 **Q: 容器/服务重启后,之前用户的端口还是同一个吗?**
 
-A: 是,只要 `User.PortMappings[dstPort]` 还在。恢复流程会读 `PortMappings` 拿到 `preferredPort`,然后走 `PortAllocator.AllocateSpecific(preferredPort)` 分回原端口。如果该端口被别人占了(不应该发生),恢复会失败,需要排查端口池一致性。
+A: 是,只要 `User.PortMappings[dstPort]` 还在。恢复流程会读 `PortMappings` 拿到 `preferredPort`,然后走 `PortAllocator.AllocateSpecific(preferredPort)` 分回原端口。如果该端口被别人占了,`GetBindPort` 会回落到自动分配 —— 也就是**用户端口静默换了一个,旧订阅失效**。2.9 的启动预扫就是为了让这件事不发生:所有持久化 inbound 端口在任何 forward 规则之前先被认领。
+
+**Q: inbound 的端口是谁分配的?会不会跟用户的 forward 端口撞上?**
+
+A: 同一个 `PortAllocator`,所以撞不上(2.9 起)。入口是 `container.ClaimInboundPort`:传 0 表示"你挑",走 `AllocatePort()` 抽签;传具体值表示"就要这个",走 `AllocateSpecificPort()` 认领。删除 inbound 时 `ReleaseInboundPort` 归还。
+
+2.9 之前有**三个互不知情的决策者**:forward 的 `PortAllocator`、xray 自己的 `generateRandomPort(4000,5000)`(只有 1001 个取值,不去重)、以及 `NewDefaultInbound` 里 `port==0 → 10000` 的硬编码。线上 `listen udp 127.0.0.1:10000: bind: address already in use` 就是第三个造成的 —— 任何两个不显式传 port 的 inbound 都落在 10000。
+
+**Q: 显式指定的 inbound 端口被占了,会自动换一个吗?**
+
+A: **不会,直接报 `ErrPortInUse` 拒绝。** 与 forward 侧"pinned `ListenPort` 不重试"是同一条原则:运维指定的端口可能已经写进防火墙规则、DNS 或客户端配置,静默换掉会在别处坏掉,却看起来像成功。只有 `port=0`(没人选)才允许抽签。
+
+**Q: hysteria / snell 的端口为什么不在容器里认领?**
+
+A: 它们是单 inbound 容器,端口写死在容器 YAML 里,不存在"分配"。由启动预扫统一认领 —— 容器构造(`LoadFromConfig`)发生在预扫之后,如果容器再认领一次,会撞上我们自己刚才的认领,而这跟真实冲突无法区分。注意 snell 默认的 **16160 落在 forward 池里**(hysteria 的 9443 是刻意选在池子下方的),所以这条不是理论问题。
 
 **Q: 一个用户可以有多个端口吗?**
 
@@ -46,6 +60,12 @@ A: `MaxConnections` 是全局并发连接数上限(全部 IP 加起来);`MaxClie
 ⚠️ **RuleKey 是合约**:`{containerType}:{inboundTag}:{username}` 的三元组是稳定键,被 TrafficCounter、AggregatedStats、日志、事件追溯等多处使用。修改格式会引发连锁不兼容,改前必须全局评估。
 
 ⚠️ **端口强制随机分配**:`PortAllocator.useRandom` 当前强制 true,不要改成顺序分配——那样端口可预测,暴露给攻击者有安全风险。
+
+⚠️ **不要给端口加兜底常量**:任何 `if port == 0 { port = <常量> }` 都会让所有省略端口的调用方落在同一个监听地址上,而代理内核只在自己的日志里报绑定失败,v2raymg 看不见 —— 结果是记录落库、订阅照发、后端根本没监听。端口没人选时唯一正确的做法是走 `ClaimInboundPort` 抽签;没有权威可用时**报错**,不要猜。
+
+⚠️ **xray 的 62789 必须保留**:`killProcessOnPort`(`pkg/proxy/containers/xray/exec_runner.go`)会 SIGKILL 任何持有该端口的进程,只挡 `pid<=1`,既不查进程名也不排除自己。forward relay 一旦拿到它,启动 xray 容器就等于 v2raymg 自杀。`reservedManagementPorts` 负责把它加进 `Reserved`。
+
+⚠️ **`forward` 配置 key 必须带下划线**:`min_port` / `max_port`,不是 `minport` / `maxport`。loader 用 `yaml.Unmarshal` 按 struct tag 解析且不开 `KnownFields`,拼错的 key 被**静默丢弃**,配置看起来生效实际没有。2.8.x 之前的 `config.example.yaml` 就是错的。
 
 ---
 

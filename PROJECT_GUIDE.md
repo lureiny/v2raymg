@@ -69,7 +69,14 @@ Makefile                   # build / build-full (full_dns tag) / proto
 3. **Container 抽象低耦合** — `core/container` 不耦合任何业务;加一个代理内核只需新增 `containers/<name>/` 子目录实现
 4. **转发层统一收口** — forward 规则创建/释放必须走 `usermanager`(`GetBindPort`/`ReleaseBindPort`),inbound/container 内部**禁止**直接调用 `forwardManager.AddRule` 创建业务规则
 5. **流量统计只信 forward 层** — 不依赖 `container.QueryStats`,统计全部源自 relay 中间计数
-6. **ForwardManager 全局单例** — container 通过 `WithForwardManager(fm)` 显式注入,缺省回退到进程级单例;inbound 继承 container 实例,不单独注入
+6. **端口分配只有一个权威(2.9)** — 进程里**只有一个** `PortAllocator`,用户侧 forward 端口与各容器的 inbound 后端端口共用同一张分配表。任何组件、任何路径要绑端口,都必须先过它
+   - **注入,不用单例**。`forward.NewDefaultForwardManager` 在 `cmd/server.go` 只 new 一次,经 `container.BuildOptions.PortClaimer` 注入给容器,再经 `NewUserManagerWithStore` 注入给 usermanager。**原先的 `forward.GlobalForwardManager()` 懒加载单例已删除** —— 它生产零调用者,只被自己的测试吊着命,而留着的风险是有人为了"拿全局 allocator"去调它,从而得到**第二个** allocator:两张 `allocated` 表各说各话,比没有权威更糟,因为它看起来有权威
+   - **`BuildOptions.PortClaimer` 是窄接口**(`AllocatePort` / `AllocateSpecificPort` / `ReleasePort`),不是整个 `ForwardManager`。这样容器包不必为三个方法 import `pkg/proxy/forward`,守住第 3 条的低耦合
+   - **抽签范围 ≠ 记账范围**。`forward.min_port/max_port` 只约束 `Allocate()` 的随机抽签;`AllocateSpecific()` 接受 `[1024,65535]` 内任何未占用端口。混为一谈会让范围外的存量端口失去保护,也会让收窄抽签范围变成破坏性变更(存量 `PortMappings` 恢复失败 → 回落自动分配 → 用户端口静默漂移)
+   - **显式端口绝不静默替换**。运维或持久化记录指定的端口,冲突就报错;只有"没人选"(port=0)才抽签。与 forward 侧"pinned ListenPort 不重试"同一条原则。**不要**在任何地方给端口加兜底常量 —— `NewDefaultInbound` 原先的 `port==0 → 10000` 正是线上 `bind: address already in use` 的根因
+   - **启动预扫必须早于所有容器**(`cmd/server.go` 第 2b 步)。容器 Start 会经 `reconcileUsersForInbound → GetBindPort` 分配用户 forward 端口,而后启动容器的 inbound 端口是持久化的 pinned 值,撞上无解。放在容器内部只能保证单容器内有序,真实事故是跨容器的
+   - **管理端口进 `Reserved`**(rpc_port / http_port / xray grpc_port / hysteria traffic_stats_port / mihomo external_controller),由 `reservedManagementPorts` 自动加入。其中 **xray 的 62789 不能漏**:`killProcessOnPort` 会 SIGKILL 任何持有该端口的进程,只挡 `pid<=1`,不查名字也不排除自己 —— forward relay 一旦拿到它,启动 xray 就等于自杀
+   - **`config.example.yaml` 的 key 必须带下划线**。2.8.x 之前写的是 `minport`/`maxport`/`userandom`,与 struct tag 不匹配被 yaml 静默丢弃,运维改端口范围从来没生效过
    - **转发监听默认双栈** — 转发规则未指定时默认同时监听 IPv4(`0.0.0.0`)+ IPv6(`[::]`,`tcp6/udp6` 即 `IPV6_V6ONLY`)。全局默认由 `forward.listen_stack`(`dual`/`ipv4`/`ipv6`,默认 `dual`)控制;单规则可用 `ForwardRule.ListenAddr`(具体 IP 字面量,IPv6 自动加方括号)或 `ForwardRule.ListenStack` 覆盖。双栈下**两半都是 best-effort**:纯 IPv4 主机跳过 `[::]`、纯 IPv6 主机跳过 `0.0.0.0`,只要有一个协议族能绑就照常启动,两个都绑不上才失败(见 `pkg/proxy/forward/listen.go` + `relay_multi.go`)
 7. **持久化走 SQLite** — user/inbound/node_groups 全部落 SQLite,DB 操作通过 `pkg/store/manager` 的 `Provider` + `Tx` 抽象
 8. **集群通信走 gRPC,无 center node** — 节点间协议定义在 `pkg/rpc/proto/rpc_server.proto`;默认加密已切到 GCM(老 CBC 回退已移除)

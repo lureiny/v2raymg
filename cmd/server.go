@@ -112,13 +112,35 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	}
 	defer storeMgr.Close()
 
-	// 2. Forward Manager
+	// 2. Forward Manager — the process-wide port authority.
+	//
+	// 2a. Exclude the management ports this process and its child proxies bind
+	//     but never allocate. They are not inbounds, so they are reserved
+	//     rather than claimed: nothing ever hands them back.
+	cfg.Forward.Reserved = append(cfg.Forward.Reserved, reservedManagementPorts(cfg)...)
+
 	forwardMgr, err := forward.NewDefaultForwardManager(cfg.Forward)
 	if err != nil {
 		log.Error("init forward manager failed", "err", err)
 		os.Exit(1)
 	}
 	defer forwardMgr.Close()
+
+	// 2b. Claim every port a persisted inbound will want back, BEFORE anything
+	//     else can allocate.
+	//
+	//     This has to happen here, not inside each container's restore: a
+	//     container's Start reconciles users, which allocates their forward
+	//     ports, and a container that starts later restores inbound ports that
+	//     were pinned by a previous run and cannot move out of the way. Doing
+	//     it per-container would only make "inbound first, forward second"
+	//     true within one container, and the collision we actually saw in
+	//     production was across two of them.
+	//
+	//     Nothing has allocated yet at this point: the user manager (step 3)
+	//     only loads rows, and forward rules are not created until containers
+	//     start (step 12).
+	preClaimPersistedInboundPorts(storeMgr, forwardMgr, cfg)
 
 	// 3. User Manager
 	// 3a. Init login_password for existing users that don't have one yet (blocking).
@@ -183,6 +205,10 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	// 4 (cont). Container Manager — needs certMgr and HTTPPort
 	containerMgr := container.NewContainerMgr(storeMgr, container.BuildOptions{
 		UserManager: userMgr,
+		// The one and only port authority in the process. Containers claim
+		// their inbound listen ports here so the forward layer can never be
+		// handed a port an inbound already owns, and vice versa.
+		PortClaimer: forwardMgr,
 		CertManager: certMgr,
 		HTTPPort:    cfg.EndNode.HttpPort,
 		ProxyHost:   cfg.EndNode.ProxyHost,

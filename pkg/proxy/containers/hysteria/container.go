@@ -190,6 +190,13 @@ func NewHysteriaContainer(cfg HysteriaConfig, opts ...HysteriaOption) (*Hysteria
 	}
 	hc.BaseContainer = container.NewBaseContainer(contracts.ContainerHysteria, &hysteriaHooks{c: hc})
 
+	// The port is fixed by container config (never drawn), so this container
+	// does not claim it itself. It is claimed by the startup pre-claim pass in
+	// cmd/server.go, together with every persisted inbound port, BEFORE any
+	// container is constructed or started — that ordering is what stops an
+	// earlier container's user forward ports from taking it. Claiming again
+	// here would collide with our own earlier claim and be indistinguishable
+	// from a real conflict.
 	hc.inbound = inbound.NewDefaultInbound(
 		defaultInboundTag,
 		contracts.ProtocolHysteria2,

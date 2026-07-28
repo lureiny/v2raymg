@@ -161,6 +161,13 @@ func NewSnellContainer(cfg SnellConfig, opts ...SnellOption) (*SnellContainer, e
 	}
 	sc.BaseContainer = container.NewBaseContainer(contracts.ContainerSnell, &snellHooks{c: sc})
 
+	// The port is fixed by container config (never drawn), so this container
+	// does not claim it itself. It is claimed by the startup pre-claim pass in
+	// cmd/server.go, together with every persisted inbound port, BEFORE any
+	// container is constructed or started — that ordering is what stops an
+	// earlier container's user forward ports from taking it. Snell's default
+	// (16160) sits inside the forward pool, unlike hysteria's deliberately
+	// sub-pool 9443, so this is not hypothetical.
 	sc.inbound = inbound.NewDefaultInbound(
 		defaultInboundTag,
 		contracts.ProtocolSnell,

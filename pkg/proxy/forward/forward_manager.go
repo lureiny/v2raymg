@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lureiny/v2raymg/pkg/log"
+	errs "github.com/lureiny/v2raymg/pkg/proxy/errors"
 )
 
 // ForwardManagerOption is a function that configures a ForwardManager.
@@ -926,9 +927,36 @@ func (m *DefaultForwardManager) AllocatePort() (uint32, error) {
 	return m.allocator.Allocate()
 }
 
+// AllocateSpecificPort implements ForwardManager.
+//
+// Like AllocatePort, this only touches the allocation table — no relay, no
+// ForwardRule, no traffic-plane state.
+func (m *DefaultForwardManager) AllocateSpecificPort(port uint32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errs.New(errs.ErrPortAllocationFail, "forward_manager: closed")
+	}
+	// Pre-check the range so an unbindable port and an already-taken one get
+	// distinct error codes: the first is a caller bug, the second is a
+	// conflict the caller may want to report differently.
+	if floor := m.allocator.bookkeepingFloor(); port < floor || port > maxBookkeepablePort {
+		return errs.Newf(errs.ErrPortAllocationFail,
+			"forward_manager: port %d out of bindable range [%d, %d]",
+			port, floor, maxBookkeepablePort)
+	}
+	if err := m.allocator.AllocateSpecific(port); err != nil {
+		// Everything the allocator can still reject at this point means the
+		// port is spoken for — by another claim or by the reserved set.
+		return errs.Wrapf(errs.ErrPortInUse, err, "forward_manager: port %d unavailable", port)
+	}
+	return nil
+}
+
 // ReleasePort implements ForwardManager.
 //
-// Companion to AllocatePort. Idempotent; does not affect relays or rules.
+// Companion to AllocatePort and AllocateSpecificPort. Idempotent; does not
+// affect relays or rules.
 func (m *DefaultForwardManager) ReleasePort(port uint32) {
 	m.allocator.Release(port)
 }

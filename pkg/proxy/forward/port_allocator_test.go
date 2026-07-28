@@ -127,15 +127,80 @@ func TestPortAllocator_AllocateSpecific(t *testing.T) {
 		t.Fatal("expected error for double allocation")
 	}
 
-	// Out of range should fail
+	// A port outside the DRAW range is still bookkeepable: the caller is
+	// telling us it is about to bind that exact port, and refusing to record
+	// it would leave the port unprotected against a later Allocate().
+	if err := pa.AllocateSpecific(50000); err != nil {
+		t.Fatalf("AllocateSpecific outside the draw range should succeed: %v", err)
+	}
+	if !pa.IsAllocated(50000) {
+		t.Error("50000 should be allocated")
+	}
 	if err := pa.AllocateSpecific(50000); err == nil {
-		t.Fatal("expected error for out-of-range port")
+		t.Fatal("expected error re-claiming a port outside the draw range")
+	}
+
+	// Outside the BOOKKEEPING range is still rejected.
+	if err := pa.AllocateSpecific(80); err == nil {
+		t.Fatal("expected error for privileged port below the bindable range")
 	}
 
 	// Reserved port should fail
 	pa.AddReserved(40006)
 	if err := pa.AllocateSpecific(40006); err == nil {
 		t.Fatal("expected error for reserved port")
+	}
+}
+
+// The draw range must stay a subset of the bookkeeping range. If Allocate()
+// could hand out a port AllocateSpecific refuses to record, that port would
+// fail to be reclaimed after a restart and the user behind it would silently
+// move to a different one.
+func TestPortAllocator_DrawRangeIsAlwaysBookkeepable(t *testing.T) {
+	// A deliberately low draw range, below the usual 1024 floor.
+	pa, err := NewPortAllocator(PortAllocatorConfig{MinPort: 200, MaxPort: 209})
+	if err != nil {
+		t.Fatalf("NewPortAllocator: %v", err)
+	}
+
+	port, err := pa.Allocate()
+	if err != nil {
+		t.Fatalf("Allocate: %v", err)
+	}
+	pa.Release(port)
+
+	if err := pa.AllocateSpecific(port); err != nil {
+		t.Fatalf("a port Allocate() handed out must be re-claimable, got %v", err)
+	}
+}
+
+// A port claimed via AllocateSpecific — including one outside the draw range —
+// must never be handed out by Allocate(). This is the property the whole
+// "single authority" design rests on: the inbound side claims exact ports, the
+// forward side draws random ones, and they share one table.
+func TestPortAllocator_SpecificClaimIsNeverDrawn(t *testing.T) {
+	pa, err := NewPortAllocator(PortAllocatorConfig{MinPort: 41000, MaxPort: 41002})
+	if err != nil {
+		t.Fatalf("NewPortAllocator: %v", err)
+	}
+
+	if err := pa.AllocateSpecific(41001); err != nil {
+		t.Fatalf("AllocateSpecific: %v", err)
+	}
+
+	// Drain the remaining two ports; neither may be the claimed one.
+	for i := 0; i < 2; i++ {
+		got, err := pa.Allocate()
+		if err != nil {
+			t.Fatalf("Allocate #%d: %v", i, err)
+		}
+		if got == 41001 {
+			t.Fatalf("Allocate handed out the specifically-claimed port %d", got)
+		}
+	}
+
+	if _, err := pa.Allocate(); err == nil {
+		t.Fatal("expected exhaustion: the claimed port must not be redrawn")
 	}
 }
 

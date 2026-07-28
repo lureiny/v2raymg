@@ -15,9 +15,21 @@ store:
   dsn: /var/lib/v2raymg/data.db
 
 forward:
-  minport: 10000
-  maxport: 60000
-  userandom: true
+  # 进程级唯一的端口权威:用户侧转发端口与各容器的 inbound 后端端口共用这一个
+  # 分配表,任何组件都不会拿到重复端口。
+  #
+  # min_port / max_port 只是**随机抽签**的范围。显式指定的端口(inbound 配置里
+  # 写死的 port、重启后要原样恢复的持久化端口)不受这个范围限制,只要在
+  # [1024, 65535] 内就能被记账保护。所以收窄这里不会让存量端口失效。
+  #
+  # 注意 key 必须带下划线(loader 按结构体 yaml tag 解析)。2.8.x 之前这里写的是
+  # minport / maxport / userandom,与 tag 不匹配,被 yaml 静默丢弃 —— 也就是说
+  # 那时改这几个值从来没有生效过,一直在吃代码里的默认值。
+  min_port: 10000
+  max_port: 60000
+  # 额外永不分配的端口。进程与子进程的管理端口(rpc_port / http_port /
+  # xray grpc_port / hysteria traffic_stats_port / mihomo external_controller)
+  # 由启动流程自动加入,不需要在这里重复。
   reserved: []
   # 转发监听默认使用的 IP 协议栈:dual(默认,同时监听 IPv4+IPv6)/ ipv4 / ipv6。
   # 未设置时按 dual 处理;单条转发规则可通过 listen_addr / listen_stack 覆盖。

@@ -11,6 +11,7 @@ import (
 
 func TestFastAddInbound_TagRequired(t *testing.T) {
 	cfg := ExecutorConfig{
+		PortClaimer:    newTestPortClaimer(t),
 		BinaryPath:     "/usr/bin/xray",
 		ConfigFilePath: "/etc/xray/config.json",
 	}
@@ -34,6 +35,7 @@ func TestFastAddInbound_TagRequired(t *testing.T) {
 
 func TestFastAddInbound_ProtocolRequired(t *testing.T) {
 	cfg := ExecutorConfig{
+		PortClaimer:    newTestPortClaimer(t),
 		BinaryPath:     "/usr/bin/xray",
 		ConfigFilePath: "/etc/xray/config.json",
 	}
@@ -57,6 +59,7 @@ func TestFastAddInbound_ProtocolRequired(t *testing.T) {
 
 func TestFastAddInbound_InvalidProtocol(t *testing.T) {
 	cfg := ExecutorConfig{
+		PortClaimer:    newTestPortClaimer(t),
 		BinaryPath:     "/usr/bin/xray",
 		ConfigFilePath: "/etc/xray/config.json",
 	}
@@ -103,6 +106,7 @@ func TestFastAddInbound_Shadowsocks_MissingParams(t *testing.T) {
 
 func TestFastAddInbound_Shadowsocks_InvalidMethod(t *testing.T) {
 	cfg := ExecutorConfig{
+		PortClaimer:    newTestPortClaimer(t),
 		BinaryPath:     "/usr/bin/xray",
 		ConfigFilePath: "/etc/xray/config.json",
 	}
@@ -248,9 +252,12 @@ func TestFastAddInbound_DefaultValues(t *testing.T) {
 		t.Fatalf("failed to get inbound: %v", err)
 	}
 
-	// Port should be auto-generated (between 4000-5000)
-	if in.Port() < 4000 || in.Port() > 5000 {
-		t.Errorf("port = %v, expected auto-generated in range 4000-5000", in.Port())
+	// The port must come from the shared allocator, not a private xray-local
+	// pool. newTestPortClaimer's range is what proves it went through the
+	// authority rather than some fallback path: a port outside it means
+	// something is choosing ports behind the allocator's back again.
+	if in.Port() < 24000 || in.Port() > 24999 {
+		t.Errorf("port = %v, expected one drawn from the shared allocator (24000-24999)", in.Port())
 	}
 
 	// Cast to XrayInbound to check security and transport
@@ -375,6 +382,7 @@ func TestFastAddInbound_DuplicateTag(t *testing.T) {
 
 func TestFastAddInbound_PortValidation(t *testing.T) {
 	cfg := ExecutorConfig{
+		PortClaimer:    newTestPortClaimer(t),
 		BinaryPath:     "/usr/bin/xray",
 		ConfigFilePath: "/etc/xray/config.json",
 	}
@@ -434,6 +442,7 @@ func TestFastAddInbound_ListInbound(t *testing.T) {
 
 func TestFastAddInbound_TLS_RequiresCert(t *testing.T) {
 	cfg := ExecutorConfig{
+		PortClaimer:    newTestPortClaimer(t),
 		BinaryPath:     "/usr/bin/xray",
 		ConfigFilePath: "/etc/xray/config.json",
 	}
@@ -578,6 +587,7 @@ func TestFastAddInbound_TLS_SelfSigned(t *testing.T) {
 
 func TestFastAddInbound_TLS_DomainNoCertManager(t *testing.T) {
 	cfg := ExecutorConfig{
+		PortClaimer:    newTestPortClaimer(t),
 		BinaryPath:     "/usr/bin/xray",
 		ConfigFilePath: "/etc/xray/config.json",
 	}
@@ -601,6 +611,7 @@ func TestFastAddInbound_TLS_DomainNoCertManager(t *testing.T) {
 
 func TestFastAddInbound_TLS_DomainCertNotFound(t *testing.T) {
 	cfg := ExecutorConfig{
+		PortClaimer:    newTestPortClaimer(t),
 		BinaryPath:     "/usr/bin/xray",
 		ConfigFilePath: "/etc/xray/config.json",
 		CertManager:    &mockCertManager{record: nil},

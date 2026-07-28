@@ -15,6 +15,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
+	"github.com/lureiny/v2raymg/pkg/proxy/forward"
 )
 
 // xrayGRPCAddr is the gRPC address of the xray process started by TestMain.
@@ -201,6 +204,11 @@ func newIntegrationExecutorWith(t *testing.T, cfgFn func(*ExecutorConfig)) *Exec
 	cfg := ExecutorConfig{
 		BinaryPath:     xrayBin,
 		GRPCAPIAddress: xrayGRPCAddr,
+		// Port claiming is load-bearing for FastAddInbound: params without a
+		// port mean "draw one", and there is deliberately no fallback constant
+		// to fall back to. Wire the real authority so these tests exercise the
+		// production path.
+		PortClaimer: newTestPortClaimer(t),
 	}
 	if cfgFn != nil {
 		cfgFn(&cfg)
@@ -210,4 +218,23 @@ func newIntegrationExecutorWith(t *testing.T, cfgFn func(*ExecutorConfig)) *Exec
 		t.Fatalf("newIntegrationExecutorWith: %v", err)
 	}
 	return exec
+}
+
+// newTestPortClaimer returns a real port authority backed by the production
+// allocator, scoped to a small range so tests stay off anything else's ports.
+//
+// Tests use the real thing rather than a stub because port claiming is now
+// load-bearing for FastAddInbound: an unclaimable port must fail the add, and a
+// stub that always says yes would hide that.
+func newTestPortClaimer(t *testing.T) container.PortClaimer {
+	t.Helper()
+	fm, err := forward.NewDefaultForwardManager(forward.PortAllocatorConfig{
+		MinPort: 24000,
+		MaxPort: 24999,
+	})
+	if err != nil {
+		t.Fatalf("newTestPortClaimer: %v", err)
+	}
+	t.Cleanup(func() { _ = fm.Close() })
+	return fm
 }

@@ -53,6 +53,14 @@ type Executor struct {
 	// storeMgr provides unified access to persistence stores.
 	storeMgr *store.StoreManager
 
+	// portClaimer is the process-wide port authority. Every inbound listen
+	// port goes through it so no forward rule can be handed a port an xray
+	// inbound already owns, and vice versa. The ports claimed here are for
+	// xray's own 127.0.0.1 listeners; the public relay in front of one is
+	// separate and goes through UserManager.GetBindPort -> forward.AddRule.
+	// nil in unit tests, which then take ports at face value.
+	portClaimer container.PortClaimer
+
 	// Reconcile loop for periodic user sync
 	reconcileStopCh chan struct{}
 	reconcileWg     sync.WaitGroup
@@ -71,9 +79,11 @@ type ExecutorConfig struct {
 	// Debug enables debug logging for gRPC operations
 	Debug bool
 
-	// PortAllocator is used to allocate unique ports for users.
-	// If not provided, a default allocator will be created.
-	PortAllocator PortAllocatorGetter
+	// PortClaimer is the process-wide port authority. Inbound listen ports are
+	// claimed there so no other component — another container, or the forward
+	// layer — can be handed the same port. nil disables claiming, which is only
+	// correct for tests that construct an Executor in isolation.
+	PortClaimer container.PortClaimer
 
 	// StoreMgr provides unified access to persistence stores (UserStore + InboundStore).
 	// When set, inbounds are persisted and Restore() can reload them after restart.
@@ -90,12 +100,6 @@ type ExecutorConfig struct {
 	// ReconcileInterval specifies how often to sync users from UserManager to inbounds.
 	// Default: 30 seconds. Set to 0 to disable.
 	ReconcileInterval time.Duration
-}
-
-// PortAllocatorGetter interface for port allocation.
-type PortAllocatorGetter interface {
-	Allocate() (uint32, error)
-	Release(port uint32) error
 }
 
 // executorHooks implements container.Hooks for the Executor.
@@ -149,12 +153,13 @@ func NewExecutor(cfg ExecutorConfig) (*Executor, error) {
 	}
 
 	e := &Executor{
-		Runner:          runner,
-		config:          cfg,
-		grpcAPIAddress:  cfg.GRPCAPIAddress,
-		inbounds:        make(map[string]*XrayInbound),
-		renderer:        NewRenderer(),
-		storeMgr:        cfg.StoreMgr,
+		Runner:         runner,
+		config:         cfg,
+		grpcAPIAddress: cfg.GRPCAPIAddress,
+		inbounds:       make(map[string]*XrayInbound),
+		renderer:       NewRenderer(),
+		storeMgr:       cfg.StoreMgr,
+		portClaimer:    cfg.PortClaimer,
 	}
 
 	// Wire dependencies from config
@@ -189,12 +194,12 @@ func NewExecutor(cfg ExecutorConfig) (*Executor, error) {
 				binaryDir = "/tmp"
 			}
 			updaterConfig = UpdaterConfig{
-				BinaryPath:   cfg.BinaryPath,
+				BinaryPath:  cfg.BinaryPath,
 				DownloadDir: binaryDir,
-				Owner:        "XTLS",
-				Repo:         "Xray-core",
-				AssetName:    "Xray-linux-64.zip",
-				BinaryName:   "xray",
+				Owner:       "XTLS",
+				Repo:        "Xray-core",
+				AssetName:   "Xray-linux-64.zip",
+				BinaryName:  "xray",
 			}
 		}
 
@@ -379,7 +384,7 @@ func (e *Executor) generateDefaultConfig() error {
 	// Generate minimal config with API
 	model := contracts.ContainerModel{
 		Type:     contracts.ContainerXray,
-		APIPort:  62789, // 固定端口，与 GRPCAPIAddress 默认值保持一致
+		APIPort:  62789,                     // 固定端口，与 GRPCAPIAddress 默认值保持一致
 		Inbounds: []contracts.InboundSpec{}, // 空，不创建默认 inbound
 	}
 
@@ -565,6 +570,13 @@ func (e *Executor) RemoveInboundConfig(tag string) error {
 	}
 
 	delete(e.inbounds, tag)
+
+	// Give the listen port back to the shared allocator. After the store delete
+	// (phase 3) on purpose: a claim outlives everything except the record
+	// itself, so releasing while the record still existed would let a forward
+	// rule take a port this inbound would reclaim on the next restart.
+	container.ReleaseInboundPort(e.portClaimer, xrayIn.Port())
+
 	return nil
 }
 
@@ -695,7 +707,7 @@ func (e *Executor) AddInboundNative(nativeInboundJSON []byte) error {
 		transport:         transport,
 		nativeJSON:        nativeInboundJSON,
 		defaultClientUUID: defaultClientUUID,
-		defaultPassword:  defaultPassword,
+		defaultPassword:   defaultPassword,
 		extra:             extra,
 		addedUsers:        make(map[string]struct{}),
 	}
@@ -703,6 +715,20 @@ func (e *Executor) AddInboundNative(nativeInboundJSON []byte) error {
 	// Inject user manager dependency
 	if e.userMgr != nil {
 		xi.SetUserManager(e.userMgr)
+	}
+
+	// Record the port with the shared allocator so no forward rule is later
+	// handed a port this inbound owns. Best-effort by necessity: unlike
+	// FastAddInbound, xray has ALREADY accepted and bound this listener by the
+	// time we get here, so a failed claim cannot be undone — it means our
+	// bookkeeping disagrees with reality, which is worth a warning and nothing
+	// more. The port itself belongs to xray's own listener; the public relay in
+	// front of it comes from UserManager.GetBindPort -> forward.AddRule.
+	if port != 0 {
+		if _, err := container.ClaimInboundPort(e.portClaimer, port); err != nil {
+			log.Warn("[AddInboundNative] could not record inbound port with the shared allocator; "+
+				"it may be handed to a forward rule later", "tag", tag, "port", port, "err", err)
+		}
 	}
 
 	e.inboundsMu.Lock()
@@ -1620,12 +1646,12 @@ func (e *Executor) Init(config any) error {
 				binaryDir = "/tmp"
 			}
 			updaterConfig = UpdaterConfig{
-				BinaryPath:   e.config.BinaryPath,
-				DownloadDir:  binaryDir,
-				Owner:        "XTLS",
-				Repo:         "Xray-core",
-				AssetName:    "Xray-linux-64.zip",
-				BinaryName:   "xray",
+				BinaryPath:  e.config.BinaryPath,
+				DownloadDir: binaryDir,
+				Owner:       "XTLS",
+				Repo:        "Xray-core",
+				AssetName:   "Xray-linux-64.zip",
+				BinaryName:  "xray",
 			}
 		}
 
@@ -1682,18 +1708,29 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 		return errs.Newf(errs.ErrFastAddInboundFailed, "invalid protocol: %s", protocolStr)
 	}
 
-	// Resolve port
-	port := fastGetUint32(params, "port", 0)
-	if port == 0 {
-		randomPort, err := generateRandomPort(4000, 5000)
-		if err != nil {
-			return errs.Wrap(errs.ErrFastAddInboundFailed, "failed to generate random port", err)
+	// Resolve port through the shared allocator — the single authority over
+	// every port this process binds. Previously this drew from a private
+	// [4000,5000] pool that nothing else knew about: only 1001 values, no
+	// availability check, and no dedupe against e.inbounds, so a few dozen
+	// inbounds made a silent collision likely. An explicitly requested port is
+	// claimed verbatim or rejected, never substituted.
+	requestedPort := fastGetUint32(params, "port", 0)
+	if requestedPort != 0 && (requestedPort < 100 || requestedPort > 65535) {
+		return errs.Newf(errs.ErrFastAddInboundFailed, "port must be between 100 and 65535, got %d", requestedPort)
+	}
+	port, err := container.ClaimInboundPort(e.portClaimer, requestedPort)
+	if err != nil {
+		return errs.Wrap(errs.ErrFastAddInboundFailed, "failed to claim inbound listen port", err)
+	}
+	// The claim is provisional until the inbound is committed to the map and
+	// the store. Any early return below must give the port back, or a failed
+	// add leaks it for the lifetime of the process.
+	portCommitted := false
+	defer func() {
+		if !portCommitted {
+			container.ReleaseInboundPort(e.portClaimer, port)
 		}
-		port = randomPort
-	}
-	if port < 100 || port > 65535 {
-		return errs.Newf(errs.ErrFastAddInboundFailed, "port must be between 100 and 65535, got %d", port)
-	}
+	}()
 
 	// Normalize: domain implies server_name for TLS SNI
 	// If domain is set, server_name must match for certificate validation
@@ -2021,6 +2058,7 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 
 	e.inbounds[tag] = xrayInbound
 	e.inboundsMu.Unlock()
+	portCommitted = true
 
 	// Sync existing users to this new inbound (must be outside lock to avoid deadlock,
 	// since reconcileUsersForInbound acquires inboundsMu.RLock internally).
@@ -2262,14 +2300,10 @@ func isValidShadowsocksMethod(method string, allowLegacy bool) bool {
 	return false
 }
 
-// generateRandomPort generates a random port in the given range.
-func generateRandomPort(min, max int) (uint32, error) {
-	n, err := rand.Int(rand.Reader, big.NewInt(int64(max-min+1)))
-	if err != nil {
-		return 0, err
-	}
-	return uint32(min) + uint32(n.Int64()), nil
-}
+// Deliberately no local port generator here. Port selection is the shared
+// allocator's job (container.ClaimInboundPort); a private random draw cannot
+// see what the forward layer or the other containers already hold, which is
+// exactly how identical ports used to be handed out twice.
 
 // generateUUID generates a random UUID v4.
 func generateUUID() string {

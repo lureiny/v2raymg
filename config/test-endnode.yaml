@@ -12,9 +12,10 @@ store:
   dsn: /tmp/v2raymg-test-data.db
 
 forward:
-  minport: 10000
-  maxport: 60000
-  userandom: true
+  # Keys must use underscores — they are matched against the struct's yaml
+  # tags. The old minport/maxport/userandom spellings were silently dropped.
+  min_port: 10000
+  max_port: 60000
   reserved: []
 
 containers:

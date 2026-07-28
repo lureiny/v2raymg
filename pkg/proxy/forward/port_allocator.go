@@ -7,6 +7,42 @@ import (
 	"sync"
 )
 
+// The allocator distinguishes two ranges, and conflating them is a bug:
+//
+//   - The DRAW range [minPort, maxPort] is where Allocate() picks from when
+//     nobody named a port. It is a policy knob — narrow it to dodge the
+//     kernel's ephemeral range, widen it for more headroom.
+//   - The BOOKKEEPING range [minBookkeepablePort, maxBookkeepablePort] is
+//     every port this process could conceivably bind. AllocateSpecific()
+//     accepts anything in it.
+//
+// AllocateSpecific used to reject ports outside the draw range, which had two
+// bad consequences: a port already in use by an existing inbound outside that
+// range could never be registered, so nothing stopped Allocate() from handing
+// the same port to somebody else; and narrowing the draw range became a
+// breaking change, because persisted ports above the new maxPort would fail to
+// be reclaimed on restart and silently move.
+// The draw range must stay a SUBSET of the bookkeeping range, otherwise
+// Allocate() could hand out a port AllocateSpecific refuses to record — and
+// that port would then fail to be reclaimed after a restart and silently move.
+// minPort is allowed below minBookkeepablePort (NewPortAllocator only clamps it
+// at 100), so the floor is taken as the lower of the two rather than assumed.
+const (
+	// minBookkeepablePort excludes the privileged range. Nothing this
+	// process binds lives below it by default, and refusing to track those
+	// ports keeps an operator typo from reserving, say, port 22.
+	minBookkeepablePort = 1024
+	maxBookkeepablePort = 65535
+)
+
+// bookkeepingFloor is the lowest port this allocator will record.
+func (pa *PortAllocator) bookkeepingFloor() uint32 {
+	if pa.minPort < minBookkeepablePort {
+		return pa.minPort
+	}
+	return minBookkeepablePort
+}
+
 // PortAllocator manages a pool of ports within a specified range.
 // It is goroutine-safe.
 type PortAllocator struct {
@@ -113,12 +149,18 @@ func (pa *PortAllocator) Allocate() (uint32, error) {
 }
 
 // AllocateSpecific allocates a specific port. Returns error if already in use or reserved.
+//
+// The port is checked against the BOOKKEEPING range, not the draw range — see
+// the range commentary at the top of this file. A caller naming a port is
+// telling us it is about to bind that exact port; refusing to record it just
+// because Allocate() would not have picked it leaves the port unprotected.
 func (pa *PortAllocator) AllocateSpecific(port uint32) error {
 	pa.mu.Lock()
 	defer pa.mu.Unlock()
 
-	if port < pa.minPort || port > pa.maxPort {
-		return fmt.Errorf("port_allocator: port %d out of range [%d, %d]", port, pa.minPort, pa.maxPort)
+	if floor := pa.bookkeepingFloor(); port < floor || port > maxBookkeepablePort {
+		return fmt.Errorf("port_allocator: port %d out of bindable range [%d, %d]",
+			port, floor, maxBookkeepablePort)
 	}
 	if pa.reserved[port] {
 		return fmt.Errorf("port_allocator: port %d is reserved", port)

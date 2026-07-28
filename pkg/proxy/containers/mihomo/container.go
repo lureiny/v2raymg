@@ -55,6 +55,12 @@ type MihomoContainer struct {
 
 	storeMgr *store.StoreManager
 
+	// portClaimer is the shared port authority. Ports for mihomo's own
+	// 127.0.0.1 listeners are claimed here; the public relay in front of a
+	// listener is separate and goes through UserManager.GetBindPort ->
+	// forward.AddRule. nil in unit tests, which then skip claiming.
+	portClaimer container.PortClaimer
+
 	// updater handles the download → verify → swap → restart flow used by
 	// both Update() and the Start-time auto-download path. nil when
 	// AutoDownload=false and no explicit updater was injected — in that case
@@ -102,6 +108,14 @@ type MihomoOption func(*MihomoContainer)
 // memory only — OK for tests, never OK in production.
 func WithStoreMgr(sm *store.StoreManager) MihomoOption {
 	return func(c *MihomoContainer) { c.storeMgr = sm }
+}
+
+// WithPortClaimer wires the process-wide port authority. Every listener port
+// mihomo binds is claimed there, so no forward rule can be handed a port a
+// mihomo listener already owns (and vice versa). Unset in unit tests that only
+// exercise inbound CRUD, in which case ports are taken at face value.
+func WithPortClaimer(pc container.PortClaimer) MihomoOption {
+	return func(c *MihomoContainer) { c.portClaimer = pc }
 }
 
 // WithUserManager wires the user manager so user-event-driven forward rule
@@ -457,7 +471,28 @@ func (c *MihomoContainer) refreshCachedVersionAfterRestart() {
 // Persistence order: store first, then map, then REST. If REST fails the
 // store record and map entry are both rolled back so a subsequent Start
 // replay doesn't resurrect a listener mihomo rejected.
+//
+// Port claiming: the listen port is resolved through the shared allocator
+// BEFORE the inbound is built, because a claim that fails must abort the whole
+// add — a listener mihomo cannot bind is worse than a rejected request, since
+// mihomo accepts the config and only logs the bind failure, leaving us
+// advertising a listener that never came up.
 func (c *MihomoContainer) FastAddInbound(tag string, params map[string]any) error {
+	params, claimed, err := c.claimPortForParams(params)
+	if err != nil {
+		return err
+	}
+	// The claim is provisional until the inbound is committed. Every early
+	// return below (build error, duplicate tag, persist failure, REST
+	// rejection) must give the port back, or a failed add leaks it for the
+	// lifetime of the process.
+	committed := false
+	defer func() {
+		if !committed {
+			container.ReleaseInboundPort(c.portClaimer, claimed)
+		}
+	}()
+
 	inb, err := fastAddBuildInbound(tag, params)
 	if err != nil {
 		return err
@@ -472,6 +507,7 @@ func (c *MihomoContainer) FastAddInbound(tag string, params map[string]any) erro
 	if err := c.addInboundLocked(tag, inb); err != nil {
 		return err
 	}
+	committed = true
 
 	// Sync existing users to this new inbound AFTER releasing inboundsMu
 	// — GetBindPort is UserManager-owned and slow; holding inboundsMu
@@ -481,6 +517,35 @@ func (c *MihomoContainer) FastAddInbound(tag string, params map[string]any) erro
 	// periodic reconcile loop converges further drift. Matches xray.
 	c.reconcileUsersForInbound(tag)
 	return nil
+}
+
+// claimPortForParams resolves params["port"] through the shared port authority
+// and returns a copy of params carrying the resolved value, plus the claimed
+// port so the caller can release it if the add does not commit.
+//
+// The port claimed here is for mihomo's own 127.0.0.1 listener. The public
+// relay in front of it is a separate concern, created via
+// UserManager.GetBindPort -> forward.AddRule when users are bound.
+//
+// params is copied rather than mutated: it belongs to the caller (the RPC
+// handler builds it per request), and writing a resolved port back into it
+// would make a failed add visible to whatever the caller does next.
+func (c *MihomoContainer) claimPortForParams(params map[string]any) (map[string]any, uint32, error) {
+	requested, err := requirePort(params, "port")
+	if err != nil {
+		return nil, 0, err
+	}
+	claimed, err := container.ClaimInboundPort(c.portClaimer, requested)
+	if err != nil {
+		return nil, 0, fmt.Errorf("mihomo: claim listen port for inbound: %w", err)
+	}
+
+	resolved := make(map[string]any, len(params))
+	for k, v := range params {
+		resolved[k] = v
+	}
+	resolved["port"] = claimed
+	return resolved, claimed, nil
 }
 
 // addInboundLocked holds inboundsMu across the "persist + map + REST push"
@@ -572,6 +637,13 @@ func (c *MihomoContainer) RemoveInboundConfig(tag string) error {
 	}
 
 	delete(c.inbounds, tag)
+
+	// Phase 4b: Give the listen port back to the shared allocator. Deliberately
+	// after the store delete: a claim outlives everything except the record
+	// itself, so releasing before the record is gone would open a window where
+	// a forward rule could take a port a still-persisted inbound would reclaim
+	// on the next restart.
+	container.ReleaseInboundPort(c.portClaimer, inb.Port())
 
 	// Phase 5: Clean up cert material v2raymg itself wrote to the scratch
 	// dir. The cert source may live on legacy SharedCred or on the Phase
@@ -734,6 +806,16 @@ func (c *MihomoContainer) buildBaseConfig() mihomoInitialConfig {
 // retry doesn't leak entries from the first attempt — BaseContainer allows
 // Start() to be called again after a hook failure and the same
 // MihomoContainer instance is reused.
+//
+// Restore deliberately does NOT claim ports. The invariant is "a port is
+// claimed for as long as an inbound record exists": claimed by FastAddInbound
+// for new inbounds, and by the startup pre-claim pass in cmd/server.go for
+// persisted ones — which has to run before ANY container starts, because a
+// container that starts earlier allocates its users' forward ports and would
+// otherwise be able to take a port this container is about to restore.
+// Claiming again here would either double-claim or, worse, fail on our own
+// earlier claim and be indistinguishable from a real conflict. A Stop/Start
+// cycle keeps its claims for the same reason: the records never went away.
 func (c *MihomoContainer) restoreAndPushInbounds() error {
 	if c.storeMgr != nil {
 		records, err := c.storeMgr.InboundStore().Load()

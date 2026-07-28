@@ -1,6 +1,6 @@
 schema_version: 1
 status: draft
-last_verified: 2026-04-17
+last_verified: 2026-07-28
 owner: proxy-team
 source:
   - pkg/proxy/forward/port_allocator.go
@@ -15,3 +15,6 @@ changelog:
   - date: 2026-04-17
     change: 初始版本,覆盖 PortAllocator/ForwardRule/TrafficCounter 三大抽象、GetBindPort/ReleaseBindPort 流程、Relay 数据平面与 Forward 层统计体系
     reason: 用户需求,将端口管理与流量统计功能的梳理沉淀为 wiki
+  - date: 2026-07-28
+    change: 端口分配统一到进程唯一 PortAllocator：inbound 与 forward 共用一张分配表；拆开抽签范围与记账范围；删除 GlobalForwardManager 单例改注入；启动预扫认领持久化 inbound 端口；删除 NewDefaultInbound 的 port==0→10000
+    reason: 线上 mihomo listener bind: address already in use 的根因修复

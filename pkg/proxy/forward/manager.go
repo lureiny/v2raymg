@@ -91,6 +91,21 @@ type ForwardManager interface {
 	// manager side). Pairs with ReleasePort.
 	AllocatePort() (uint32, error)
 
+	// AllocateSpecificPort claims one exact port in the shared pool, again
+	// WITHOUT creating a rule or starting a relay. Same allocation table as
+	// AddRule and AllocatePort, so it is the single authority: once a port is
+	// claimed here, no other caller can be handed it.
+	//
+	// Use this when the port is not ours to choose — an operator named it, or
+	// it was persisted by a previous run and has to come back unchanged. A
+	// claimed port is NEVER silently substituted; an occupied port is an error
+	// the caller must surface, because whoever named it may already have it in
+	// a firewall rule or a client config. Pairs with ReleasePort.
+	//
+	// Returns errs.ErrPortInUse when the port is already claimed or reserved,
+	// and errs.ErrPortAllocationFail when it is outside the bindable range.
+	AllocateSpecificPort(port uint32) error
+
 	// ReleasePort returns a port previously obtained from AllocatePort to
 	// the shared pool. It does NOT stop a relay and does NOT touch any
 	// rule created via AddRule (those are released by RemoveRule). Safe on

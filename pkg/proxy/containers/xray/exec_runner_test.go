@@ -262,6 +262,10 @@ func (m *mockForwardManagerForTest) AllocatePort() (uint32, error) {
 	return 0, nil
 }
 
+func (m *mockForwardManagerForTest) AllocateSpecificPort(port uint32) error {
+	return nil
+}
+
 func (m *mockForwardManagerForTest) ReleasePort(port uint32) {}
 
 func (m *mockForwardManagerForTest) Close() error {

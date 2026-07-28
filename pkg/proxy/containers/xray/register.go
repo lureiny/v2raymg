@@ -28,6 +28,7 @@ func (f *xrayFactory) New(opts container.BuildOptions) (container.Container, err
 	cfg.UserManager = opts.UserManager
 	cfg.CertManager, _ = opts.CertManager.(CertManagerGetter)
 	cfg.StoreMgr = opts.StoreMgr
+	cfg.PortClaimer = opts.PortClaimer
 	return NewExecutor(*cfg)
 }
 

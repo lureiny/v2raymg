@@ -37,6 +37,9 @@ func (f *mihomoFactory) New(opts container.BuildOptions) (container.Container, e
 	if opts.UserManager != nil {
 		options = append(options, WithUserManager(opts.UserManager))
 	}
+	if opts.PortClaimer != nil {
+		options = append(options, WithPortClaimer(opts.PortClaimer))
+	}
 	// If the caller provided a cert manager with a discoverable storage
 	// root, whitelist that root in SAFE_PATHS so mihomo accepts
 	// certmgr-managed cert paths referenced from inbound configs. When

@@ -50,7 +50,9 @@ type ProtocolParams struct {
 
 	// Port is the listener's server-side port. The forward layer maps
 	// per-user public ports onto this. 0 means "let the container choose",
-	// which is only meaningful when the adapter knows how to allocate.
+	// which it does by drawing from the shared port authority
+	// (container.ClaimInboundPort) — the same allocation table the forward
+	// layer draws from, so the two can never be handed the same port.
 	Port uint32 `json:"port"`
 
 	// ListenAddr defaults to "127.0.0.1" when unset — external ingress is

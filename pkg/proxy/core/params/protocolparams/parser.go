@@ -150,7 +150,11 @@ func optionalString(raw map[string]any, key string) string {
 //   - int32 — proto-generated structs (FastAddInboundReq.Port is int32)
 //   - uint / uint16 / uint32 — typed callers
 //
-// 0 is accepted — the adapter layer interprets it as "allocate one".
+// 0 is accepted and genuinely means "allocate one": the container resolves it
+// through the shared port authority (container.ClaimInboundPort) before
+// building the inbound. Do NOT reintroduce a fallback constant here — a
+// private default is how every caller that omitted a port used to end up on
+// the same listener address.
 // Out-of-range values produce ErrMissingRequired-wrapped errors so callers
 // get a single branch for "port missing or invalid".
 func requireUint32(raw map[string]any, key string) (uint32, error) {
