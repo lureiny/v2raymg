@@ -69,8 +69,8 @@ func TestLoadFromFile_YML(t *testing.T) {
 store:
   dsn: /tmp/data.db
 forward:
-  minport: 1000
-  maxport: 2000
+  min_port: 1000
+  max_port: 2000
 containers:
   containers:
     - type: xray
@@ -83,8 +83,45 @@ containers:
 	cfg, err := LoadFromFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/data.db", cfg.Store.DSN)
+	assert.Equal(t, uint32(1000), cfg.Forward.MinPort)
+	assert.Equal(t, uint32(2000), cfg.Forward.MaxPort)
 	require.Len(t, cfg.Containers.Containers, 1)
 	assert.True(t, cfg.Containers.Containers[0].Enabled)
+}
+
+// Decoding is plain yaml.Unmarshal without KnownFields, so a key that does not
+// match a struct tag is dropped without a word. config.example.yaml shipped
+// minport/maxport/userandom for a long time, which meant nobody's configured
+// forward port range ever took effect while the file looked correct.
+//
+// This pins the footgun rather than the fix: if anyone switches the loader to
+// strict decoding, this test tells them it will start rejecting configs that
+// have been quietly accepted for years, and if anyone reintroduces the wrong
+// spelling in an example, the asserted defaults here show what actually happens.
+func TestLoadFromFile_MisspelledForwardKeysAreSilentlyDropped(t *testing.T) {
+	content := `
+store:
+  dsn: /tmp/data.db
+forward:
+  minport: 1000
+  maxport: 2000
+  userandom: false
+containers:
+  containers:
+    - type: xray
+      enabled: true
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	cfg, err := LoadFromFile(path)
+	require.NoError(t, err, "an unknown key must not fail the load")
+
+	assert.Equal(t, uint32(10000), cfg.Forward.MinPort,
+		"minport does not match the min_port tag, so the code default stands")
+	assert.Equal(t, uint32(60000), cfg.Forward.MaxPort,
+		"maxport does not match the max_port tag, so the code default stands")
 }
 
 func TestLoadFromFile_JSON(t *testing.T) {
