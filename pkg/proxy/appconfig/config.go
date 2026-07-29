@@ -204,12 +204,13 @@ type EndNodeConfig struct {
 	Ping PingConfig `yaml:"ping" json:"ping"`
 	// HttpPort is the HTTP management interface port.
 	HttpPort int `yaml:"http_port" json:"http_port"`
-	// HttpListen is the listen address for the HTTP management server, chosen
-	// independently of the gRPC one so a cluster can expose the management API
-	// on a single node while every other node keeps it unreachable.
+	// HttpListen overrides the listen address for the HTTP management server on
+	// this node alone, so a cluster can publish the management API on one node
+	// and keep it unreachable on the rest.
 	//
-	// When empty it is "127.0.0.1", NOT the shared Listen address — see
-	// ResolveHTTPListen for why the two differ deliberately.
+	// Empty inherits Listen. Resolution and the reasoning live on
+	// ResolveHTTPListen — do not restate the rule here, that is how this comment
+	// and the code came to disagree for six releases.
 	HttpListen string `yaml:"http_listen" json:"http_listen"`
 	// HttpToken is the HTTP management interface authentication token.
 	HttpToken string `yaml:"http_token" json:"http_token"`
