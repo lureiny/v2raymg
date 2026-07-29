@@ -270,3 +270,102 @@ func TestLocalIdentityStore_IsStableAcrossReopen(t *testing.T) {
 			"to peers like the node being replaced", first, after)
 	}
 }
+
+// Migration 17 adds the transport alongside the address. It must apply on top of
+// a populated v16 database without disturbing what is already there, and every
+// existing row must come back as plaintext — which is what it meant, since
+// nothing before this release could advertise anything else.
+func TestMigration17_UpgradesAnExistingV16Database(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v16.db")
+
+	upTo16 := migrations.All[:16]
+	if v := upTo16[len(upTo16)-1].Version; v != 16 {
+		t.Fatalf("expected to slice through version 16, got %d", v)
+	}
+	mgr, err := store.NewStoreManager(path, upTo16)
+	if err != nil {
+		t.Fatalf("NewStoreManager at v16: %v", err)
+	}
+	if _, err := mgr.DB().DB().Exec(
+		`INSERT INTO cluster_nodes (node_id, name, host, port, created_at) VALUES (?, ?, ?, ?, ?)`,
+		"id-old", "old-peer", "10.0.0.1", 5000, 1); err != nil {
+		t.Fatalf("insert v16 row: %v", err)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	mgr2, err := store.NewStoreManager(path, migrations.All)
+	if err != nil {
+		t.Fatalf("NewStoreManager with migration 17: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr2.Close() })
+	s := store.NewSQLiteClusterNodesStore(mgr2.DB())
+
+	nodes, err := s.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("nodes = %+v, want the pre-existing row preserved", nodes)
+	}
+	if nodes[0].NodeID != "id-old" || nodes[0].Host != "10.0.0.1" || nodes[0].Port != 5000 {
+		t.Errorf("row = %+v, want it carried across untouched", nodes[0])
+	}
+	if nodes[0].TLS {
+		t.Error("a row written before this migration must read back as plaintext")
+	}
+}
+
+// The transport has to survive the round trip, or the first dial after every
+// restart goes out in plaintext and a peer behind a TLS proxy stays unreachable
+// until it happens to register inbound.
+func TestClusterNodesStore_TLSRoundTrips(t *testing.T) {
+	s := newClusterNodesStore(t)
+
+	if err := s.Upsert(store.ClusterNode{
+		NodeID: "id-tls", Name: "behind-proxy",
+		Host: "cluster.example.com", Port: 443, TLS: true,
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := s.Upsert(store.ClusterNode{
+		NodeID: "id-plain", Name: "direct",
+		Host: "10.0.0.2", Port: 9090,
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	got := map[string]store.ClusterNode{}
+	nodes, err := s.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, n := range nodes {
+		got[n.NodeID] = n
+	}
+
+	if !got["id-tls"].TLS {
+		t.Error("tls=true did not survive the round trip")
+	}
+	if got["id-tls"].Port != 443 {
+		t.Errorf("port = %d, want 443", got["id-tls"].Port)
+	}
+	if got["id-plain"].TLS {
+		t.Error("tls must default to false, not leak from another row")
+	}
+
+	// An upsert flips it back, the way a node dropping its reverse proxy would.
+	if err := s.Upsert(store.ClusterNode{
+		NodeID: "id-tls", Name: "behind-proxy",
+		Host: "10.0.0.3", Port: 9090, TLS: false,
+	}); err != nil {
+		t.Fatalf("Upsert update: %v", err)
+	}
+	nodes, _ = s.List()
+	for _, n := range nodes {
+		if n.NodeID == "id-tls" && n.TLS {
+			t.Error("upsert must overwrite tls, not leave the previous value")
+		}
+	}
+}

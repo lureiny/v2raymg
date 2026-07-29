@@ -27,8 +27,28 @@ func TestAll_SQLNonEmpty(t *testing.T) {
 }
 
 func TestAll_Count(t *testing.T) {
-	if len(migrations.All) != 16 {
-		t.Errorf("expected 16 migrations, got %d", len(migrations.All))
+	if len(migrations.All) != 17 {
+		t.Errorf("expected 17 migrations, got %d", len(migrations.All))
+	}
+}
+
+// Migration 17 carries the transport next to the address, so a peer behind a
+// TLS-terminating reverse proxy survives a restart. Defaulting to 0 is what
+// makes the upgrade silent: every existing row meant plaintext.
+func TestVersion17_TLSColumnsAndSecrets(t *testing.T) {
+	m := migrations.All[16] // version 17
+	if m.Version != 17 {
+		t.Fatalf("expected version 17, got %d", m.Version)
+	}
+	for _, want := range []string{
+		"ALTER TABLE cluster_nodes ADD COLUMN tls",
+		"ALTER TABLE cluster_seeds ADD COLUMN tls",
+		"DEFAULT 0",
+		"local_secrets",
+	} {
+		if !strings.Contains(m.SQL, want) {
+			t.Errorf("version 17 should contain %q", want)
+		}
 	}
 }
 

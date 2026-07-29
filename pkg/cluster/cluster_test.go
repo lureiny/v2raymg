@@ -341,7 +341,14 @@ func TestStaticNode_IsValide(t *testing.T) {
 		{"same host+port as this node", cluster.StaticNode{Host: "10.0.0.1", Port: 3000}, false},
 		{"same host, different port", cluster.StaticNode{Host: "10.0.0.1", Port: 4000}, true},
 		{"empty host", cluster.StaticNode{Host: "", Port: 4000}, false},
-		{"low port", cluster.StaticNode{Host: "10.0.0.2", Port: 999}, false},
+		// 443 must be accepted: it is the default port of a grpcs:// seed, so the
+		// old Port > 1000 rule silently discarded exactly the seeds pointing at a
+		// peer behind a TLS-terminating reverse proxy.
+		{"tls default port", cluster.StaticNode{Host: "10.0.0.2", Port: 443, TLS: true}, true},
+		{"plain default port", cluster.StaticNode{Host: "10.0.0.2", Port: 80}, true},
+		// The remaining port test is "is this a port at all".
+		{"port zero", cluster.StaticNode{Host: "10.0.0.2", Port: 0}, false},
+		{"port out of range", cluster.StaticNode{Host: "10.0.0.2", Port: 70000}, false},
 	}
 
 	for _, tt := range tests {

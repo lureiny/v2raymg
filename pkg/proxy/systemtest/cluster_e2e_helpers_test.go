@@ -553,3 +553,19 @@ func (c *e2eCluster) restartWithConfigEdit(t *testing.T, s *e2eServer, what stri
 	}
 	t.Logf("%s restarted (%s)", s.name, what)
 }
+
+// restartWithReverseProxy restarts a node configured to believe it sits behind a
+// reverse proxy at the given URL, so it advertises that address instead of
+// proxy_host + rpc_port.
+//
+// The URL is plaintext grpc:// on purpose. Standing up a real TLS-terminating
+// proxy would test the proxy, not this code — what needs proving here is that
+// the advertised address comes from reverse_proxy.grpc_addr and that peers
+// follow it to an entry they update in place rather than a second one.
+func (c *e2eCluster) restartWithReverseProxy(t *testing.T, s *e2eServer, addr string) {
+	t.Helper()
+	c.restartWithConfigEdit(t, s, "reverse_proxy "+addr, func(endNode map[string]any) {
+		endNode["listen"] = "0.0.0.0"
+		endNode["reverse_proxy"] = map[string]any{"grpc_addr": addr}
+	})
+}

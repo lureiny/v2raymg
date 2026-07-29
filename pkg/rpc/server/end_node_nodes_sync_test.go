@@ -195,10 +195,16 @@ func TestHeartBeat_ReconcileRejectsUntrustworthyNodes(t *testing.T) {
 	s := newNodesSyncServer(t, "self", "peer-1")
 
 	pushed := map[string]*proto.Node{
-		"no-host":  {Name: "no-host", Port: 2007},
-		"low-port": {Name: "low-port", Host: "10.0.0.7", Port: 80},
-		"no-name":  {Host: "10.0.0.6", Port: 2006},
-		"good":     {Name: "good", Host: "10.0.0.5", Port: 2005},
+		"no-host":   {Name: "no-host", Port: 2007},
+		"zero-port": {Name: "zero-port", Host: "10.0.0.7", Port: 0},
+		"huge-port": {Name: "huge-port", Host: "10.0.0.8", Port: 70000},
+		"no-name":   {Host: "10.0.0.6", Port: 2006},
+		"good":      {Name: "good", Host: "10.0.0.5", Port: 2005},
+		// A peer behind a TLS-terminating reverse proxy advertises the proxy's
+		// address, and grpcs:// defaults to 443. The completeness test used to
+		// require Port > 1000, which rejected exactly those peers as
+		// "incomplete" and kept them out of the directory for good.
+		"tls-443": {Name: "tls-443", Host: "cluster.example.com", Port: 443, Tls: true},
 	}
 
 	if _, err := s.HeartBeat(context.Background(),
@@ -206,13 +212,20 @@ func TestHeartBeat_ReconcileRejectsUntrustworthyNodes(t *testing.T) {
 		t.Fatalf("HeartBeat: %v", err)
 	}
 
-	for _, name := range []string{"no-host", "low-port", "no-name"} {
+	for _, name := range []string{"no-host", "zero-port", "huge-port", "no-name"} {
 		if findByName(t, s, name) != nil {
 			t.Errorf("node %q should have been rejected but was merged", name)
 		}
 	}
 	if findByName(t, s, "good") == nil {
 		t.Error("a valid pushed node was rejected")
+	}
+	tlsNode := findByName(t, s, "tls-443")
+	if tlsNode == nil {
+		t.Fatal("a peer on 443 was rejected; a node behind a TLS proxy could never join")
+	}
+	if !tlsNode.GetTls() {
+		t.Error("the tls flag was dropped on the gossip path — the peer would be dialled in plaintext")
 	}
 }
 

@@ -177,4 +177,29 @@ CREATE TABLE cluster_nodes (
     created_at INTEGER NOT NULL
 );`,
 	},
+
+	// A peer's address is not enough to reach it: a node behind a
+	// TLS-terminating reverse proxy advertises the proxy's host and port, and
+	// dialling that in plaintext fails. The transport therefore has to be stored
+	// next to the address, or the first outbound dial after every restart goes
+	// out wrong and only recovers when the peer happens to register inbound.
+	//
+	// Default 0 = plaintext, which is what every row written before this
+	// migration meant and what every pre-2.10 peer still advertises.
+	//
+	// local_secrets holds credentials minted by the process rather than
+	// configured, starting with an auto-generated http_token. It is a table
+	// rather than a column on local_node_identity because that table is a
+	// single-row identity record with a CHECK(id = 1), and secrets are a
+	// keyed set that will grow.
+	{
+		Version: 17,
+		SQL: `ALTER TABLE cluster_nodes ADD COLUMN tls INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE cluster_seeds ADD COLUMN tls INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS local_secrets (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);`,
+	},
 }

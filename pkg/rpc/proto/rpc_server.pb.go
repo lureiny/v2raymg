@@ -1224,7 +1224,25 @@ type Node struct {
 	//
 	// Deliberately NOT folded into ComputeNodesSum: the digest must stay
 	// byte-compatible with 2.7 or mixed clusters would never converge.
-	NodeId        string `protobuf:"bytes,5,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	NodeId string `protobuf:"bytes,5,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	// tls says how to reach host:port, not where. False (the default, and what
+	// every pre-2.10 peer sends) means plaintext h2c, which is what this
+	// cluster plane has always spoken; true means the dial must be TLS.
+	//
+	// It exists because a node may sit behind a reverse proxy that terminates
+	// TLS: host/port then carry the PROXY's address — the address peers must
+	// actually dial — while the node's own server keeps listening in plaintext
+	// behind it. The scheme has to travel on the wire rather than live in each
+	// node's config, because a peer usually learns an address by gossip from a
+	// third node and would otherwise have no idea how to reach it.
+	//
+	// Deliberately NOT folded into ComputeNodesSum, for the same reason as
+	// node_id: a 2.9 peer cannot see this field, so folding it would make the
+	// two sides compute different digests for an identical member set and a
+	// mixed cluster would never converge. host and port ARE folded, and they
+	// change when a reverse proxy is configured — that is a real membership
+	// change and should trigger a resync.
+	Tls           bool `protobuf:"varint,6,opt,name=tls,proto3" json:"tls,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1285,6 +1303,13 @@ func (x *Node) GetNodeId() string {
 		return x.NodeId
 	}
 	return ""
+}
+
+func (x *Node) GetTls() bool {
+	if x != nil {
+		return x.Tls
+	}
+	return false
 }
 
 type HeartBeatRsp struct {
@@ -5118,12 +5143,13 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\n" +
 	"NodesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12!\n" +
-	"\x05value\x18\x02 \x01(\v2\v.proto.NodeR\x05value:\x028\x01\"a\n" +
+	"\x05value\x18\x02 \x01(\v2\v.proto.NodeR\x05value:\x028\x01\"s\n" +
 	"\x04Node\x12\x12\n" +
 	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\x12\x12\n" +
 	"\x04name\x18\x04 \x01(\tR\x04name\x12\x17\n" +
-	"\anode_id\x18\x05 \x01(\tR\x06nodeIdJ\x04\b\x03\x10\x04\"\xdb\x02\n" +
+	"\anode_id\x18\x05 \x01(\tR\x06nodeId\x12\x10\n" +
+	"\x03tls\x18\x06 \x01(\bR\x03tlsJ\x04\b\x03\x10\x04\"\xdb\x02\n" +
 	"\fHeartBeatRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
 	"\x03msg\x18\x02 \x01(\tR\x03msg\x12=\n" +

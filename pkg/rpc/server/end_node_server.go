@@ -332,6 +332,7 @@ func (s *EndNodeServer) reconcileNodeStore() {
 			Name:   n.GetName(),
 			Host:   n.GetHost(),
 			Port:   n.GetPort(),
+			TLS:    n.GetTls(),
 		}); err != nil {
 			log.Warn("persist cluster node failed", "node", key, "err", err)
 		}

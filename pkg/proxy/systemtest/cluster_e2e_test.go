@@ -404,3 +404,61 @@ func TestClusterE2E_LegacySeedNameIsIgnored(t *testing.T) {
 		}
 	}
 }
+
+// TestClusterE2E_ReverseProxyAddressIsAdvertised covers the advertise path
+// end to end: a node told it is behind a reverse proxy must publish the proxy's
+// address, and its peers must follow that address into the SAME directory entry.
+//
+// The entry count is the assertion that matters, as in the address-change case.
+// Advertising a different address is indistinguishable from a new node unless
+// the directory is keyed by identity, and a design that "converges" by adding a
+// second entry would pass an address-only check while doubling the cluster.
+//
+// The proxy address here is plaintext grpc:// pointing at a second loopback IP.
+// Running an actual TLS proxy would exercise the proxy rather than this code;
+// what needs proving is that reverse_proxy.grpc_addr is what reaches the wire.
+func TestClusterE2E_ReverseProxyAddressIsAdvertised(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	c := startE2ECluster(t, tmpDir, clusterOpts{
+		HeartbeatIntervalSec: 1,
+		XrayBin:              os.Getenv("XRAY_BIN"),
+	})
+	for i := 0; i < 3; i++ {
+		c.addEndNode(t)
+	}
+	c.waitConverged(t, 60*time.Second)
+	c.waitFanoutReady(t, 60*time.Second)
+
+	// Not the seed: the others reach it via static_nodes by address, and this
+	// case is about what a node publishes about itself.
+	victim := c.ends[2]
+	before := c.ends[0].knownNodes(t)[victim.name]
+	if before.NodeID == "" {
+		t.Fatalf("precondition: %s must have been identified first", victim.name)
+	}
+
+	addr := fmt.Sprintf("grpc://127.0.0.2:%d", victim.rpcPort)
+	c.restartWithReverseProxy(t, victim, addr)
+
+	// Same sub-60s bound as the address-change case: anything slower would mean
+	// the old entry aged out rather than being updated in place.
+	wantAddr := fmt.Sprintf("127.0.0.2:%d", victim.rpcPort)
+	c.waitPeerAddress(t, victim.name, wantAddr, len(c.ends), 30*time.Second)
+
+	after := c.ends[0].knownNodes(t)[victim.name]
+	if after.NodeID != before.NodeID {
+		t.Errorf("%s node_id changed when it started advertising a proxy address: %q -> %q",
+			victim.name, before.NodeID, after.NodeID)
+	}
+
+	// Traffic has to follow the advertised address, not just the field: a cached
+	// grpc.ClientConn is pinned to whatever it was dialled with.
+	c.waitFanoutReady(t, 30*time.Second)
+
+	for _, s := range c.ends {
+		if got := s.nodeCount(t); got != len(c.ends) {
+			t.Errorf("%s holds %d directory entries, want %d", s.name, got, len(c.ends))
+		}
+	}
+}

@@ -234,6 +234,12 @@ func applyRuntimeDefaults(cfg *AppConfig) error {
 	return nil
 }
 
+// GenerateRandomSecret returns a URL-safe base64-encoded random string of n
+// bytes of crypto/rand entropy. Exported so the credentials minted outside the
+// config loader — the auto-generated http_token, which is persisted rather than
+// regenerated each boot — come from the same place with the same strength.
+func GenerateRandomSecret(n int) (string, error) { return generateRandomSecret(n) }
+
 // generateRandomSecret returns a URL-safe base64-encoded random string of n bytes.
 func generateRandomSecret(n int) (string, error) {
 	b := make([]byte, n)

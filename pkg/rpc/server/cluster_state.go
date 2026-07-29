@@ -108,6 +108,11 @@ type PersistedNode struct {
 	Name   string
 	Host   string
 	Port   int32
+	// TLS is how to reach Host:Port. Persisted with the address because it is
+	// part of reaching it: without it every outbound dial after a restart goes
+	// out in plaintext, and a peer behind a TLS-terminating proxy stays
+	// unreachable until it happens to register inbound.
+	TLS bool
 }
 
 type NodeStore interface {

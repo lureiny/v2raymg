@@ -82,6 +82,14 @@ Makefile                   # build / build-full (full_dns tag) / proto
      - 用途:集群里通常只让**一个**节点对外提供管理 API。配法是**对外那台留空或写 `0.0.0.0`,其余每台显式写 `127.0.0.1`** —— 隐藏必须显式,留空不隐藏
      - 因为默认是继承,**"忘记配"的方向是暴露而不是隐藏**。所以启动时区分两种可达:因继承 `listen` 而对外可达 → **WARN**(没人显式选择过这个暴露);显式配置的对外可达 → INFO。仅本机 → INFO
      - **历史(2.9.1)**:`config.go` 与 `config.example.yaml` 一直写着"留空回退到 listen",而代码自 `f3ebd40` 起实际是 `127.0.0.1`,分歧跨越六个版本没人发现 —— 因为解析逻辑是 `cmd/server.go` 里的内联默认值且零测试。2.9.1 按文档语义统一为继承 `listen`,**这是行为变更**:升级前 `listen: 0.0.0.0` 且未配 `http_listen` 的节点,管理 API 从仅本机变为对外可达,必须在升级前给这些节点补 `http_listen: 127.0.0.1`。解析已收敛为带表驱动测试的函数,不要再改回内联
+   - **广播地址 ≠ 监听地址** — 对端要拨的地址由 `EndNodeConfig.ResolveAdvertise()` 决定:配了 `end_node.reverse_proxy.grpc_addr` 就广播反代的 `(scheme, host, port)`,否则等价于 `grpc://{proxy_host}:{rpc_port}`(与 2.9 逐字节一致)。**本节点的 gRPC server 永远是明文 h2c**,`grpcs://` 描述的是反代终止的 TLS,不是本进程说 TLS
+     - **传输方式必须被声明,不能被探测**。客户端"先试 TLS、失败回退明文"是典型降级面:攻击者一个 RST 就能把你打回明文。所以 scheme 写在配置里、`Node.tls` 走线上,`grpc.Dial` 只按标志选 credentials,没有任何回退
+     - **`Node.tls` 不折入 `ComputeNodesSum`**(与 `node_id` 同理)。但 host/port 折入 —— 换成反代地址是**真实的成员变更**,应该触发一次重新同步
+     - **`static_nodes` 支持 URL 标量**(`"grpcs://host:443"`)与原 mapping 形式共存。种子必须能表达协议,否则无法 bootstrap 到反代后面的节点
+     - **新增 proto 字段必须过 `cluster.CopyIdentity`**。目录有六个逐字段重建点(`nodeFromClaim` / `AdoptIdentity` / `RefreshName` / `MarkDirty` 降级 / `LoadStaticNode` / `loadPersistedNodes`),漏一处就是该路径静默丢字段;gossip 路径存的是收到的指针所以免费随行,这种不对称最容易漏。`TestCopyIdentity_CoversEveryProtoField` 用反射兜底,加字段不处理会直接失败
+     - **端口守卫是"是不是端口",不是"是不是 >1000"**。`IsComplete` / `StaticNode.IsValide` 原先要求 `Port > 1000`,会把 443(grpcs 默认端口)判为不完整而丢弃。本地 bind 的 `isAddrValid` 保持自己的下限,那是另一个问题
+   - **`http_token` 留空时自动生成并落库**(`local_secrets` 表,migration 17),照 `node_id` 的模式而不是 `jwt_secret`:jwt 每次重启换只是让人重新登录,而 token 每次变会废掉运维的 CLI 配置。**只在生成那一次打印明文**,后续启动只说"已从存储读取"
+     - 它是**纯本机**凭据,从不跨节点比较(跨节点用的是 `cluster.token`),所以每台自己生成一个是对的
 7. **持久化走 SQLite** — user/inbound/node_groups 全部落 SQLite,DB 操作通过 `pkg/store/manager` 的 `Provider` + `Tx` 抽象
 8. **集群通信走 gRPC,无 center node** — 节点间协议定义在 `pkg/rpc/proto/rpc_server.proto`;默认加密已切到 GCM(老 CBC 回退已移除)
    - **center node 已于 2026-07 彻底移除**。它唯一的作用是发现,而 `static_nodes` 覆盖了同样的能力且更好:静态节点带 `isLocal`、**永不被 60s 超时回收**,注册又是双向的(种子立刻通过 `RegisterNode` 认识加入者,不必等自己下一跳)。同时 center 是集群面**唯一一条默认明文的链路**,还携带集群主密钥。旧配置里的 `node_type: center` / `center_node` / `center_node_host` / `center_token` 一律忽略并在启动时逐条 WARN
