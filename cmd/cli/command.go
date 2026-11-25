@@ -97,6 +97,11 @@ func InitPromptAndRegister() *prompt.Prompt {
 			idleSessionCheckIntervalSecondsSuggest,
 			idleSessionTimeoutSecondsSuggest,
 			minIdleSessionSuggest,
+			// Chain & Layer 2 isolation
+			inboundTypeSuggest,
+			chainURISuggest,
+			accessTagsSuggest,
+			remarkSuggest,
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
@@ -129,6 +134,16 @@ func InitPromptAndRegister() *prompt.Prompt {
 			targetSuggest,
 			containerSuggest,
 			tagSuggest,
+		}),
+		prompt.WithGetSuggestMethod(GetSuggest),
+	)
+
+	m.RegisterHandler(setInboundTags, "SetInboundTags",
+		prompt.WithSuggests([]prompt.Suggest{
+			targetSuggest,
+			containerSuggest,
+			inboundNameSuggest,
+			getSuggestWithTemplate(accessTagsSuggest, WihtDescription("comma-separated Layer 2 access tags (empty clears tags)")),
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
@@ -170,6 +185,7 @@ func InitPromptAndRegister() *prompt.Prompt {
 			{Text: "max_clients", Description: "max client IPs (0=unlimited)", Default: int(0)},
 			{Text: "recycle_delay_sec", Description: "client recycle delay sec", Default: int(0)},
 			{Text: "drain_sec", Description: "client drain sec", Default: int(0)},
+			{Text: "inbound_tags", Description: "comma-separated Layer 2 inbound access tags", Default: ""},
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
@@ -188,6 +204,7 @@ func InitPromptAndRegister() *prompt.Prompt {
 			{Text: "recycle_delay_sec", Description: "client recycle delay sec (0=no change)", Default: int(0)},
 			{Text: "drain_sec", Description: "client drain sec (0=no change)", Default: int(0)},
 			{Text: "group", Description: "cluster group (empty=no change)", Default: ""},
+			{Text: "inbound_tags", Description: "comma-separated Layer 2 inbound access tags (empty=no change, 'clear' or '[]'=clear)", Default: ""},
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)
@@ -391,12 +408,15 @@ func fastAddInbound(
 	// AnyTLS
 	paddingScheme string,
 	idleSessionCheckIntervalSeconds, idleSessionTimeoutSeconds, minIdleSession int,
+	// Chain & Layer 2 isolation
+	inboundType, chainURI, accessTags, remark string,
 ) error {
 	node := getNode(target)
 	if domain == "" && node != nil {
 		domain = node.GetHost()
 	}
-	if tag == "" {
+	isChain := strings.EqualFold(strings.TrimSpace(inboundType), "chain") || strings.TrimSpace(chainURI) != ""
+	if tag == "" && !isChain {
 		h := sha256.Sum256([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
 		tag = fmt.Sprintf("%s-%s", protocol, hex.EncodeToString(h[:])[:8])
 	}
@@ -405,61 +425,53 @@ func fastAddInbound(
 		port = 10000 + rand.Intn(40000)
 	}
 
-	// Parse comma-separated Reality params
-	var serverNames, shortIDs []string
-	if realityServerNames != "" {
-		for _, s := range strings.Split(realityServerNames, ",") {
-			if s = strings.TrimSpace(s); s != "" {
-				serverNames = append(serverNames, s)
-			}
-		}
-	}
-	if realityShortIDs != "" {
-		for _, s := range strings.Split(realityShortIDs, ",") {
-			if s = strings.TrimSpace(s); s != "" {
-				shortIDs = append(shortIDs, s)
-			}
-		}
-	}
+	// Parse comma-separated Reality params & access_tags
+	serverNames := parseCSVStrings(realityServerNames)
+	shortIDs := parseCSVStrings(realityShortIDs)
+	parsedAccessTags := parseCSVStrings(accessTags)
 
 	result, err := client.FastAddInbound(getHost(), getAuthToken(), &client.FastAddInboundRequest{
-		Target:             target,
-		Tag:                tag,
-		Protocol:           protocol,
-		Stream:             stream,
-		Domain:             domain,
-		IsXtls:             isXtls,
-		Port:               port,
-		Container:          container,
-		Security:           security,
-		RealityTarget:      realityTarget,
-		RealityServerNames: serverNames,
-		RealityShortIDs:    shortIDs,
-		SkipCertVerify:     skipCertVerify,
-		SelfSigned:         selfSigned,
-		SniffingEnabled:    sniffingEnabled,
-		Plugin:             plugin,
-		PluginMode:         pluginMode,
-		PluginHost:         pluginHost,
-		PluginPath:         pluginPath,
-		PluginPassword:     pluginPassword,
-		PluginVersion:      pluginVersion,
-		PluginTLS:          pluginTLS,
-		Obfs:               obfs,
-		ObfsPassword:       obfsPassword,
-		Up:                 up,
-		Down:               down,
-		Masquerade:         masquerade,
-		IgnoreClientBandwidth: ignoreClientBandwidth,
-		CongestionController: congestionController,
-		UDPRelayMode:       udpRelayMode,
-		ZeroRTTHandshake:   zeroRTTHandshake,
-		HeartbeatInterval:  heartbeatInterval,
-		DisableSNI:         disableSNI,
-		PaddingScheme:      paddingScheme,
+		Target:                          target,
+		Tag:                             tag,
+		Protocol:                        protocol,
+		Stream:                          stream,
+		Domain:                          domain,
+		IsXtls:                          isXtls,
+		Port:                            port,
+		Container:                       container,
+		Security:                        security,
+		RealityTarget:                   realityTarget,
+		RealityServerNames:              serverNames,
+		RealityShortIDs:                 shortIDs,
+		SkipCertVerify:                  skipCertVerify,
+		SelfSigned:                      selfSigned,
+		SniffingEnabled:                 sniffingEnabled,
+		Plugin:                          plugin,
+		PluginMode:                      pluginMode,
+		PluginHost:                      pluginHost,
+		PluginPath:                      pluginPath,
+		PluginPassword:                  pluginPassword,
+		PluginVersion:                   pluginVersion,
+		PluginTLS:                       pluginTLS,
+		Obfs:                            obfs,
+		ObfsPassword:                    obfsPassword,
+		Up:                              up,
+		Down:                            down,
+		Masquerade:                      masquerade,
+		IgnoreClientBandwidth:           ignoreClientBandwidth,
+		CongestionController:            congestionController,
+		UDPRelayMode:                    udpRelayMode,
+		ZeroRTTHandshake:                zeroRTTHandshake,
+		HeartbeatInterval:               heartbeatInterval,
+		DisableSNI:                      disableSNI,
+		PaddingScheme:                   paddingScheme,
 		IdleSessionCheckIntervalSeconds: idleSessionCheckIntervalSeconds,
 		IdleSessionTimeoutSeconds:       idleSessionTimeoutSeconds,
-		MinIdleSession:     minIdleSession,
+		MinIdleSession:                  minIdleSession,
+		InboundType:                     inboundType,
+		ChainURI:                        chainURI,
+		AccessTags:                      parsedAccessTags,
+		Remark:                          remark,
 	})
 	if err != nil {
 		return err
@@ -494,7 +506,20 @@ func listInbounds(target string) error {
 	for node, inbounds := range result {
 		fmt.Printf("%s :\n", node)
 		for _, inb := range inbounds {
-			fmt.Printf("  [%s] %s\n", inb.GetContainer(), inb.GetName())
+			line := fmt.Sprintf("  [%s] %s", inb.GetContainer(), inb.GetName())
+			if it := inb.GetInboundType(); it != "" {
+				line += fmt.Sprintf(" type=%s", it)
+			}
+			if inb.GetChainProtocol() != "" || inb.GetChainTarget() != "" {
+				line += fmt.Sprintf(" chain=%s://%s", inb.GetChainProtocol(), inb.GetChainTarget())
+			}
+			if len(inb.GetAccessTags()) > 0 {
+				line += fmt.Sprintf(" tags=%v", inb.GetAccessTags())
+			}
+			if inb.GetRemark() != "" {
+				line += fmt.Sprintf(" remark=%q", inb.GetRemark())
+			}
+			fmt.Println(line)
 		}
 	}
 	return nil
@@ -509,6 +534,32 @@ func deleteInboundByName(target, containerType, name string) error {
 	return nil
 }
 
+func setInboundTags(target, containerType, name, accessTags string) error {
+	tags := parseCSVStrings(accessTags)
+	if tags == nil {
+		tags = []string{}
+	}
+	result, err := client.SetInboundTags(getHost(), getAuthToken(), target, containerType, name, tags)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
+}
+
+func parseCSVStrings(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var out []string
+	for _, s := range strings.Split(raw, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // ---- User ----
 
 func copyUserBetweenNodes(srcNode, dstNode string) error {
@@ -521,9 +572,9 @@ func copyUserBetweenNodes(srcNode, dstNode string) error {
 }
 
 func addUser(target, userName, password string, expire, ttl int,
-	role, group string, uploadBps, downloadBps int64, maxClients, recycleDelaySec, drainSec int) error {
+	role, group string, uploadBps, downloadBps int64, maxClients, recycleDelaySec, drainSec int, inboundTags string) error {
 	result, err := client.AddUser(getHost(), getAuthToken(), target, userName, password, expire, ttl,
-		role, group, uploadBps, downloadBps, maxClients, recycleDelaySec, drainSec)
+		role, group, uploadBps, downloadBps, maxClients, recycleDelaySec, drainSec, parseCSVStrings(inboundTags))
 	if err != nil {
 		return err
 	}
@@ -532,9 +583,22 @@ func addUser(target, userName, password string, expire, ttl int,
 }
 
 func updateUser(target, userName, password string, expire, ttl int,
-	role string, uploadBps, downloadBps int64, maxClients, recycleDelaySec, drainSec int, group string) error {
+	role string, uploadBps, downloadBps int64, maxClients, recycleDelaySec, drainSec int, group, inboundTags string) error {
+	var tagsPtr *[]string
+	if trimmed := strings.TrimSpace(inboundTags); trimmed != "" {
+		if trimmed == "clear" || trimmed == "[]" || trimmed == "-" {
+			empty := []string{}
+			tagsPtr = &empty
+		} else {
+			parsed := parseCSVStrings(trimmed)
+			if parsed == nil {
+				parsed = []string{}
+			}
+			tagsPtr = &parsed
+		}
+	}
 	result, err := client.UpdateUser(getHost(), getAuthToken(), target, userName, password, expire, ttl,
-		role, uploadBps, downloadBps, maxClients, recycleDelaySec, drainSec, group)
+		role, uploadBps, downloadBps, maxClients, recycleDelaySec, drainSec, group, tagsPtr)
 	if err != nil {
 		return err
 	}
@@ -580,6 +644,9 @@ func listUser(target string) error {
 				expireStr = time.Unix(u.GetExpireTime(), 0).Format("2006-01-02 15:04:05")
 			}
 			fmt.Printf("  %-16s role=%-8s group=%-10s expire=%s\n", u.GetName(), u.GetRole(), u.GetGroup(), expireStr)
+			if len(u.GetInboundTags()) > 0 {
+				fmt.Printf("    inbound_tags=%v\n", u.GetInboundTags())
+			}
 			fmt.Printf("    auth_token=%s\n", u.GetAuthToken())
 			fmt.Printf("    traffic   up=%-12d down=%-12d\n", u.GetUplink(), u.GetDownlink())
 			fmt.Printf("    bandwidth upload_bps=%-10d download_bps=%-10d\n", u.GetUploadBps(), u.GetDownloadBps())
@@ -603,6 +670,9 @@ func listAllUsers(target string) error {
 				expireStr = time.Unix(u.GetExpireTime(), 0).Format("2006-01-02 15:04:05")
 			}
 			fmt.Printf("  %-16s role=%-8s group=%-10s expire=%s\n", u.GetName(), u.GetRole(), u.GetGroup(), expireStr)
+			if len(u.GetInboundTags()) > 0 {
+				fmt.Printf("    inbound_tags=%v\n", u.GetInboundTags())
+			}
 			fmt.Printf("    auth_token=%s\n", u.GetAuthToken())
 			fmt.Printf("    traffic   up=%-12d down=%-12d\n", u.GetUplink(), u.GetDownlink())
 			fmt.Printf("    bandwidth upload_bps=%-10d download_bps=%-10d\n", u.GetUploadBps(), u.GetDownloadBps())

@@ -197,6 +197,11 @@ type FastAddInboundRequest struct {
 	IdleSessionCheckIntervalSeconds int
 	IdleSessionTimeoutSeconds       int
 	MinIdleSession                  int
+	// Chain & Layer 2 isolation
+	InboundType string
+	ChainURI    string
+	AccessTags  []string
+	Remark      string
 }
 
 func FastAddInbound(host, token string, req *FastAddInboundRequest) (string, error) {
@@ -212,25 +217,25 @@ func FastAddInbound(host, token string, req *FastAddInboundRequest) (string, err
 
 	reqUrl := fmt.Sprintf("%s/%s", host, common.FastAddInbound)
 	body := map[string]interface{}{
-		"target":               req.Target,
-		"tag":                  req.Tag,
-		"protocol":             req.Protocol,
-		"stream":               req.Stream,
-		"domain":               req.Domain,
-		"is_xtls":              req.IsXtls,
-		"port":                 req.Port,
-		"container":            req.Container,
-		"security":             req.Security,
-		"reality_target":       req.RealityTarget,
-		"reality_server_names": req.RealityServerNames,
-		"reality_short_ids":    req.RealityShortIDs,
-		"skip_cert_verify":     req.SkipCertVerify,
-		"self_signed":          req.SelfSigned,
-		"sniffing_enabled":     req.SniffingEnabled,
-		"plugin_tls":           req.PluginTLS,
-		"ignore_client_bandwidth": req.IgnoreClientBandwidth,
-		"zero_rtt_handshake":   req.ZeroRTTHandshake,
-		"disable_sni":          req.DisableSNI,
+		"target":                              req.Target,
+		"tag":                                 req.Tag,
+		"protocol":                            req.Protocol,
+		"stream":                              req.Stream,
+		"domain":                              req.Domain,
+		"is_xtls":                             req.IsXtls,
+		"port":                                req.Port,
+		"container":                           req.Container,
+		"security":                            req.Security,
+		"reality_target":                      req.RealityTarget,
+		"reality_server_names":                req.RealityServerNames,
+		"reality_short_ids":                   req.RealityShortIDs,
+		"skip_cert_verify":                    req.SkipCertVerify,
+		"self_signed":                         req.SelfSigned,
+		"sniffing_enabled":                    req.SniffingEnabled,
+		"plugin_tls":                          req.PluginTLS,
+		"ignore_client_bandwidth":             req.IgnoreClientBandwidth,
+		"zero_rtt_handshake":                  req.ZeroRTTHandshake,
+		"disable_sni":                         req.DisableSNI,
 		"idle_session_check_interval_seconds": req.IdleSessionCheckIntervalSeconds,
 		"idle_session_timeout_seconds":        req.IdleSessionTimeoutSeconds,
 		"min_idle_session":                    req.MinIdleSession,
@@ -281,6 +286,18 @@ func FastAddInbound(host, token string, req *FastAddInboundRequest) (string, err
 	if req.PaddingScheme != "" {
 		body["padding_scheme"] = req.PaddingScheme
 	}
+	if req.InboundType != "" {
+		body["inbound_type"] = req.InboundType
+	}
+	if req.ChainURI != "" {
+		body["chain_uri"] = req.ChainURI
+	}
+	if len(req.AccessTags) > 0 {
+		body["access_tags"] = req.AccessTags
+	}
+	if req.Remark != "" {
+		body["remark"] = req.Remark
+	}
 	err := DoPostRequest(reqUrl, token, body, getCallBackFunc(cb))
 	return result, err
 }
@@ -306,7 +323,7 @@ func CopyUserBetweenNodes(host, token, srcNode, dstNode string) (string, error) 
 }
 
 func AddUser(host, token, target, userName, password string, expire, ttl int,
-	role, group string, uploadBps, downloadBps int64, maxClients, recycleDelaySec, drainSec int) (string, error) {
+	role, group string, uploadBps, downloadBps int64, maxClients, recycleDelaySec, drainSec int, inboundTags []string) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {
 		d, err := readBody(resp)
@@ -332,12 +349,15 @@ func AddUser(host, token, target, userName, password string, expire, ttl int,
 		"client_recycle_delay_sec": recycleDelaySec,
 		"client_drain_sec":         drainSec,
 	}
+	if len(inboundTags) > 0 {
+		body["inbound_tags"] = inboundTags
+	}
 	err := DoPostRequest(reqUrl, token, body, getCallBackFunc(cb))
 	return result, err
 }
 
 func UpdateUser(host, token, target, userName, password string, expire, ttl int,
-	role string, uploadBps, downloadBps int64, maxClients, recycleDelaySec, drainSec int, group string) (string, error) {
+	role string, uploadBps, downloadBps int64, maxClients, recycleDelaySec, drainSec int, group string, inboundTags *[]string) (string, error) {
 	result := ""
 	cb := func(resp *http.Response) error {
 		d, err := readBody(resp)
@@ -350,18 +370,25 @@ func UpdateUser(host, token, target, userName, password string, expire, ttl int,
 
 	reqUrl := fmt.Sprintf("%s/%s", host, common.User)
 	body := map[string]interface{}{
-		"target":                  target,
-		"user":                    userName,
-		"pwd":                     password,
-		"expire":                  expire,
-		"ttl":                     ttl,
-		"role":                    role,
-		"upload_bps":              uploadBps,
-		"download_bps":            downloadBps,
-		"max_clients":             maxClients,
+		"target":                   target,
+		"user":                     userName,
+		"pwd":                      password,
+		"expire":                   expire,
+		"ttl":                      ttl,
+		"role":                     role,
+		"upload_bps":               uploadBps,
+		"download_bps":             downloadBps,
+		"max_clients":              maxClients,
 		"client_recycle_delay_sec": recycleDelaySec,
-		"client_drain_sec":        drainSec,
-		"group":                   group,
+		"client_drain_sec":         drainSec,
+		"group":                    group,
+	}
+	if inboundTags != nil {
+		tags := *inboundTags
+		if tags == nil {
+			tags = []string{}
+		}
+		body["inbound_tags"] = tags
 	}
 	err := DoPutRequest(reqUrl, token, body, getCallBackFunc(cb))
 	return result, err
@@ -581,6 +608,31 @@ func DeleteInboundByName(host, token, target, container, name string) (string, e
 		"name":      name,
 	}
 	err := DoDeleteRequest(reqUrl, token, body, getCallBackFunc(cb))
+	return result, err
+}
+
+func SetInboundTags(host, token, target, container, name string, accessTags []string) (string, error) {
+	result := ""
+	cb := func(resp *http.Response) error {
+		d, err := readBody(resp)
+		if err != nil {
+			return err
+		}
+		result = string(d)
+		return nil
+	}
+	tags := accessTags
+	if tags == nil {
+		tags = []string{}
+	}
+	reqUrl := fmt.Sprintf("%s/%s", host, common.InboundsTags)
+	body := map[string]interface{}{
+		"target":      target,
+		"container":   container,
+		"name":        name,
+		"access_tags": tags,
+	}
+	err := DoPutRequest(reqUrl, token, body, getCallBackFunc(cb))
 	return result, err
 }
 

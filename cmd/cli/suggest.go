@@ -311,6 +311,30 @@ var (
 		Description: "inbound name (tag within the container)",
 		Default:     "",
 	}
+
+	inboundTypeSuggest = prompt.Suggest{
+		Text:        "inbound_type",
+		Description: "inbound mode: direct (default) or chain",
+		Default:     "direct",
+	}
+
+	chainURISuggest = prompt.Suggest{
+		Text:        "chain_uri",
+		Description: "upstream proxy URI for chain inbound (e.g. socks5://user:pass@host:port#remark)",
+		Default:     "",
+	}
+
+	accessTagsSuggest = prompt.Suggest{
+		Text:        "access_tags",
+		Description: "comma-separated Layer 2 access tags (empty = unrestricted)",
+		Default:     "",
+	}
+
+	remarkSuggest = prompt.Suggest{
+		Text:        "remark",
+		Description: "optional inbound remark",
+		Default:     "",
+	}
 )
 
 type SetSuggestOption func(*prompt.Suggest)

@@ -968,7 +968,7 @@ func TestMCP_FullWired_ReadWriteMode(t *testing.T) {
 		}
 	})
 
-	t.Run("MCPReadOnly=false clusterEnabled=true exposes exact 32 admin tools and 7 user tools with annotations", func(t *testing.T) {
+	t.Run("MCPReadOnly=false clusterEnabled=true exposes exact 33 admin tools and 7 user tools with annotations", func(t *testing.T) {
 		s, ts := newWiredServer(t, true, false)
 
 		adminSess := connectMCPClient(t, ts.URL, map[string]string{"X-Token": s.token})
@@ -1002,6 +1002,7 @@ func TestMCP_FullWired_ReadWriteMode(t *testing.T) {
 			"rotate_all_ports",
 			"rotate_inbound_port",
 			"set_gateway",
+			"set_inbound_tags",
 			"set_node_groups",
 			"set_ping_check",
 			"set_user_bandwidth",
@@ -1012,7 +1013,7 @@ func TestMCP_FullWired_ReadWriteMode(t *testing.T) {
 			"update_user",
 		}
 		gotAdmin := toolNames(adminRes.Tools)
-		if len(gotAdmin) != 32 || strings.Join(gotAdmin, ",") != strings.Join(wantAdmin, ",") {
+		if len(gotAdmin) != 33 || strings.Join(gotAdmin, ",") != strings.Join(wantAdmin, ",") {
 			t.Fatalf("admin tools mismatch: got %d %v, want %d %v", len(gotAdmin), gotAdmin, len(wantAdmin), wantAdmin)
 		}
 
@@ -1037,8 +1038,8 @@ func TestMCP_FullWired_ReadWriteMode(t *testing.T) {
 				destructiveTools = append(destructiveTools, tl.Name)
 			}
 		}
-		if readOnlyCount != 9 || writeCount != 23 {
-			t.Errorf("ReadOnlyHint counts mismatch: got readOnly=%d write=%d, want readOnly=9 write=23", readOnlyCount, writeCount)
+		if readOnlyCount != 9 || writeCount != 24 {
+			t.Errorf("ReadOnlyHint counts mismatch: got readOnly=%d write=%d, want readOnly=9 write=24", readOnlyCount, writeCount)
 		}
 
 		sort.Strings(destructiveTools)
@@ -1079,7 +1080,7 @@ func TestMCP_FullWired_ReadWriteMode(t *testing.T) {
 		}
 	})
 
-	t.Run("MCPReadOnly=false clusterEnabled=false exposes 30 admin tools without node_groups tools", func(t *testing.T) {
+	t.Run("MCPReadOnly=false clusterEnabled=false exposes 31 admin tools without node_groups tools", func(t *testing.T) {
 		s, ts := newWiredServer(t, false, false)
 
 		adminSess := connectMCPClient(t, ts.URL, map[string]string{"X-Token": s.token})
@@ -1112,6 +1113,7 @@ func TestMCP_FullWired_ReadWriteMode(t *testing.T) {
 			"rotate_all_ports",
 			"rotate_inbound_port",
 			"set_gateway",
+			"set_inbound_tags",
 			"set_ping_check",
 			"set_user_bandwidth",
 			"set_user_client_limit",
@@ -1121,7 +1123,7 @@ func TestMCP_FullWired_ReadWriteMode(t *testing.T) {
 			"update_user",
 		}
 		gotAdmin := toolNames(adminRes.Tools)
-		if len(gotAdmin) != 30 || strings.Join(gotAdmin, ",") != strings.Join(wantAdmin, ",") {
+		if len(gotAdmin) != 31 || strings.Join(gotAdmin, ",") != strings.Join(wantAdmin, ",") {
 			t.Fatalf("clusterEnabled=false admin tools mismatch: got %d %v, want %d %v", len(gotAdmin), gotAdmin, len(wantAdmin), wantAdmin)
 		}
 	})

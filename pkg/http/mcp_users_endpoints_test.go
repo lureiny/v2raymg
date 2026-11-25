@@ -386,7 +386,7 @@ func TestUsersEndpoints_HTTPVerbatimVsMCPRedacted(t *testing.T) {
 		expectedAdminKeys := []string{
 			"name", "auth_token", "expire_time", "downlink", "uplink", "role",
 			"upload_bps", "download_bps", "max_clients", "client_recycle_delay_sec",
-			"client_drain_sec", "group",
+			"client_drain_sec", "group", "inbound_tags",
 		}
 		for _, k := range expectedAdminKeys {
 			if _, ok := aliceHTTP[k]; !ok {

@@ -787,6 +787,7 @@ func TestMCP_InboundsWriteEndpoints(t *testing.T) {
 			"obfs", "obfs_password", "up", "down", "masquerade", "ignore_client_bandwidth",
 			"congestion_controller", "udp_relay_mode", "zero_rtt_handshake", "heartbeat_interval", "disable_sni",
 			"padding_scheme", "idle_session_check_interval_seconds", "idle_session_timeout_seconds", "min_idle_session",
+			"inbound_type", "chain_uri", "access_tags", "remark",
 		}
 		if len(fastSchema.Properties) != len(expectedFastFields) {
 			t.Fatalf("fast_add_inbound property count=%d, want %d", len(fastSchema.Properties), len(expectedFastFields))

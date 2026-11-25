@@ -7,17 +7,22 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/rpc/client"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
 const fastAddInboundHelp = `POST /api/inbound/fast
 	快速添加指定配置的inbound
-	body: {"target":"", "tag":"", "protocol":"vless", "transport":"tcp", "domain":"", "security":"tls", "port":0, ...}
+	body: {"target":"", "tag":"", "protocol":"vless", "transport":"tcp", "domain":"", "security":"tls", "port":0, "inbound_type":"direct", "chain_uri":"", "access_tags":[], "remark":"", ...}
 	protocol: vless, vmess, trojan, shadowsocks, hysteria2, tuic, anytls (hysteria2/tuic/anytls 仅 container=mihomo)
 	transport: tcp, ws, h2(http), grpc, httpupgrade, xhttp, splithttp (也可用 stream 字段, 向后兼容)
 	security: tls(默认), reality
 	domain: 证书域名 (tls 时使用); 为空则自签
+	inbound_type: direct(默认) 或 chain (仅 127.0.0.1 本地链式代理入口; container 需支持 chain outbound)
+	chain_uri: inbound_type="chain" 时的上游出站 URI (如 socks5://, ss://, vless://, trojan://); direct 时禁止填写
+	access_tags: Layer 2 访问控制标签数组 (空数组表示所有可见用户均可使用)
+	remark: 可选备注 (chain 入口留空时默认取 chain_uri 的 fragment)
 	reality_target, reality_server_names, reality_short_ids: Reality 参数
 	flow: VLESS flow, 一般为 "xtls-rprx-vision" (配合 reality 使用)
 	convenience fields: ws_path, grpc_service_name, http_path, http_host(逗号分隔), httpupgrade_path, xhttp_path, xhttp_mode, alpn, flow, sniffing_enabled
@@ -95,6 +100,11 @@ type FastAddInboundReq struct {
 	IdleSessionCheckIntervalSeconds int    `json:"idle_session_check_interval_seconds,omitempty" jsonschema:"AnyTLS client-only idle session check interval in seconds (0 uses runtime default)"`
 	IdleSessionTimeoutSeconds       int    `json:"idle_session_timeout_seconds,omitempty" jsonschema:"AnyTLS client-only idle session timeout in seconds (0 uses runtime default)"`
 	MinIdleSession                  int    `json:"min_idle_session,omitempty" jsonschema:"AnyTLS client-only minimum idle session count (0 uses runtime default)"`
+	// Chain proxy & Layer 2 access isolation fields.
+	InboundType string   `json:"inbound_type,omitempty" jsonschema:"Inbound exposure mode: 'direct' (default) or 'chain' (loopback-only local relay bound to 127.0.0.1)"`
+	ChainURI    string   `json:"chain_uri,omitempty" jsonschema:"Upstream proxy URI for 'chain' inbounds (required when inbound_type='chain', forbidden when 'direct')"`
+	AccessTags  []string `json:"access_tags,omitempty" jsonschema:"Layer 2 access tags restricting which users may use this inbound (empty means unrestricted)"`
+	Remark      string   `json:"remark,omitempty" jsonschema:"Optional human-readable remark (chain inbounds default to the URI fragment if omitted)"`
 }
 
 type FastAddInboundHandler struct{ HttpHandlerImp }
@@ -158,10 +168,35 @@ func (s *HttpServer) fastAddInboundEndpoint() Endpoint[FastAddInboundReq, map[st
 		Scope:          ScopeAdmin,
 		Help:           fastAddInboundHelp,
 		MCPName:        "fast_add_inbound",
-		MCPDescription: "Quickly create and add a proxy inbound on the target cluster node(s) using high-level protocol, transport, security, and container options. Supports protocols vless, vmess, trojan, ss/shadowsocks, hysteria2, tuic, and anytls across xray, mihomo, hysteria, and snell containers (hysteria2/tuic/anytls require container 'mihomo'). Target defaults to the local node when omitted.",
+		MCPDescription: "Quickly create and add a proxy inbound on the target cluster node(s) using high-level protocol, transport, security, container, chain proxy (inbound_type/chain_uri), and Layer 2 access_tags options. Supports protocols vless, vmess, trojan, ss/shadowsocks, hysteria2, tuic, and anytls across xray, mihomo, hysteria, and snell containers (hysteria2/tuic/anytls require container 'mihomo'; chain outbounds require a ChainCapable container such as 'xray' or 'mihomo'). Target defaults to the local node when omitted.",
 		ReadOnly:       false,
 		Destructive:    false,
 		Execute: func(ctx context.Context, caller Caller, req FastAddInboundReq) (map[string]any, error) {
+			rawType := strings.TrimSpace(req.InboundType)
+			chainURI := strings.TrimSpace(req.ChainURI)
+			var (
+				inboundType contracts.InboundType
+				err         error
+			)
+			if rawType == "" && chainURI != "" {
+				inboundType = contracts.InboundTypeChain
+			} else {
+				inboundType, err = contracts.NormalizeInboundType(rawType)
+				if err != nil {
+					return nil, NewEndpointErr(400, err.Error())
+				}
+			}
+			if inboundType == contracts.InboundTypeChain && chainURI == "" {
+				return nil, NewEndpointErr(400, "chain_uri is required when inbound_type is 'chain'")
+			}
+			if inboundType == contracts.InboundTypeDirect && chainURI != "" {
+				return nil, NewEndpointErr(400, "chain_uri must not be specified when inbound_type is 'direct'")
+			}
+			accessTags, err := contracts.NormalizeAccessTags(req.AccessTags)
+			if err != nil {
+				return nil, NewEndpointErr(400, fmt.Sprintf("invalid access_tags: %v", err))
+			}
+
 			req.Target = resolveTarget(req.Target, s.Name)
 			if req.Protocol == "" {
 				req.Protocol = "vless"
@@ -319,6 +354,10 @@ func (s *HttpServer) fastAddInboundEndpoint() Endpoint[FastAddInboundReq, map[st
 				RealityServerNames: req.RealityServerNames,
 				RealityShortIds:    req.RealityShortIDs,
 				ExtraParams:        extra,
+				InboundType:        string(inboundType),
+				ChainUri:           chainURI,
+				AccessTags:         accessTags,
+				Remark:             strings.TrimSpace(req.Remark),
 			}, s.GetClusterToken())
 			if len(failedList) != 0 {
 				errMsg := joinFailedList(failedList)

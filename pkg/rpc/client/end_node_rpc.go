@@ -6,8 +6,8 @@ import (
 	"sync"
 
 	"github.com/lureiny/v2raymg/pkg/cluster"
-	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/common/rpc"
+	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 	"google.golang.org/grpc"
 	pb "google.golang.org/protobuf/proto"
@@ -84,6 +84,8 @@ func init() {
 	registerReqToEndNodeFunc(ResetAuthTokenReqType, ReqResetAuthToken)
 	// containers
 	registerReqToEndNodeFunc(GetContainersReqType, ReqGetContainers)
+	// set inbound access tags
+	registerReqToEndNodeFunc(SetInboundAccessTagsReqType, ReqSetInboundAccessTags)
 }
 
 func registerReqToEndNodeFunc(reqType ReqToEndNodeType, f ReqToEndNodeFunc) {
@@ -687,5 +689,21 @@ func ReqGetContainers(ctx context.Context, reqData []byte, endNodeAccessClient p
 	if rsp.GetCode() != 0 {
 		return nil, fmt.Errorf("%s", rsp.GetMsg())
 	}
-	return rsp.GetContainers(), nil
+	return rsp, nil
+}
+
+func ReqSetInboundAccessTags(ctx context.Context, reqData []byte, endNodeAccessClient proto.EndNodeAccessClient, nodeAuthInfo *proto.NodeAuthInfo, token string) (interface{}, error) {
+	req := &proto.SetInboundAccessTagsReq{}
+	if err := pb.Unmarshal(reqData, req); err != nil {
+		return nil, fmt.Errorf("can't unmarshal req to SetInboundAccessTagsReq > %v", err)
+	}
+	req.NodeAuthInfo = nodeAuthInfo
+	rsp, err := endNodeAccessClient.SetInboundAccessTags(ctx, req, grpc.ForceCodec(rpc.NewEncryptMessageCodec(token)))
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetCode() != 0 {
+		return nil, fmt.Errorf("%s", rsp.GetMsg())
+	}
+	return nil, nil
 }

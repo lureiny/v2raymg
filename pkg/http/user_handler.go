@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/rpc/client"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
@@ -75,34 +76,36 @@ const userResetAuthTokenHelpText = `POST /api/user/reset-token
 
 // UserAddReq is the request payload for POST /api/user (MCP tool: add_user).
 type UserAddReq struct {
-	Target                string `json:"target,omitempty" jsonschema:"Target node name or node ID, or 'all' for all nodes (defaults to local node)"`
-	User                  string `json:"user" jsonschema:"Username to create"`
-	Pwd                   string `json:"pwd,omitempty" jsonschema:"Login password for the user"`
-	Expire                uint64 `json:"expire,omitempty" jsonschema:"Expiration Unix timestamp in seconds (overridden by ttl when ttl is non-zero)"`
-	TTL                   uint64 `json:"ttl,omitempty" jsonschema:"Time-to-live in seconds from now (takes precedence over expire when non-zero)"`
-	Role                  string `json:"role,omitempty" jsonschema:"User role (e.g. normal or admin)"`
-	Group                 string `json:"group,omitempty" jsonschema:"User group name for cluster visibility"`
-	UploadBps             int64  `json:"upload_bps,omitempty" jsonschema:"Upload bandwidth limit in bytes per second (0 for default)"`
-	DownloadBps           int64  `json:"download_bps,omitempty" jsonschema:"Download bandwidth limit in bytes per second (0 for default)"`
-	MaxClients            int32  `json:"max_clients,omitempty" jsonschema:"Maximum concurrent client connections (0 for default)"`
-	ClientRecycleDelaySec int32  `json:"client_recycle_delay_sec,omitempty" jsonschema:"Delay in seconds before recycling inactive client slots (0 for default)"`
-	ClientDrainSec        int32  `json:"client_drain_sec,omitempty" jsonschema:"Drain grace period in seconds when closing excess clients (0 for default)"`
+	Target                string   `json:"target,omitempty" jsonschema:"Target node name or node ID, or 'all' for all nodes (defaults to local node)"`
+	User                  string   `json:"user" jsonschema:"Username to create"`
+	Pwd                   string   `json:"pwd,omitempty" jsonschema:"Login password for the user"`
+	Expire                uint64   `json:"expire,omitempty" jsonschema:"Expiration Unix timestamp in seconds (overridden by ttl when ttl is non-zero)"`
+	TTL                   uint64   `json:"ttl,omitempty" jsonschema:"Time-to-live in seconds from now (takes precedence over expire when non-zero)"`
+	Role                  string   `json:"role,omitempty" jsonschema:"User role (e.g. normal or admin)"`
+	Group                 string   `json:"group,omitempty" jsonschema:"User group name for cluster visibility"`
+	UploadBps             int64    `json:"upload_bps,omitempty" jsonschema:"Upload bandwidth limit in bytes per second (0 for default)"`
+	DownloadBps           int64    `json:"download_bps,omitempty" jsonschema:"Download bandwidth limit in bytes per second (0 for default)"`
+	MaxClients            int32    `json:"max_clients,omitempty" jsonschema:"Maximum concurrent client connections (0 for default)"`
+	ClientRecycleDelaySec int32    `json:"client_recycle_delay_sec,omitempty" jsonschema:"Delay in seconds before recycling inactive client slots (0 for default)"`
+	ClientDrainSec        int32    `json:"client_drain_sec,omitempty" jsonschema:"Drain grace period in seconds when closing excess clients (0 for default)"`
+	InboundTags           []string `json:"inbound_tags,omitempty" jsonschema:"Layer 2 inbound access tags restricting which tagged inbounds this user can use (empty means unrestricted)"`
 }
 
 // UserUpdateReq is the request payload for PUT /api/user (MCP tool: update_user).
 type UserUpdateReq struct {
-	Target                string `json:"target,omitempty" jsonschema:"Target node name or node ID, or 'all' for all nodes (defaults to local node)"`
-	User                  string `json:"user" jsonschema:"Username to update"`
-	Pwd                   string `json:"pwd,omitempty" jsonschema:"New login password (empty keeps unchanged)"`
-	Expire                uint64 `json:"expire,omitempty" jsonschema:"New expiration Unix timestamp in seconds (overridden by ttl when ttl is non-zero)"`
-	TTL                   uint64 `json:"ttl,omitempty" jsonschema:"New time-to-live in seconds from now (takes precedence over expire when non-zero)"`
-	Role                  string `json:"role,omitempty" jsonschema:"New user role (empty keeps unchanged)"`
-	UploadBps             int64  `json:"upload_bps,omitempty" jsonschema:"Upload bandwidth limit in bytes per second (0 keeps unchanged, -1 removes limit)"`
-	DownloadBps           int64  `json:"download_bps,omitempty" jsonschema:"Download bandwidth limit in bytes per second (0 keeps unchanged, -1 removes limit)"`
-	MaxClients            int32  `json:"max_clients,omitempty" jsonschema:"Maximum concurrent client connections (0 keeps unchanged, -1 removes limit)"`
-	ClientRecycleDelaySec int32  `json:"client_recycle_delay_sec,omitempty" jsonschema:"Delay in seconds before recycling inactive client slots (0 keeps unchanged, -1 removes limit)"`
-	ClientDrainSec        int32  `json:"client_drain_sec,omitempty" jsonschema:"Drain grace period in seconds when closing excess clients (0 keeps unchanged, -1 removes limit)"`
-	Group                 string `json:"group,omitempty" jsonschema:"User group name for cluster visibility (empty keeps unchanged)"`
+	Target                string    `json:"target,omitempty" jsonschema:"Target node name or node ID, or 'all' for all nodes (defaults to local node)"`
+	User                  string    `json:"user" jsonschema:"Username to update"`
+	Pwd                   string    `json:"pwd,omitempty" jsonschema:"New login password (empty keeps unchanged)"`
+	Expire                uint64    `json:"expire,omitempty" jsonschema:"New expiration Unix timestamp in seconds (overridden by ttl when ttl is non-zero)"`
+	TTL                   uint64    `json:"ttl,omitempty" jsonschema:"New time-to-live in seconds from now (takes precedence over expire when non-zero)"`
+	Role                  string    `json:"role,omitempty" jsonschema:"New user role (empty keeps unchanged)"`
+	UploadBps             int64     `json:"upload_bps,omitempty" jsonschema:"Upload bandwidth limit in bytes per second (0 keeps unchanged, -1 removes limit)"`
+	DownloadBps           int64     `json:"download_bps,omitempty" jsonschema:"Download bandwidth limit in bytes per second (0 keeps unchanged, -1 removes limit)"`
+	MaxClients            int32     `json:"max_clients,omitempty" jsonschema:"Maximum concurrent client connections (0 keeps unchanged, -1 removes limit)"`
+	ClientRecycleDelaySec int32     `json:"client_recycle_delay_sec,omitempty" jsonschema:"Delay in seconds before recycling inactive client slots (0 keeps unchanged, -1 removes limit)"`
+	ClientDrainSec        int32     `json:"client_drain_sec,omitempty" jsonschema:"Drain grace period in seconds when closing excess clients (0 keeps unchanged, -1 removes limit)"`
+	Group                 string    `json:"group,omitempty" jsonschema:"User group name for cluster visibility (empty keeps unchanged)"`
+	InboundTags           *[]string `json:"inbound_tags,omitempty" jsonschema:"Layer 2 inbound access tags (omit/null keeps unchanged; empty array [] clears all tags)"`
 }
 
 // UserDeleteReq is the request payload for DELETE /api/user (MCP tool: delete_user).
@@ -183,6 +186,13 @@ func cloneAnyValue(v any) any {
 			cp[i] = cloneAnyValue(item).(gin.H)
 		}
 		return cp
+	case []string:
+		if typed == nil {
+			return []string(nil)
+		}
+		cp := make([]string, len(typed))
+		copy(cp, typed)
+		return cp
 	default:
 		return v
 	}
@@ -218,6 +228,10 @@ func (s *HttpServer) userAddEndpoint() Endpoint[UserAddReq, map[string]any] {
 		ReadOnly:       false,
 		Destructive:    false,
 		Execute: func(ctx context.Context, caller Caller, req UserAddReq) (map[string]any, error) {
+			tags, err := contracts.NormalizeAccessTags(req.InboundTags)
+			if err != nil {
+				return nil, NewEndpointErr(400, fmt.Sprintf("invalid inbound_tags: %v", err))
+			}
 			req.Target = resolveTarget(req.Target, s.Name)
 			expire := calcExpire(req.Expire, req.TTL)
 			userPoint := &proto.User{
@@ -231,6 +245,7 @@ func (s *HttpServer) userAddEndpoint() Endpoint[UserAddReq, map[string]any] {
 				MaxClients:            req.MaxClients,
 				ClientRecycleDelaySec: req.ClientRecycleDelaySec,
 				ClientDrainSec:        req.ClientDrainSec,
+				InboundTags:           tags,
 			}
 			nodes := s.GetTargetNodes(req.Target)
 			if len(nodes) == 0 {
@@ -275,6 +290,14 @@ func (s *HttpServer) userUpdateEndpoint() Endpoint[UserUpdateReq, map[string]any
 				ClientRecycleDelaySec: req.ClientRecycleDelaySec,
 				ClientDrainSec:        req.ClientDrainSec,
 				Group:                 req.Group,
+			}
+			if req.InboundTags != nil {
+				tags, err := contracts.NormalizeAccessTags(*req.InboundTags)
+				if err != nil {
+					return nil, NewEndpointErr(400, fmt.Sprintf("invalid inbound_tags: %v", err))
+				}
+				userPoint.InboundTags = tags
+				userPoint.UpdateInboundTags = true
 			}
 			nodes := s.GetTargetNodes(req.Target)
 			if len(nodes) == 0 {
@@ -578,6 +601,13 @@ func cloneGinHValue(v any) any {
 			cp[i] = cloneGinHValue(item).(gin.H)
 		}
 		return cp
+	case []string:
+		if typed == nil {
+			return []string(nil)
+		}
+		cp := make([]string, len(typed))
+		copy(cp, typed)
+		return cp
 	default:
 		return v
 	}
@@ -651,6 +681,8 @@ func (s *HttpServer) userListEndpoint() Endpoint[UserListReq, map[string][]gin.H
 				}
 				list := make([]gin.H, 0, len(users))
 				for _, u := range users {
+					inboundTags := make([]string, len(u.GetInboundTags()))
+					copy(inboundTags, u.GetInboundTags())
 					list = append(list, gin.H{
 						"name":                     u.GetName(),
 						"auth_token":               u.GetAuthToken(),
@@ -664,6 +696,7 @@ func (s *HttpServer) userListEndpoint() Endpoint[UserListReq, map[string][]gin.H
 						"client_recycle_delay_sec": u.GetClientRecycleDelaySec(),
 						"client_drain_sec":         u.GetClientDrainSec(),
 						"group":                    u.GetGroup(),
+						"inbound_tags":             inboundTags,
 					})
 				}
 				result[node] = list

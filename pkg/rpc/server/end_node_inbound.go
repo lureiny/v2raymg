@@ -2,13 +2,19 @@ package server
 
 import (
 	context "context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"sort"
 	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/appconfig"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/chain"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/params"
@@ -75,6 +81,25 @@ func (s *EndNodeServer) AddInbound(ctx context.Context, inboundOpReq *proto.Inbo
 		// fallback: treat as raw JSON if not base64
 		inboundJSON = []byte(inboundOpReq.GetInboundInfo())
 	}
+	var nativeHeader struct {
+		Tag string `json:"tag"`
+	}
+	if err := json.Unmarshal(inboundJSON, &nativeHeader); err == nil && nativeHeader.Tag != "" {
+		if err := contracts.ValidateInboundTag(nativeHeader.Tag); err != nil {
+			errMsg := fmt.Sprintf("invalid inbound tag %q: %v", nativeHeader.Tag, err)
+			log.Error("add inbound failed", "err", errMsg)
+			inboundOpRsp.Msg = errMsg
+			inboundOpRsp.Code = 601
+			return inboundOpRsp, nil
+		}
+		if existingCT, exists := s.inboundTagExistsAnywhere(nativeHeader.Tag); exists {
+			errMsg := fmt.Sprintf("inbound tag %q already exists in container %s", nativeHeader.Tag, existingCT)
+			log.Error("add inbound failed", "err", errMsg)
+			inboundOpRsp.Msg = errMsg
+			inboundOpRsp.Code = 601
+			return inboundOpRsp, nil
+		}
+	}
 	err = rapi.AddInboundNative(inboundJSON)
 	if err != nil {
 		errMsg := fmt.Sprintf("add inbound err > %v", err)
@@ -85,7 +110,6 @@ func (s *EndNodeServer) AddInbound(ctx context.Context, inboundOpReq *proto.Inbo
 	}
 	return inboundOpRsp, nil
 }
-
 
 func (s *EndNodeServer) GetInbound(ctx context.Context, getInboundReq *proto.GetInboundReq) (*proto.GetInboundRsp, error) {
 	getInboundRsp := &proto.GetInboundRsp{Code: 0}
@@ -226,6 +250,89 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		security = "xtls"
 	}
 
+	rawType := strings.TrimSpace(fastAddInboundReq.GetInboundType())
+	chainURI := strings.TrimSpace(fastAddInboundReq.GetChainUri())
+	var inboundType contracts.InboundType
+	if rawType == "" && chainURI != "" {
+		inboundType = contracts.InboundTypeChain
+	} else {
+		inboundType, err = contracts.NormalizeInboundType(rawType)
+		if err != nil {
+			fastAddInboundRsp.Code = 1020
+			fastAddInboundRsp.Msg = err.Error()
+			return fastAddInboundRsp, nil
+		}
+	}
+	if inboundType == contracts.InboundTypeChain && chainURI == "" {
+		fastAddInboundRsp.Code = 1020
+		fastAddInboundRsp.Msg = "chain inbound requires chain_uri"
+		return fastAddInboundRsp, nil
+	}
+	if inboundType == contracts.InboundTypeDirect && chainURI != "" {
+		fastAddInboundRsp.Code = 1020
+		fastAddInboundRsp.Msg = "direct inbound must not specify chain_uri"
+		return fastAddInboundRsp, nil
+	}
+
+	accessTags, err := contracts.NormalizeAccessTags(fastAddInboundReq.GetAccessTags())
+	if err != nil {
+		fastAddInboundRsp.Code = 1020
+		fastAddInboundRsp.Msg = fmt.Sprintf("invalid access_tags: %v", err)
+		return fastAddInboundRsp, nil
+	}
+	remark := strings.TrimSpace(fastAddInboundReq.GetRemark())
+
+	tag := strings.TrimSpace(fastAddInboundReq.GetTag())
+	if tag == "" {
+		tag, err = generateInboundTag(protocol, inboundType)
+		if err != nil {
+			fastAddInboundRsp.Code = 1020
+			fastAddInboundRsp.Msg = fmt.Sprintf("generate inbound tag failed: %v", err)
+			return fastAddInboundRsp, nil
+		}
+	}
+	if err := contracts.ValidateInboundTag(tag); err != nil {
+		fastAddInboundRsp.Code = 1020
+		fastAddInboundRsp.Msg = fmt.Sprintf("invalid tag %q: %v", tag, err)
+		return fastAddInboundRsp, nil
+	}
+	if existingCT, exists := s.inboundTagExistsAnywhere(tag); exists {
+		fastAddInboundRsp.Code = 1020
+		fastAddInboundRsp.Msg = fmt.Sprintf("inbound tag %q already exists in container %s", tag, existingCT)
+		return fastAddInboundRsp, nil
+	}
+
+	if inboundType == contracts.InboundTypeChain {
+		if extraListen, ok := fastAddInboundReq.GetExtraParams()["listen"]; ok {
+			trimmedListen := strings.TrimSpace(extraListen)
+			if trimmedListen != "" && trimmedListen != "127.0.0.1" {
+				fastAddInboundRsp.Code = 1020
+				fastAddInboundRsp.Msg = fmt.Sprintf("chain inbound listen must be 127.0.0.1, got %q", extraListen)
+				return fastAddInboundRsp, nil
+			}
+		}
+		cc, ok := c.(container.ChainCapable)
+		if !ok || !cc.SupportsChainOutbound() {
+			fastAddInboundRsp.Code = 1020
+			fastAddInboundRsp.Msg = fmt.Sprintf("container %s does not support chain outbound", c.Type())
+			return fastAddInboundRsp, nil
+		}
+		spec, err := chain.ParseAndValidate(chainURI, s.buildChainAddressPolicy())
+		if err != nil {
+			fastAddInboundRsp.Code = 1020
+			fastAddInboundRsp.Msg = fmt.Sprintf("invalid chain_uri (%s): %v", chain.RedactURI(chainURI), err)
+			return fastAddInboundRsp, nil
+		}
+		if err := cc.ValidateChainURI(chainURI); err != nil {
+			fastAddInboundRsp.Code = 1020
+			fastAddInboundRsp.Msg = fmt.Sprintf("container %s rejected chain_uri (%s): %v", c.Type(), chain.RedactURI(chainURI), err)
+			return fastAddInboundRsp, nil
+		}
+		if remark == "" {
+			remark = spec.Remark
+		}
+	}
+
 	// Cert acquisition: only when domain is provided AND security actually needs a cert (tls/xtls).
 	// Reality, none, and other security types don't use domain certs.
 	domain := fastAddInboundReq.GetDomain()
@@ -244,7 +351,7 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		"port":     fastAddInboundReq.GetPort(),
 		"domain":   domain,
 		"security": security,
-		"tag":      fastAddInboundReq.GetTag(),
+		"tag":      tag,
 	}
 	if transport != "" {
 		reqParams["transport"] = transport
@@ -286,6 +393,16 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		}
 	}
 
+	// Enforce validated canonical chain & isolation metadata after extra_params merge.
+	reqParams["tag"] = tag
+	reqParams["inbound_type"] = string(inboundType)
+	reqParams["chain_uri"] = chainURI
+	reqParams["access_tags"] = accessTags
+	reqParams["remark"] = remark
+	if inboundType == contracts.InboundTypeChain {
+		reqParams["listen"] = "127.0.0.1"
+	}
+
 	// Container-agnostic normalisation: credential auto-fill + cert-source
 	// resolution. Runs AFTER extra_params merge so caller-supplied values
 	// always win. scratchDir comes from the container when it has a
@@ -302,7 +419,7 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		return fastAddInboundRsp, nil
 	}
 
-	if err := c.FastAddInbound(fastAddInboundReq.GetTag(), reqParams); err != nil {
+	if err := c.FastAddInbound(tag, reqParams); err != nil {
 		fastAddInboundRsp.Code = 1021
 		fastAddInboundRsp.Msg = err.Error()
 	}
@@ -357,11 +474,33 @@ func (s *EndNodeServer) ListInbound(ctx context.Context, req *proto.ListInboundR
 		if !ok {
 			continue
 		}
+		metaProvider, hasMeta := c.(container.InboundMetaProvider)
 		for _, inb := range c.ListInboundConfigs() {
-			rsp.Inbounds = append(rsp.Inbounds, &proto.InboundInfo{
+			info := &proto.InboundInfo{
 				Container: string(ct),
 				Name:      inb.Tag(),
-			})
+			}
+			if hasMeta {
+				if meta, ok := metaProvider.GetInboundMeta(inb.Tag()); ok {
+					inboundType := meta.InboundType
+					if inboundType == "" {
+						inboundType = contracts.InboundTypeDirect
+					}
+					info.InboundType = string(inboundType)
+					if len(meta.AccessTags) > 0 {
+						info.AccessTags = append([]string(nil), meta.AccessTags...)
+					}
+					info.Remark = meta.Remark
+					if inboundType == contracts.InboundTypeChain && meta.ChainOutboundURI != "" {
+						info.ChainProtocol, info.ChainTarget = chain.SummarizeURI(meta.ChainOutboundURI)
+					}
+				} else {
+					info.InboundType = string(contracts.InboundTypeDirect)
+				}
+			} else {
+				info.InboundType = string(contracts.InboundTypeDirect)
+			}
+			rsp.Inbounds = append(rsp.Inbounds, info)
 		}
 	}
 
@@ -414,4 +553,165 @@ func (s *EndNodeServer) DeleteInboundByName(ctx context.Context, req *proto.Dele
 
 	log.Info("DeleteInboundByName success", "container", req.GetContainer(), "name", name)
 	return rsp, nil
+}
+
+// SetInboundAccessTags updates the Layer 2 access tags on an existing inbound.
+func (s *EndNodeServer) SetInboundAccessTags(ctx context.Context, req *proto.SetInboundAccessTagsReq) (*proto.InboundOpRsp, error) {
+	rsp := &proto.InboundOpRsp{Code: 0}
+
+	containerType := strings.TrimSpace(req.GetContainer())
+	if containerType == "" {
+		rsp.Code = 600
+		rsp.Msg = "container is required"
+		return rsp, nil
+	}
+	name := strings.TrimSpace(req.GetName())
+	if name == "" {
+		rsp.Code = 600
+		rsp.Msg = "name is required"
+		return rsp, nil
+	}
+	tags, err := contracts.NormalizeAccessTags(req.GetAccessTags())
+	if err != nil {
+		rsp.Code = 600
+		rsp.Msg = fmt.Sprintf("invalid access_tags: %v", err)
+		return rsp, nil
+	}
+
+	c, err := s.getContainerByType(containerType)
+	if err != nil {
+		rsp.Code = 600
+		rsp.Msg = err.Error()
+		return rsp, nil
+	}
+	updater, ok := c.(container.InboundTagUpdater)
+	if !ok {
+		rsp.Code = 600
+		rsp.Msg = fmt.Sprintf("container %s does not support access tag updates", containerType)
+		return rsp, nil
+	}
+	if err := updater.SetInboundAccessTags(name, tags); err != nil {
+		rsp.Code = 601
+		rsp.Msg = fmt.Sprintf("set inbound access tags failed: %v", err)
+		return rsp, nil
+	}
+
+	log.Info("SetInboundAccessTags success", "container", containerType, "name", name, "access_tags", tags)
+	return rsp, nil
+}
+
+func (s *EndNodeServer) inboundTagExistsAnywhere(tag string) (contracts.ContainerType, bool) {
+	if s.containerMgr == nil || tag == "" {
+		return "", false
+	}
+	for _, ct := range s.containerMgr.Types() {
+		c, ok := s.containerMgr.Get(ct)
+		if !ok {
+			continue
+		}
+		if inb, err := c.GetInboundConfig(tag); err == nil && inb != nil {
+			return ct, true
+		}
+	}
+	return "", false
+}
+
+func generateInboundTag(protocol string, inboundType contracts.InboundType) (string, error) {
+	var raw [4]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	suffix := hex.EncodeToString(raw[:])
+	if inboundType == contracts.InboundTypeChain {
+		return fmt.Sprintf("%s-chain-%s", protocol, suffix), nil
+	}
+	return fmt.Sprintf("%s-%s", protocol, suffix), nil
+}
+
+func (s *EndNodeServer) buildChainAddressPolicy() chain.AddressPolicy {
+	reservedPorts := map[uint32]struct{}{
+		62789: {}, // xray default gRPC API
+		9999:  {}, // hysteria default traffic stats API
+		9090:  {}, // mihomo default external controller
+	}
+	if s.cfg.HttpPort > 0 {
+		reservedPorts[uint32(s.cfg.HttpPort)] = struct{}{}
+	}
+	if s.cfg.RpcPort > 0 {
+		reservedPorts[uint32(s.cfg.RpcPort)] = struct{}{}
+	}
+	if s.Port > 0 {
+		reservedPorts[uint32(s.Port)] = struct{}{}
+	}
+
+	policy := chain.AddressPolicy{
+		AllowLoopback: s.cfg.AllowLoopbackChainTarget,
+		LocalHosts:    collectLocalHosts(s.cfg, s.Host),
+		ReservedPorts: reservedPorts,
+	}
+	if s.userMgr != nil {
+		if fm := s.userMgr.GetForwardManager(); fm != nil {
+			policy.IsPortAllocated = func(port uint32) bool {
+				if checker, ok := fm.(interface{ IsPortAllocated(uint32) bool }); ok {
+					return checker.IsPortAllocated(port)
+				}
+				if checker, ok := fm.(interface{ IsAllocated(uint32) bool }); ok {
+					return checker.IsAllocated(port)
+				}
+				for _, r := range fm.GetAllRules() {
+					if r.ListenPort == port {
+						return true
+					}
+				}
+				return false
+			}
+		}
+	}
+	return policy
+}
+
+func collectLocalHosts(cfg appconfig.EndNodeConfig, serverHost string) []string {
+	seen := make(map[string]struct{})
+	var hosts []string
+	addHost := func(raw string) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return
+		}
+		if host, _, err := net.SplitHostPort(raw); err == nil {
+			raw = strings.TrimSpace(host)
+		}
+		raw = strings.Trim(raw, "[]")
+		if raw == "" || raw == "0.0.0.0" || raw == "::" {
+			return
+		}
+		key := strings.ToLower(raw)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		hosts = append(hosts, raw)
+	}
+
+	addHost(cfg.ProxyHost)
+	addHost(cfg.Listen)
+	addHost(cfg.HttpListen)
+	addHost(serverHost)
+
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsUnspecified() {
+				continue
+			}
+			addHost(ip.String())
+		}
+	}
+	return hosts
 }

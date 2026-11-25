@@ -761,8 +761,12 @@ func userToProtoClusterUserSync(u *contracts.User) *proto.ClusterUserSync {
 	if u == nil {
 		return nil
 	}
+	pu := userToProtoUser(u)
+	if pu != nil {
+		pu.UpdateInboundTags = true
+	}
 	return &proto.ClusterUserSync{
-		User:        userToProtoUser(u),
+		User:        pu,
 		Deleted:     u.IsDeleting(),
 		UpdatedAtUs: u.UpdatedAtUs,
 		OriginNode:  u.OriginNode,
@@ -783,6 +787,10 @@ func userToProtoUser(u *contracts.User) *proto.User {
 	if role == "" {
 		role = "normal"
 	}
+	var inboundTags []string
+	if len(u.InboundTags) > 0 {
+		inboundTags = append([]string(nil), u.InboundTags...)
+	}
 	return &proto.User{
 		Name:                  u.Username,
 		AuthToken:             u.AuthToken,
@@ -797,6 +805,7 @@ func userToProtoUser(u *contracts.User) *proto.User {
 		Uplink:                u.TrafficTotalUplink,
 		Downlink:              u.TrafficTotalDownlink,
 		LoginPasswordHash:     u.LoginPassword,
+		InboundTags:           inboundTags,
 	}
 }
 
@@ -829,6 +838,9 @@ func protoClusterUserSyncToUser(p *proto.ClusterUserSync) *contracts.User {
 	u.ClientRecycleDelaySec = int(pu.GetClientRecycleDelaySec())
 	u.ClientDrainSec = int(pu.GetClientDrainSec())
 	u.LoginPassword = pu.GetLoginPasswordHash()
+	if tags := pu.GetInboundTags(); len(tags) > 0 {
+		u.InboundTags = append([]string(nil), tags...)
+	}
 	return u
 }
 

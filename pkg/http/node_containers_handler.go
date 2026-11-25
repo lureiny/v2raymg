@@ -17,10 +17,17 @@ type ContainersReq struct {
 	Target string `json:"target,omitempty" query:"target" default:"all" jsonschema:"Target cluster node name or node_id, or 'all' to query all available cluster nodes (defaults to 'all')."`
 }
 
+// ContainerDetail describes a container type and whether it supports chain outbounds.
+type ContainerDetail struct {
+	Type          string `json:"type"`
+	SupportsChain bool   `json:"supports_chain"`
+}
+
 // ContainersResp is the response payload for GET /containers.
 type ContainersResp struct {
-	Nodes  map[string][]string `json:"nodes"`
-	Failed map[string]string   `json:"failed"`
+	Nodes   map[string][]string          `json:"nodes"`
+	Failed  map[string]string            `json:"failed"`
+	Details map[string][]ContainerDetail `json:"details,omitempty"`
 }
 
 func (s *HttpServer) containersEndpoint() Endpoint[ContainersReq, ContainersResp] {
@@ -58,13 +65,36 @@ func (s *HttpServer) containersEndpoint() Endpoint[ContainersReq, ContainersResp
 			}
 
 			result := make(map[string][]string, len(succList))
+			var details map[string][]ContainerDetail
 			for nodeName, v := range succList {
-				cs, ok := v.([]string)
-				if !ok {
+				switch resp := v.(type) {
+				case *proto.GetContainersRsp:
+					cs := append([]string(nil), resp.GetContainers()...)
+					if len(cs) == 0 && len(resp.GetContainerInfos()) > 0 {
+						cs = make([]string, 0, len(resp.GetContainerInfos()))
+						for _, info := range resp.GetContainerInfos() {
+							cs = append(cs, info.GetType())
+						}
+					}
+					result[nodeName] = cs
+					if infos := resp.GetContainerInfos(); len(infos) > 0 {
+						if details == nil {
+							details = make(map[string][]ContainerDetail)
+						}
+						nodeDetails := make([]ContainerDetail, 0, len(infos))
+						for _, info := range infos {
+							nodeDetails = append(nodeDetails, ContainerDetail{
+								Type:          info.GetType(),
+								SupportsChain: info.GetSupportsChain(),
+							})
+						}
+						details[nodeName] = nodeDetails
+					}
+				case []string:
+					result[nodeName] = resp
+				default:
 					failedList[nodeName] = "unexpected response type"
-					continue
 				}
-				result[nodeName] = cs
 			}
 
 			if len(failedList) != 0 {
@@ -72,8 +102,9 @@ func (s *HttpServer) containersEndpoint() Endpoint[ContainersReq, ContainersResp
 			}
 
 			return ContainersResp{
-				Nodes:  result,
-				Failed: failedList,
+				Nodes:   result,
+				Failed:  failedList,
+				Details: details,
 			}, nil
 		},
 	}

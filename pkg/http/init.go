@@ -53,6 +53,7 @@ func (s *HttpServer) registerRoutes() {
 	registerEndpoint(s, adminGroup, s.inboundAddEndpoint())
 	registerEndpoint(s, adminGroup, s.inboundListEndpoint())
 	registerEndpoint(s, adminGroup, s.inboundDeleteByNameEndpoint())
+	registerEndpoint(s, adminGroup, s.inboundSetTagsEndpoint())
 	registerEndpoint(s, adminGroup, s.fastAddInboundEndpoint())
 	registerEndpoint(s, adminGroup, s.applyCertEndpoint())
 	registerEndpoint(s, adminGroup, s.transferCertEndpoint())

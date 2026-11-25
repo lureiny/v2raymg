@@ -36,14 +36,16 @@ func (s *EndNodeServer) GetProfile(ctx context.Context, req *proto.GetProfileReq
 		Downlink:      user.TrafficTotalDownlink,
 		ProxyPassword: user.AuthToken,
 	}
-	if fm := s.userMgr.GetForwardManager(); fm != nil {
-		rules := fm.GetRulesByUser(user.Username)
-		for _, r := range rules {
-			rsp.Inbounds = append(rsp.Inbounds, &proto.ProfileInbound{
-				Tag:       r.InboundTag,
-				Container: string(r.ContainerType),
-				Port:      int32(r.ListenPort),
-			})
+	if s.userMgr.IsUserVisible(user) {
+		if fm := s.userMgr.GetForwardManager(); fm != nil {
+			rules := fm.GetRulesByUser(user.Username)
+			for _, r := range rules {
+				rsp.Inbounds = append(rsp.Inbounds, &proto.ProfileInbound{
+					Tag:       r.InboundTag,
+					Container: string(r.ContainerType),
+					Port:      int32(r.ListenPort),
+				})
+			}
 		}
 	}
 	return rsp, nil
@@ -73,27 +75,26 @@ func (s *EndNodeServer) AddUsers(ctx context.Context, addUsersReq *proto.UserOpR
 		if user.ExpireTime > 0 {
 			ttl = time.Until(time.Unix(user.ExpireTime, 0))
 		}
+		inboundTags, tagErr := contracts.NormalizeAccessTags(user.GetInboundTags())
+		if tagErr != nil {
+			log.Error("add user failed: invalid inbound_tags", "err", tagErr, "user", user.Name)
+			addUsersRsp.Msg += fmt.Sprintf("user: %s add failed: %s|", user.Name, tagErr.Error())
+			continue
+		}
 		err := s.userMgr.AddUser(usermanager.AddUserRequest{
-			Username: user.Name,
-			Password: user.Passwd,
-			TTL:      ttl,
+			Username:    user.Name,
+			Password:    user.Passwd,
+			TTL:         ttl,
+			Role:        user.Role,
+			TargetGroup: user.Group,
+			InboundTags: inboundTags,
 		})
 		if err != nil {
 			log.Error("add user failed", "err", err.Error(), "user", user.Name)
 			addUsersRsp.Msg += fmt.Sprintf("user: %s add failed: %s|", user.Name, err.Error())
 			continue
 		}
-		// Apply optional fields after user creation.
-		if user.Role != "" {
-			if err := s.userMgr.SetUserRole(user.Name, user.Role); err != nil {
-				addUsersRsp.Msg += fmt.Sprintf("user: %s set role failed: %s|", user.Name, err.Error())
-			}
-		}
-		if user.Group != "" {
-			if err := s.userMgr.SetUserGroup(user.Name, user.Group); err != nil {
-				addUsersRsp.Msg += fmt.Sprintf("user: %s set group failed: %s|", user.Name, err.Error())
-			}
-		}
+		// Apply optional traffic/limit fields after user creation.
 		if user.UploadBps != 0 {
 			bps := user.UploadBps
 			if bps < 0 {
@@ -194,6 +195,11 @@ func (s *EndNodeServer) UpdateUsers(ctx context.Context, updateUsersReq *proto.U
 			}
 			if err := s.userMgr.SetUserClientLimit(user.Name, mc, int(user.ClientRecycleDelaySec), int(user.ClientDrainSec)); err != nil {
 				errMsgs = append(errMsgs, fmt.Sprintf("set client limit for %s: %s", user.Name, err.Error()))
+			}
+		}
+		if user.GetUpdateInboundTags() {
+			if err := s.userMgr.SetUserInboundTags(user.Name, user.GetInboundTags()); err != nil {
+				errMsgs = append(errMsgs, fmt.Sprintf("set inbound tags for %s: %s", user.Name, err.Error()))
 			}
 		}
 	}
@@ -320,12 +326,6 @@ func (s *EndNodeServer) GetSub(ctx context.Context, getSubReq *proto.GetSubReq) 
 		if spec.URI != "" {
 			uris = append(uris, spec.URI)
 		}
-	}
-	if len(uris) == 0 {
-		log.Error("get sub failed", "err", "no subscription found", "user", localUser.Username)
-		getSubRsp.Msg = "no subscription found"
-		getSubRsp.Code = 300
-		return getSubRsp, nil
 	}
 	getSubRsp.Uris = uris
 

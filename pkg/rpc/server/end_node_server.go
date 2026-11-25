@@ -74,6 +74,14 @@ func GetEndNodeServer() *EndNodeServer {
 	return endNodeServer
 }
 
+// ContainerMgr returns the server's container manager (may be nil before Init or in unit tests).
+func (s *EndNodeServer) ContainerMgr() *container.ContainerMgr {
+	if s == nil {
+		return nil
+	}
+	return s.containerMgr
+}
+
 // heartbeatInterval returns the configured cluster heartbeat period, falling back
 // to defaultHeartbeatInterval when unset. appconfig.Validate bounds the configured
 // value to 1..30s; the fallback here also covers servers built directly in tests,
@@ -133,6 +141,7 @@ var methodRspMap = map[string]interface{}{
 	"UpsertClusterUsers":   &proto.UpsertClusterUsersRsp{},
 	"GetStatus":            &proto.GetStatusRsp{},
 	"GetContainers":        &proto.GetContainersRsp{},
+	"SetInboundAccessTags": &proto.InboundOpRsp{},
 }
 
 // newEmptyRsp returns a fresh, per-call response instance for the given method.

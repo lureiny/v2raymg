@@ -7,6 +7,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/pkg/cluster"
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
+	rpcserver "github.com/lureiny/v2raymg/pkg/rpc/server"
 )
 
 // HttpServerConfig holds HTTP server configuration.
@@ -62,6 +64,7 @@ type HttpServer struct {
 	clusterNodes            ClusterNodes
 	localNode               *cluster.LocalNode
 	userLister              UserLister
+	containerMgr            *container.ContainerMgr
 	clusterEnabled          bool
 	enableSubUserInfoHeader bool
 	subUserInfoHeaderFormat string
@@ -97,6 +100,21 @@ func (s *HttpServer) GetLocalNode() *cluster.LocalNode {
 
 func (s *HttpServer) SetName(name string) {
 	s.Name = name
+}
+
+// SetContainerMgr injects a local ContainerMgr for HTTP handlers (e.g. AuthHysteria2).
+func (s *HttpServer) SetContainerMgr(cm *container.ContainerMgr) {
+	s.containerMgr = cm
+}
+
+func (s *HttpServer) getContainerMgr() *container.ContainerMgr {
+	if s.containerMgr != nil {
+		return s.containerMgr
+	}
+	if srv := rpcserver.GetEndNodeServer(); srv != nil {
+		return srv.ContainerMgr()
+	}
+	return nil
 }
 
 // Listen binds the HTTP listener synchronously so a bind failure can fail-fast

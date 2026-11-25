@@ -50,6 +50,7 @@ GET /api/inbound
 POST /api/inbound
 GET /api/inbounds
 DELETE /api/inbounds
+PUT /api/inbounds/tags
 POST /api/inbound/fast
 
 # --- admin scope: certificates ---
