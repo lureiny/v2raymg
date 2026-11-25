@@ -127,6 +127,12 @@ Public routes (`/sub`, `/api/login`, `/api/authHysteria2`) do not require authen
 | POST | `/api/update` | Update proxy binary version |
 | GET | `/api/metrics` | Prometheus metrics endpoint |
 
+## Embedded MCP Server
+
+v2raymg includes an embedded **Stateless Streamable HTTP MCP server** mounted at `/mcp` on the HTTP management server (disabled by default via `end_node.mcp.enabled: false`, and read-only by default via `end_node.mcp.read_only: true`). It shares the same `Endpoint` execution functions, authentication (`X-Token` / `Bearer JWT`), and role isolation as the HTTP API, while redacting `auth_token` fields in MCP responses.
+
+See [`docs/mcp-guide.md`](docs/mcp-guide.md) for configuration, client setup, RBAC rules, the full 32-tool reference, and developer extension instructions.
+
 ## Configuration
 
 See [`config/config.example.yaml`](config/config.example.yaml) for the full configuration reference.

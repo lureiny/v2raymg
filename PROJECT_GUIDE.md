@@ -236,6 +236,9 @@ go test ./pkg/proxy/systemtest -tags=integration -run TestClusterE2E -v -timeout
 
 # 路由覆盖守卫(无 tag,默认 CI 就跑;新增路由没补集成用例会红)
 go test ./pkg/http -run TestRouteCoverage -v
+
+# MCP 路由防漂移守卫(校验所有 HTTP 路由均经 registerEndpoint 接入或列入显式非 MCP 白名单)
+go test ./pkg/http -run TestMCP_RouteDriftGuard -v
 ```
 
 `pkg/proxy/systemtest/README.md` 里仍写的是 `./pkg/proxyrefactor/...`,是历史残留,实际路径应当是 `./pkg/proxy/...`。
@@ -256,6 +259,7 @@ go test ./pkg/http -run TestRouteCoverage -v
   - `cluster-user-*` — 集群用户体系各阶段设计
   - `inbound-user-tracker-refactor.md` — 延后的用户追踪架构统一方案
   - `http-api-reference.md` — HTTP API 参考
+  - `mcp-guide.md` — 内嵌 MCP Server（`/mcp`）使用与开发指南（配置、鉴权/脱敏、32 工具参考与 `Endpoint[Req, Resp]` 扩展方式）
   - `certmgmt-design.md` — 证书管理设计
   - `user-placement-controller-design.md` / `user-sync-design.md` — 多节点用户编排
   - `heartbeat-optimization-design.md` — **集群心跳流量优化(有序聚合 hash + 不一致才拉全量,兼容旧版)设计稿,待评审**
