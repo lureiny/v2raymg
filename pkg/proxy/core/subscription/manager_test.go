@@ -32,21 +32,21 @@ type mockContainer struct {
 	err  error
 }
 
-func (c *mockContainer) Init(_ any) error                                          { return nil }
-func (c *mockContainer) Start() error                                              { return nil }
-func (c *mockContainer) Stop() error                                               { return nil }
-func (c *mockContainer) Restart() error                                            { return nil }
-func (c *mockContainer) Reload() error                                             { return nil }
-func (c *mockContainer) IsRunning() bool                                           { return true }
-func (c *mockContainer) Version() string                                           { return "" }
-func (c *mockContainer) Type() contracts.ContainerType                             { return c.kind }
-func (c *mockContainer) ConfigFile() string                                        { return "" }
-func (c *mockContainer) GetRunFunc() (func() error, func() error)                  { return nil, nil }
-func (c *mockContainer) RemoveInboundConfig(_ string) error                        { return nil }
-func (c *mockContainer) GetInboundConfig(_ string) (inbound.Inbound, error)        { return nil, nil }
-func (c *mockContainer) ListInboundConfigs() []inbound.Inbound                     { return nil }
-func (c *mockContainer) FastAddInbound(_ string, _ map[string]any) error           { return nil }
-func (c *mockContainer) UserEventChannel() <-chan usermanager.UserEvent             { return nil }
+func (c *mockContainer) Init(_ any) error                                   { return nil }
+func (c *mockContainer) Start() error                                       { return nil }
+func (c *mockContainer) Stop() error                                        { return nil }
+func (c *mockContainer) Restart() error                                     { return nil }
+func (c *mockContainer) Reload() error                                      { return nil }
+func (c *mockContainer) IsRunning() bool                                    { return true }
+func (c *mockContainer) Version() string                                    { return "" }
+func (c *mockContainer) Type() contracts.ContainerType                      { return c.kind }
+func (c *mockContainer) ConfigFile() string                                 { return "" }
+func (c *mockContainer) GetRunFunc() (func() error, func() error)           { return nil, nil }
+func (c *mockContainer) RemoveInboundConfig(_ string) error                 { return nil }
+func (c *mockContainer) GetInboundConfig(_ string) (inbound.Inbound, error) { return nil, nil }
+func (c *mockContainer) ListInboundConfigs() []inbound.Inbound              { return nil }
+func (c *mockContainer) FastAddInbound(_ string, _ map[string]any) error    { return nil }
+func (c *mockContainer) UserEventChannel() <-chan usermanager.UserEvent     { return nil }
 func (c *mockContainer) Update(_ context.Context, _ container.UpdateRequest) (*container.UpdateResult, error) {
 	return nil, nil
 }
@@ -147,6 +147,21 @@ func TestGetSubscription_aggregatesAllContainers(t *testing.T) {
 	}
 }
 
+// mockUserGetterWithVisibility extends mockUserGetter with IsUserVisible.
+type mockUserGetterWithVisibility struct {
+	user    *contracts.UserSpec
+	err     error
+	visible bool
+}
+
+func (m *mockUserGetterWithVisibility) GetUser(username string) (*contracts.UserSpec, error) {
+	return m.user, m.err
+}
+
+func (m *mockUserGetterWithVisibility) IsUserVisible(user *contracts.User) bool {
+	return m.visible
+}
+
 func TestGetSubscription_toleratesContainerError(t *testing.T) {
 	spec1 := contracts.SubscriptionSpec{InboundTag: "in1"}
 
@@ -171,5 +186,49 @@ func TestGetSubscription_toleratesContainerError(t *testing.T) {
 	// Only the successful container's spec should appear.
 	if len(specs) != 1 || specs[0].InboundTag != "in1" {
 		t.Errorf("expected 1 spec from healthy container, got %v", specs)
+	}
+}
+
+func TestGetSubscription_respectsLayer1Visibility(t *testing.T) {
+	spec1 := contracts.SubscriptionSpec{InboundTag: "in1", Protocol: contracts.ProtocolVLess}
+
+	cs := newMockContainerSource()
+	cs.containers[contracts.ContainerXray] = &mockContainer{
+		kind: contracts.ContainerXray,
+		subs: []contracts.SubscriptionSpec{spec1},
+	}
+
+	// Invisible user -> returns nil, nil
+	ugHidden := &mockUserGetterWithVisibility{
+		user:    &contracts.UserSpec{Username: "alice", TargetGroup: "other"},
+		visible: false,
+	}
+	mHidden := newTestManager(cs, ugHidden)
+	specs, err := mHidden.GetSubscription(contracts.SubscriptionRequest{
+		User: contracts.UserSpec{Username: "alice"},
+		Host: "example.com",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error for hidden user: %v", err)
+	}
+	if specs != nil {
+		t.Errorf("expected nil specs for invisible user, got %v", specs)
+	}
+
+	// Visible user -> aggregates normally
+	ugVisible := &mockUserGetterWithVisibility{
+		user:    &contracts.UserSpec{Username: "alice", TargetGroup: "vip"},
+		visible: true,
+	}
+	mVisible := newTestManager(cs, ugVisible)
+	specs, err = mVisible.GetSubscription(contracts.SubscriptionRequest{
+		User: contracts.UserSpec{Username: "alice"},
+		Host: "example.com",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error for visible user: %v", err)
+	}
+	if len(specs) != 1 || specs[0].InboundTag != "in1" {
+		t.Errorf("expected [in1] for visible user, got %v", specs)
 	}
 }

@@ -2,6 +2,7 @@ package contracts_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -131,3 +132,68 @@ func TestUserSpec_LoginPasswordField(t *testing.T) {
 	}
 }
 
+func TestUserSpec_InboundTags_JSONAndClone(t *testing.T) {
+	t.Run("omitempty_when_empty", func(t *testing.T) {
+		u := &contracts.UserSpec{Username: "alice"}
+		data, err := json.Marshal(u)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		if strings.Contains(string(data), "inbound_tags") {
+			t.Errorf("expected empty InboundTags to be omitted in JSON, got %s", string(data))
+		}
+	})
+
+	t.Run("json_round_trip", func(t *testing.T) {
+		u := &contracts.UserSpec{Username: "alice", InboundTags: []string{"home-sh", "vip"}}
+		data, err := json.Marshal(u)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		var decoded contracts.UserSpec
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
+		if !reflect.DeepEqual(decoded.InboundTags, []string{"home-sh", "vip"}) {
+			t.Errorf("InboundTags = %v, want [home-sh vip]", decoded.InboundTags)
+		}
+	})
+
+	t.Run("clone_deep_copies_inbound_tags", func(t *testing.T) {
+		var nilUser *contracts.UserSpec
+		if nilUser.Clone() != nil {
+			t.Fatal("nil Clone should return nil")
+		}
+
+		orig := &contracts.UserSpec{
+			Username:     "alice",
+			BindPorts:    []uint32{10001},
+			InboundTags:  []string{"home-sh", "vip"},
+			PortMappings: map[uint32]uint32{443: 10001},
+		}
+		cloned := orig.Clone()
+		if !reflect.DeepEqual(cloned.InboundTags, orig.InboundTags) {
+			t.Fatalf("cloned InboundTags = %v, want %v", cloned.InboundTags, orig.InboundTags)
+		}
+
+		// Mutating original slice elements and map must not affect clone.
+		orig.InboundTags[0] = "mutated"
+		orig.BindPorts[0] = 99999
+		orig.PortMappings[443] = 99999
+		if cloned.InboundTags[0] != "home-sh" {
+			t.Errorf("clone InboundTags aliased original: got %v", cloned.InboundTags)
+		}
+		if cloned.BindPorts[0] != 10001 {
+			t.Errorf("clone BindPorts aliased original: got %v", cloned.BindPorts)
+		}
+		if cloned.PortMappings[443] != 10001 {
+			t.Errorf("clone PortMappings aliased original: got %v", cloned.PortMappings)
+		}
+
+		// Mutating clone must not affect original.
+		cloned.InboundTags[1] = "clone-only"
+		if orig.InboundTags[1] != "vip" {
+			t.Errorf("original InboundTags aliased clone: got %v", orig.InboundTags)
+		}
+	})
+}

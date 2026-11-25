@@ -27,8 +27,63 @@ func TestAll_SQLNonEmpty(t *testing.T) {
 }
 
 func TestAll_Count(t *testing.T) {
-	if len(migrations.All) != 17 {
-		t.Errorf("expected 17 migrations, got %d", len(migrations.All))
+	if len(migrations.All) != 18 {
+		t.Errorf("expected 18 migrations, got %d", len(migrations.All))
+	}
+}
+
+func TestVersion18_ChainProxyAndInboundTags(t *testing.T) {
+	m := migrations.All[17] // version 18
+	if m.Version != 18 {
+		t.Fatalf("expected version 18, got %d", m.Version)
+	}
+	for _, want := range []string{
+		"ALTER TABLE users ADD COLUMN inbound_tags",
+		"ALTER TABLE inbounds ADD COLUMN inbound_type",
+		"ALTER TABLE inbounds ADD COLUMN access_tags",
+		"ALTER TABLE inbounds ADD COLUMN chain_outbound_uri",
+		"ALTER TABLE inbounds ADD COLUMN remark",
+	} {
+		if !strings.Contains(m.SQL, want) {
+			t.Errorf("version 18 should contain %q", want)
+		}
+	}
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "v18.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	// Apply v1-17, insert legacy user & inbound rows, then migrate to v18.
+	if err := store.Migrate(db, migrations.All[:17]); err != nil {
+		t.Fatalf("Migrate v1-17: %v", err)
+	}
+	if _, err := db.DB().Exec(`INSERT INTO users (username, auth_token) VALUES ('legacy', 'tok')`); err != nil {
+		t.Fatalf("insert legacy user: %v", err)
+	}
+	if _, err := db.DB().Exec(`INSERT INTO inbounds (tag, container_type, native_json) VALUES ('in1', 'xray', '{}')`); err != nil {
+		t.Fatalf("insert legacy inbound: %v", err)
+	}
+	if err := store.Migrate(db, migrations.All); err != nil {
+		t.Fatalf("Migrate v18: %v", err)
+	}
+
+	var inboundTags string
+	if err := db.DB().QueryRow(`SELECT inbound_tags FROM users WHERE username='legacy'`).Scan(&inboundTags); err != nil {
+		t.Fatalf("scan user inbound_tags: %v", err)
+	}
+	if inboundTags != "[]" {
+		t.Errorf("user inbound_tags default = %q, want '[]'", inboundTags)
+	}
+
+	var inboundType, accessTags, chainURI, remark string
+	if err := db.DB().QueryRow(`SELECT inbound_type, access_tags, chain_outbound_uri, remark FROM inbounds WHERE tag='in1'`).
+		Scan(&inboundType, &accessTags, &chainURI, &remark); err != nil {
+		t.Fatalf("scan inbound v18 cols: %v", err)
+	}
+	if inboundType != "direct" || accessTags != "[]" || chainURI != "" || remark != "" {
+		t.Errorf("unexpected inbound v18 defaults: type=%q tags=%q uri=%q remark=%q", inboundType, accessTags, chainURI, remark)
 	}
 }
 

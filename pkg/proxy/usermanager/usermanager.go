@@ -4,6 +4,8 @@ package usermanager
 
 import (
 	"fmt"
+	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -276,7 +278,22 @@ func (m *UserManager) SetNodeGroups(groups []string) error {
 	}
 	m.mu.Lock()
 	m.cachedNodeGroups = makeGroupSet(groups)
+	snapshots := make([]*contracts.User, 0, len(m.users))
+	for _, u := range m.users {
+		if u.IsDeleting() || u.IsExpired() {
+			continue
+		}
+		snapshots = append(snapshots, u.Clone())
+	}
 	m.mu.Unlock()
+
+	for _, snap := range snapshots {
+		m.emitEvent(UserEvent{
+			Type:     UserEventUpdate,
+			Username: snap.Username,
+			User:     snap,
+		})
+	}
 	return nil
 }
 
@@ -308,6 +325,59 @@ func (m *UserManager) IsUserVisible(user *contracts.User) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.isUserVisibleLocked(user)
+}
+
+// CanUserAccessInbound evaluates both Layer 1 (node group visibility) and
+// Layer 2 (inbound access_tags intersection) for a user in strict order.
+func (m *UserManager) CanUserAccessInbound(user *contracts.User, inboundAccessTags []string) bool {
+	if user == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.canUserAccessInboundLocked(user, inboundAccessTags)
+}
+
+// CanUserAccessInboundByUsername evaluates two-layer access control against the
+// authoritative live user record held in UserManager.
+func (m *UserManager) CanUserAccessInboundByUsername(username string, inboundAccessTags []string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	user, exists := m.users[username]
+	if !exists {
+		return false
+	}
+	return m.canUserAccessInboundLocked(user, inboundAccessTags)
+}
+
+func (m *UserManager) canUserAccessInboundLocked(user *contracts.User, inboundAccessTags []string) bool {
+	if user == nil || user.IsDeleting() || user.IsExpired() {
+		return false
+	}
+	if !m.isUserVisibleLocked(user) {
+		return false
+	}
+	if len(inboundAccessTags) == 0 {
+		return true
+	}
+	return hasTagIntersection(user.InboundTags, inboundAccessTags)
+}
+
+func hasTagIntersection(userTags, inboundTags []string) bool {
+	if len(userTags) == 0 || len(inboundTags) == 0 {
+		return false
+	}
+	for _, it := range inboundTags {
+		if it == "" {
+			continue
+		}
+		for _, ut := range userTags {
+			if ut != "" && ut == it {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // NodeGroupsStore returns the node groups store (nil if cluster sync is disabled).
@@ -466,15 +536,22 @@ func (m *UserManager) emitEvent(event UserEvent) {
 
 // AddUserRequest contains parameters for adding a user.
 type AddUserRequest struct {
-	Username string
-	Password string
-	TTL      time.Duration // 0 means no expiration
+	Username    string
+	Password    string
+	TTL         time.Duration // 0 means no expiration
+	Role        string
+	TargetGroup string
+	InboundTags []string
 }
 
 // AddUser adds a new user.
 func (m *UserManager) AddUser(req AddUserRequest) error {
 	if err := m.validateUserCredentials(req.Username, req.Password); err != nil {
 		return err
+	}
+	normalizedInboundTags, err := contracts.NormalizeAccessTags(req.InboundTags)
+	if err != nil {
+		return errors.Wrap(errors.ErrInvalidUserSpec, "invalid inbound_tags", err)
 	}
 
 	m.mu.Lock()
@@ -500,7 +577,10 @@ func (m *UserManager) AddUser(req AddUserRequest) error {
 	}
 
 	user := &contracts.User{
-		Username: req.Username,
+		Username:    req.Username,
+		Role:        req.Role,
+		TargetGroup: req.TargetGroup,
+		InboundTags: normalizedInboundTags,
 	}
 	_ = m.setAuthTokenLocked(user, "") // empty → auto-generate unique token
 
@@ -775,6 +855,18 @@ func (m *UserManager) SetUserGroup(username, group string) error {
 	})
 }
 
+// SetUserInboundTags normalizes and replaces the inbound access tags of an existing user.
+func (m *UserManager) SetUserInboundTags(username string, tags []string) error {
+	normalized, err := contracts.NormalizeAccessTags(tags)
+	if err != nil {
+		return errors.Wrap(errors.ErrInvalidUserSpec, "invalid inbound_tags", err)
+	}
+	return m.mutateUser(username, UserEventUpdate, func(user *contracts.User) error {
+		user.InboundTags = normalized
+		return nil
+	})
+}
+
 // UpdateUser updates a user's password and/or expiry time.
 // expireTime is a Unix timestamp; 0 means no change to expiry.
 // If password is non-empty, it is updated. If expireTime > 0, ExpiryTime is set.
@@ -1038,6 +1130,7 @@ func (m *UserManager) RotateUserPortForInbound(username string, containerType co
 		InboundTag:            tmpTag,
 		Protocol:              existingRule.Protocol,
 		ListenAddr:            existingRule.ListenAddr,
+		ListenStack:           existingRule.ListenStack,
 		ListenPort:            preferredPort, // 0 = auto-allocate
 		TargetAddr:            existingRule.TargetAddr,
 		UploadBytesPerSec:     existingRule.UploadBytesPerSec,
@@ -1046,6 +1139,8 @@ func (m *UserManager) RotateUserPortForInbound(username string, containerType co
 		MaxClients:            existingRule.MaxClients,
 		ClientRecycleDelaySec: existingRule.ClientRecycleDelaySec,
 		ClientDrainSec:        existingRule.ClientDrainSec,
+		Network:               existingRule.Network,
+		UDPSessionIdleSec:     existingRule.UDPSessionIdleSec,
 	}
 	createdTmpRule, err := m.forwardMgr.AddRule(tmpRule)
 	if err != nil {
@@ -1069,6 +1164,7 @@ func (m *UserManager) RotateUserPortForInbound(username string, containerType co
 		InboundTag:            inboundTag,
 		Protocol:              existingRule.Protocol,
 		ListenAddr:            existingRule.ListenAddr,
+		ListenStack:           existingRule.ListenStack,
 		ListenPort:            newPort, // reclaim the same port (just freed above)
 		TargetAddr:            existingRule.TargetAddr,
 		UploadBytesPerSec:     existingRule.UploadBytesPerSec,
@@ -1077,6 +1173,8 @@ func (m *UserManager) RotateUserPortForInbound(username string, containerType co
 		MaxClients:            existingRule.MaxClients,
 		ClientRecycleDelaySec: existingRule.ClientRecycleDelaySec,
 		ClientDrainSec:        existingRule.ClientDrainSec,
+		Network:               existingRule.Network,
+		UDPSessionIdleSec:     existingRule.UDPSessionIdleSec,
 	}
 	createdFinalRule, err := m.forwardMgr.AddRule(finalRule)
 	if err != nil {
@@ -1394,7 +1492,8 @@ func (m *UserManager) ReleaseBindPort(req ReleaseBindPortRequest) error {
 
 // ReleaseInboundPorts releases all bound ports for a specific inbound tag.
 // This is called when an inbound is stopped or destroyed.
-// It removes forward rules for all users associated with this inbound.
+// It removes forward rules for all users associated with this inbound and
+// clears the corresponding BindPorts and PortMappings entries.
 func (m *UserManager) ReleaseInboundPorts(inboundTag string) error {
 	if inboundTag == "" {
 		return nil // idempotent
@@ -1408,12 +1507,73 @@ func (m *UserManager) ReleaseInboundPorts(inboundTag string) error {
 		return nil // idempotent
 	}
 
-	// Remove all rules for this inbound tag
-	_ = m.forwardMgr.RemoveRulesByInbound(inboundTag)
+	type userInboundPorts struct {
+		fwdPorts map[uint32]struct{}
+		dstPorts map[uint32]struct{}
+	}
+	affected := make(map[string]*userInboundPorts)
+	for _, r := range m.forwardMgr.GetAllRules() {
+		if r == nil || r.InboundTag != inboundTag {
+			continue
+		}
+		entry, ok := affected[r.Username]
+		if !ok {
+			entry = &userInboundPorts{
+				fwdPorts: make(map[uint32]struct{}),
+				dstPorts: make(map[uint32]struct{}),
+			}
+			affected[r.Username] = entry
+		}
+		if r.ListenPort != 0 {
+			entry.fwdPorts[r.ListenPort] = struct{}{}
+		}
+		if _, portStr, err := net.SplitHostPort(r.TargetAddr); err == nil {
+			if p, err := strconv.ParseUint(portStr, 10, 32); err == nil && p > 0 {
+				entry.dstPorts[uint32(p)] = struct{}{}
+			}
+		}
+	}
 
-	// Note: We don't modify user.BindPorts here because those ports
-	// may be reused by the same user on different inbounds.
-	// The ports will be cleaned up when users are removed or expired.
+	// Remove all rules for this inbound tag
+	if err := m.forwardMgr.RemoveRulesByInbound(inboundTag); err != nil {
+		return err
+	}
+
+	for username, entry := range affected {
+		user, exists := m.users[username]
+		if !exists {
+			continue
+		}
+		changed := false
+		if len(entry.fwdPorts) > 0 && len(user.BindPorts) > 0 {
+			kept := make([]uint32, 0, len(user.BindPorts))
+			for _, p := range user.BindPorts {
+				if _, removed := entry.fwdPorts[p]; removed {
+					changed = true
+					continue
+				}
+				kept = append(kept, p)
+			}
+			user.BindPorts = kept
+		}
+		for dst := range entry.dstPorts {
+			if _, ok := user.PortMappings[dst]; ok {
+				delete(user.PortMappings, dst)
+				changed = true
+			}
+		}
+		for dst, fwd := range user.PortMappings {
+			if _, removed := entry.fwdPorts[fwd]; removed {
+				delete(user.PortMappings, dst)
+				changed = true
+			}
+		}
+		if changed && m.store != nil {
+			if err := m.store.Save(user); err != nil {
+				log.Warn("[ReleaseInboundPorts] failed to persist user after cleanup", "user", username, "err", err)
+			}
+		}
+	}
 
 	return nil
 }
@@ -1579,6 +1739,12 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 
 	// Case 2: incoming is an active user.
 	if !exists {
+		// Deep-copy InboundTags so caller mutations never alias m.users.
+		if incoming.InboundTags != nil {
+			copied := make([]string, len(incoming.InboundTags))
+			copy(copied, incoming.InboundTags)
+			incoming.InboundTags = copied
+		}
 		// New user from remote. Ensure auth token is valid and unique.
 		if err := m.setAuthTokenLocked(incoming, incoming.AuthToken); err != nil {
 			// Invalid or conflicting token — auto-generate a new one.
@@ -1617,6 +1783,12 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 	existing.ExpiryTime = incoming.ExpiryTime
 	existing.Role = incoming.Role
 	existing.TargetGroup = incoming.TargetGroup
+	if incoming.InboundTags != nil {
+		existing.InboundTags = make([]string, len(incoming.InboundTags))
+		copy(existing.InboundTags, incoming.InboundTags)
+	} else {
+		existing.InboundTags = nil
+	}
 	existing.BandwidthUploadBps = incoming.BandwidthUploadBps
 	existing.BandwidthDownloadBps = incoming.BandwidthDownloadBps
 	existing.MaxClients = incoming.MaxClients

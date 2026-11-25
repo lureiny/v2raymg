@@ -47,6 +47,11 @@ func (m *Manager) GetSubscription(req contracts.SubscriptionRequest) ([]contract
 	if user.IsDeleting() {
 		return nil, fmt.Errorf("user %s is being deleted", req.User.Username)
 	}
+	if vis, ok := m.users.(interface{ IsUserVisible(*contracts.User) bool }); ok {
+		if !vis.IsUserVisible(user) {
+			return nil, nil
+		}
+	}
 
 	var specs []contracts.SubscriptionSpec
 	for _, kind := range m.containers.Types() {
@@ -122,7 +127,9 @@ func (m *Manager) GetSubscriptionForClientWithOptions(req contracts.Subscription
 	}
 
 	// 检查 converter 是否支持 ConvertWithOptions
-	if cc, ok := c.(interface{ ConvertWithOptions([]contracts.SubscriptionSpec, *ConvertOptions) (string, error) }); ok && opts != nil {
+	if cc, ok := c.(interface {
+		ConvertWithOptions([]contracts.SubscriptionSpec, *ConvertOptions) (string, error)
+	}); ok && opts != nil {
 		return cc.ConvertWithOptions(specs, opts)
 	}
 

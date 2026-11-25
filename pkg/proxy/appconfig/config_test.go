@@ -925,5 +925,53 @@ end_node:
 		require.NoError(t, err)
 		assert.False(t, cfg.EndNode.MCP.Enabled)
 		assert.True(t, cfg.EndNode.MCP.ReadOnly)
+		assert.False(t, cfg.EndNode.AllowLoopbackChainTarget)
+	})
+}
+
+func TestLoadFromFile_AllowLoopbackChainTarget(t *testing.T) {
+	writeFile := func(t *testing.T, name, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), name)
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		return path
+	}
+
+	t.Run("defaults_to_false", func(t *testing.T) {
+		path := writeFile(t, "config.yaml", `
+end_node:
+  listen: 127.0.0.1
+  http_port: 8080
+`)
+		cfg, err := LoadFromFile(path)
+		require.NoError(t, err)
+		assert.False(t, cfg.EndNode.AllowLoopbackChainTarget)
+	})
+
+	t.Run("yaml_true", func(t *testing.T) {
+		path := writeFile(t, "config.yaml", `
+end_node:
+  listen: 127.0.0.1
+  http_port: 8080
+  allow_loopback_chain_target: true
+`)
+		cfg, err := LoadFromFile(path)
+		require.NoError(t, err)
+		assert.True(t, cfg.EndNode.AllowLoopbackChainTarget)
+	})
+
+	t.Run("json_true", func(t *testing.T) {
+		raw, err := json.Marshal(map[string]any{
+			"end_node": map[string]any{
+				"listen":                      "127.0.0.1",
+				"http_port":                   8080,
+				"allow_loopback_chain_target": true,
+			},
+		})
+		require.NoError(t, err)
+		path := writeFile(t, "config.json", string(raw))
+		cfg, err := LoadFromFile(path)
+		require.NoError(t, err)
+		assert.True(t, cfg.EndNode.AllowLoopbackChainTarget)
 	})
 }

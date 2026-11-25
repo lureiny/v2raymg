@@ -89,6 +89,10 @@ type UserSpec struct {
 	// Empty means no group assignment (local-only or default group).
 	TargetGroup string `json:"target_group,omitempty"`
 
+	// InboundTags restricts which tagged inbounds this user can access (Layer 2 isolation).
+	// Empty means the user can only access untagged (public) inbounds.
+	InboundTags []string `json:"inbound_tags,omitempty"`
+
 	// UpdatedAtUs is the version timestamp in microseconds for cluster sync.
 	// Zero means the user has never been cluster-synced.
 	UpdatedAtUs int64 `json:"updated_at_us,omitempty"`
@@ -99,14 +103,13 @@ type UserSpec struct {
 
 	// Hash is the SHA-256 digest of canonical fields for cluster conflict detection.
 	Hash string `json:"hash,omitempty"`
-
 }
 
 // Clone returns a deep copy safe to share across goroutines without a lock.
 // All scalar fields are value-copied (time.Time and its shared *Location are
-// immutable, so a value copy is safe); the two reference fields — BindPorts
-// and PortMappings — are duplicated so later mutations of the original never
-// race with a reader of the clone. A nil receiver clones to nil.
+// immutable, so a value copy is safe); reference fields — BindPorts,
+// InboundTags, and PortMappings — are duplicated so later mutations of the
+// original never race with a reader of the clone. A nil receiver clones to nil.
 //
 // Emitted UserEvents must carry a Clone, never the live *User held in the
 // manager's map: subscribers read event.User off the lock while mutateUser
@@ -119,6 +122,10 @@ func (u *UserSpec) Clone() *UserSpec {
 	if u.BindPorts != nil {
 		c.BindPorts = make([]uint32, len(u.BindPorts))
 		copy(c.BindPorts, u.BindPorts)
+	}
+	if u.InboundTags != nil {
+		c.InboundTags = make([]string, len(u.InboundTags))
+		copy(c.InboundTags, u.InboundTags)
 	}
 	if u.PortMappings != nil {
 		c.PortMappings = make(map[uint32]uint32, len(u.PortMappings))

@@ -286,20 +286,7 @@ func runEndNode(cfg *appconfig.AppConfig) {
 
 	// 9a. Cluster sync — enable on UserManager when configured.
 	if cfg.ClusterUser.Enabled {
-		ngStore := store.NewSQLiteNodeGroupsStore(storeMgr.DB())
-		userMgr.EnableClusterSync(cfg.ClusterUser.DefaultGroup, ngStore)
-
-		// Seed node groups if empty.
-		if groups, _ := ngStore.List(); len(groups) == 0 {
-			_ = ngStore.Set([]string{cfg.ClusterUser.DefaultGroup})
-		}
-
-		// Backfill cluster fields for users loaded before cluster sync was enabled.
-		userMgr.BackfillClusterFields()
-
-		log.Info("cluster sync enabled",
-			"default_group", cfg.ClusterUser.DefaultGroup,
-		)
+		initClusterSync(cfg, storeMgr, userMgr)
 	}
 
 	// 10. HTTP Server
@@ -493,4 +480,28 @@ func loadPersistedNodes(st *store.SQLiteClusterNodesStore, clusterMgr *cluster.E
 	if loaded > 0 {
 		log.Info("loaded persisted cluster nodes", "count", loaded, "seeds", len(seeds))
 	}
+}
+
+// initClusterSync seeds default node groups before enabling cluster sync on
+// UserManager so cachedNodeGroups is never empty on a fresh database (which
+// would otherwise fail-open Layer 1 visibility until restart).
+func initClusterSync(cfg *appconfig.AppConfig, storeMgr *store.StoreManager, userMgr *usermanager.UserManager) {
+	ngStore := store.NewSQLiteNodeGroupsStore(storeMgr.DB())
+
+	if groups, err := ngStore.List(); err != nil {
+		log.Warn("list node groups failed before seeding default group", "err", err)
+	} else if len(groups) == 0 {
+		if err := ngStore.Set([]string{cfg.ClusterUser.DefaultGroup}); err != nil {
+			log.Warn("seed default node group failed", "group", cfg.ClusterUser.DefaultGroup, "err", err)
+		}
+	}
+
+	userMgr.EnableClusterSync(cfg.ClusterUser.DefaultGroup, ngStore)
+
+	// Backfill cluster fields for users loaded before cluster sync was enabled.
+	userMgr.BackfillClusterFields()
+
+	log.Info("cluster sync enabled",
+		"default_group", cfg.ClusterUser.DefaultGroup,
+	)
 }

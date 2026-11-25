@@ -49,7 +49,7 @@ func TestIsNewer_Identical_ReturnsFalse(t *testing.T) {
 func TestComputeHash_Deterministic(t *testing.T) {
 	u := &contracts.User{
 		Username:    "alice",
-		AuthToken:    "secret",
+		AuthToken:   "secret",
 		ExpiryTime:  time.Unix(1700000000, 0),
 		Role:        "normal",
 		TargetGroup: "default",
@@ -103,6 +103,54 @@ func TestComputeHash_OriginNode_NotIncluded(t *testing.T) {
 	u2 := &contracts.User{Username: "alice", AuthToken: "pw", UpdatedAtUs: 1, OriginNode: "node-b"}
 	if ComputeHash(u1) != ComputeHash(u2) {
 		t.Error("OriginNode should NOT be included in hash")
+	}
+}
+
+func TestComputeHash_InboundTags(t *testing.T) {
+	base := &contracts.User{
+		Username:    "alice",
+		AuthToken:   "secret",
+		ExpiryTime:  time.Unix(1700000000, 0),
+		Role:        "normal",
+		TargetGroup: "default",
+		UpdatedAtUs: 12345678,
+	}
+	baseHash := ComputeHash(base)
+
+	// Empty slice and whitespace-only slice must match nil exactly (legacy compatibility).
+	emptySlice := *base
+	emptySlice.InboundTags = []string{}
+	if ComputeHash(&emptySlice) != baseHash {
+		t.Error("empty InboundTags slice must produce identical hash to nil")
+	}
+	wsOnly := *base
+	wsOnly.InboundTags = []string{"", "   "}
+	if ComputeHash(&wsOnly) != baseHash {
+		t.Error("whitespace-only InboundTags must produce identical hash to nil")
+	}
+
+	// Non-empty tags must alter hash.
+	tagged := *base
+	tagged.InboundTags = []string{"home-sh", "vip"}
+	taggedHash := ComputeHash(&tagged)
+	if taggedHash == baseHash {
+		t.Error("non-empty InboundTags must change hash")
+	}
+
+	// Unsorted/duplicate/whitespace variants must normalize to the same hash.
+	unsorted := *base
+	unsorted.InboundTags = []string{" vip ", "home-sh", "vip", ""}
+	if ComputeHash(&unsorted) != taggedHash {
+		t.Error("unsorted/duplicate InboundTags must normalize to identical hash")
+	}
+
+	// NUL delimiter prevents boundary collisions.
+	splitA := *base
+	splitA.InboundTags = []string{"ab", "c"}
+	splitB := *base
+	splitB.InboundTags = []string{"a", "bc"}
+	if ComputeHash(&splitA) == ComputeHash(&splitB) {
+		t.Error("distinct tag splits must not collide")
 	}
 }
 

@@ -70,12 +70,12 @@ func (m *mockContainer) Update(ctx context.Context, req UpdateRequest) (*UpdateR
 	}, nil
 }
 
-func (m *mockContainer) GetRunFunc() (func() error, func() error)      { return nil, nil }
+func (m *mockContainer) GetRunFunc() (func() error, func() error)       { return nil, nil }
 func (m *mockContainer) RemoveInboundConfig(tag string) error           { return nil }
 func (m *mockContainer) GetInboundConfig(tag string) (Inbound, error)   { return nil, nil }
 func (m *mockContainer) ListInboundConfigs() []Inbound                  { return nil }
 func (m *mockContainer) FastAddInbound(string, map[string]any) error    { return nil }
-func (m *mockContainer) UserEventChannel() <-chan usermanager.UserEvent  { return nil }
+func (m *mockContainer) UserEventChannel() <-chan usermanager.UserEvent { return nil }
 func (m *mockContainer) Init(config any) error                          { return nil }
 func (m *mockContainer) GetUserSubscriptions(req contracts.SubscriptionRequest) ([]contracts.SubscriptionSpec, error) {
 	return nil, nil
@@ -161,5 +161,52 @@ func TestContainer_Update(t *testing.T) {
 	}
 	if result.ToVersion != "v1.8.5" {
 		t.Errorf("ToVersion = %q, want %q", result.ToVersion, "v1.8.5")
+	}
+}
+
+type mockCapableContainer struct {
+	mockContainer
+	meta contracts.InboundMeta
+}
+
+func (m *mockCapableContainer) SupportsChainOutbound() bool                 { return true }
+func (m *mockCapableContainer) ValidateChainURI(rawURI string) error        { return nil }
+func (m *mockCapableContainer) SetInboundAccessTags(string, []string) error { return nil }
+func (m *mockCapableContainer) GetInboundMeta(string) (contracts.InboundMeta, bool) {
+	return m.meta, true
+}
+
+func TestContainer_OptionalCapabilityInterfaces(t *testing.T) {
+	var c Container = &mockCapableContainer{
+		meta: contracts.InboundMeta{
+			InboundType: contracts.InboundTypeChain,
+			AccessTags:  []string{"vip"},
+			Remark:      "SH",
+		},
+	}
+
+	cc, ok := c.(ChainCapable)
+	if !ok || !cc.SupportsChainOutbound() {
+		t.Fatal("expected ChainCapable support")
+	}
+	if err := cc.ValidateChainURI("socks5://1.2.3.4:1080"); err != nil {
+		t.Fatalf("ValidateChainURI: %v", err)
+	}
+
+	tu, ok := c.(InboundTagUpdater)
+	if !ok {
+		t.Fatal("expected InboundTagUpdater support")
+	}
+	if err := tu.SetInboundAccessTags("in1", []string{"vip"}); err != nil {
+		t.Fatalf("SetInboundAccessTags: %v", err)
+	}
+
+	mp, ok := c.(InboundMetaProvider)
+	if !ok {
+		t.Fatal("expected InboundMetaProvider support")
+	}
+	meta, found := mp.GetInboundMeta("in1")
+	if !found || meta.InboundType != contracts.InboundTypeChain {
+		t.Fatalf("GetInboundMeta = (%+v, %v)", meta, found)
 	}
 }

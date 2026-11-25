@@ -194,6 +194,10 @@ end_node:
   # Master switch for active ICMP/TCP ping probing and ping_nodes loading. Default: false.
   enable_ping_check: false
   only_gateway: false
+  # Allow chain proxy backend URIs targeting loopback (127.0.0.0/8, ::1, localhost),
+  # e.g. for local frps port-forwarding tunnels. Local management and allocated ports
+  # are still unconditionally blocked. Default: false.
+  allow_loopback_chain_target: false
   ping:
     enable_icmp_ping: true       # requires root/cap_net_raw
     icmp_ping_interval: 5        # seconds

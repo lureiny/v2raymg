@@ -121,12 +121,14 @@ type User struct {
 	UploadBps   int64 `protobuf:"varint,8,opt,name=upload_bps,json=uploadBps,proto3" json:"upload_bps,omitempty"`
 	DownloadBps int64 `protobuf:"varint,9,opt,name=download_bps,json=downloadBps,proto3" json:"download_bps,omitempty"`
 	// Client limits. Sentinel: 0=no change, -1=remove limit, >0=set.
-	MaxClients            int32  `protobuf:"varint,10,opt,name=max_clients,json=maxClients,proto3" json:"max_clients,omitempty"`
-	ClientRecycleDelaySec int32  `protobuf:"varint,11,opt,name=client_recycle_delay_sec,json=clientRecycleDelaySec,proto3" json:"client_recycle_delay_sec,omitempty"`
-	ClientDrainSec        int32  `protobuf:"varint,12,opt,name=client_drain_sec,json=clientDrainSec,proto3" json:"client_drain_sec,omitempty"`
-	Group                 string `protobuf:"bytes,13,opt,name=group,proto3" json:"group,omitempty"`
-	AuthToken             string `protobuf:"bytes,14,opt,name=auth_token,json=authToken,proto3" json:"auth_token,omitempty"`                           // proxy auth token (UUID), returned by GetUsers/ClusterSync
-	LoginPasswordHash     string `protobuf:"bytes,15,opt,name=login_password_hash,json=loginPasswordHash,proto3" json:"login_password_hash,omitempty"` // bcrypt hash of login password, propagated via ClusterSync
+	MaxClients            int32    `protobuf:"varint,10,opt,name=max_clients,json=maxClients,proto3" json:"max_clients,omitempty"`
+	ClientRecycleDelaySec int32    `protobuf:"varint,11,opt,name=client_recycle_delay_sec,json=clientRecycleDelaySec,proto3" json:"client_recycle_delay_sec,omitempty"`
+	ClientDrainSec        int32    `protobuf:"varint,12,opt,name=client_drain_sec,json=clientDrainSec,proto3" json:"client_drain_sec,omitempty"`
+	Group                 string   `protobuf:"bytes,13,opt,name=group,proto3" json:"group,omitempty"`
+	AuthToken             string   `protobuf:"bytes,14,opt,name=auth_token,json=authToken,proto3" json:"auth_token,omitempty"`                           // proxy auth token (UUID), returned by GetUsers/ClusterSync
+	LoginPasswordHash     string   `protobuf:"bytes,15,opt,name=login_password_hash,json=loginPasswordHash,proto3" json:"login_password_hash,omitempty"` // bcrypt hash of login password, propagated via ClusterSync
+	InboundTags           []string `protobuf:"bytes,16,rep,name=inbound_tags,json=inboundTags,proto3" json:"inbound_tags,omitempty"`
+	UpdateInboundTags     bool     `protobuf:"varint,17,opt,name=update_inbound_tags,json=updateInboundTags,proto3" json:"update_inbound_tags,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -257,6 +259,20 @@ func (x *User) GetLoginPasswordHash() string {
 		return x.LoginPasswordHash
 	}
 	return ""
+}
+
+func (x *User) GetInboundTags() []string {
+	if x != nil {
+		return x.InboundTags
+	}
+	return nil
+}
+
+func (x *User) GetUpdateInboundTags() bool {
+	if x != nil {
+		return x.UpdateInboundTags
+	}
+	return false
 }
 
 type NodeAuthInfo struct {
@@ -2169,6 +2185,11 @@ type InboundInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Container     string                 `protobuf:"bytes,1,opt,name=container,proto3" json:"container,omitempty"` // container type: "xray" / "snell" / "hysteria"
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`           // inbound unique identifier within the container (tag)
+	InboundType   string                 `protobuf:"bytes,3,opt,name=inbound_type,json=inboundType,proto3" json:"inbound_type,omitempty"`
+	AccessTags    []string               `protobuf:"bytes,4,rep,name=access_tags,json=accessTags,proto3" json:"access_tags,omitempty"`
+	Remark        string                 `protobuf:"bytes,5,opt,name=remark,proto3" json:"remark,omitempty"`
+	ChainProtocol string                 `protobuf:"bytes,6,opt,name=chain_protocol,json=chainProtocol,proto3" json:"chain_protocol,omitempty"`
+	ChainTarget   string                 `protobuf:"bytes,7,opt,name=chain_target,json=chainTarget,proto3" json:"chain_target,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2217,6 +2238,109 @@ func (x *InboundInfo) GetName() string {
 	return ""
 }
 
+func (x *InboundInfo) GetInboundType() string {
+	if x != nil {
+		return x.InboundType
+	}
+	return ""
+}
+
+func (x *InboundInfo) GetAccessTags() []string {
+	if x != nil {
+		return x.AccessTags
+	}
+	return nil
+}
+
+func (x *InboundInfo) GetRemark() string {
+	if x != nil {
+		return x.Remark
+	}
+	return ""
+}
+
+func (x *InboundInfo) GetChainProtocol() string {
+	if x != nil {
+		return x.ChainProtocol
+	}
+	return ""
+}
+
+func (x *InboundInfo) GetChainTarget() string {
+	if x != nil {
+		return x.ChainTarget
+	}
+	return ""
+}
+
+type SetInboundAccessTagsReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeAuthInfo  *NodeAuthInfo          `protobuf:"bytes,1,opt,name=node_auth_info,json=nodeAuthInfo,proto3" json:"node_auth_info,omitempty"`
+	Container     string                 `protobuf:"bytes,2,opt,name=container,proto3" json:"container,omitempty"`
+	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	AccessTags    []string               `protobuf:"bytes,4,rep,name=access_tags,json=accessTags,proto3" json:"access_tags,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetInboundAccessTagsReq) Reset() {
+	*x = SetInboundAccessTagsReq{}
+	mi := &file_rpc_server_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetInboundAccessTagsReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetInboundAccessTagsReq) ProtoMessage() {}
+
+func (x *SetInboundAccessTagsReq) ProtoReflect() protoreflect.Message {
+	mi := &file_rpc_server_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetInboundAccessTagsReq.ProtoReflect.Descriptor instead.
+func (*SetInboundAccessTagsReq) Descriptor() ([]byte, []int) {
+	return file_rpc_server_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *SetInboundAccessTagsReq) GetNodeAuthInfo() *NodeAuthInfo {
+	if x != nil {
+		return x.NodeAuthInfo
+	}
+	return nil
+}
+
+func (x *SetInboundAccessTagsReq) GetContainer() string {
+	if x != nil {
+		return x.Container
+	}
+	return ""
+}
+
+func (x *SetInboundAccessTagsReq) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SetInboundAccessTagsReq) GetAccessTags() []string {
+	if x != nil {
+		return x.AccessTags
+	}
+	return nil
+}
+
 type ListInboundReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeAuthInfo  *NodeAuthInfo          `protobuf:"bytes,1,opt,name=node_auth_info,json=nodeAuthInfo,proto3" json:"node_auth_info,omitempty"`
@@ -2226,7 +2350,7 @@ type ListInboundReq struct {
 
 func (x *ListInboundReq) Reset() {
 	*x = ListInboundReq{}
-	mi := &file_rpc_server_proto_msgTypes[29]
+	mi := &file_rpc_server_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2238,7 +2362,7 @@ func (x *ListInboundReq) String() string {
 func (*ListInboundReq) ProtoMessage() {}
 
 func (x *ListInboundReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[29]
+	mi := &file_rpc_server_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2251,7 +2375,7 @@ func (x *ListInboundReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListInboundReq.ProtoReflect.Descriptor instead.
 func (*ListInboundReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{29}
+	return file_rpc_server_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ListInboundReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -2272,7 +2396,7 @@ type ListInboundRsp struct {
 
 func (x *ListInboundRsp) Reset() {
 	*x = ListInboundRsp{}
-	mi := &file_rpc_server_proto_msgTypes[30]
+	mi := &file_rpc_server_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2284,7 +2408,7 @@ func (x *ListInboundRsp) String() string {
 func (*ListInboundRsp) ProtoMessage() {}
 
 func (x *ListInboundRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[30]
+	mi := &file_rpc_server_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2297,7 +2421,7 @@ func (x *ListInboundRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListInboundRsp.ProtoReflect.Descriptor instead.
 func (*ListInboundRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{30}
+	return file_rpc_server_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ListInboundRsp) GetCode() int32 {
@@ -2332,7 +2456,7 @@ type DeleteInboundByNameReq struct {
 
 func (x *DeleteInboundByNameReq) Reset() {
 	*x = DeleteInboundByNameReq{}
-	mi := &file_rpc_server_proto_msgTypes[31]
+	mi := &file_rpc_server_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2344,7 +2468,7 @@ func (x *DeleteInboundByNameReq) String() string {
 func (*DeleteInboundByNameReq) ProtoMessage() {}
 
 func (x *DeleteInboundByNameReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[31]
+	mi := &file_rpc_server_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2357,7 +2481,7 @@ func (x *DeleteInboundByNameReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteInboundByNameReq.ProtoReflect.Descriptor instead.
 func (*DeleteInboundByNameReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{31}
+	return file_rpc_server_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *DeleteInboundByNameReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -2391,7 +2515,7 @@ type UpdateProxyReq struct {
 
 func (x *UpdateProxyReq) Reset() {
 	*x = UpdateProxyReq{}
-	mi := &file_rpc_server_proto_msgTypes[32]
+	mi := &file_rpc_server_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2403,7 +2527,7 @@ func (x *UpdateProxyReq) String() string {
 func (*UpdateProxyReq) ProtoMessage() {}
 
 func (x *UpdateProxyReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[32]
+	mi := &file_rpc_server_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2416,7 +2540,7 @@ func (x *UpdateProxyReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateProxyReq.ProtoReflect.Descriptor instead.
 func (*UpdateProxyReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{32}
+	return file_rpc_server_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *UpdateProxyReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -2443,7 +2567,7 @@ type UpdateProxyRsp struct {
 
 func (x *UpdateProxyRsp) Reset() {
 	*x = UpdateProxyRsp{}
-	mi := &file_rpc_server_proto_msgTypes[33]
+	mi := &file_rpc_server_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2455,7 +2579,7 @@ func (x *UpdateProxyRsp) String() string {
 func (*UpdateProxyRsp) ProtoMessage() {}
 
 func (x *UpdateProxyRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[33]
+	mi := &file_rpc_server_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2468,7 +2592,7 @@ func (x *UpdateProxyRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateProxyRsp.ProtoReflect.Descriptor instead.
 func (*UpdateProxyRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{33}
+	return file_rpc_server_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *UpdateProxyRsp) GetCode() int32 {
@@ -2496,7 +2620,7 @@ type AdaptiveOpReq struct {
 
 func (x *AdaptiveOpReq) Reset() {
 	*x = AdaptiveOpReq{}
-	mi := &file_rpc_server_proto_msgTypes[34]
+	mi := &file_rpc_server_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2508,7 +2632,7 @@ func (x *AdaptiveOpReq) String() string {
 func (*AdaptiveOpReq) ProtoMessage() {}
 
 func (x *AdaptiveOpReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[34]
+	mi := &file_rpc_server_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2521,7 +2645,7 @@ func (x *AdaptiveOpReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdaptiveOpReq.ProtoReflect.Descriptor instead.
 func (*AdaptiveOpReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{34}
+	return file_rpc_server_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *AdaptiveOpReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -2555,7 +2679,7 @@ type AdaptiveReq struct {
 
 func (x *AdaptiveReq) Reset() {
 	*x = AdaptiveReq{}
-	mi := &file_rpc_server_proto_msgTypes[35]
+	mi := &file_rpc_server_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2567,7 +2691,7 @@ func (x *AdaptiveReq) String() string {
 func (*AdaptiveReq) ProtoMessage() {}
 
 func (x *AdaptiveReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[35]
+	mi := &file_rpc_server_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2580,7 +2704,7 @@ func (x *AdaptiveReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdaptiveReq.ProtoReflect.Descriptor instead.
 func (*AdaptiveReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{35}
+	return file_rpc_server_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *AdaptiveReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -2607,7 +2731,7 @@ type AdaptiveRsp struct {
 
 func (x *AdaptiveRsp) Reset() {
 	*x = AdaptiveRsp{}
-	mi := &file_rpc_server_proto_msgTypes[36]
+	mi := &file_rpc_server_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2619,7 +2743,7 @@ func (x *AdaptiveRsp) String() string {
 func (*AdaptiveRsp) ProtoMessage() {}
 
 func (x *AdaptiveRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[36]
+	mi := &file_rpc_server_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2632,7 +2756,7 @@ func (x *AdaptiveRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdaptiveRsp.ProtoReflect.Descriptor instead.
 func (*AdaptiveRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{36}
+	return file_rpc_server_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *AdaptiveRsp) GetCode() int32 {
@@ -2659,7 +2783,7 @@ type SetGatewayModelReq struct {
 
 func (x *SetGatewayModelReq) Reset() {
 	*x = SetGatewayModelReq{}
-	mi := &file_rpc_server_proto_msgTypes[37]
+	mi := &file_rpc_server_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2671,7 +2795,7 @@ func (x *SetGatewayModelReq) String() string {
 func (*SetGatewayModelReq) ProtoMessage() {}
 
 func (x *SetGatewayModelReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[37]
+	mi := &file_rpc_server_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2684,7 +2808,7 @@ func (x *SetGatewayModelReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetGatewayModelReq.ProtoReflect.Descriptor instead.
 func (*SetGatewayModelReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{37}
+	return file_rpc_server_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *SetGatewayModelReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -2711,7 +2835,7 @@ type SetGatewayModelRsp struct {
 
 func (x *SetGatewayModelRsp) Reset() {
 	*x = SetGatewayModelRsp{}
-	mi := &file_rpc_server_proto_msgTypes[38]
+	mi := &file_rpc_server_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2723,7 +2847,7 @@ func (x *SetGatewayModelRsp) String() string {
 func (*SetGatewayModelRsp) ProtoMessage() {}
 
 func (x *SetGatewayModelRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[38]
+	mi := &file_rpc_server_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2736,7 +2860,7 @@ func (x *SetGatewayModelRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetGatewayModelRsp.ProtoReflect.Descriptor instead.
 func (*SetGatewayModelRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{38}
+	return file_rpc_server_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *SetGatewayModelRsp) GetCode() int32 {
@@ -2763,7 +2887,7 @@ type ObtainNewCertReq struct {
 
 func (x *ObtainNewCertReq) Reset() {
 	*x = ObtainNewCertReq{}
-	mi := &file_rpc_server_proto_msgTypes[39]
+	mi := &file_rpc_server_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2775,7 +2899,7 @@ func (x *ObtainNewCertReq) String() string {
 func (*ObtainNewCertReq) ProtoMessage() {}
 
 func (x *ObtainNewCertReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[39]
+	mi := &file_rpc_server_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2788,7 +2912,7 @@ func (x *ObtainNewCertReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObtainNewCertReq.ProtoReflect.Descriptor instead.
 func (*ObtainNewCertReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{39}
+	return file_rpc_server_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ObtainNewCertReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -2815,7 +2939,7 @@ type ObtainNewCertRsp struct {
 
 func (x *ObtainNewCertRsp) Reset() {
 	*x = ObtainNewCertRsp{}
-	mi := &file_rpc_server_proto_msgTypes[40]
+	mi := &file_rpc_server_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2827,7 +2951,7 @@ func (x *ObtainNewCertRsp) String() string {
 func (*ObtainNewCertRsp) ProtoMessage() {}
 
 func (x *ObtainNewCertRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[40]
+	mi := &file_rpc_server_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2840,7 +2964,7 @@ func (x *ObtainNewCertRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObtainNewCertRsp.ProtoReflect.Descriptor instead.
 func (*ObtainNewCertRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{40}
+	return file_rpc_server_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ObtainNewCertRsp) GetCode() int32 {
@@ -2873,13 +2997,17 @@ type FastAddInboundReq struct {
 	RealityShortIds    []string               `protobuf:"bytes,12,rep,name=reality_short_ids,json=realityShortIds,proto3" json:"reality_short_ids,omitempty"`                                                             // short ID list for Reality
 	Transport          string                 `protobuf:"bytes,13,opt,name=transport,proto3" json:"transport,omitempty"`                                                                                                  // transport type string: "tcp","ws","grpc","httpupgrade","xhttp","splithttp"
 	ExtraParams        map[string]string      `protobuf:"bytes,14,rep,name=extra_params,json=extraParams,proto3" json:"extra_params,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // additional params: ws_path, grpc_service_name, httpupgrade_path, xhttp_path, xhttp_mode, alpn, sniffing_enabled, etc.
+	InboundType        string                 `protobuf:"bytes,15,opt,name=inbound_type,json=inboundType,proto3" json:"inbound_type,omitempty"`
+	ChainUri           string                 `protobuf:"bytes,16,opt,name=chain_uri,json=chainUri,proto3" json:"chain_uri,omitempty"`
+	AccessTags         []string               `protobuf:"bytes,17,rep,name=access_tags,json=accessTags,proto3" json:"access_tags,omitempty"`
+	Remark             string                 `protobuf:"bytes,18,opt,name=remark,proto3" json:"remark,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
 
 func (x *FastAddInboundReq) Reset() {
 	*x = FastAddInboundReq{}
-	mi := &file_rpc_server_proto_msgTypes[41]
+	mi := &file_rpc_server_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2891,7 +3019,7 @@ func (x *FastAddInboundReq) String() string {
 func (*FastAddInboundReq) ProtoMessage() {}
 
 func (x *FastAddInboundReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[41]
+	mi := &file_rpc_server_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2904,7 +3032,7 @@ func (x *FastAddInboundReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FastAddInboundReq.ProtoReflect.Descriptor instead.
 func (*FastAddInboundReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{41}
+	return file_rpc_server_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *FastAddInboundReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -3005,6 +3133,34 @@ func (x *FastAddInboundReq) GetExtraParams() map[string]string {
 	return nil
 }
 
+func (x *FastAddInboundReq) GetInboundType() string {
+	if x != nil {
+		return x.InboundType
+	}
+	return ""
+}
+
+func (x *FastAddInboundReq) GetChainUri() string {
+	if x != nil {
+		return x.ChainUri
+	}
+	return ""
+}
+
+func (x *FastAddInboundReq) GetAccessTags() []string {
+	if x != nil {
+		return x.AccessTags
+	}
+	return nil
+}
+
+func (x *FastAddInboundReq) GetRemark() string {
+	if x != nil {
+		return x.Remark
+	}
+	return ""
+}
+
 type FastAddInboundRsp struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Code          int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
@@ -3015,7 +3171,7 @@ type FastAddInboundRsp struct {
 
 func (x *FastAddInboundRsp) Reset() {
 	*x = FastAddInboundRsp{}
-	mi := &file_rpc_server_proto_msgTypes[42]
+	mi := &file_rpc_server_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3027,7 +3183,7 @@ func (x *FastAddInboundRsp) String() string {
 func (*FastAddInboundRsp) ProtoMessage() {}
 
 func (x *FastAddInboundRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[42]
+	mi := &file_rpc_server_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3040,7 +3196,7 @@ func (x *FastAddInboundRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FastAddInboundRsp.ProtoReflect.Descriptor instead.
 func (*FastAddInboundRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{42}
+	return file_rpc_server_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *FastAddInboundRsp) GetCode() int32 {
@@ -3069,7 +3225,7 @@ type TransferCertReq struct {
 
 func (x *TransferCertReq) Reset() {
 	*x = TransferCertReq{}
-	mi := &file_rpc_server_proto_msgTypes[43]
+	mi := &file_rpc_server_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3081,7 +3237,7 @@ func (x *TransferCertReq) String() string {
 func (*TransferCertReq) ProtoMessage() {}
 
 func (x *TransferCertReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[43]
+	mi := &file_rpc_server_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3094,7 +3250,7 @@ func (x *TransferCertReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TransferCertReq.ProtoReflect.Descriptor instead.
 func (*TransferCertReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{43}
+	return file_rpc_server_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *TransferCertReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -3135,7 +3291,7 @@ type TransferCertRsp struct {
 
 func (x *TransferCertRsp) Reset() {
 	*x = TransferCertRsp{}
-	mi := &file_rpc_server_proto_msgTypes[44]
+	mi := &file_rpc_server_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3147,7 +3303,7 @@ func (x *TransferCertRsp) String() string {
 func (*TransferCertRsp) ProtoMessage() {}
 
 func (x *TransferCertRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[44]
+	mi := &file_rpc_server_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3160,7 +3316,7 @@ func (x *TransferCertRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TransferCertRsp.ProtoReflect.Descriptor instead.
 func (*TransferCertRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{44}
+	return file_rpc_server_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *TransferCertRsp) GetCode() int32 {
@@ -3189,7 +3345,7 @@ type Cert struct {
 
 func (x *Cert) Reset() {
 	*x = Cert{}
-	mi := &file_rpc_server_proto_msgTypes[45]
+	mi := &file_rpc_server_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3201,7 +3357,7 @@ func (x *Cert) String() string {
 func (*Cert) ProtoMessage() {}
 
 func (x *Cert) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[45]
+	mi := &file_rpc_server_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3214,7 +3370,7 @@ func (x *Cert) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cert.ProtoReflect.Descriptor instead.
 func (*Cert) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{45}
+	return file_rpc_server_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *Cert) GetDomain() string {
@@ -3254,7 +3410,7 @@ type GetCertsReq struct {
 
 func (x *GetCertsReq) Reset() {
 	*x = GetCertsReq{}
-	mi := &file_rpc_server_proto_msgTypes[46]
+	mi := &file_rpc_server_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3266,7 +3422,7 @@ func (x *GetCertsReq) String() string {
 func (*GetCertsReq) ProtoMessage() {}
 
 func (x *GetCertsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[46]
+	mi := &file_rpc_server_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3279,7 +3435,7 @@ func (x *GetCertsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCertsReq.ProtoReflect.Descriptor instead.
 func (*GetCertsReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{46}
+	return file_rpc_server_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *GetCertsReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -3299,7 +3455,7 @@ type GetCertsRsp struct {
 
 func (x *GetCertsRsp) Reset() {
 	*x = GetCertsRsp{}
-	mi := &file_rpc_server_proto_msgTypes[47]
+	mi := &file_rpc_server_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3311,7 +3467,7 @@ func (x *GetCertsRsp) String() string {
 func (*GetCertsRsp) ProtoMessage() {}
 
 func (x *GetCertsRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[47]
+	mi := &file_rpc_server_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3324,7 +3480,7 @@ func (x *GetCertsRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCertsRsp.ProtoReflect.Descriptor instead.
 func (*GetCertsRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{47}
+	return file_rpc_server_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *GetCertsRsp) GetCode() int32 {
@@ -3351,7 +3507,7 @@ type DeleteCertReq struct {
 
 func (x *DeleteCertReq) Reset() {
 	*x = DeleteCertReq{}
-	mi := &file_rpc_server_proto_msgTypes[48]
+	mi := &file_rpc_server_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3363,7 +3519,7 @@ func (x *DeleteCertReq) String() string {
 func (*DeleteCertReq) ProtoMessage() {}
 
 func (x *DeleteCertReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[48]
+	mi := &file_rpc_server_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3376,7 +3532,7 @@ func (x *DeleteCertReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteCertReq.ProtoReflect.Descriptor instead.
 func (*DeleteCertReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{48}
+	return file_rpc_server_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *DeleteCertReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -3403,7 +3559,7 @@ type DeleteCertRsp struct {
 
 func (x *DeleteCertRsp) Reset() {
 	*x = DeleteCertRsp{}
-	mi := &file_rpc_server_proto_msgTypes[49]
+	mi := &file_rpc_server_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3415,7 +3571,7 @@ func (x *DeleteCertRsp) String() string {
 func (*DeleteCertRsp) ProtoMessage() {}
 
 func (x *DeleteCertRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[49]
+	mi := &file_rpc_server_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3428,7 +3584,7 @@ func (x *DeleteCertRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteCertRsp.ProtoReflect.Descriptor instead.
 func (*DeleteCertRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{49}
+	return file_rpc_server_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *DeleteCertRsp) GetCode() int32 {
@@ -3456,7 +3612,7 @@ type PingMetric struct {
 
 func (x *PingMetric) Reset() {
 	*x = PingMetric{}
-	mi := &file_rpc_server_proto_msgTypes[50]
+	mi := &file_rpc_server_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3468,7 +3624,7 @@ func (x *PingMetric) String() string {
 func (*PingMetric) ProtoMessage() {}
 
 func (x *PingMetric) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[50]
+	mi := &file_rpc_server_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3481,7 +3637,7 @@ func (x *PingMetric) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingMetric.ProtoReflect.Descriptor instead.
 func (*PingMetric) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{50}
+	return file_rpc_server_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *PingMetric) GetHost() string {
@@ -3523,7 +3679,7 @@ type PingResult struct {
 
 func (x *PingResult) Reset() {
 	*x = PingResult{}
-	mi := &file_rpc_server_proto_msgTypes[51]
+	mi := &file_rpc_server_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3535,7 +3691,7 @@ func (x *PingResult) String() string {
 func (*PingResult) ProtoMessage() {}
 
 func (x *PingResult) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[51]
+	mi := &file_rpc_server_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3548,7 +3704,7 @@ func (x *PingResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingResult.ProtoReflect.Descriptor instead.
 func (*PingResult) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{51}
+	return file_rpc_server_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *PingResult) GetGeo() string {
@@ -3630,7 +3786,7 @@ type GetPingMetricReq struct {
 
 func (x *GetPingMetricReq) Reset() {
 	*x = GetPingMetricReq{}
-	mi := &file_rpc_server_proto_msgTypes[52]
+	mi := &file_rpc_server_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3642,7 +3798,7 @@ func (x *GetPingMetricReq) String() string {
 func (*GetPingMetricReq) ProtoMessage() {}
 
 func (x *GetPingMetricReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[52]
+	mi := &file_rpc_server_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3655,7 +3811,7 @@ func (x *GetPingMetricReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPingMetricReq.ProtoReflect.Descriptor instead.
 func (*GetPingMetricReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{52}
+	return file_rpc_server_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *GetPingMetricReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -3676,7 +3832,7 @@ type GetPingMetricRsp struct {
 
 func (x *GetPingMetricRsp) Reset() {
 	*x = GetPingMetricRsp{}
-	mi := &file_rpc_server_proto_msgTypes[53]
+	mi := &file_rpc_server_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3688,7 +3844,7 @@ func (x *GetPingMetricRsp) String() string {
 func (*GetPingMetricRsp) ProtoMessage() {}
 
 func (x *GetPingMetricRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[53]
+	mi := &file_rpc_server_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3701,7 +3857,7 @@ func (x *GetPingMetricRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPingMetricRsp.ProtoReflect.Descriptor instead.
 func (*GetPingMetricRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{53}
+	return file_rpc_server_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *GetPingMetricRsp) GetCode() int32 {
@@ -3735,7 +3891,7 @@ type SetPingCheckReq struct {
 
 func (x *SetPingCheckReq) Reset() {
 	*x = SetPingCheckReq{}
-	mi := &file_rpc_server_proto_msgTypes[54]
+	mi := &file_rpc_server_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3747,7 +3903,7 @@ func (x *SetPingCheckReq) String() string {
 func (*SetPingCheckReq) ProtoMessage() {}
 
 func (x *SetPingCheckReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[54]
+	mi := &file_rpc_server_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3760,7 +3916,7 @@ func (x *SetPingCheckReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPingCheckReq.ProtoReflect.Descriptor instead.
 func (*SetPingCheckReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{54}
+	return file_rpc_server_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *SetPingCheckReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -3787,7 +3943,7 @@ type SetPingCheckRsp struct {
 
 func (x *SetPingCheckRsp) Reset() {
 	*x = SetPingCheckRsp{}
-	mi := &file_rpc_server_proto_msgTypes[55]
+	mi := &file_rpc_server_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3799,7 +3955,7 @@ func (x *SetPingCheckRsp) String() string {
 func (*SetPingCheckRsp) ProtoMessage() {}
 
 func (x *SetPingCheckRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[55]
+	mi := &file_rpc_server_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3812,7 +3968,7 @@ func (x *SetPingCheckRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPingCheckRsp.ProtoReflect.Descriptor instead.
 func (*SetPingCheckRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{55}
+	return file_rpc_server_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *SetPingCheckRsp) GetCode() int32 {
@@ -3840,7 +3996,7 @@ type NodeMetrics struct {
 
 func (x *NodeMetrics) Reset() {
 	*x = NodeMetrics{}
-	mi := &file_rpc_server_proto_msgTypes[56]
+	mi := &file_rpc_server_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3852,7 +4008,7 @@ func (x *NodeMetrics) String() string {
 func (*NodeMetrics) ProtoMessage() {}
 
 func (x *NodeMetrics) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[56]
+	mi := &file_rpc_server_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3865,7 +4021,7 @@ func (x *NodeMetrics) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeMetrics.ProtoReflect.Descriptor instead.
 func (*NodeMetrics) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{56}
+	return file_rpc_server_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *NodeMetrics) GetHost() string {
@@ -3898,7 +4054,7 @@ type GetNodeMetricReq struct {
 
 func (x *GetNodeMetricReq) Reset() {
 	*x = GetNodeMetricReq{}
-	mi := &file_rpc_server_proto_msgTypes[57]
+	mi := &file_rpc_server_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3910,7 +4066,7 @@ func (x *GetNodeMetricReq) String() string {
 func (*GetNodeMetricReq) ProtoMessage() {}
 
 func (x *GetNodeMetricReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[57]
+	mi := &file_rpc_server_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3923,7 +4079,7 @@ func (x *GetNodeMetricReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodeMetricReq.ProtoReflect.Descriptor instead.
 func (*GetNodeMetricReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{57}
+	return file_rpc_server_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *GetNodeMetricReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -3944,7 +4100,7 @@ type GetNodeMetricRsp struct {
 
 func (x *GetNodeMetricRsp) Reset() {
 	*x = GetNodeMetricRsp{}
-	mi := &file_rpc_server_proto_msgTypes[58]
+	mi := &file_rpc_server_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3956,7 +4112,7 @@ func (x *GetNodeMetricRsp) String() string {
 func (*GetNodeMetricRsp) ProtoMessage() {}
 
 func (x *GetNodeMetricRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[58]
+	mi := &file_rpc_server_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3969,7 +4125,7 @@ func (x *GetNodeMetricRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodeMetricRsp.ProtoReflect.Descriptor instead.
 func (*GetNodeMetricRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{58}
+	return file_rpc_server_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *GetNodeMetricRsp) GetCode() int32 {
@@ -4015,7 +4171,7 @@ type NodeStatus struct {
 
 func (x *NodeStatus) Reset() {
 	*x = NodeStatus{}
-	mi := &file_rpc_server_proto_msgTypes[59]
+	mi := &file_rpc_server_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4027,7 +4183,7 @@ func (x *NodeStatus) String() string {
 func (*NodeStatus) ProtoMessage() {}
 
 func (x *NodeStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[59]
+	mi := &file_rpc_server_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4040,7 +4196,7 @@ func (x *NodeStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeStatus.ProtoReflect.Descriptor instead.
 func (*NodeStatus) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{59}
+	return file_rpc_server_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *NodeStatus) GetNodeName() string {
@@ -4150,7 +4306,7 @@ type GetStatusReq struct {
 
 func (x *GetStatusReq) Reset() {
 	*x = GetStatusReq{}
-	mi := &file_rpc_server_proto_msgTypes[60]
+	mi := &file_rpc_server_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4162,7 +4318,7 @@ func (x *GetStatusReq) String() string {
 func (*GetStatusReq) ProtoMessage() {}
 
 func (x *GetStatusReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[60]
+	mi := &file_rpc_server_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4175,7 +4331,7 @@ func (x *GetStatusReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatusReq.ProtoReflect.Descriptor instead.
 func (*GetStatusReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{60}
+	return file_rpc_server_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *GetStatusReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -4196,7 +4352,7 @@ type GetStatusRsp struct {
 
 func (x *GetStatusRsp) Reset() {
 	*x = GetStatusRsp{}
-	mi := &file_rpc_server_proto_msgTypes[61]
+	mi := &file_rpc_server_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4208,7 +4364,7 @@ func (x *GetStatusRsp) String() string {
 func (*GetStatusRsp) ProtoMessage() {}
 
 func (x *GetStatusRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[61]
+	mi := &file_rpc_server_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4221,7 +4377,7 @@ func (x *GetStatusRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatusRsp.ProtoReflect.Descriptor instead.
 func (*GetStatusRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{61}
+	return file_rpc_server_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *GetStatusRsp) GetCode() int32 {
@@ -4254,7 +4410,7 @@ type GetNodeGroupsReq struct {
 
 func (x *GetNodeGroupsReq) Reset() {
 	*x = GetNodeGroupsReq{}
-	mi := &file_rpc_server_proto_msgTypes[62]
+	mi := &file_rpc_server_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4266,7 +4422,7 @@ func (x *GetNodeGroupsReq) String() string {
 func (*GetNodeGroupsReq) ProtoMessage() {}
 
 func (x *GetNodeGroupsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[62]
+	mi := &file_rpc_server_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4279,7 +4435,7 @@ func (x *GetNodeGroupsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodeGroupsReq.ProtoReflect.Descriptor instead.
 func (*GetNodeGroupsReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{62}
+	return file_rpc_server_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *GetNodeGroupsReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -4300,7 +4456,7 @@ type GetNodeGroupsRsp struct {
 
 func (x *GetNodeGroupsRsp) Reset() {
 	*x = GetNodeGroupsRsp{}
-	mi := &file_rpc_server_proto_msgTypes[63]
+	mi := &file_rpc_server_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4312,7 +4468,7 @@ func (x *GetNodeGroupsRsp) String() string {
 func (*GetNodeGroupsRsp) ProtoMessage() {}
 
 func (x *GetNodeGroupsRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[63]
+	mi := &file_rpc_server_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4325,7 +4481,7 @@ func (x *GetNodeGroupsRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodeGroupsRsp.ProtoReflect.Descriptor instead.
 func (*GetNodeGroupsRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{63}
+	return file_rpc_server_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *GetNodeGroupsRsp) GetCode() int32 {
@@ -4359,7 +4515,7 @@ type SetNodeGroupsReq struct {
 
 func (x *SetNodeGroupsReq) Reset() {
 	*x = SetNodeGroupsReq{}
-	mi := &file_rpc_server_proto_msgTypes[64]
+	mi := &file_rpc_server_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4371,7 +4527,7 @@ func (x *SetNodeGroupsReq) String() string {
 func (*SetNodeGroupsReq) ProtoMessage() {}
 
 func (x *SetNodeGroupsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[64]
+	mi := &file_rpc_server_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4384,7 +4540,7 @@ func (x *SetNodeGroupsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetNodeGroupsReq.ProtoReflect.Descriptor instead.
 func (*SetNodeGroupsReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{64}
+	return file_rpc_server_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *SetNodeGroupsReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -4411,7 +4567,7 @@ type SetNodeGroupsRsp struct {
 
 func (x *SetNodeGroupsRsp) Reset() {
 	*x = SetNodeGroupsRsp{}
-	mi := &file_rpc_server_proto_msgTypes[65]
+	mi := &file_rpc_server_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4423,7 +4579,7 @@ func (x *SetNodeGroupsRsp) String() string {
 func (*SetNodeGroupsRsp) ProtoMessage() {}
 
 func (x *SetNodeGroupsRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[65]
+	mi := &file_rpc_server_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4436,7 +4592,7 @@ func (x *SetNodeGroupsRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetNodeGroupsRsp.ProtoReflect.Descriptor instead.
 func (*SetNodeGroupsRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{65}
+	return file_rpc_server_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *SetNodeGroupsRsp) GetCode() int32 {
@@ -4464,7 +4620,7 @@ type UpsertClusterUsersReq struct {
 
 func (x *UpsertClusterUsersReq) Reset() {
 	*x = UpsertClusterUsersReq{}
-	mi := &file_rpc_server_proto_msgTypes[66]
+	mi := &file_rpc_server_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4476,7 +4632,7 @@ func (x *UpsertClusterUsersReq) String() string {
 func (*UpsertClusterUsersReq) ProtoMessage() {}
 
 func (x *UpsertClusterUsersReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[66]
+	mi := &file_rpc_server_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4489,7 +4645,7 @@ func (x *UpsertClusterUsersReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpsertClusterUsersReq.ProtoReflect.Descriptor instead.
 func (*UpsertClusterUsersReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{66}
+	return file_rpc_server_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *UpsertClusterUsersReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -4523,7 +4679,7 @@ type UpsertClusterUsersRsp struct {
 
 func (x *UpsertClusterUsersRsp) Reset() {
 	*x = UpsertClusterUsersRsp{}
-	mi := &file_rpc_server_proto_msgTypes[67]
+	mi := &file_rpc_server_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4535,7 +4691,7 @@ func (x *UpsertClusterUsersRsp) String() string {
 func (*UpsertClusterUsersRsp) ProtoMessage() {}
 
 func (x *UpsertClusterUsersRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[67]
+	mi := &file_rpc_server_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4548,7 +4704,7 @@ func (x *UpsertClusterUsersRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpsertClusterUsersRsp.ProtoReflect.Descriptor instead.
 func (*UpsertClusterUsersRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{67}
+	return file_rpc_server_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *UpsertClusterUsersRsp) GetCode() int32 {
@@ -4578,7 +4734,7 @@ type RotateInboundPortReq struct {
 
 func (x *RotateInboundPortReq) Reset() {
 	*x = RotateInboundPortReq{}
-	mi := &file_rpc_server_proto_msgTypes[68]
+	mi := &file_rpc_server_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4590,7 +4746,7 @@ func (x *RotateInboundPortReq) String() string {
 func (*RotateInboundPortReq) ProtoMessage() {}
 
 func (x *RotateInboundPortReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[68]
+	mi := &file_rpc_server_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4603,7 +4759,7 @@ func (x *RotateInboundPortReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotateInboundPortReq.ProtoReflect.Descriptor instead.
 func (*RotateInboundPortReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{68}
+	return file_rpc_server_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *RotateInboundPortReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -4652,7 +4808,7 @@ type RotateInboundPortRsp struct {
 
 func (x *RotateInboundPortRsp) Reset() {
 	*x = RotateInboundPortRsp{}
-	mi := &file_rpc_server_proto_msgTypes[69]
+	mi := &file_rpc_server_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4664,7 +4820,7 @@ func (x *RotateInboundPortRsp) String() string {
 func (*RotateInboundPortRsp) ProtoMessage() {}
 
 func (x *RotateInboundPortRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[69]
+	mi := &file_rpc_server_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4677,7 +4833,7 @@ func (x *RotateInboundPortRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotateInboundPortRsp.ProtoReflect.Descriptor instead.
 func (*RotateInboundPortRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{69}
+	return file_rpc_server_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *RotateInboundPortRsp) GetCode() int32 {
@@ -4711,7 +4867,7 @@ type RotateAllPortsReq struct {
 
 func (x *RotateAllPortsReq) Reset() {
 	*x = RotateAllPortsReq{}
-	mi := &file_rpc_server_proto_msgTypes[70]
+	mi := &file_rpc_server_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4723,7 +4879,7 @@ func (x *RotateAllPortsReq) String() string {
 func (*RotateAllPortsReq) ProtoMessage() {}
 
 func (x *RotateAllPortsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[70]
+	mi := &file_rpc_server_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4736,7 +4892,7 @@ func (x *RotateAllPortsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotateAllPortsReq.ProtoReflect.Descriptor instead.
 func (*RotateAllPortsReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{70}
+	return file_rpc_server_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *RotateAllPortsReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -4764,7 +4920,7 @@ type RotateAllPortsRsp struct {
 
 func (x *RotateAllPortsRsp) Reset() {
 	*x = RotateAllPortsRsp{}
-	mi := &file_rpc_server_proto_msgTypes[71]
+	mi := &file_rpc_server_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4776,7 +4932,7 @@ func (x *RotateAllPortsRsp) String() string {
 func (*RotateAllPortsRsp) ProtoMessage() {}
 
 func (x *RotateAllPortsRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[71]
+	mi := &file_rpc_server_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4789,7 +4945,7 @@ func (x *RotateAllPortsRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotateAllPortsRsp.ProtoReflect.Descriptor instead.
 func (*RotateAllPortsRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{71}
+	return file_rpc_server_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *RotateAllPortsRsp) GetCode() int32 {
@@ -4824,7 +4980,7 @@ type ResetAuthTokenReq struct {
 
 func (x *ResetAuthTokenReq) Reset() {
 	*x = ResetAuthTokenReq{}
-	mi := &file_rpc_server_proto_msgTypes[72]
+	mi := &file_rpc_server_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4836,7 +4992,7 @@ func (x *ResetAuthTokenReq) String() string {
 func (*ResetAuthTokenReq) ProtoMessage() {}
 
 func (x *ResetAuthTokenReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[72]
+	mi := &file_rpc_server_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4849,7 +5005,7 @@ func (x *ResetAuthTokenReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetAuthTokenReq.ProtoReflect.Descriptor instead.
 func (*ResetAuthTokenReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{72}
+	return file_rpc_server_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *ResetAuthTokenReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -4884,7 +5040,7 @@ type ResetAuthTokenRsp struct {
 
 func (x *ResetAuthTokenRsp) Reset() {
 	*x = ResetAuthTokenRsp{}
-	mi := &file_rpc_server_proto_msgTypes[73]
+	mi := &file_rpc_server_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4896,7 +5052,7 @@ func (x *ResetAuthTokenRsp) String() string {
 func (*ResetAuthTokenRsp) ProtoMessage() {}
 
 func (x *ResetAuthTokenRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[73]
+	mi := &file_rpc_server_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4909,7 +5065,7 @@ func (x *ResetAuthTokenRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetAuthTokenRsp.ProtoReflect.Descriptor instead.
 func (*ResetAuthTokenRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{73}
+	return file_rpc_server_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *ResetAuthTokenRsp) GetCode() int32 {
@@ -4933,6 +5089,58 @@ func (x *ResetAuthTokenRsp) GetAuthToken() string {
 	return ""
 }
 
+type ContainerInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	SupportsChain bool                   `protobuf:"varint,2,opt,name=supports_chain,json=supportsChain,proto3" json:"supports_chain,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ContainerInfo) Reset() {
+	*x = ContainerInfo{}
+	mi := &file_rpc_server_proto_msgTypes[75]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContainerInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContainerInfo) ProtoMessage() {}
+
+func (x *ContainerInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_rpc_server_proto_msgTypes[75]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContainerInfo.ProtoReflect.Descriptor instead.
+func (*ContainerInfo) Descriptor() ([]byte, []int) {
+	return file_rpc_server_proto_rawDescGZIP(), []int{75}
+}
+
+func (x *ContainerInfo) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *ContainerInfo) GetSupportsChain() bool {
+	if x != nil {
+		return x.SupportsChain
+	}
+	return false
+}
+
 type GetContainersReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeAuthInfo  *NodeAuthInfo          `protobuf:"bytes,1,opt,name=node_auth_info,json=nodeAuthInfo,proto3" json:"node_auth_info,omitempty"`
@@ -4942,7 +5150,7 @@ type GetContainersReq struct {
 
 func (x *GetContainersReq) Reset() {
 	*x = GetContainersReq{}
-	mi := &file_rpc_server_proto_msgTypes[74]
+	mi := &file_rpc_server_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4954,7 +5162,7 @@ func (x *GetContainersReq) String() string {
 func (*GetContainersReq) ProtoMessage() {}
 
 func (x *GetContainersReq) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[74]
+	mi := &file_rpc_server_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4967,7 +5175,7 @@ func (x *GetContainersReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetContainersReq.ProtoReflect.Descriptor instead.
 func (*GetContainersReq) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{74}
+	return file_rpc_server_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *GetContainersReq) GetNodeAuthInfo() *NodeAuthInfo {
@@ -4978,17 +5186,18 @@ func (x *GetContainersReq) GetNodeAuthInfo() *NodeAuthInfo {
 }
 
 type GetContainersRsp struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Code          int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
-	Msg           string                 `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
-	Containers    []string               `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Code           int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
+	Msg            string                 `protobuf:"bytes,2,opt,name=msg,proto3" json:"msg,omitempty"`
+	Containers     []string               `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
+	ContainerInfos []*ContainerInfo       `protobuf:"bytes,4,rep,name=container_infos,json=containerInfos,proto3" json:"container_infos,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *GetContainersRsp) Reset() {
 	*x = GetContainersRsp{}
-	mi := &file_rpc_server_proto_msgTypes[75]
+	mi := &file_rpc_server_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5000,7 +5209,7 @@ func (x *GetContainersRsp) String() string {
 func (*GetContainersRsp) ProtoMessage() {}
 
 func (x *GetContainersRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_server_proto_msgTypes[75]
+	mi := &file_rpc_server_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5013,7 +5222,7 @@ func (x *GetContainersRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetContainersRsp.ProtoReflect.Descriptor instead.
 func (*GetContainersRsp) Descriptor() ([]byte, []int) {
-	return file_rpc_server_proto_rawDescGZIP(), []int{75}
+	return file_rpc_server_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *GetContainersRsp) GetCode() int32 {
@@ -5037,11 +5246,18 @@ func (x *GetContainersRsp) GetContainers() []string {
 	return nil
 }
 
+func (x *GetContainersRsp) GetContainerInfos() []*ContainerInfo {
+	if x != nil {
+		return x.ContainerInfos
+	}
+	return nil
+}
+
 var File_rpc_server_proto protoreflect.FileDescriptor
 
 const file_rpc_server_proto_rawDesc = "" +
 	"\n" +
-	"\x10rpc_server.proto\x12\x05proto\"\xcc\x03\n" +
+	"\x10rpc_server.proto\x12\x05proto\"\x9f\x04\n" +
 	"\x04User\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06passwd\x18\x02 \x01(\tR\x06passwd\x12\x1f\n" +
@@ -5061,7 +5277,9 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\x05group\x18\r \x01(\tR\x05group\x12\x1d\n" +
 	"\n" +
 	"auth_token\x18\x0e \x01(\tR\tauthToken\x12.\n" +
-	"\x13login_password_hash\x18\x0f \x01(\tR\x11loginPasswordHashJ\x04\b\x04\x10\x05\"\xde\x01\n" +
+	"\x13login_password_hash\x18\x0f \x01(\tR\x11loginPasswordHash\x12!\n" +
+	"\finbound_tags\x18\x10 \x03(\tR\vinboundTags\x12.\n" +
+	"\x13update_inbound_tags\x18\x11 \x01(\bR\x11updateInboundTagsJ\x04\b\x04\x10\x05\"\xde\x01\n" +
 	"\fNodeAuthInfo\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1f\n" +
 	"\x04node\x18\x02 \x01(\v2\v.proto.NodeR\x04node\x12!\n" +
@@ -5212,10 +5430,22 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\rGetInboundRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
 	"\x03msg\x18\x02 \x01(\tR\x03msg\x12\x12\n" +
-	"\x04data\x18\x03 \x01(\tR\x04data\"?\n" +
+	"\x04data\x18\x03 \x01(\tR\x04data\"\xe5\x01\n" +
 	"\vInboundInfo\x12\x1c\n" +
 	"\tcontainer\x18\x01 \x01(\tR\tcontainer\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"K\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12!\n" +
+	"\finbound_type\x18\x03 \x01(\tR\vinboundType\x12\x1f\n" +
+	"\vaccess_tags\x18\x04 \x03(\tR\n" +
+	"accessTags\x12\x16\n" +
+	"\x06remark\x18\x05 \x01(\tR\x06remark\x12%\n" +
+	"\x0echain_protocol\x18\x06 \x01(\tR\rchainProtocol\x12!\n" +
+	"\fchain_target\x18\a \x01(\tR\vchainTarget\"\xa7\x01\n" +
+	"\x17SetInboundAccessTagsReq\x129\n" +
+	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x12\x1c\n" +
+	"\tcontainer\x18\x02 \x01(\tR\tcontainer\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x1f\n" +
+	"\vaccess_tags\x18\x04 \x03(\tR\n" +
+	"accessTags\"K\n" +
 	"\x0eListInboundReq\x129\n" +
 	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\"f\n" +
 	"\x0eListInboundRsp\x12\x12\n" +
@@ -5253,7 +5483,7 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\x06domain\x18\x02 \x01(\tR\x06domain\"8\n" +
 	"\x10ObtainNewCertRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
-	"\x03msg\x18\x02 \x01(\tR\x03msg\"\x9e\x05\n" +
+	"\x03msg\x18\x02 \x01(\tR\x03msg\"\x97\x06\n" +
 	"\x11FastAddInboundReq\x129\n" +
 	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\x12B\n" +
 	"\x12inboundBuilderType\x18\x02 \x01(\x0e2\x12.proto.BuilderTypeR\x12inboundBuilderType\x12@\n" +
@@ -5269,7 +5499,12 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\x14reality_server_names\x18\v \x03(\tR\x12realityServerNames\x12*\n" +
 	"\x11reality_short_ids\x18\f \x03(\tR\x0frealityShortIds\x12\x1c\n" +
 	"\ttransport\x18\r \x01(\tR\ttransport\x12L\n" +
-	"\fextra_params\x18\x0e \x03(\v2).proto.FastAddInboundReq.ExtraParamsEntryR\vextraParams\x1a>\n" +
+	"\fextra_params\x18\x0e \x03(\v2).proto.FastAddInboundReq.ExtraParamsEntryR\vextraParams\x12!\n" +
+	"\finbound_type\x18\x0f \x01(\tR\vinboundType\x12\x1b\n" +
+	"\tchain_uri\x18\x10 \x01(\tR\bchainUri\x12\x1f\n" +
+	"\vaccess_tags\x18\x11 \x03(\tR\n" +
+	"accessTags\x12\x16\n" +
+	"\x06remark\x18\x12 \x01(\tR\x06remark\x1a>\n" +
 	"\x10ExtraParamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"9\n" +
@@ -5421,15 +5656,19 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
 	"\x03msg\x18\x02 \x01(\tR\x03msg\x12\x1d\n" +
 	"\n" +
-	"auth_token\x18\x03 \x01(\tR\tauthToken\"M\n" +
+	"auth_token\x18\x03 \x01(\tR\tauthToken\"J\n" +
+	"\rContainerInfo\x12\x12\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12%\n" +
+	"\x0esupports_chain\x18\x02 \x01(\bR\rsupportsChain\"M\n" +
 	"\x10GetContainersReq\x129\n" +
-	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\"X\n" +
+	"\x0enode_auth_info\x18\x01 \x01(\v2\x13.proto.NodeAuthInfoR\fnodeAuthInfo\"\x97\x01\n" +
 	"\x10GetContainersRsp\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
 	"\x03msg\x18\x02 \x01(\tR\x03msg\x12\x1e\n" +
 	"\n" +
 	"containers\x18\x03 \x03(\tR\n" +
-	"containers*\xec\x02\n" +
+	"containers\x12=\n" +
+	"\x0fcontainer_infos\x18\x04 \x03(\v2\x14.proto.ContainerInfoR\x0econtainerInfos*\xec\x02\n" +
 	"\vBuilderType\x12\x15\n" +
 	"\x11UnknowBuilderType\x10\x00\x12\x1b\n" +
 	"\x17VLESSSettingBuilderType\x10\n" +
@@ -5445,7 +5684,7 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\x0fQuicBuilderType\x10\x16\x12\x13\n" +
 	"\x0fMkcpBuilderType\x10\x17\x12\x13\n" +
 	"\x0fGrpcBuilderType\x10\x18\x12\x13\n" +
-	"\x0fHttpBuilderType\x10\x192\xd0\x13\n" +
+	"\x0fHttpBuilderType\x10\x192\x9f\x14\n" +
 	"\rEndNodeAccess\x124\n" +
 	"\bGetUsers\x12\x12.proto.GetUsersReq\x1a\x12.proto.GetUsersRsp\"\x00\x12:\n" +
 	"\n" +
@@ -5472,7 +5711,8 @@ const file_rpc_server_proto_rawDesc = "" +
 	"\n" +
 	"GetInbound\x12\x14.proto.GetInboundReq\x1a\x14.proto.GetInboundRsp\"\x00\x12=\n" +
 	"\vListInbound\x12\x15.proto.ListInboundReq\x1a\x15.proto.ListInboundRsp\"\x00\x12K\n" +
-	"\x13DeleteInboundByName\x12\x1d.proto.DeleteInboundByNameReq\x1a\x13.proto.InboundOpRsp\"\x00\x12=\n" +
+	"\x13DeleteInboundByName\x12\x1d.proto.DeleteInboundByNameReq\x1a\x13.proto.InboundOpRsp\"\x00\x12M\n" +
+	"\x14SetInboundAccessTags\x12\x1e.proto.SetInboundAccessTagsReq\x1a\x13.proto.InboundOpRsp\"\x00\x12=\n" +
 	"\vUpdateProxy\x12\x15.proto.UpdateProxyReq\x1a\x15.proto.UpdateProxyRsp\"\x00\x12?\n" +
 	"\x11AddAdaptiveConfig\x12\x14.proto.AdaptiveOpReq\x1a\x12.proto.AdaptiveRsp\"\x00\x12B\n" +
 	"\x14DeleteAdaptiveConfig\x12\x14.proto.AdaptiveOpReq\x1a\x12.proto.AdaptiveRsp\"\x00\x124\n" +
@@ -5504,89 +5744,91 @@ func file_rpc_server_proto_rawDescGZIP() []byte {
 }
 
 var file_rpc_server_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_rpc_server_proto_msgTypes = make([]protoimpl.MessageInfo, 80)
+var file_rpc_server_proto_msgTypes = make([]protoimpl.MessageInfo, 82)
 var file_rpc_server_proto_goTypes = []any{
-	(BuilderType)(0),               // 0: proto.BuilderType
-	(*User)(nil),                   // 1: proto.User
-	(*NodeAuthInfo)(nil),           // 2: proto.NodeAuthInfo
-	(*GetUsersReq)(nil),            // 3: proto.GetUsersReq
-	(*GetUsersRsp)(nil),            // 4: proto.GetUsersRsp
-	(*ProfileInbound)(nil),         // 5: proto.ProfileInbound
-	(*GetProfileReq)(nil),          // 6: proto.GetProfileReq
-	(*GetProfileRsp)(nil),          // 7: proto.GetProfileRsp
-	(*UserOpReq)(nil),              // 8: proto.UserOpReq
-	(*UserOpRsp)(nil),              // 9: proto.UserOpRsp
-	(*GetSubReq)(nil),              // 10: proto.GetSubReq
-	(*GetSubRsp)(nil),              // 11: proto.GetSubRsp
-	(*UserDigest)(nil),             // 12: proto.UserDigest
-	(*ClusterUserSync)(nil),        // 13: proto.ClusterUserSync
-	(*HeartBeatReq)(nil),           // 14: proto.HeartBeatReq
-	(*Node)(nil),                   // 15: proto.Node
-	(*HeartBeatRsp)(nil),           // 16: proto.HeartBeatRsp
-	(*RegisterNodeReq)(nil),        // 17: proto.RegisterNodeReq
-	(*RegisterNodeRsp)(nil),        // 18: proto.RegisterNodeRsp
-	(*GetBandwidthStatsReq)(nil),   // 19: proto.GetBandwidthStatsReq
-	(*Stats)(nil),                  // 20: proto.Stats
-	(*GetBandwidthStatsRsp)(nil),   // 21: proto.GetBandwidthStatsRsp
-	(*InboundOpReq)(nil),           // 22: proto.InboundOpReq
-	(*InboundOpRsp)(nil),           // 23: proto.InboundOpRsp
-	(*TransferInboundReq)(nil),     // 24: proto.TransferInboundReq
-	(*CopyInboundReq)(nil),         // 25: proto.CopyInboundReq
-	(*CopyUserReq)(nil),            // 26: proto.CopyUserReq
-	(*GetInboundReq)(nil),          // 27: proto.GetInboundReq
-	(*GetInboundRsp)(nil),          // 28: proto.GetInboundRsp
-	(*InboundInfo)(nil),            // 29: proto.InboundInfo
-	(*ListInboundReq)(nil),         // 30: proto.ListInboundReq
-	(*ListInboundRsp)(nil),         // 31: proto.ListInboundRsp
-	(*DeleteInboundByNameReq)(nil), // 32: proto.DeleteInboundByNameReq
-	(*UpdateProxyReq)(nil),         // 33: proto.UpdateProxyReq
-	(*UpdateProxyRsp)(nil),         // 34: proto.UpdateProxyRsp
-	(*AdaptiveOpReq)(nil),          // 35: proto.AdaptiveOpReq
-	(*AdaptiveReq)(nil),            // 36: proto.AdaptiveReq
-	(*AdaptiveRsp)(nil),            // 37: proto.AdaptiveRsp
-	(*SetGatewayModelReq)(nil),     // 38: proto.SetGatewayModelReq
-	(*SetGatewayModelRsp)(nil),     // 39: proto.SetGatewayModelRsp
-	(*ObtainNewCertReq)(nil),       // 40: proto.ObtainNewCertReq
-	(*ObtainNewCertRsp)(nil),       // 41: proto.ObtainNewCertRsp
-	(*FastAddInboundReq)(nil),      // 42: proto.FastAddInboundReq
-	(*FastAddInboundRsp)(nil),      // 43: proto.FastAddInboundRsp
-	(*TransferCertReq)(nil),        // 44: proto.TransferCertReq
-	(*TransferCertRsp)(nil),        // 45: proto.TransferCertRsp
-	(*Cert)(nil),                   // 46: proto.Cert
-	(*GetCertsReq)(nil),            // 47: proto.GetCertsReq
-	(*GetCertsRsp)(nil),            // 48: proto.GetCertsRsp
-	(*DeleteCertReq)(nil),          // 49: proto.DeleteCertReq
-	(*DeleteCertRsp)(nil),          // 50: proto.DeleteCertRsp
-	(*PingMetric)(nil),             // 51: proto.PingMetric
-	(*PingResult)(nil),             // 52: proto.PingResult
-	(*GetPingMetricReq)(nil),       // 53: proto.GetPingMetricReq
-	(*GetPingMetricRsp)(nil),       // 54: proto.GetPingMetricRsp
-	(*SetPingCheckReq)(nil),        // 55: proto.SetPingCheckReq
-	(*SetPingCheckRsp)(nil),        // 56: proto.SetPingCheckRsp
-	(*NodeMetrics)(nil),            // 57: proto.NodeMetrics
-	(*GetNodeMetricReq)(nil),       // 58: proto.GetNodeMetricReq
-	(*GetNodeMetricRsp)(nil),       // 59: proto.GetNodeMetricRsp
-	(*NodeStatus)(nil),             // 60: proto.NodeStatus
-	(*GetStatusReq)(nil),           // 61: proto.GetStatusReq
-	(*GetStatusRsp)(nil),           // 62: proto.GetStatusRsp
-	(*GetNodeGroupsReq)(nil),       // 63: proto.GetNodeGroupsReq
-	(*GetNodeGroupsRsp)(nil),       // 64: proto.GetNodeGroupsRsp
-	(*SetNodeGroupsReq)(nil),       // 65: proto.SetNodeGroupsReq
-	(*SetNodeGroupsRsp)(nil),       // 66: proto.SetNodeGroupsRsp
-	(*UpsertClusterUsersReq)(nil),  // 67: proto.UpsertClusterUsersReq
-	(*UpsertClusterUsersRsp)(nil),  // 68: proto.UpsertClusterUsersRsp
-	(*RotateInboundPortReq)(nil),   // 69: proto.RotateInboundPortReq
-	(*RotateInboundPortRsp)(nil),   // 70: proto.RotateInboundPortRsp
-	(*RotateAllPortsReq)(nil),      // 71: proto.RotateAllPortsReq
-	(*RotateAllPortsRsp)(nil),      // 72: proto.RotateAllPortsRsp
-	(*ResetAuthTokenReq)(nil),      // 73: proto.ResetAuthTokenReq
-	(*ResetAuthTokenRsp)(nil),      // 74: proto.ResetAuthTokenRsp
-	(*GetContainersReq)(nil),       // 75: proto.GetContainersReq
-	(*GetContainersRsp)(nil),       // 76: proto.GetContainersRsp
-	nil,                            // 77: proto.HeartBeatReq.NodesEntry
-	nil,                            // 78: proto.HeartBeatRsp.NodesMapEntry
-	nil,                            // 79: proto.FastAddInboundReq.ExtraParamsEntry
-	nil,                            // 80: proto.RotateAllPortsRsp.PortsEntry
+	(BuilderType)(0),                // 0: proto.BuilderType
+	(*User)(nil),                    // 1: proto.User
+	(*NodeAuthInfo)(nil),            // 2: proto.NodeAuthInfo
+	(*GetUsersReq)(nil),             // 3: proto.GetUsersReq
+	(*GetUsersRsp)(nil),             // 4: proto.GetUsersRsp
+	(*ProfileInbound)(nil),          // 5: proto.ProfileInbound
+	(*GetProfileReq)(nil),           // 6: proto.GetProfileReq
+	(*GetProfileRsp)(nil),           // 7: proto.GetProfileRsp
+	(*UserOpReq)(nil),               // 8: proto.UserOpReq
+	(*UserOpRsp)(nil),               // 9: proto.UserOpRsp
+	(*GetSubReq)(nil),               // 10: proto.GetSubReq
+	(*GetSubRsp)(nil),               // 11: proto.GetSubRsp
+	(*UserDigest)(nil),              // 12: proto.UserDigest
+	(*ClusterUserSync)(nil),         // 13: proto.ClusterUserSync
+	(*HeartBeatReq)(nil),            // 14: proto.HeartBeatReq
+	(*Node)(nil),                    // 15: proto.Node
+	(*HeartBeatRsp)(nil),            // 16: proto.HeartBeatRsp
+	(*RegisterNodeReq)(nil),         // 17: proto.RegisterNodeReq
+	(*RegisterNodeRsp)(nil),         // 18: proto.RegisterNodeRsp
+	(*GetBandwidthStatsReq)(nil),    // 19: proto.GetBandwidthStatsReq
+	(*Stats)(nil),                   // 20: proto.Stats
+	(*GetBandwidthStatsRsp)(nil),    // 21: proto.GetBandwidthStatsRsp
+	(*InboundOpReq)(nil),            // 22: proto.InboundOpReq
+	(*InboundOpRsp)(nil),            // 23: proto.InboundOpRsp
+	(*TransferInboundReq)(nil),      // 24: proto.TransferInboundReq
+	(*CopyInboundReq)(nil),          // 25: proto.CopyInboundReq
+	(*CopyUserReq)(nil),             // 26: proto.CopyUserReq
+	(*GetInboundReq)(nil),           // 27: proto.GetInboundReq
+	(*GetInboundRsp)(nil),           // 28: proto.GetInboundRsp
+	(*InboundInfo)(nil),             // 29: proto.InboundInfo
+	(*SetInboundAccessTagsReq)(nil), // 30: proto.SetInboundAccessTagsReq
+	(*ListInboundReq)(nil),          // 31: proto.ListInboundReq
+	(*ListInboundRsp)(nil),          // 32: proto.ListInboundRsp
+	(*DeleteInboundByNameReq)(nil),  // 33: proto.DeleteInboundByNameReq
+	(*UpdateProxyReq)(nil),          // 34: proto.UpdateProxyReq
+	(*UpdateProxyRsp)(nil),          // 35: proto.UpdateProxyRsp
+	(*AdaptiveOpReq)(nil),           // 36: proto.AdaptiveOpReq
+	(*AdaptiveReq)(nil),             // 37: proto.AdaptiveReq
+	(*AdaptiveRsp)(nil),             // 38: proto.AdaptiveRsp
+	(*SetGatewayModelReq)(nil),      // 39: proto.SetGatewayModelReq
+	(*SetGatewayModelRsp)(nil),      // 40: proto.SetGatewayModelRsp
+	(*ObtainNewCertReq)(nil),        // 41: proto.ObtainNewCertReq
+	(*ObtainNewCertRsp)(nil),        // 42: proto.ObtainNewCertRsp
+	(*FastAddInboundReq)(nil),       // 43: proto.FastAddInboundReq
+	(*FastAddInboundRsp)(nil),       // 44: proto.FastAddInboundRsp
+	(*TransferCertReq)(nil),         // 45: proto.TransferCertReq
+	(*TransferCertRsp)(nil),         // 46: proto.TransferCertRsp
+	(*Cert)(nil),                    // 47: proto.Cert
+	(*GetCertsReq)(nil),             // 48: proto.GetCertsReq
+	(*GetCertsRsp)(nil),             // 49: proto.GetCertsRsp
+	(*DeleteCertReq)(nil),           // 50: proto.DeleteCertReq
+	(*DeleteCertRsp)(nil),           // 51: proto.DeleteCertRsp
+	(*PingMetric)(nil),              // 52: proto.PingMetric
+	(*PingResult)(nil),              // 53: proto.PingResult
+	(*GetPingMetricReq)(nil),        // 54: proto.GetPingMetricReq
+	(*GetPingMetricRsp)(nil),        // 55: proto.GetPingMetricRsp
+	(*SetPingCheckReq)(nil),         // 56: proto.SetPingCheckReq
+	(*SetPingCheckRsp)(nil),         // 57: proto.SetPingCheckRsp
+	(*NodeMetrics)(nil),             // 58: proto.NodeMetrics
+	(*GetNodeMetricReq)(nil),        // 59: proto.GetNodeMetricReq
+	(*GetNodeMetricRsp)(nil),        // 60: proto.GetNodeMetricRsp
+	(*NodeStatus)(nil),              // 61: proto.NodeStatus
+	(*GetStatusReq)(nil),            // 62: proto.GetStatusReq
+	(*GetStatusRsp)(nil),            // 63: proto.GetStatusRsp
+	(*GetNodeGroupsReq)(nil),        // 64: proto.GetNodeGroupsReq
+	(*GetNodeGroupsRsp)(nil),        // 65: proto.GetNodeGroupsRsp
+	(*SetNodeGroupsReq)(nil),        // 66: proto.SetNodeGroupsReq
+	(*SetNodeGroupsRsp)(nil),        // 67: proto.SetNodeGroupsRsp
+	(*UpsertClusterUsersReq)(nil),   // 68: proto.UpsertClusterUsersReq
+	(*UpsertClusterUsersRsp)(nil),   // 69: proto.UpsertClusterUsersRsp
+	(*RotateInboundPortReq)(nil),    // 70: proto.RotateInboundPortReq
+	(*RotateInboundPortRsp)(nil),    // 71: proto.RotateInboundPortRsp
+	(*RotateAllPortsReq)(nil),       // 72: proto.RotateAllPortsReq
+	(*RotateAllPortsRsp)(nil),       // 73: proto.RotateAllPortsRsp
+	(*ResetAuthTokenReq)(nil),       // 74: proto.ResetAuthTokenReq
+	(*ResetAuthTokenRsp)(nil),       // 75: proto.ResetAuthTokenRsp
+	(*ContainerInfo)(nil),           // 76: proto.ContainerInfo
+	(*GetContainersReq)(nil),        // 77: proto.GetContainersReq
+	(*GetContainersRsp)(nil),        // 78: proto.GetContainersRsp
+	nil,                             // 79: proto.HeartBeatReq.NodesEntry
+	nil,                             // 80: proto.HeartBeatRsp.NodesMapEntry
+	nil,                             // 81: proto.FastAddInboundReq.ExtraParamsEntry
+	nil,                             // 82: proto.RotateAllPortsRsp.PortsEntry
 }
 var file_rpc_server_proto_depIdxs = []int32{
 	15, // 0: proto.NodeAuthInfo.node:type_name -> proto.Node
@@ -5601,8 +5843,8 @@ var file_rpc_server_proto_depIdxs = []int32{
 	1,  // 9: proto.ClusterUserSync.user:type_name -> proto.User
 	2,  // 10: proto.HeartBeatReq.node_auth_info:type_name -> proto.NodeAuthInfo
 	12, // 11: proto.HeartBeatReq.user_digests:type_name -> proto.UserDigest
-	77, // 12: proto.HeartBeatReq.nodes:type_name -> proto.HeartBeatReq.NodesEntry
-	78, // 13: proto.HeartBeatRsp.nodesMap:type_name -> proto.HeartBeatRsp.NodesMapEntry
+	79, // 12: proto.HeartBeatReq.nodes:type_name -> proto.HeartBeatReq.NodesEntry
+	80, // 13: proto.HeartBeatRsp.nodesMap:type_name -> proto.HeartBeatRsp.NodesMapEntry
 	2,  // 14: proto.RegisterNodeReq.node_auth_info:type_name -> proto.NodeAuthInfo
 	2,  // 15: proto.GetBandwidthStatsReq.node_auth_info:type_name -> proto.NodeAuthInfo
 	20, // 16: proto.GetBandwidthStatsRsp.stats:type_name -> proto.Stats
@@ -5611,124 +5853,128 @@ var file_rpc_server_proto_depIdxs = []int32{
 	2,  // 19: proto.CopyInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
 	2,  // 20: proto.CopyUserReq.node_auth_info:type_name -> proto.NodeAuthInfo
 	2,  // 21: proto.GetInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 22: proto.ListInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	29, // 23: proto.ListInboundRsp.inbounds:type_name -> proto.InboundInfo
-	2,  // 24: proto.DeleteInboundByNameReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 25: proto.UpdateProxyReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 26: proto.AdaptiveOpReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 27: proto.AdaptiveReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 28: proto.SetGatewayModelReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 29: proto.ObtainNewCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 30: proto.FastAddInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	0,  // 31: proto.FastAddInboundReq.inboundBuilderType:type_name -> proto.BuilderType
-	0,  // 32: proto.FastAddInboundReq.streamBuilderType:type_name -> proto.BuilderType
-	79, // 33: proto.FastAddInboundReq.extra_params:type_name -> proto.FastAddInboundReq.ExtraParamsEntry
-	2,  // 34: proto.TransferCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 35: proto.GetCertsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	46, // 36: proto.GetCertsRsp.certs:type_name -> proto.Cert
-	2,  // 37: proto.DeleteCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	52, // 38: proto.PingMetric.results:type_name -> proto.PingResult
-	2,  // 39: proto.GetPingMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	51, // 40: proto.GetPingMetricRsp.metric:type_name -> proto.PingMetric
-	2,  // 41: proto.SetPingCheckReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 42: proto.GetNodeMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	57, // 43: proto.GetNodeMetricRsp.node_metrics:type_name -> proto.NodeMetrics
-	2,  // 44: proto.GetStatusReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	60, // 45: proto.GetStatusRsp.status:type_name -> proto.NodeStatus
-	2,  // 46: proto.GetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 47: proto.SetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 48: proto.UpsertClusterUsersReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	13, // 49: proto.UpsertClusterUsersReq.users:type_name -> proto.ClusterUserSync
-	2,  // 50: proto.RotateInboundPortReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 51: proto.RotateAllPortsReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	80, // 52: proto.RotateAllPortsRsp.ports:type_name -> proto.RotateAllPortsRsp.PortsEntry
-	2,  // 53: proto.ResetAuthTokenReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	2,  // 54: proto.GetContainersReq.node_auth_info:type_name -> proto.NodeAuthInfo
-	15, // 55: proto.HeartBeatReq.NodesEntry.value:type_name -> proto.Node
-	15, // 56: proto.HeartBeatRsp.NodesMapEntry.value:type_name -> proto.Node
-	3,  // 57: proto.EndNodeAccess.GetUsers:input_type -> proto.GetUsersReq
-	6,  // 58: proto.EndNodeAccess.GetProfile:input_type -> proto.GetProfileReq
-	8,  // 59: proto.EndNodeAccess.AddUsers:input_type -> proto.UserOpReq
-	8,  // 60: proto.EndNodeAccess.DeleteUsers:input_type -> proto.UserOpReq
-	8,  // 61: proto.EndNodeAccess.UpdateUsers:input_type -> proto.UserOpReq
-	8,  // 62: proto.EndNodeAccess.ResetUser:input_type -> proto.UserOpReq
-	8,  // 63: proto.EndNodeAccess.ResetUserTraffic:input_type -> proto.UserOpReq
-	73, // 64: proto.EndNodeAccess.ResetAuthToken:input_type -> proto.ResetAuthTokenReq
-	69, // 65: proto.EndNodeAccess.RotateInboundPort:input_type -> proto.RotateInboundPortReq
-	71, // 66: proto.EndNodeAccess.RotateAllPorts:input_type -> proto.RotateAllPortsReq
-	10, // 67: proto.EndNodeAccess.GetSub:input_type -> proto.GetSubReq
-	19, // 68: proto.EndNodeAccess.GetBandWidthStats:input_type -> proto.GetBandwidthStatsReq
-	14, // 69: proto.EndNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
-	17, // 70: proto.EndNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
-	38, // 71: proto.EndNodeAccess.SetGatewayModel:input_type -> proto.SetGatewayModelReq
-	55, // 72: proto.EndNodeAccess.SetPingCheck:input_type -> proto.SetPingCheckReq
-	22, // 73: proto.EndNodeAccess.AddInbound:input_type -> proto.InboundOpReq
-	24, // 74: proto.EndNodeAccess.TransferInbound:input_type -> proto.TransferInboundReq
-	25, // 75: proto.EndNodeAccess.CopyInbound:input_type -> proto.CopyInboundReq
-	26, // 76: proto.EndNodeAccess.CopyUser:input_type -> proto.CopyUserReq
-	27, // 77: proto.EndNodeAccess.GetInbound:input_type -> proto.GetInboundReq
-	30, // 78: proto.EndNodeAccess.ListInbound:input_type -> proto.ListInboundReq
-	32, // 79: proto.EndNodeAccess.DeleteInboundByName:input_type -> proto.DeleteInboundByNameReq
-	33, // 80: proto.EndNodeAccess.UpdateProxy:input_type -> proto.UpdateProxyReq
-	35, // 81: proto.EndNodeAccess.AddAdaptiveConfig:input_type -> proto.AdaptiveOpReq
-	35, // 82: proto.EndNodeAccess.DeleteAdaptiveConfig:input_type -> proto.AdaptiveOpReq
-	36, // 83: proto.EndNodeAccess.Adaptive:input_type -> proto.AdaptiveReq
-	42, // 84: proto.EndNodeAccess.FastAddInbound:input_type -> proto.FastAddInboundReq
-	40, // 85: proto.EndNodeAccess.ObtainNewCert:input_type -> proto.ObtainNewCertReq
-	44, // 86: proto.EndNodeAccess.TransferCert:input_type -> proto.TransferCertReq
-	47, // 87: proto.EndNodeAccess.GetCerts:input_type -> proto.GetCertsReq
-	49, // 88: proto.EndNodeAccess.DeleteCert:input_type -> proto.DeleteCertReq
-	53, // 89: proto.EndNodeAccess.GetPingMetric:input_type -> proto.GetPingMetricReq
-	58, // 90: proto.EndNodeAccess.GetNodeMetric:input_type -> proto.GetNodeMetricReq
-	63, // 91: proto.EndNodeAccess.GetNodeGroups:input_type -> proto.GetNodeGroupsReq
-	65, // 92: proto.EndNodeAccess.SetNodeGroups:input_type -> proto.SetNodeGroupsReq
-	67, // 93: proto.EndNodeAccess.UpsertClusterUsers:input_type -> proto.UpsertClusterUsersReq
-	61, // 94: proto.EndNodeAccess.GetStatus:input_type -> proto.GetStatusReq
-	75, // 95: proto.EndNodeAccess.GetContainers:input_type -> proto.GetContainersReq
-	4,  // 96: proto.EndNodeAccess.GetUsers:output_type -> proto.GetUsersRsp
-	7,  // 97: proto.EndNodeAccess.GetProfile:output_type -> proto.GetProfileRsp
-	9,  // 98: proto.EndNodeAccess.AddUsers:output_type -> proto.UserOpRsp
-	9,  // 99: proto.EndNodeAccess.DeleteUsers:output_type -> proto.UserOpRsp
-	9,  // 100: proto.EndNodeAccess.UpdateUsers:output_type -> proto.UserOpRsp
-	9,  // 101: proto.EndNodeAccess.ResetUser:output_type -> proto.UserOpRsp
-	9,  // 102: proto.EndNodeAccess.ResetUserTraffic:output_type -> proto.UserOpRsp
-	74, // 103: proto.EndNodeAccess.ResetAuthToken:output_type -> proto.ResetAuthTokenRsp
-	70, // 104: proto.EndNodeAccess.RotateInboundPort:output_type -> proto.RotateInboundPortRsp
-	72, // 105: proto.EndNodeAccess.RotateAllPorts:output_type -> proto.RotateAllPortsRsp
-	11, // 106: proto.EndNodeAccess.GetSub:output_type -> proto.GetSubRsp
-	21, // 107: proto.EndNodeAccess.GetBandWidthStats:output_type -> proto.GetBandwidthStatsRsp
-	16, // 108: proto.EndNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
-	18, // 109: proto.EndNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
-	39, // 110: proto.EndNodeAccess.SetGatewayModel:output_type -> proto.SetGatewayModelRsp
-	56, // 111: proto.EndNodeAccess.SetPingCheck:output_type -> proto.SetPingCheckRsp
-	23, // 112: proto.EndNodeAccess.AddInbound:output_type -> proto.InboundOpRsp
-	23, // 113: proto.EndNodeAccess.TransferInbound:output_type -> proto.InboundOpRsp
-	23, // 114: proto.EndNodeAccess.CopyInbound:output_type -> proto.InboundOpRsp
-	23, // 115: proto.EndNodeAccess.CopyUser:output_type -> proto.InboundOpRsp
-	28, // 116: proto.EndNodeAccess.GetInbound:output_type -> proto.GetInboundRsp
-	31, // 117: proto.EndNodeAccess.ListInbound:output_type -> proto.ListInboundRsp
-	23, // 118: proto.EndNodeAccess.DeleteInboundByName:output_type -> proto.InboundOpRsp
-	34, // 119: proto.EndNodeAccess.UpdateProxy:output_type -> proto.UpdateProxyRsp
-	37, // 120: proto.EndNodeAccess.AddAdaptiveConfig:output_type -> proto.AdaptiveRsp
-	37, // 121: proto.EndNodeAccess.DeleteAdaptiveConfig:output_type -> proto.AdaptiveRsp
-	37, // 122: proto.EndNodeAccess.Adaptive:output_type -> proto.AdaptiveRsp
-	43, // 123: proto.EndNodeAccess.FastAddInbound:output_type -> proto.FastAddInboundRsp
-	41, // 124: proto.EndNodeAccess.ObtainNewCert:output_type -> proto.ObtainNewCertRsp
-	45, // 125: proto.EndNodeAccess.TransferCert:output_type -> proto.TransferCertRsp
-	48, // 126: proto.EndNodeAccess.GetCerts:output_type -> proto.GetCertsRsp
-	50, // 127: proto.EndNodeAccess.DeleteCert:output_type -> proto.DeleteCertRsp
-	54, // 128: proto.EndNodeAccess.GetPingMetric:output_type -> proto.GetPingMetricRsp
-	59, // 129: proto.EndNodeAccess.GetNodeMetric:output_type -> proto.GetNodeMetricRsp
-	64, // 130: proto.EndNodeAccess.GetNodeGroups:output_type -> proto.GetNodeGroupsRsp
-	66, // 131: proto.EndNodeAccess.SetNodeGroups:output_type -> proto.SetNodeGroupsRsp
-	68, // 132: proto.EndNodeAccess.UpsertClusterUsers:output_type -> proto.UpsertClusterUsersRsp
-	62, // 133: proto.EndNodeAccess.GetStatus:output_type -> proto.GetStatusRsp
-	76, // 134: proto.EndNodeAccess.GetContainers:output_type -> proto.GetContainersRsp
-	96, // [96:135] is the sub-list for method output_type
-	57, // [57:96] is the sub-list for method input_type
-	57, // [57:57] is the sub-list for extension type_name
-	57, // [57:57] is the sub-list for extension extendee
-	0,  // [0:57] is the sub-list for field type_name
+	2,  // 22: proto.SetInboundAccessTagsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 23: proto.ListInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	29, // 24: proto.ListInboundRsp.inbounds:type_name -> proto.InboundInfo
+	2,  // 25: proto.DeleteInboundByNameReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 26: proto.UpdateProxyReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 27: proto.AdaptiveOpReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 28: proto.AdaptiveReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 29: proto.SetGatewayModelReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 30: proto.ObtainNewCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 31: proto.FastAddInboundReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	0,  // 32: proto.FastAddInboundReq.inboundBuilderType:type_name -> proto.BuilderType
+	0,  // 33: proto.FastAddInboundReq.streamBuilderType:type_name -> proto.BuilderType
+	81, // 34: proto.FastAddInboundReq.extra_params:type_name -> proto.FastAddInboundReq.ExtraParamsEntry
+	2,  // 35: proto.TransferCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 36: proto.GetCertsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	47, // 37: proto.GetCertsRsp.certs:type_name -> proto.Cert
+	2,  // 38: proto.DeleteCertReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	53, // 39: proto.PingMetric.results:type_name -> proto.PingResult
+	2,  // 40: proto.GetPingMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	52, // 41: proto.GetPingMetricRsp.metric:type_name -> proto.PingMetric
+	2,  // 42: proto.SetPingCheckReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 43: proto.GetNodeMetricReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	58, // 44: proto.GetNodeMetricRsp.node_metrics:type_name -> proto.NodeMetrics
+	2,  // 45: proto.GetStatusReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	61, // 46: proto.GetStatusRsp.status:type_name -> proto.NodeStatus
+	2,  // 47: proto.GetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 48: proto.SetNodeGroupsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 49: proto.UpsertClusterUsersReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	13, // 50: proto.UpsertClusterUsersReq.users:type_name -> proto.ClusterUserSync
+	2,  // 51: proto.RotateInboundPortReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 52: proto.RotateAllPortsReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	82, // 53: proto.RotateAllPortsRsp.ports:type_name -> proto.RotateAllPortsRsp.PortsEntry
+	2,  // 54: proto.ResetAuthTokenReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	2,  // 55: proto.GetContainersReq.node_auth_info:type_name -> proto.NodeAuthInfo
+	76, // 56: proto.GetContainersRsp.container_infos:type_name -> proto.ContainerInfo
+	15, // 57: proto.HeartBeatReq.NodesEntry.value:type_name -> proto.Node
+	15, // 58: proto.HeartBeatRsp.NodesMapEntry.value:type_name -> proto.Node
+	3,  // 59: proto.EndNodeAccess.GetUsers:input_type -> proto.GetUsersReq
+	6,  // 60: proto.EndNodeAccess.GetProfile:input_type -> proto.GetProfileReq
+	8,  // 61: proto.EndNodeAccess.AddUsers:input_type -> proto.UserOpReq
+	8,  // 62: proto.EndNodeAccess.DeleteUsers:input_type -> proto.UserOpReq
+	8,  // 63: proto.EndNodeAccess.UpdateUsers:input_type -> proto.UserOpReq
+	8,  // 64: proto.EndNodeAccess.ResetUser:input_type -> proto.UserOpReq
+	8,  // 65: proto.EndNodeAccess.ResetUserTraffic:input_type -> proto.UserOpReq
+	74, // 66: proto.EndNodeAccess.ResetAuthToken:input_type -> proto.ResetAuthTokenReq
+	70, // 67: proto.EndNodeAccess.RotateInboundPort:input_type -> proto.RotateInboundPortReq
+	72, // 68: proto.EndNodeAccess.RotateAllPorts:input_type -> proto.RotateAllPortsReq
+	10, // 69: proto.EndNodeAccess.GetSub:input_type -> proto.GetSubReq
+	19, // 70: proto.EndNodeAccess.GetBandWidthStats:input_type -> proto.GetBandwidthStatsReq
+	14, // 71: proto.EndNodeAccess.HeartBeat:input_type -> proto.HeartBeatReq
+	17, // 72: proto.EndNodeAccess.RegisterNode:input_type -> proto.RegisterNodeReq
+	39, // 73: proto.EndNodeAccess.SetGatewayModel:input_type -> proto.SetGatewayModelReq
+	56, // 74: proto.EndNodeAccess.SetPingCheck:input_type -> proto.SetPingCheckReq
+	22, // 75: proto.EndNodeAccess.AddInbound:input_type -> proto.InboundOpReq
+	24, // 76: proto.EndNodeAccess.TransferInbound:input_type -> proto.TransferInboundReq
+	25, // 77: proto.EndNodeAccess.CopyInbound:input_type -> proto.CopyInboundReq
+	26, // 78: proto.EndNodeAccess.CopyUser:input_type -> proto.CopyUserReq
+	27, // 79: proto.EndNodeAccess.GetInbound:input_type -> proto.GetInboundReq
+	31, // 80: proto.EndNodeAccess.ListInbound:input_type -> proto.ListInboundReq
+	33, // 81: proto.EndNodeAccess.DeleteInboundByName:input_type -> proto.DeleteInboundByNameReq
+	30, // 82: proto.EndNodeAccess.SetInboundAccessTags:input_type -> proto.SetInboundAccessTagsReq
+	34, // 83: proto.EndNodeAccess.UpdateProxy:input_type -> proto.UpdateProxyReq
+	36, // 84: proto.EndNodeAccess.AddAdaptiveConfig:input_type -> proto.AdaptiveOpReq
+	36, // 85: proto.EndNodeAccess.DeleteAdaptiveConfig:input_type -> proto.AdaptiveOpReq
+	37, // 86: proto.EndNodeAccess.Adaptive:input_type -> proto.AdaptiveReq
+	43, // 87: proto.EndNodeAccess.FastAddInbound:input_type -> proto.FastAddInboundReq
+	41, // 88: proto.EndNodeAccess.ObtainNewCert:input_type -> proto.ObtainNewCertReq
+	45, // 89: proto.EndNodeAccess.TransferCert:input_type -> proto.TransferCertReq
+	48, // 90: proto.EndNodeAccess.GetCerts:input_type -> proto.GetCertsReq
+	50, // 91: proto.EndNodeAccess.DeleteCert:input_type -> proto.DeleteCertReq
+	54, // 92: proto.EndNodeAccess.GetPingMetric:input_type -> proto.GetPingMetricReq
+	59, // 93: proto.EndNodeAccess.GetNodeMetric:input_type -> proto.GetNodeMetricReq
+	64, // 94: proto.EndNodeAccess.GetNodeGroups:input_type -> proto.GetNodeGroupsReq
+	66, // 95: proto.EndNodeAccess.SetNodeGroups:input_type -> proto.SetNodeGroupsReq
+	68, // 96: proto.EndNodeAccess.UpsertClusterUsers:input_type -> proto.UpsertClusterUsersReq
+	62, // 97: proto.EndNodeAccess.GetStatus:input_type -> proto.GetStatusReq
+	77, // 98: proto.EndNodeAccess.GetContainers:input_type -> proto.GetContainersReq
+	4,  // 99: proto.EndNodeAccess.GetUsers:output_type -> proto.GetUsersRsp
+	7,  // 100: proto.EndNodeAccess.GetProfile:output_type -> proto.GetProfileRsp
+	9,  // 101: proto.EndNodeAccess.AddUsers:output_type -> proto.UserOpRsp
+	9,  // 102: proto.EndNodeAccess.DeleteUsers:output_type -> proto.UserOpRsp
+	9,  // 103: proto.EndNodeAccess.UpdateUsers:output_type -> proto.UserOpRsp
+	9,  // 104: proto.EndNodeAccess.ResetUser:output_type -> proto.UserOpRsp
+	9,  // 105: proto.EndNodeAccess.ResetUserTraffic:output_type -> proto.UserOpRsp
+	75, // 106: proto.EndNodeAccess.ResetAuthToken:output_type -> proto.ResetAuthTokenRsp
+	71, // 107: proto.EndNodeAccess.RotateInboundPort:output_type -> proto.RotateInboundPortRsp
+	73, // 108: proto.EndNodeAccess.RotateAllPorts:output_type -> proto.RotateAllPortsRsp
+	11, // 109: proto.EndNodeAccess.GetSub:output_type -> proto.GetSubRsp
+	21, // 110: proto.EndNodeAccess.GetBandWidthStats:output_type -> proto.GetBandwidthStatsRsp
+	16, // 111: proto.EndNodeAccess.HeartBeat:output_type -> proto.HeartBeatRsp
+	18, // 112: proto.EndNodeAccess.RegisterNode:output_type -> proto.RegisterNodeRsp
+	40, // 113: proto.EndNodeAccess.SetGatewayModel:output_type -> proto.SetGatewayModelRsp
+	57, // 114: proto.EndNodeAccess.SetPingCheck:output_type -> proto.SetPingCheckRsp
+	23, // 115: proto.EndNodeAccess.AddInbound:output_type -> proto.InboundOpRsp
+	23, // 116: proto.EndNodeAccess.TransferInbound:output_type -> proto.InboundOpRsp
+	23, // 117: proto.EndNodeAccess.CopyInbound:output_type -> proto.InboundOpRsp
+	23, // 118: proto.EndNodeAccess.CopyUser:output_type -> proto.InboundOpRsp
+	28, // 119: proto.EndNodeAccess.GetInbound:output_type -> proto.GetInboundRsp
+	32, // 120: proto.EndNodeAccess.ListInbound:output_type -> proto.ListInboundRsp
+	23, // 121: proto.EndNodeAccess.DeleteInboundByName:output_type -> proto.InboundOpRsp
+	23, // 122: proto.EndNodeAccess.SetInboundAccessTags:output_type -> proto.InboundOpRsp
+	35, // 123: proto.EndNodeAccess.UpdateProxy:output_type -> proto.UpdateProxyRsp
+	38, // 124: proto.EndNodeAccess.AddAdaptiveConfig:output_type -> proto.AdaptiveRsp
+	38, // 125: proto.EndNodeAccess.DeleteAdaptiveConfig:output_type -> proto.AdaptiveRsp
+	38, // 126: proto.EndNodeAccess.Adaptive:output_type -> proto.AdaptiveRsp
+	44, // 127: proto.EndNodeAccess.FastAddInbound:output_type -> proto.FastAddInboundRsp
+	42, // 128: proto.EndNodeAccess.ObtainNewCert:output_type -> proto.ObtainNewCertRsp
+	46, // 129: proto.EndNodeAccess.TransferCert:output_type -> proto.TransferCertRsp
+	49, // 130: proto.EndNodeAccess.GetCerts:output_type -> proto.GetCertsRsp
+	51, // 131: proto.EndNodeAccess.DeleteCert:output_type -> proto.DeleteCertRsp
+	55, // 132: proto.EndNodeAccess.GetPingMetric:output_type -> proto.GetPingMetricRsp
+	60, // 133: proto.EndNodeAccess.GetNodeMetric:output_type -> proto.GetNodeMetricRsp
+	65, // 134: proto.EndNodeAccess.GetNodeGroups:output_type -> proto.GetNodeGroupsRsp
+	67, // 135: proto.EndNodeAccess.SetNodeGroups:output_type -> proto.SetNodeGroupsRsp
+	69, // 136: proto.EndNodeAccess.UpsertClusterUsers:output_type -> proto.UpsertClusterUsersRsp
+	63, // 137: proto.EndNodeAccess.GetStatus:output_type -> proto.GetStatusRsp
+	78, // 138: proto.EndNodeAccess.GetContainers:output_type -> proto.GetContainersRsp
+	99, // [99:139] is the sub-list for method output_type
+	59, // [59:99] is the sub-list for method input_type
+	59, // [59:59] is the sub-list for extension type_name
+	59, // [59:59] is the sub-list for extension extendee
+	0,  // [0:59] is the sub-list for field type_name
 }
 
 func init() { file_rpc_server_proto_init() }
@@ -5742,7 +5988,7 @@ func file_rpc_server_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_rpc_server_proto_rawDesc), len(file_rpc_server_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   80,
+			NumMessages:   82,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

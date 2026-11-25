@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/lureiny/v2raymg/pkg/proxy/appconfig"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/usermanager"
 	"github.com/lureiny/v2raymg/pkg/store"
 	"github.com/lureiny/v2raymg/pkg/store/migrations"
@@ -88,5 +90,39 @@ func TestStartupWiring_BackfillClusterFields(t *testing.T) {
 	}
 	if u.UpdatedAtUs == 0 {
 		t.Error("expected UpdatedAtUs to be set by AddUser")
+	}
+}
+
+// TestInitClusterSync_SeedsDefaultGroupBeforeEnableClusterSync guards against
+// the first-boot fail-open bug where EnableClusterSync saw an empty
+// local_node_groups table and left cachedNodeGroups empty until restart.
+func TestInitClusterSync_SeedsDefaultGroupBeforeEnableClusterSync(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "test.db")
+	sm, err := store.NewStoreManager(dsn, migrations.All)
+	if err != nil {
+		t.Fatalf("NewStoreManager: %v", err)
+	}
+	t.Cleanup(func() { _ = sm.Close() })
+
+	mgr, err := usermanager.NewUserManagerWithStore(nil, sm, "node-test")
+	if err != nil {
+		t.Fatalf("NewUserManagerWithStore: %v", err)
+	}
+
+	cfg := &appconfig.AppConfig{
+		ClusterUser: appconfig.ClusterUserConfig{
+			Enabled:      true,
+			DefaultGroup: "default",
+		},
+	}
+	initClusterSync(cfg, sm, mgr)
+
+	vipUser := &contracts.User{Username: "vip-only", TargetGroup: "vip"}
+	defaultUser := &contracts.User{Username: "def-user", TargetGroup: "default"}
+	if mgr.IsUserVisible(vipUser) {
+		t.Fatal("cross-group user must NOT be visible on first boot when local_node_groups was seeded to default")
+	}
+	if !mgr.IsUserVisible(defaultUser) {
+		t.Fatal("default-group user should be visible after initClusterSync")
 	}
 }

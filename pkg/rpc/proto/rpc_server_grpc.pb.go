@@ -42,6 +42,7 @@ const (
 	EndNodeAccess_GetInbound_FullMethodName           = "/proto.EndNodeAccess/GetInbound"
 	EndNodeAccess_ListInbound_FullMethodName          = "/proto.EndNodeAccess/ListInbound"
 	EndNodeAccess_DeleteInboundByName_FullMethodName  = "/proto.EndNodeAccess/DeleteInboundByName"
+	EndNodeAccess_SetInboundAccessTags_FullMethodName = "/proto.EndNodeAccess/SetInboundAccessTags"
 	EndNodeAccess_UpdateProxy_FullMethodName          = "/proto.EndNodeAccess/UpdateProxy"
 	EndNodeAccess_AddAdaptiveConfig_FullMethodName    = "/proto.EndNodeAccess/AddAdaptiveConfig"
 	EndNodeAccess_DeleteAdaptiveConfig_FullMethodName = "/proto.EndNodeAccess/DeleteAdaptiveConfig"
@@ -90,6 +91,7 @@ type EndNodeAccessClient interface {
 	GetInbound(ctx context.Context, in *GetInboundReq, opts ...grpc.CallOption) (*GetInboundRsp, error)
 	ListInbound(ctx context.Context, in *ListInboundReq, opts ...grpc.CallOption) (*ListInboundRsp, error)
 	DeleteInboundByName(ctx context.Context, in *DeleteInboundByNameReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
+	SetInboundAccessTags(ctx context.Context, in *SetInboundAccessTagsReq, opts ...grpc.CallOption) (*InboundOpRsp, error)
 	// proxy
 	UpdateProxy(ctx context.Context, in *UpdateProxyReq, opts ...grpc.CallOption) (*UpdateProxyRsp, error)
 	AddAdaptiveConfig(ctx context.Context, in *AdaptiveOpReq, opts ...grpc.CallOption) (*AdaptiveRsp, error)
@@ -101,7 +103,7 @@ type EndNodeAccessClient interface {
 	TransferCert(ctx context.Context, in *TransferCertReq, opts ...grpc.CallOption) (*TransferCertRsp, error)
 	GetCerts(ctx context.Context, in *GetCertsReq, opts ...grpc.CallOption) (*GetCertsRsp, error)
 	DeleteCert(ctx context.Context, in *DeleteCertReq, opts ...grpc.CallOption) (*DeleteCertRsp, error)
-	// / metric
+	/// metric
 	GetPingMetric(ctx context.Context, in *GetPingMetricReq, opts ...grpc.CallOption) (*GetPingMetricRsp, error)
 	GetNodeMetric(ctx context.Context, in *GetNodeMetricReq, opts ...grpc.CallOption) (*GetNodeMetricRsp, error)
 	// cluster user
@@ -352,6 +354,16 @@ func (c *endNodeAccessClient) DeleteInboundByName(ctx context.Context, in *Delet
 	return out, nil
 }
 
+func (c *endNodeAccessClient) SetInboundAccessTags(ctx context.Context, in *SetInboundAccessTagsReq, opts ...grpc.CallOption) (*InboundOpRsp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InboundOpRsp)
+	err := c.cc.Invoke(ctx, EndNodeAccess_SetInboundAccessTags_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *endNodeAccessClient) UpdateProxy(ctx context.Context, in *UpdateProxyReq, opts ...grpc.CallOption) (*UpdateProxyRsp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateProxyRsp)
@@ -542,6 +554,7 @@ type EndNodeAccessServer interface {
 	GetInbound(context.Context, *GetInboundReq) (*GetInboundRsp, error)
 	ListInbound(context.Context, *ListInboundReq) (*ListInboundRsp, error)
 	DeleteInboundByName(context.Context, *DeleteInboundByNameReq) (*InboundOpRsp, error)
+	SetInboundAccessTags(context.Context, *SetInboundAccessTagsReq) (*InboundOpRsp, error)
 	// proxy
 	UpdateProxy(context.Context, *UpdateProxyReq) (*UpdateProxyRsp, error)
 	AddAdaptiveConfig(context.Context, *AdaptiveOpReq) (*AdaptiveRsp, error)
@@ -553,7 +566,7 @@ type EndNodeAccessServer interface {
 	TransferCert(context.Context, *TransferCertReq) (*TransferCertRsp, error)
 	GetCerts(context.Context, *GetCertsReq) (*GetCertsRsp, error)
 	DeleteCert(context.Context, *DeleteCertReq) (*DeleteCertRsp, error)
-	// / metric
+	/// metric
 	GetPingMetric(context.Context, *GetPingMetricReq) (*GetPingMetricRsp, error)
 	GetNodeMetric(context.Context, *GetNodeMetricReq) (*GetNodeMetricRsp, error)
 	// cluster user
@@ -642,6 +655,9 @@ func (UnimplementedEndNodeAccessServer) ListInbound(context.Context, *ListInboun
 }
 func (UnimplementedEndNodeAccessServer) DeleteInboundByName(context.Context, *DeleteInboundByNameReq) (*InboundOpRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteInboundByName not implemented")
+}
+func (UnimplementedEndNodeAccessServer) SetInboundAccessTags(context.Context, *SetInboundAccessTagsReq) (*InboundOpRsp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetInboundAccessTags not implemented")
 }
 func (UnimplementedEndNodeAccessServer) UpdateProxy(context.Context, *UpdateProxyReq) (*UpdateProxyRsp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateProxy not implemented")
@@ -1126,6 +1142,24 @@ func _EndNodeAccess_DeleteInboundByName_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EndNodeAccess_SetInboundAccessTags_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetInboundAccessTagsReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndNodeAccessServer).SetInboundAccessTags(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EndNodeAccess_SetInboundAccessTags_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndNodeAccessServer).SetInboundAccessTags(ctx, req.(*SetInboundAccessTagsReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _EndNodeAccess_UpdateProxy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UpdateProxyReq)
 	if err := dec(in); err != nil {
@@ -1512,6 +1546,10 @@ var EndNodeAccess_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteInboundByName",
 			Handler:    _EndNodeAccess_DeleteInboundByName_Handler,
+		},
+		{
+			MethodName: "SetInboundAccessTags",
+			Handler:    _EndNodeAccess_SetInboundAccessTags_Handler,
 		},
 		{
 			MethodName: "UpdateProxy",

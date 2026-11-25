@@ -302,6 +302,10 @@ type EndNodeConfig struct {
 	// When empty, the interface with the default route is detected automatically.
 	// If auto-detection fails, all non-loopback interfaces are summed (fallback).
 	MonitorInterfaces []string `yaml:"monitor_interfaces" json:"monitor_interfaces"`
+	// AllowLoopbackChainTarget controls whether chain_uri targets pointing to
+	// loopback addresses (127.0.0.0/8, ::1, localhost) are permitted. Default: false.
+	// Local management and allocated ports remain unconditionally blocked even when true.
+	AllowLoopbackChainTarget bool `yaml:"allow_loopback_chain_target" json:"allow_loopback_chain_target"`
 }
 
 // defaultHTTPListen applies only when BOTH http_listen and listen are empty.

@@ -202,4 +202,12 @@ CREATE TABLE IF NOT EXISTS local_secrets (
     created_at INTEGER NOT NULL
 );`,
 	},
+	{
+		Version: 18,
+		SQL: `ALTER TABLE users ADD COLUMN inbound_tags TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE inbounds ADD COLUMN inbound_type TEXT NOT NULL DEFAULT 'direct';
+ALTER TABLE inbounds ADD COLUMN access_tags TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE inbounds ADD COLUMN chain_outbound_uri TEXT NOT NULL DEFAULT '';
+ALTER TABLE inbounds ADD COLUMN remark TEXT NOT NULL DEFAULT '';`,
+	},
 }
