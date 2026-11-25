@@ -8,6 +8,12 @@ import (
 	"github.com/lureiny/v2raymg/pkg/proxy/core/params/protocolparams"
 )
 
+const chainProxyPrefix = "__chain_out__:"
+
+func chainProxyName(tag string) string {
+	return chainProxyPrefix + tag
+}
+
 // BuildListener converts a MihomoInbound into a map[string]any suitable as
 // one entry of mihomo's top-level listeners[] yaml array.
 //
@@ -79,6 +85,14 @@ func BuildListener(inb *MihomoInbound) (map[string]any, error) {
 		// forgetting to update profilegen.
 		return nil, fmt.Errorf("%w: %q", ErrProtocolNotSupported, inb.Protocol())
 	}
+
+	if inb.GetInboundType() == contracts.InboundTypeChain {
+		if inb.ListenAddr() != "127.0.0.1" {
+			return nil, fmt.Errorf("mihomo: chain inbound %q must listen on 127.0.0.1, got %q", inb.Tag(), inb.ListenAddr())
+		}
+		m["proxy"] = chainProxyName(inb.Tag())
+	}
+
 	return m, nil
 }
 

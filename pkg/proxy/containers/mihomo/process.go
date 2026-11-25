@@ -16,13 +16,13 @@ import (
 
 // mihomoInitialConfig is the minimal config.yaml written at startup.
 //
-// v2raymg uses mihomo exclusively for its inbound listeners — the outbound
-// side is kept inert (empty proxies/proxy-groups, single MATCH,DIRECT rule).
-// Listeners start empty; per-user listeners are appended in later stages
-// via PUT /configs.
+// Direct inbounds fall through to MATCH,DIRECT; chained inbounds route 1:1
+// to their dedicated proxies[] entry via listener.proxy and IN-NAME rules.
+// Listeners start empty; per-inbound listeners are appended via PUT /configs.
 type mihomoInitialConfig struct {
 	MixedPort          int      `yaml:"mixed-port"`
 	AllowLan           bool     `yaml:"allow-lan"`
+	IPv6               bool     `yaml:"ipv6"`
 	ExternalController string   `yaml:"external-controller"`
 	Secret             string   `yaml:"secret"`
 	LogLevel           string   `yaml:"log-level"`

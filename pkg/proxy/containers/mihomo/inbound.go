@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
@@ -56,6 +57,15 @@ type MihomoInbound struct {
 	// through the helper methods below.
 	addedUsersMu sync.Mutex
 	addedUsers   map[string]struct{}
+
+	// metaMu guards chain-proxy and two-layer visibility metadata.
+	// accessTags can be mutated at runtime via SetInboundAccessTags while
+	// concurrent event/reconcile/subscription paths read it.
+	metaMu           sync.RWMutex
+	inboundType      contracts.InboundType
+	accessTags       []string
+	chainOutboundURI string
+	remark           string
 }
 
 // MihomoSharedCred holds the union of per-protocol credential fields. A
@@ -155,6 +165,7 @@ func NewMihomoInbound(tag string, protocol contracts.Protocol, port uint32, cred
 		DefaultInbound: base,
 		SharedCred:     cred,
 		addedUsers:     make(map[string]struct{}),
+		inboundType:    contracts.InboundTypeDirect,
 	}
 }
 
@@ -173,7 +184,78 @@ func NewMihomoInboundFromProtocolParams(pp *protocolparams.ProtocolParams) *Miho
 		DefaultInbound: base,
 		ProtocolParams: pp,
 		addedUsers:     make(map[string]struct{}),
+		inboundType:    contracts.InboundTypeDirect,
 	}
+}
+
+// GetInboundType returns the inbound's routing type, defaulting empty values to
+// contracts.InboundTypeDirect.
+func (i *MihomoInbound) GetInboundType() contracts.InboundType {
+	i.metaMu.RLock()
+	defer i.metaMu.RUnlock()
+	if i.inboundType == "" {
+		return contracts.InboundTypeDirect
+	}
+	return i.inboundType
+}
+
+// GetAccessTags returns a defensive copy of the inbound's Layer 2 access tags.
+func (i *MihomoInbound) GetAccessTags() []string {
+	i.metaMu.RLock()
+	defer i.metaMu.RUnlock()
+	return slices.Clone(i.accessTags)
+}
+
+// SetAccessTags atomically replaces the inbound's Layer 2 access tags.
+func (i *MihomoInbound) SetAccessTags(tags []string) {
+	i.metaMu.Lock()
+	defer i.metaMu.Unlock()
+	i.accessTags = slices.Clone(tags)
+}
+
+// GetChainOutboundURI returns the backend chain proxy URI (empty for direct inbounds).
+func (i *MihomoInbound) GetChainOutboundURI() string {
+	i.metaMu.RLock()
+	defer i.metaMu.RUnlock()
+	return i.chainOutboundURI
+}
+
+// GetRemark returns the optional inbound remark.
+func (i *MihomoInbound) GetRemark() string {
+	i.metaMu.RLock()
+	defer i.metaMu.RUnlock()
+	return i.remark
+}
+
+// Meta returns a snapshot of the inbound's chain and visibility metadata with a
+// cloned AccessTags slice.
+func (i *MihomoInbound) Meta() contracts.InboundMeta {
+	i.metaMu.RLock()
+	defer i.metaMu.RUnlock()
+	t := i.inboundType
+	if t == "" {
+		t = contracts.InboundTypeDirect
+	}
+	return contracts.InboundMeta{
+		InboundType:      t,
+		AccessTags:       slices.Clone(i.accessTags),
+		ChainOutboundURI: i.chainOutboundURI,
+		Remark:           i.remark,
+	}
+}
+
+// SetMeta atomically sets all chain and visibility metadata fields on the inbound.
+func (i *MihomoInbound) SetMeta(meta contracts.InboundMeta) {
+	i.metaMu.Lock()
+	defer i.metaMu.Unlock()
+	t := meta.InboundType
+	if t == "" {
+		t = contracts.InboundTypeDirect
+	}
+	i.inboundType = t
+	i.accessTags = slices.Clone(meta.AccessTags)
+	i.chainOutboundURI = meta.ChainOutboundURI
+	i.remark = meta.Remark
 }
 
 // Validate performs structural validation plus per-protocol credential checks.

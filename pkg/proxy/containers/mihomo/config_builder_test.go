@@ -13,10 +13,11 @@ func baseConfigForTest() mihomoInitialConfig {
 	return mihomoInitialConfig{
 		MixedPort:          0,
 		AllowLan:           false,
+		IPv6:               true,
 		ExternalController: "127.0.0.1:9090",
 		Secret:             "",
 		LogLevel:           "info",
-		Mode:               "global",
+		Mode:               "rule",
 		Proxies:            []any{},
 		ProxyGroups:        []any{},
 		Rules:              []string{"MATCH,DIRECT"},
@@ -42,8 +43,11 @@ func TestBuildConfig_EmptyInbounds(t *testing.T) {
 	}
 	// The inert outbound section must survive — if it gets dropped mihomo
 	// will synthesise defaults that might reach for the network.
-	if cfg["mode"] != "global" {
+	if cfg["mode"] != "rule" {
 		t.Errorf("mode preserved: %v", cfg["mode"])
+	}
+	if cfg["ipv6"] != true {
+		t.Errorf("ipv6 preserved: %v", cfg["ipv6"])
 	}
 	if rules, ok := cfg["rules"].([]any); !ok || len(rules) != 1 || rules[0] != "MATCH,DIRECT" {
 		t.Errorf("rules not preserved: %v", cfg["rules"])
