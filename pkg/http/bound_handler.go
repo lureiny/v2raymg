@@ -10,39 +10,56 @@ import (
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
+const inboundAddHelp = `POST /api/inbound
+	添加inbound（仅支持 xray container）
+	body: {"target": "", "bound_raw_string": "", "container": "xray"}
+	bound_raw_string: json中inbound配置base64编码后的字符串
+	container: 可选，目前仅支持 "xray"（默认）；其他container请使用 POST /api/inbound/fast`
+
+// InboundAddReq is the request payload for POST /api/inbound and MCP tool add_inbound.
+type InboundAddReq struct {
+	Target         string `json:"target,omitempty" jsonschema:"Target node name, node_id, or 'all' (defaults to the local node when omitted)"`
+	BoundRawString string `json:"bound_raw_string" jsonschema:"Base64-encoded xray native JSON inbound configuration"`
+	Container      string `json:"container,omitempty" jsonschema:"Container type; optional and only 'xray' is supported by add_inbound (defaults to 'xray'). Use fast_add_inbound for other containers."`
+}
+
+func (s *HttpServer) inboundAddEndpoint() Endpoint[InboundAddReq, map[string]any] {
+	return Endpoint[InboundAddReq, map[string]any]{
+		Method:         "POST",
+		Path:           "/inbound",
+		Scope:          ScopeAdmin,
+		Help:           inboundAddHelp,
+		MCPName:        "add_inbound",
+		MCPDescription: "Add a raw xray inbound configuration (base64-encoded xray inbound JSON) on the target cluster node(s). Only container 'xray' is supported; use fast_add_inbound for other containers or simplified inbound creation. Target defaults to the local node when omitted.",
+		ReadOnly:       false,
+		Destructive:    false,
+		Execute: func(ctx context.Context, caller Caller, req InboundAddReq) (map[string]any, error) {
+			// Only xray is supported via this raw-JSON path; other containers must use POST /inbound/fast
+			if req.Container != "" && req.Container != "xray" {
+				return nil, NewEndpointErr(400, fmt.Sprintf("container %q not supported via POST /inbound; use POST /inbound/fast instead", req.Container))
+			}
+			req.Target = resolveTarget(req.Target, s.Name)
+			nodes := s.GetTargetNodes(req.Target)
+			if len(nodes) == 0 {
+				return nil, NewEndpointErr(502, "no available node")
+			}
+			rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
+			_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(ctx, client.AddInboundReqType, &proto.InboundOpReq{InboundInfo: req.BoundRawString}, s.GetClusterToken())
+			if len(failedList) != 0 {
+				errMsg := joinFailedList(failedList)
+				log.Errorf("Err=%s|OpType=addInbound|Target=%s", errMsg, req.Target)
+				return nil, NewEndpointErr(500, errMsg)
+			}
+			return map[string]any{"code": 0, "msg": "ok"}, nil
+		},
+	}
+}
+
 // InboundAddHandler POST /inbound — 添加inbound
 type InboundAddHandler struct{ HttpHandlerImp }
 
 func (handler *InboundAddHandler) handlerFunc(c *gin.Context) {
-	var req struct {
-		Target         string `json:"target"`
-		BoundRawString string `json:"bound_raw_string"`
-		Container      string `json:"container"` // "xray"(default); other containers not yet supported
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
-		return
-	}
-	// Only xray is supported via this raw-JSON path; other containers must use POST /inbound/fast
-	if req.Container != "" && req.Container != "xray" {
-		jsonErr(c, 400, fmt.Sprintf("container %q not supported via POST /inbound; use POST /inbound/fast instead", req.Container))
-		return
-	}
-	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
-	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
-	if len(nodes) == 0 {
-		jsonErr(c, 502, "no available node")
-		return
-	}
-	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
-	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.AddInboundReqType, &proto.InboundOpReq{InboundInfo: req.BoundRawString}, handler.getHttpServer().GetClusterToken())
-	if len(failedList) != 0 {
-		errMsg := joinFailedList(failedList)
-		log.Errorf("Err=%s|OpType=addInbound|Target=%s", errMsg, req.Target)
-		jsonErr(c, 500, errMsg)
-		return
-	}
-	jsonOK(c)
+	endpointHandlerFunc(handler.getHttpServer().inboundAddEndpoint())(c)
 }
 
 func (handler *InboundAddHandler) getHandlers() []gin.HandlerFunc {
@@ -52,11 +69,7 @@ func (handler *InboundAddHandler) getHandlers() []gin.HandlerFunc {
 func (handler *InboundAddHandler) getRelativePath() string { return "/inbound" }
 
 func (handler *InboundAddHandler) help() string {
-	return `POST /api/inbound
-	添加inbound（仅支持 xray container）
-	body: {"target": "", "bound_raw_string": "", "container": "xray"}
-	bound_raw_string: json中inbound配置base64编码后的字符串
-	container: 可选，目前仅支持 "xray"（默认）；其他container请使用 POST /api/inbound/fast`
+	return inboundAddHelp
 }
 
 const inboundGetHelp = `GET /api/inbound

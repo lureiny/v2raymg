@@ -9,7 +9,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/lureiny/v2raymg/pkg/http/auth"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/rpc/client"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
@@ -47,56 +46,410 @@ func calcExpire(expire, ttl uint64) int64 {
 	return time.Now().Unix() + int64(ttl)
 }
 
+const userAddHelpText = `POST /api/user
+	添加用户
+	body: {"target": "", "user": "", "pwd": "", "expire": 0, "ttl": 0}
+	user: 用户名, pwd: password, expire: 过期时间戳(与ttl同时存在时优先使用ttl), ttl: 存活时间(秒)`
+
+const userUpdateHelpText = `PUT /api/user
+	更新用户信息
+	body: {"target": "", "user": "", "pwd": "", "expire": 0, "ttl": 0, "role": "", "upload_bps": 0, "download_bps": 0, "max_clients": 0, "client_recycle_delay_sec": 0, "client_drain_sec": 0}`
+
+const userDeleteHelpText = `DELETE /api/user
+	删除用户
+	body: {"target": "", "user": ""}`
+
+const userResetHelpText = `POST /api/user/reset
+	重置用户proxy密钥
+	body: {"target": "", "user": ""}`
+
+const userResetTrafficHelpText = `POST /api/user/reset-traffic
+	重置用户累计持久化流量统计 (TrafficTotalUplink/Downlink 清零)
+	节点自治: 每个目标节点各自清零本地累计值; target 为空默认作用本机。
+	body: {"target": "", "user": ""}`
+
+const userResetAuthTokenHelpText = `POST /api/user/reset-token
+	重置当前用户的auth token
+	Body (optional): {"target":"node1"}
+	  target: 目标节点名，空则默认本机`
+
+// UserAddReq is the request payload for POST /api/user (MCP tool: add_user).
+type UserAddReq struct {
+	Target                string `json:"target,omitempty" jsonschema:"Target node name or node ID, or 'all' for all nodes (defaults to local node)"`
+	User                  string `json:"user" jsonschema:"Username to create"`
+	Pwd                   string `json:"pwd,omitempty" jsonschema:"Login password for the user"`
+	Expire                uint64 `json:"expire,omitempty" jsonschema:"Expiration Unix timestamp in seconds (overridden by ttl when ttl is non-zero)"`
+	TTL                   uint64 `json:"ttl,omitempty" jsonschema:"Time-to-live in seconds from now (takes precedence over expire when non-zero)"`
+	Role                  string `json:"role,omitempty" jsonschema:"User role (e.g. normal or admin)"`
+	Group                 string `json:"group,omitempty" jsonschema:"User group name for cluster visibility"`
+	UploadBps             int64  `json:"upload_bps,omitempty" jsonschema:"Upload bandwidth limit in bytes per second (0 for default)"`
+	DownloadBps           int64  `json:"download_bps,omitempty" jsonschema:"Download bandwidth limit in bytes per second (0 for default)"`
+	MaxClients            int32  `json:"max_clients,omitempty" jsonschema:"Maximum concurrent client connections (0 for default)"`
+	ClientRecycleDelaySec int32  `json:"client_recycle_delay_sec,omitempty" jsonschema:"Delay in seconds before recycling inactive client slots (0 for default)"`
+	ClientDrainSec        int32  `json:"client_drain_sec,omitempty" jsonschema:"Drain grace period in seconds when closing excess clients (0 for default)"`
+}
+
+// UserUpdateReq is the request payload for PUT /api/user (MCP tool: update_user).
+type UserUpdateReq struct {
+	Target                string `json:"target,omitempty" jsonschema:"Target node name or node ID, or 'all' for all nodes (defaults to local node)"`
+	User                  string `json:"user" jsonschema:"Username to update"`
+	Pwd                   string `json:"pwd,omitempty" jsonschema:"New login password (empty keeps unchanged)"`
+	Expire                uint64 `json:"expire,omitempty" jsonschema:"New expiration Unix timestamp in seconds (overridden by ttl when ttl is non-zero)"`
+	TTL                   uint64 `json:"ttl,omitempty" jsonschema:"New time-to-live in seconds from now (takes precedence over expire when non-zero)"`
+	Role                  string `json:"role,omitempty" jsonschema:"New user role (empty keeps unchanged)"`
+	UploadBps             int64  `json:"upload_bps,omitempty" jsonschema:"Upload bandwidth limit in bytes per second (0 keeps unchanged, -1 removes limit)"`
+	DownloadBps           int64  `json:"download_bps,omitempty" jsonschema:"Download bandwidth limit in bytes per second (0 keeps unchanged, -1 removes limit)"`
+	MaxClients            int32  `json:"max_clients,omitempty" jsonschema:"Maximum concurrent client connections (0 keeps unchanged, -1 removes limit)"`
+	ClientRecycleDelaySec int32  `json:"client_recycle_delay_sec,omitempty" jsonschema:"Delay in seconds before recycling inactive client slots (0 keeps unchanged, -1 removes limit)"`
+	ClientDrainSec        int32  `json:"client_drain_sec,omitempty" jsonschema:"Drain grace period in seconds when closing excess clients (0 keeps unchanged, -1 removes limit)"`
+	Group                 string `json:"group,omitempty" jsonschema:"User group name for cluster visibility (empty keeps unchanged)"`
+}
+
+// UserDeleteReq is the request payload for DELETE /api/user (MCP tool: delete_user).
+type UserDeleteReq struct {
+	Target string `json:"target,omitempty" jsonschema:"Target node name or node ID, or 'all' for all nodes (defaults to local node)"`
+	User   string `json:"user" jsonschema:"Username to delete"`
+}
+
+// UserResetReq is the request payload for POST /api/user/reset (MCP tool: reset_user).
+type UserResetReq struct {
+	Target string `json:"target,omitempty" jsonschema:"Target node name or node ID, or 'all' for all nodes (defaults to local node)"`
+	User   string `json:"user" jsonschema:"Username whose proxy credentials will be reset"`
+}
+
+// UserResetTrafficReq is the request payload for POST /api/user/reset-traffic (MCP tool: reset_user_traffic).
+type UserResetTrafficReq struct {
+	Target string `json:"target,omitempty" jsonschema:"Target node name or node ID, or 'all' for all nodes (defaults to local node)"`
+	User   string `json:"user" jsonschema:"Username whose cumulative traffic counters will be reset"`
+}
+
+// UserResetAuthTokenReq is the request payload for POST /api/user/reset-token (MCP tool: reset_auth_token).
+type UserResetAuthTokenReq struct {
+	Target string `json:"target,omitempty" jsonschema:"Target node name or node ID, or 'all' for all nodes (defaults to local node)"`
+}
+
+func cloneAnyValue(v any) any {
+	switch typed := v.(type) {
+	case map[string]any:
+		if typed == nil {
+			return map[string]any(nil)
+		}
+		cp := make(map[string]any, len(typed))
+		for k, val := range typed {
+			cp[k] = cloneAnyValue(val)
+		}
+		return cp
+	case gin.H:
+		if typed == nil {
+			return gin.H(nil)
+		}
+		cp := make(gin.H, len(typed))
+		for k, val := range typed {
+			cp[k] = cloneAnyValue(val)
+		}
+		return cp
+	case []any:
+		if typed == nil {
+			return []any(nil)
+		}
+		cp := make([]any, len(typed))
+		for i, item := range typed {
+			cp[i] = cloneAnyValue(item)
+		}
+		return cp
+	case []map[string]any:
+		if typed == nil {
+			return []map[string]any(nil)
+		}
+		cp := make([]map[string]any, len(typed))
+		for i, item := range typed {
+			if item == nil {
+				cp[i] = nil
+				continue
+			}
+			cp[i] = cloneAnyValue(item).(map[string]any)
+		}
+		return cp
+	case []gin.H:
+		if typed == nil {
+			return []gin.H(nil)
+		}
+		cp := make([]gin.H, len(typed))
+		for i, item := range typed {
+			if item == nil {
+				cp[i] = nil
+				continue
+			}
+			cp[i] = cloneAnyValue(item).(gin.H)
+		}
+		return cp
+	default:
+		return v
+	}
+}
+
+// sanitizeResetAuthTokenForMCP deep-copies a reset-token response map for MCP
+// callers and redacts non-empty "auth_token" values without mutating resp.
+func sanitizeResetAuthTokenForMCP(resp map[string]any) any {
+	if resp == nil {
+		return nil
+	}
+	out := make(map[string]any, len(resp))
+	for k, v := range resp {
+		if k == "auth_token" {
+			if tok, ok := v.(string); ok && tok != "" {
+				out[k] = "[REDACTED]"
+				continue
+			}
+		}
+		out[k] = cloneAnyValue(v)
+	}
+	return out
+}
+
+func (s *HttpServer) userAddEndpoint() Endpoint[UserAddReq, map[string]any] {
+	return Endpoint[UserAddReq, map[string]any]{
+		Method:         http.MethodPost,
+		Path:           "/user",
+		Scope:          ScopeAdmin,
+		Help:           userAddHelpText,
+		MCPName:        "add_user",
+		MCPDescription: "Add a user to target cluster nodes (defaults to the local node when target is omitted).",
+		ReadOnly:       false,
+		Destructive:    false,
+		Execute: func(ctx context.Context, caller Caller, req UserAddReq) (map[string]any, error) {
+			req.Target = resolveTarget(req.Target, s.Name)
+			expire := calcExpire(req.Expire, req.TTL)
+			userPoint := &proto.User{
+				Name:                  req.User,
+				Passwd:                req.Pwd,
+				ExpireTime:            expire,
+				Role:                  req.Role,
+				Group:                 req.Group,
+				UploadBps:             req.UploadBps,
+				DownloadBps:           req.DownloadBps,
+				MaxClients:            req.MaxClients,
+				ClientRecycleDelaySec: req.ClientRecycleDelaySec,
+				ClientDrainSec:        req.ClientDrainSec,
+			}
+			nodes := s.GetTargetNodes(req.Target)
+			if len(nodes) == 0 {
+				return nil, NewEndpointErr(502, "no available node")
+			}
+			rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
+			if rpcClient == nil {
+				return nil, NewEndpointErr(500, "local node not initialized")
+			}
+			_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(ctx, client.AddUsersReqType, &proto.UserOpReq{Users: []*proto.User{userPoint}}, s.GetClusterToken())
+			if len(failedList) != 0 {
+				errMsg := joinFailedList(failedList)
+				log.Errorf("Err=%s|User=%s|Target=%s", errMsg, req.User, req.Target)
+				return nil, NewEndpointErr(500, errMsg)
+			}
+			return map[string]any{"code": 0, "msg": "ok"}, nil
+		},
+	}
+}
+
+func (s *HttpServer) userUpdateEndpoint() Endpoint[UserUpdateReq, map[string]any] {
+	return Endpoint[UserUpdateReq, map[string]any]{
+		Method:         http.MethodPut,
+		Path:           "/user",
+		Scope:          ScopeAdmin,
+		Help:           userUpdateHelpText,
+		MCPName:        "update_user",
+		MCPDescription: "Update an existing user's settings on target cluster nodes (defaults to the local node when target is omitted).",
+		ReadOnly:       false,
+		Destructive:    false,
+		Execute: func(ctx context.Context, caller Caller, req UserUpdateReq) (map[string]any, error) {
+			req.Target = resolveTarget(req.Target, s.Name)
+			expire := calcExpire(req.Expire, req.TTL)
+			userPoint := &proto.User{
+				Name:                  req.User,
+				Passwd:                req.Pwd,
+				ExpireTime:            expire,
+				Role:                  req.Role,
+				UploadBps:             req.UploadBps,
+				DownloadBps:           req.DownloadBps,
+				MaxClients:            req.MaxClients,
+				ClientRecycleDelaySec: req.ClientRecycleDelaySec,
+				ClientDrainSec:        req.ClientDrainSec,
+				Group:                 req.Group,
+			}
+			nodes := s.GetTargetNodes(req.Target)
+			if len(nodes) == 0 {
+				return nil, NewEndpointErr(502, "no available node")
+			}
+			rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
+			if rpcClient == nil {
+				return nil, NewEndpointErr(500, "local node not initialized")
+			}
+			_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(ctx, client.UpdateUsersReqType, &proto.UserOpReq{Users: []*proto.User{userPoint}}, s.GetClusterToken())
+			if len(failedList) != 0 {
+				errMsg := joinFailedList(failedList)
+				log.Errorf("Err=%s|User=%s|Target=%s", errMsg, req.User, req.Target)
+				return nil, NewEndpointErr(500, errMsg)
+			}
+			return map[string]any{"code": 0, "msg": "ok"}, nil
+		},
+	}
+}
+
+func (s *HttpServer) userDeleteEndpoint() Endpoint[UserDeleteReq, map[string]any] {
+	return Endpoint[UserDeleteReq, map[string]any]{
+		Method:         http.MethodDelete,
+		Path:           "/user",
+		Scope:          ScopeAdmin,
+		Help:           userDeleteHelpText,
+		MCPName:        "delete_user",
+		MCPDescription: "Delete a user from target cluster nodes (defaults to the local node when target is omitted).",
+		ReadOnly:       false,
+		Destructive:    true,
+		Execute: func(ctx context.Context, caller Caller, req UserDeleteReq) (map[string]any, error) {
+			req.Target = resolveTarget(req.Target, s.Name)
+			userPoint := &proto.User{Name: req.User}
+			nodes := s.GetTargetNodes(req.Target)
+			if len(nodes) == 0 {
+				return nil, NewEndpointErr(502, "no available node")
+			}
+			rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
+			if rpcClient == nil {
+				return nil, NewEndpointErr(500, "local node not initialized")
+			}
+			_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(ctx, client.DeleteUsersReqType, &proto.UserOpReq{Users: []*proto.User{userPoint}}, s.GetClusterToken())
+			if len(failedList) != 0 {
+				errMsg := joinFailedList(failedList)
+				log.Errorf("Err=%s|User=%s|Target=%s", errMsg, req.User, req.Target)
+				return nil, NewEndpointErr(500, errMsg)
+			}
+			return map[string]any{"code": 0, "msg": "ok"}, nil
+		},
+	}
+}
+
+func (s *HttpServer) userResetEndpoint() Endpoint[UserResetReq, map[string]any] {
+	return Endpoint[UserResetReq, map[string]any]{
+		Method:         http.MethodPost,
+		Path:           "/user/reset",
+		Scope:          ScopeAdmin,
+		Help:           userResetHelpText,
+		MCPName:        "reset_user",
+		MCPDescription: "Reset a user's proxy credentials on target cluster nodes (defaults to the local node when target is omitted).",
+		ReadOnly:       false,
+		Destructive:    true,
+		Execute: func(ctx context.Context, caller Caller, req UserResetReq) (map[string]any, error) {
+			if req.User == "" {
+				return nil, NewEndpointErr(400, "user is required")
+			}
+			req.Target = resolveTarget(req.Target, s.Name)
+			userPoint := &proto.User{Name: req.User}
+			nodes := s.GetTargetNodes(req.Target)
+			if len(nodes) == 0 {
+				return nil, NewEndpointErr(502, "no available node")
+			}
+			rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
+			if rpcClient == nil {
+				return nil, NewEndpointErr(500, "local node not initialized")
+			}
+			_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(ctx, client.ResetUserReqType, &proto.UserOpReq{Users: []*proto.User{userPoint}}, s.GetClusterToken())
+			if len(failedList) != 0 {
+				errMsg := joinFailedList(failedList)
+				log.Errorf("Err=%s|User=%s|Target=%s", errMsg, req.User, req.Target)
+				return nil, NewEndpointErr(500, errMsg)
+			}
+			return map[string]any{"code": 0, "msg": "ok"}, nil
+		},
+	}
+}
+
+func (s *HttpServer) userResetTrafficEndpoint() Endpoint[UserResetTrafficReq, map[string]any] {
+	return Endpoint[UserResetTrafficReq, map[string]any]{
+		Method:         http.MethodPost,
+		Path:           "/user/reset-traffic",
+		Scope:          ScopeAdmin,
+		Help:           userResetTrafficHelpText,
+		MCPName:        "reset_user_traffic",
+		MCPDescription: "Reset a user's persisted cumulative uplink and downlink traffic counters to zero on target cluster nodes (defaults to the local node when target is omitted).",
+		ReadOnly:       false,
+		Destructive:    true,
+		Execute: func(ctx context.Context, caller Caller, req UserResetTrafficReq) (map[string]any, error) {
+			if req.User == "" {
+				return nil, NewEndpointErr(400, "user is required")
+			}
+			req.Target = resolveTarget(req.Target, s.Name)
+			userPoint := &proto.User{Name: req.User}
+			nodes := s.GetTargetNodes(req.Target)
+			if len(nodes) == 0 {
+				return nil, NewEndpointErr(502, "no available node")
+			}
+			rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
+			if rpcClient == nil {
+				return nil, NewEndpointErr(500, "local node not initialized")
+			}
+			_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(ctx, client.ResetUserTrafficReqType, &proto.UserOpReq{Users: []*proto.User{userPoint}}, s.GetClusterToken())
+			if len(failedList) != 0 {
+				errMsg := joinFailedList(failedList)
+				log.Errorf("Err=%s|User=%s|Target=%s", errMsg, req.User, req.Target)
+				return nil, NewEndpointErr(500, errMsg)
+			}
+			return map[string]any{"code": 0, "msg": "ok"}, nil
+		},
+	}
+}
+
+func (s *HttpServer) userResetAuthTokenEndpoint() Endpoint[UserResetAuthTokenReq, map[string]any] {
+	return Endpoint[UserResetAuthTokenReq, map[string]any]{
+		Method:         http.MethodPost,
+		Path:           "/user/reset-token",
+		Scope:          ScopeUser,
+		Help:           userResetAuthTokenHelpText,
+		OptionalBody:   true,
+		MCPName:        "reset_auth_token",
+		MCPDescription: "Reset the authenticated caller's own proxy auth token on target cluster nodes (requires JWT authentication; defaults to the local node when target is omitted; token value is redacted in MCP responses).",
+		ReadOnly:       false,
+		Destructive:    true,
+		MCPSanitize:    sanitizeResetAuthTokenForMCP,
+		Execute: func(ctx context.Context, caller Caller, req UserResetAuthTokenReq) (map[string]any, error) {
+			if caller.Username == "" {
+				return nil, NewEndpointErr(401, "JWT required")
+			}
+
+			newToken := uuid.NewString()
+
+			target := resolveTarget(req.Target, s.Name)
+			nodes := s.GetTargetNodes(target)
+			if len(nodes) == 0 {
+				return nil, NewBusinessErr(200, 300, "no available node")
+			}
+			rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
+			if rpcClient == nil {
+				return nil, NewBusinessErr(200, 300, "local node not initialized")
+			}
+			succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
+				ctx,
+				client.ResetAuthTokenReqType,
+				&proto.ResetAuthTokenReq{Username: caller.Username, NewToken: newToken},
+				s.GetClusterToken(),
+			)
+			if len(failedList) != 0 && len(succList) == 0 {
+				errMsg := joinFailedList(failedList)
+				log.Errorf("[ResetAuthToken] failed|User=%s|Err=%s", caller.Username, errMsg)
+				return nil, NewBusinessErr(200, 300, errMsg)
+			}
+			msg := "ok"
+			if len(failedList) != 0 {
+				msg = joinFailedList(failedList)
+			}
+			return map[string]any{"code": 0, "msg": msg, "auth_token": newToken}, nil
+		},
+	}
+}
+
 // UserAddHandler POST /user — 添加用户
 type UserAddHandler struct{ HttpHandlerImp }
 
 func (handler *UserAddHandler) handlerFunc(c *gin.Context) {
-	var req struct {
-		Target                string `json:"target"`
-		User                  string `json:"user"`
-		Pwd                   string `json:"pwd"`
-		Expire                uint64 `json:"expire"`
-		TTL                   uint64 `json:"ttl"`
-		Role                  string `json:"role"`
-		Group                 string `json:"group"`
-		UploadBps             int64  `json:"upload_bps"`
-		DownloadBps           int64  `json:"download_bps"`
-		MaxClients            int32  `json:"max_clients"`
-		ClientRecycleDelaySec int32  `json:"client_recycle_delay_sec"`
-		ClientDrainSec        int32  `json:"client_drain_sec"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
-		return
-	}
-	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
-	expire := calcExpire(req.Expire, req.TTL)
-	userPoint := &proto.User{
-		Name:                  req.User,
-		Passwd:                req.Pwd,
-		ExpireTime:            expire,
-		Role:                  req.Role,
-		Group:                 req.Group,
-		UploadBps:             req.UploadBps,
-		DownloadBps:           req.DownloadBps,
-		MaxClients:            req.MaxClients,
-		ClientRecycleDelaySec: req.ClientRecycleDelaySec,
-		ClientDrainSec:        req.ClientDrainSec,
-	}
-	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
-	if len(nodes) == 0 {
-		jsonErr(c, 502, "no available node")
-		return
-	}
-	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
-	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.AddUsersReqType, &proto.UserOpReq{Users: []*proto.User{userPoint}}, handler.getHttpServer().GetClusterToken())
-	if len(failedList) != 0 {
-		errMsg := joinFailedList(failedList)
-		log.Errorf("Err=%s|User=%s|Target=%s", errMsg, req.User, req.Target)
-		jsonErr(c, 500, errMsg)
-		return
-	}
-	jsonOK(c)
+	endpointHandlerFunc(handler.getHttpServer().userAddEndpoint())(c)
 }
 
 func (handler *UserAddHandler) getHandlers() []gin.HandlerFunc {
@@ -105,63 +458,13 @@ func (handler *UserAddHandler) getHandlers() []gin.HandlerFunc {
 
 func (handler *UserAddHandler) getRelativePath() string { return "/user" }
 
-func (handler *UserAddHandler) help() string {
-	return `POST /api/user
-	添加用户
-	body: {"target": "", "user": "", "pwd": "", "expire": 0, "ttl": 0}
-	user: 用户名, pwd: password, expire: 过期时间戳(与ttl同时存在时优先使用ttl), ttl: 存活时间(秒)`
-}
+func (handler *UserAddHandler) help() string { return userAddHelpText }
 
 // UserUpdateHandler PUT /user — 更新用户
 type UserUpdateHandler struct{ HttpHandlerImp }
 
 func (handler *UserUpdateHandler) handlerFunc(c *gin.Context) {
-	var req struct {
-		Target                string `json:"target"`
-		User                  string `json:"user"`
-		Pwd                   string `json:"pwd"`
-		Expire                uint64 `json:"expire"`
-		TTL                   uint64 `json:"ttl"`
-		Role                  string `json:"role"`
-		UploadBps             int64  `json:"upload_bps"`
-		DownloadBps           int64  `json:"download_bps"`
-		MaxClients            int32  `json:"max_clients"`
-		ClientRecycleDelaySec int32  `json:"client_recycle_delay_sec"`
-		ClientDrainSec        int32  `json:"client_drain_sec"`
-		Group                 string `json:"group"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
-		return
-	}
-	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
-	expire := calcExpire(req.Expire, req.TTL)
-	userPoint := &proto.User{
-		Name:                  req.User,
-		Passwd:                req.Pwd,
-		ExpireTime:            expire,
-		Role:                  req.Role,
-		UploadBps:             req.UploadBps,
-		DownloadBps:           req.DownloadBps,
-		MaxClients:            req.MaxClients,
-		ClientRecycleDelaySec: req.ClientRecycleDelaySec,
-		ClientDrainSec:        req.ClientDrainSec,
-		Group:                 req.Group,
-	}
-	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
-	if len(nodes) == 0 {
-		jsonErr(c, 502, "no available node")
-		return
-	}
-	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
-	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.UpdateUsersReqType, &proto.UserOpReq{Users: []*proto.User{userPoint}}, handler.getHttpServer().GetClusterToken())
-	if len(failedList) != 0 {
-		errMsg := joinFailedList(failedList)
-		log.Errorf("Err=%s|User=%s|Target=%s", errMsg, req.User, req.Target)
-		jsonErr(c, 500, errMsg)
-		return
-	}
-	jsonOK(c)
+	endpointHandlerFunc(handler.getHttpServer().userUpdateEndpoint())(c)
 }
 
 func (handler *UserUpdateHandler) getHandlers() []gin.HandlerFunc {
@@ -170,40 +473,13 @@ func (handler *UserUpdateHandler) getHandlers() []gin.HandlerFunc {
 
 func (handler *UserUpdateHandler) getRelativePath() string { return "/user" }
 
-func (handler *UserUpdateHandler) help() string {
-	return `PUT /api/user
-	更新用户信息
-	body: {"target": "", "user": "", "pwd": "", "expire": 0, "ttl": 0, "role": "", "upload_bps": 0, "download_bps": 0, "max_clients": 0, "client_recycle_delay_sec": 0, "client_drain_sec": 0}`
-}
+func (handler *UserUpdateHandler) help() string { return userUpdateHelpText }
 
 // UserDeleteHandler DELETE /user — 删除用户
 type UserDeleteHandler struct{ HttpHandlerImp }
 
 func (handler *UserDeleteHandler) handlerFunc(c *gin.Context) {
-	var req struct {
-		Target string `json:"target"`
-		User   string `json:"user"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
-		return
-	}
-	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
-	userPoint := &proto.User{Name: req.User}
-	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
-	if len(nodes) == 0 {
-		jsonErr(c, 502, "no available node")
-		return
-	}
-	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
-	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.DeleteUsersReqType, &proto.UserOpReq{Users: []*proto.User{userPoint}}, handler.getHttpServer().GetClusterToken())
-	if len(failedList) != 0 {
-		errMsg := joinFailedList(failedList)
-		log.Errorf("Err=%s|User=%s|Target=%s", errMsg, req.User, req.Target)
-		jsonErr(c, 500, errMsg)
-		return
-	}
-	jsonOK(c)
+	endpointHandlerFunc(handler.getHttpServer().userDeleteEndpoint())(c)
 }
 
 func (handler *UserDeleteHandler) getHandlers() []gin.HandlerFunc {
@@ -212,44 +488,13 @@ func (handler *UserDeleteHandler) getHandlers() []gin.HandlerFunc {
 
 func (handler *UserDeleteHandler) getRelativePath() string { return "/user" }
 
-func (handler *UserDeleteHandler) help() string {
-	return `DELETE /api/user
-	删除用户
-	body: {"target": "", "user": ""}`
-}
+func (handler *UserDeleteHandler) help() string { return userDeleteHelpText }
 
 // UserResetHandler POST /user/reset — 重置用户
 type UserResetHandler struct{ HttpHandlerImp }
 
 func (handler *UserResetHandler) handlerFunc(c *gin.Context) {
-	var req struct {
-		Target string `json:"target"`
-		User   string `json:"user"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
-		return
-	}
-	if req.User == "" {
-		jsonErr(c, 400, "user is required")
-		return
-	}
-	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
-	userPoint := &proto.User{Name: req.User}
-	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
-	if len(nodes) == 0 {
-		jsonErr(c, 502, "no available node")
-		return
-	}
-	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
-	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.ResetUserReqType, &proto.UserOpReq{Users: []*proto.User{userPoint}}, handler.getHttpServer().GetClusterToken())
-	if len(failedList) != 0 {
-		errMsg := joinFailedList(failedList)
-		log.Errorf("Err=%s|User=%s|Target=%s", errMsg, req.User, req.Target)
-		jsonErr(c, 500, errMsg)
-		return
-	}
-	jsonOK(c)
+	endpointHandlerFunc(handler.getHttpServer().userResetEndpoint())(c)
 }
 
 func (handler *UserResetHandler) getHandlers() []gin.HandlerFunc {
@@ -258,44 +503,13 @@ func (handler *UserResetHandler) getHandlers() []gin.HandlerFunc {
 
 func (handler *UserResetHandler) getRelativePath() string { return "/user/reset" }
 
-func (handler *UserResetHandler) help() string {
-	return `POST /api/user/reset
-	重置用户proxy密钥
-	body: {"target": "", "user": ""}`
-}
+func (handler *UserResetHandler) help() string { return userResetHelpText }
 
 // UserResetTrafficHandler POST /user/reset-traffic — 重置用户累计持久化流量统计
 type UserResetTrafficHandler struct{ HttpHandlerImp }
 
 func (handler *UserResetTrafficHandler) handlerFunc(c *gin.Context) {
-	var req struct {
-		Target string `json:"target"`
-		User   string `json:"user"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
-		return
-	}
-	if req.User == "" {
-		jsonErr(c, 400, "user is required")
-		return
-	}
-	req.Target = resolveTarget(req.Target, handler.getHttpServer().Name)
-	userPoint := &proto.User{Name: req.User}
-	nodes := handler.getHttpServer().GetTargetNodes(req.Target)
-	if len(nodes) == 0 {
-		jsonErr(c, 502, "no available node")
-		return
-	}
-	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
-	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.ResetUserTrafficReqType, &proto.UserOpReq{Users: []*proto.User{userPoint}}, handler.getHttpServer().GetClusterToken())
-	if len(failedList) != 0 {
-		errMsg := joinFailedList(failedList)
-		log.Errorf("Err=%s|User=%s|Target=%s", errMsg, req.User, req.Target)
-		jsonErr(c, 500, errMsg)
-		return
-	}
-	jsonOK(c)
+	endpointHandlerFunc(handler.getHttpServer().userResetTrafficEndpoint())(c)
 }
 
 func (handler *UserResetTrafficHandler) getHandlers() []gin.HandlerFunc {
@@ -304,57 +518,14 @@ func (handler *UserResetTrafficHandler) getHandlers() []gin.HandlerFunc {
 
 func (handler *UserResetTrafficHandler) getRelativePath() string { return "/user/reset-traffic" }
 
-func (handler *UserResetTrafficHandler) help() string {
-	return `POST /api/user/reset-traffic
-	重置用户累计持久化流量统计 (TrafficTotalUplink/Downlink 清零)
-	节点自治: 每个目标节点各自清零本地累计值; target 为空默认作用本机。
-	body: {"target": "", "user": ""}`
-}
+func (handler *UserResetTrafficHandler) help() string { return userResetTrafficHelpText }
 
 // UserResetAuthTokenHandler POST /user/reset-token — reset the caller's own auth token.
 // Available to any authenticated user (normal or admin).
 type UserResetAuthTokenHandler struct{ HttpHandlerImp }
 
 func (handler *UserResetAuthTokenHandler) handlerFunc(c *gin.Context) {
-	usernameVal, exists := c.Get(auth.ContextKeyUsername)
-	if !exists {
-		c.JSON(401, gin.H{"code": 401, "msg": "JWT required"})
-		return
-	}
-	username, _ := usernameVal.(string)
-
-	var req struct {
-		Target string `json:"target"`
-	}
-	// Body is optional — GET-style usage without body is still valid.
-	_ = c.ShouldBindJSON(&req)
-
-	newToken := uuid.NewString()
-
-	s := handler.getHttpServer()
-	target := resolveTarget(req.Target, s.Name)
-	nodes := s.GetTargetNodes(target)
-	if len(nodes) == 0 {
-		c.JSON(200, gin.H{"code": 300, "msg": "no available node"})
-		return
-	}
-	rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
-	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
-		c.Request.Context(),
-		client.ResetAuthTokenReqType,
-		&proto.ResetAuthTokenReq{Username: username, NewToken: newToken},
-		s.GetClusterToken(),
-	)
-	if len(failedList) != 0 && len(succList) == 0 {
-		log.Errorf("[ResetAuthToken] failed|User=%s|Err=%s", username, joinFailedList(failedList))
-		c.JSON(200, gin.H{"code": 300, "msg": joinFailedList(failedList)})
-		return
-	}
-	msg := "ok"
-	if len(failedList) != 0 {
-		msg = joinFailedList(failedList)
-	}
-	c.JSON(200, gin.H{"code": 0, "msg": msg, "auth_token": newToken})
+	endpointHandlerFunc(handler.getHttpServer().userResetAuthTokenEndpoint())(c)
 }
 
 func (handler *UserResetAuthTokenHandler) getHandlers() []gin.HandlerFunc {
@@ -363,12 +534,7 @@ func (handler *UserResetAuthTokenHandler) getHandlers() []gin.HandlerFunc {
 
 func (handler *UserResetAuthTokenHandler) getRelativePath() string { return "/user/reset-token" }
 
-func (handler *UserResetAuthTokenHandler) help() string {
-	return `POST /api/user/reset-token
-	重置当前用户的auth token
-	Body (optional): {"target":"node1"}
-	  target: 目标节点名，空则默认本机`
-}
+func (handler *UserResetAuthTokenHandler) help() string { return userResetAuthTokenHelpText }
 
 const userListHelpText = `GET /api/user
 	获取用户信息。管理员返回全部用户，普通用户返回自己的数据。

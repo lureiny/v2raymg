@@ -2,7 +2,6 @@ package http
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -85,32 +84,55 @@ func (handler *NodeGroupsGetHandler) help() string {
 	return nodeGroupsGetHelp
 }
 
+const nodeGroupsSetHelp = `PUT /api/node/:name/groups
+	设置节点所属 groups
+	path: name — 目标节点名
+	body: {"groups": ["default", "hk"]}`
+
+// NodeGroupsSetReq is the request payload for PUT /node/:name/groups (MCP tool: set_node_groups).
+type NodeGroupsSetReq struct {
+	Name   string   `json:"name" path:"name" jsonschema:"Target cluster node name or node_id whose assigned groups will be replaced."`
+	Groups []string `json:"groups" jsonschema:"List of group names to assign to the target cluster node."`
+}
+
+func (s *HttpServer) nodeGroupsSetEndpoint() Endpoint[NodeGroupsSetReq, map[string]any] {
+	return Endpoint[NodeGroupsSetReq, map[string]any]{
+		Method:         http.MethodPut,
+		Path:           "/node/:name/groups",
+		Scope:          ScopeAdmin,
+		Help:           nodeGroupsSetHelp,
+		MCPName:        "set_node_groups",
+		MCPDescription: "Set the list of groups assigned to a specific cluster node identified by node name or node_id.",
+		ReadOnly:       false,
+		Destructive:    false,
+		Execute: func(ctx context.Context, caller Caller, req NodeGroupsSetReq) (map[string]any, error) {
+			if req.Name == "" {
+				return nil, NewEndpointErr(http.StatusBadRequest, "name is required")
+			}
+			nodes := s.GetTargetNodes(req.Name)
+			if len(nodes) == 0 {
+				return nil, NewEndpointErr(http.StatusBadGateway, "no available node")
+			}
+			rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
+			if rpcClient == nil {
+				return nil, NewEndpointErr(http.StatusInternalServerError, "local node not initialized")
+			}
+			_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(ctx, client.SetNodeGroupsReqType, &proto.SetNodeGroupsReq{Groups: req.Groups}, s.GetClusterToken())
+			if len(failedList) != 0 {
+				errMsg := joinFailedList(failedList)
+				log.Errorf("Err=%s|Node=%s", errMsg, req.Name)
+				return nil, NewEndpointErr(http.StatusInternalServerError, errMsg)
+			}
+			return map[string]any{"code": 0, "msg": "ok"}, nil
+		},
+	}
+}
+
 // NodeGroupsSetHandler PUT /node/:name/groups
 type NodeGroupsSetHandler struct{ HttpHandlerImp }
 
 func (handler *NodeGroupsSetHandler) handlerFunc(c *gin.Context) {
-	name := c.Param("name")
-	var body struct {
-		Groups []string `json:"groups"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		jsonErr(c, 400, fmt.Sprintf("invalid request body: %v", err))
-		return
-	}
-	nodes := handler.getHttpServer().GetTargetNodes(name)
-	if len(nodes) == 0 {
-		jsonErr(c, 502, "no available node")
-		return
-	}
-	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
-	_, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.SetNodeGroupsReqType, &proto.SetNodeGroupsReq{Groups: body.Groups}, handler.getHttpServer().GetClusterToken())
-	if len(failedList) != 0 {
-		errMsg := joinFailedList(failedList)
-		log.Errorf("Err=%s|Node=%s", errMsg, name)
-		jsonErr(c, 500, errMsg)
-		return
-	}
-	jsonOK(c)
+	endpointHandlerFunc(handler.getHttpServer().nodeGroupsSetEndpoint())(c)
 }
 
 func (handler *NodeGroupsSetHandler) getHandlers() []gin.HandlerFunc {
@@ -120,8 +142,5 @@ func (handler *NodeGroupsSetHandler) getHandlers() []gin.HandlerFunc {
 func (handler *NodeGroupsSetHandler) getRelativePath() string { return "/node/:name/groups" }
 
 func (handler *NodeGroupsSetHandler) help() string {
-	return `PUT /api/node/:name/groups
-	设置节点所属 groups
-	path: name — 目标节点名
-	body: {"groups": ["default", "hk"]}`
+	return nodeGroupsSetHelp
 }
