@@ -412,3 +412,67 @@ func TestExecutor_GetGRPCAddress(t *testing.T) {
 		t.Errorf("GRPCAPIAddress = %v, want %v", exec.config.GRPCAPIAddress, "192.168.1.1:62789")
 	}
 }
+
+func TestExecutor_StartUserEventHandler_IdempotentAndStoppable(t *testing.T) {
+	um := usermanager.NewUserManager(nil, "test-node")
+	exec, err := NewExecutor(ExecutorConfig{
+		BinaryPath:  filepath.Join(t.TempDir(), "xray-nonexistent"),
+		UserManager: um,
+	})
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	defer exec.Close()
+
+	if !exec.startUserEventHandler() {
+		t.Fatal("first startUserEventHandler must return true")
+	}
+	if exec.startUserEventHandler() {
+		t.Fatal("second startUserEventHandler must be idempotent and return false")
+	}
+	if exec.userEventStopCh == nil {
+		t.Fatal("expected userEventStopCh to be non-nil while handler is running")
+	}
+
+	// Emit a user event while handler is active, then stop cleanly.
+	_ = um.AddUser(usermanager.AddUserRequest{Username: "alice", Password: "pw"})
+
+	exec.stopUserEventHandler()
+	if exec.userEventStopCh != nil {
+		t.Fatal("expected userEventStopCh to be nil after stopUserEventHandler")
+	}
+
+	if !exec.startUserEventHandler() {
+		t.Fatal("startUserEventHandler after stop must return true")
+	}
+
+	// Close must tear down handler, reconcile loop, and forwardUserEvents idempotently.
+	exec.Close()
+	exec.Close()
+	if exec.userEventStopCh != nil || exec.userMgrSubCh != nil {
+		t.Fatal("expected userEventStopCh and userMgrSubCh to be cleared after Close")
+	}
+}
+
+func TestExecutor_StartFailure_RollsBackLoops(t *testing.T) {
+	um := usermanager.NewUserManager(nil, "test-node")
+	exec, err := NewExecutor(ExecutorConfig{
+		BinaryPath:   filepath.Join(t.TempDir(), "subdir", "xray-nonexistent"),
+		AutoDownload: false,
+		UserManager:  um,
+	})
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	defer exec.Close()
+
+	if err := exec.Start(); err == nil {
+		t.Fatal("expected Start to fail for missing binary")
+	}
+	if exec.userEventStopCh != nil {
+		t.Fatal("failed Start must stop and clear userEventStopCh")
+	}
+	if exec.reconcileStopCh != nil {
+		t.Fatal("failed Start must stop and clear reconcileStopCh")
+	}
+}

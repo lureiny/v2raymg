@@ -43,8 +43,15 @@ type Executor struct {
 	renderer                 *Renderer
 
 	// UserManager integration
-	userMgr     *usermanager.UserManager
-	userEventCh chan usermanager.UserEvent
+	userMgr         *usermanager.UserManager
+	userEventCh     chan usermanager.UserEvent
+	userEventStopCh chan struct{}
+	userEventWg     sync.WaitGroup
+	userMgrSubCh    <-chan usermanager.UserEvent
+	forwardStopCh   chan struct{}
+	forwardWg       sync.WaitGroup
+	lifecycleMu     sync.Mutex
+	closeOnce       sync.Once
 
 	// certManager provides certificate lookup for TLS inbounds.
 	// Optional: only required when FastAddInbound is called with a domain parameter.
@@ -166,7 +173,7 @@ func NewExecutor(cfg ExecutorConfig) (*Executor, error) {
 	if cfg.UserManager != nil {
 		e.userMgr = cfg.UserManager
 		e.userEventCh = make(chan usermanager.UserEvent, 100)
-		go e.forwardUserEvents(cfg.UserManager.Subscribe())
+		e.forwardStopCh = make(chan struct{})
 	}
 	if cfg.CertManager != nil {
 		e.certManager = cfg.CertManager
@@ -209,6 +216,13 @@ func NewExecutor(cfg ExecutorConfig) (*Executor, error) {
 		}
 		updater.SetProcessController(e)
 		e.updater = updater
+	}
+
+	if cfg.UserManager != nil {
+		sub := cfg.UserManager.Subscribe()
+		e.userMgrSubCh = sub
+		e.forwardWg.Add(1)
+		go e.forwardUserEvents(sub, e.forwardStopCh)
 	}
 
 	return e, nil
@@ -436,10 +450,22 @@ func (e *Executor) Start() error {
 
 	// Step 1: Start user event handler (for checkUser sync)
 	// This must be done before starting to process user events
-	e.startUserEventHandler()
+	startedHandler := e.startUserEventHandler()
 
 	// Step 1b: Start periodic user reconciliation
-	e.startReconcileLoop()
+	startedReconcile := e.startReconcileLoop()
+
+	started := false
+	defer func() {
+		if !started {
+			if startedReconcile {
+				e.stopReconcileLoop()
+			}
+			if startedHandler {
+				e.stopUserEventHandler()
+			}
+		}
+	}()
 
 	// Step 2: Ensure binary exists
 	if err := e.EnsureBinary(context.Background()); err != nil {
@@ -460,6 +486,7 @@ func (e *Executor) Start() error {
 	// Without this delay, subsequent gRPC calls may fail because xray hasn't
 	// begun execution yet.
 	time.Sleep(500 * time.Millisecond)
+	started = true
 	return nil
 }
 
@@ -476,9 +503,33 @@ func (e *Executor) IsRunning() bool {
 
 // Stop stops the Xray process directly (for Updater).
 func (e *Executor) Stop() error {
-	// Stop the reconcile loop first
+	// Stop background loops before stopping the process.
 	e.stopReconcileLoop()
+	e.stopUserEventHandler()
 	return e.Runner.Stop()
+}
+
+// Close tears down background loops and the UserManager event subscription
+// started at construction. Safe to call multiple times and concurrently.
+func (e *Executor) Close() {
+	e.closeOnce.Do(func() {
+		e.stopReconcileLoop()
+		e.stopUserEventHandler()
+
+		e.lifecycleMu.Lock()
+		stopCh := e.forwardStopCh
+		sub := e.userMgrSubCh
+		e.userMgrSubCh = nil
+		e.lifecycleMu.Unlock()
+
+		if stopCh != nil {
+			close(stopCh)
+		}
+		if e.userMgr != nil && sub != nil {
+			e.userMgr.Unsubscribe(sub)
+		}
+		e.forwardWg.Wait()
+	})
 }
 
 // Restart restarts the Xray process directly (for Container interface).
@@ -940,31 +991,78 @@ func (e *Executor) UserEventChannel() <-chan usermanager.UserEvent {
 }
 
 // forwardUserEvents forwards events from UserManager to local channel.
-func (e *Executor) forwardUserEvents(source <-chan usermanager.UserEvent) {
-	for event := range source {
-		if e.userEventCh != nil {
-			select {
-			case e.userEventCh <- event:
-			default:
-				// Channel full, event dropped
+func (e *Executor) forwardUserEvents(source <-chan usermanager.UserEvent, stopCh <-chan struct{}) {
+	defer e.forwardWg.Done()
+	for {
+		select {
+		case event, ok := <-source:
+			if !ok {
+				return
 			}
+			if e.userEventCh != nil {
+				select {
+				case e.userEventCh <- event:
+				default:
+					// Channel full, event dropped
+				}
+			}
+		case <-stopCh:
+			return
 		}
 	}
 }
 
 // startUserEventHandler starts a goroutine to process user events from the channel.
-// This implements the checkUser logic: when a user is added, it allocates a port,
-// creates a forward rule, and adds the user to the inbound. When removed, it reverses.
-func (e *Executor) startUserEventHandler() {
+// It is idempotent so repeated Start() calls cannot spawn duplicate consumers,
+// returning true only when a new handler loop was started.
+func (e *Executor) startUserEventHandler() bool {
 	if e.userEventCh == nil {
-		return
+		return false
 	}
 
-	go func() {
-		for event := range e.userEventCh {
-			e.handleUserEvent(event)
+	e.lifecycleMu.Lock()
+	if e.userEventStopCh != nil {
+		e.lifecycleMu.Unlock()
+		return false
+	}
+	stopCh := make(chan struct{})
+	e.userEventStopCh = stopCh
+	e.userEventWg.Add(1)
+	e.lifecycleMu.Unlock()
+
+	go func(stopCh <-chan struct{}) {
+		defer e.userEventWg.Done()
+		for {
+			select {
+			case <-stopCh:
+				return
+			default:
+			}
+			select {
+			case <-stopCh:
+				return
+			case event, ok := <-e.userEventCh:
+				if !ok {
+					return
+				}
+				e.handleUserEvent(event)
+			}
 		}
-	}()
+	}(stopCh)
+	return true
+}
+
+// stopUserEventHandler stops the user event handler goroutine and waits for it to exit.
+func (e *Executor) stopUserEventHandler() {
+	e.lifecycleMu.Lock()
+	stopCh := e.userEventStopCh
+	e.userEventStopCh = nil
+	e.lifecycleMu.Unlock()
+
+	if stopCh != nil {
+		close(stopCh)
+		e.userEventWg.Wait()
+	}
 }
 
 // handleUserEvent processes a single user event from usermanager.
@@ -1128,23 +1226,28 @@ func (e *Executor) reconcileUsersForInbound(tag string) {
 }
 
 // startReconcileLoop starts the periodic user reconciliation goroutine.
-func (e *Executor) startReconcileLoop() {
+// It is idempotent and returns true only when a new reconcile loop was started.
+func (e *Executor) startReconcileLoop() bool {
 	// Idempotent: a non-nil reconcileStopCh means a loop is already running.
 	// Now that IsRunning reflects real liveness, the updater can skip Stop and
 	// call Start on a crashed executor; without this guard that would spawn a
 	// second reconcile goroutine and race on reconcileStopCh.
+	e.lifecycleMu.Lock()
 	if e.reconcileStopCh != nil {
-		return
+		e.lifecycleMu.Unlock()
+		return false
 	}
 	interval := e.config.ReconcileInterval
 	if interval <= 0 {
 		interval = 30 * time.Second // default
 	}
 
-	e.reconcileStopCh = make(chan struct{})
+	stopCh := make(chan struct{})
+	e.reconcileStopCh = stopCh
 	e.reconcileWg.Add(1)
+	e.lifecycleMu.Unlock()
 
-	go func() {
+	go func(stopCh <-chan struct{}) {
 		defer e.reconcileWg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -1153,19 +1256,24 @@ func (e *Executor) startReconcileLoop() {
 			select {
 			case <-ticker.C:
 				e.reconcileUsers()
-			case <-e.reconcileStopCh:
+			case <-stopCh:
 				return
 			}
 		}
-	}()
+	}(stopCh)
+	return true
 }
 
 // stopReconcileLoop stops the periodic user reconciliation goroutine gracefully.
 func (e *Executor) stopReconcileLoop() {
-	if e.reconcileStopCh != nil {
-		close(e.reconcileStopCh)
+	e.lifecycleMu.Lock()
+	stopCh := e.reconcileStopCh
+	e.reconcileStopCh = nil
+	e.lifecycleMu.Unlock()
+
+	if stopCh != nil {
+		close(stopCh)
 		e.reconcileWg.Wait()
-		e.reconcileStopCh = nil
 	}
 }
 

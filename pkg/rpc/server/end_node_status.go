@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"io"
 	"math"
 	"os"
 	"runtime"
@@ -37,6 +38,15 @@ var (
 	// netMonitorIfaceSet is pre-built by InitNetSpeedMonitor.
 	// nil means collect all non-loopback interfaces (fallback).
 	netMonitorIfaceSet map[string]struct{}
+
+	// procReadBufPool reuses 32 KB scratch buffers when counting /proc/net/tcp*
+	// lines every second, avoiding a 256 KB heap allocation per file per tick.
+	procReadBufPool = sync.Pool{
+		New: func() any {
+			b := make([]byte, 32*1024)
+			return &b
+		},
+	}
 )
 
 func initCPUSampler() {
@@ -419,17 +429,33 @@ func countLinesInFile(path string) int {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 256*1024), 1024*1024) // /proc/net/tcp can exceed default 64KB
+	bp := procReadBufPool.Get().(*[]byte)
+	defer procReadBufPool.Put(bp)
+	buf := *bp
+
+	seenHeader := false
+	hasNonSpace := false
 	count := 0
-	first := true
-	for scanner.Scan() {
-		if first {
-			first = false
-			continue // skip header
+
+	for {
+		n, err := f.Read(buf)
+		for _, b := range buf[:n] {
+			if b == '\n' {
+				if !seenHeader {
+					seenHeader = true
+				} else if hasNonSpace {
+					count++
+				}
+				hasNonSpace = false
+			} else if b != ' ' && b != '\t' && b != '\r' && b != '\v' && b != '\f' {
+				hasNonSpace = true
+			}
 		}
-		if strings.TrimSpace(scanner.Text()) != "" {
-			count++
+		if err != nil {
+			if err == io.EOF && seenHeader && hasNonSpace {
+				count++
+			}
+			break
 		}
 	}
 	return count

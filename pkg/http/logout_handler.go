@@ -22,7 +22,11 @@ func (handler *LogoutHandler) handlerFunc(c *gin.Context) {
 	if len(authHeader) > 7 {
 		s := handler.getHttpServer()
 		if claims, err := auth.ParseJWT(s.jwtSecret, authHeader[7:]); err == nil {
-			auth.BlacklistAdd(claims.JTI)
+			if claims.ExpiresAt != nil {
+				auth.BlacklistAddWithExpiry(claims.JTI, claims.ExpiresAt.Time)
+			} else {
+				auth.BlacklistAdd(claims.JTI)
+			}
 			log.Info("[Logout] token revoked", "username", claims.Username, "jti", claims.JTI)
 		}
 	}
