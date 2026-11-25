@@ -601,16 +601,28 @@ func (s *EndNodeServer) SetInboundAccessTags(ctx context.Context, req *proto.Set
 }
 
 func (s *EndNodeServer) inboundTagExistsAnywhere(tag string) (contracts.ContainerType, bool) {
-	if s.containerMgr == nil || tag == "" {
+	if s == nil || tag == "" {
 		return "", false
 	}
-	for _, ct := range s.containerMgr.Types() {
-		c, ok := s.containerMgr.Get(ct)
-		if !ok {
-			continue
+	if s.containerMgr != nil {
+		for _, ct := range s.containerMgr.Types() {
+			c, ok := s.containerMgr.Get(ct)
+			if !ok {
+				continue
+			}
+			if inb, err := c.GetInboundConfig(tag); err == nil && inb != nil {
+				return ct, true
+			}
 		}
-		if inb, err := c.GetInboundConfig(tag); err == nil && inb != nil {
-			return ct, true
+	}
+	if s.inboundStore != nil {
+		rec, err := s.inboundStore.Get(tag)
+		if err != nil {
+			log.Warn("check inbound tag in store failed", "tag", tag, "err", err)
+			return "", false
+		}
+		if rec != nil {
+			return contracts.ContainerType(rec.ContainerType), true
 		}
 	}
 	return "", false

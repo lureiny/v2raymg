@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -19,6 +20,8 @@ import (
 	"github.com/lureiny/v2raymg/pkg/proxy/forward"
 	"github.com/lureiny/v2raymg/pkg/proxy/usermanager"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
+	"github.com/lureiny/v2raymg/pkg/store"
+	"github.com/lureiny/v2raymg/pkg/store/migrations"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -675,4 +678,112 @@ func TestUserRPC_ChainIsolationAndProfileAndGetSub(t *testing.T) {
 	assert.Equal(t, []string{"hk"}, syncProto.GetUser().GetInboundTags())
 	roundTrip := protoClusterUserSyncToUser(syncProto)
 	assert.Equal(t, []string{"hk"}, roundTrip.InboundTags)
+}
+
+type stubInboundStore struct {
+	getFn func(tag string) (*store.InboundRecord, error)
+}
+
+func (s *stubInboundStore) Load() ([]*store.InboundRecord, error) { return nil, nil }
+func (s *stubInboundStore) Get(tag string) (*store.InboundRecord, error) {
+	return s.getFn(tag)
+}
+func (s *stubInboundStore) Save(*store.InboundRecord) error { return nil }
+func (s *stubInboundStore) Delete(string) error             { return nil }
+
+func TestInboundTagUniqueness_PersistedStoreDisabledContainer(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "test.db")
+	sm, err := store.NewStoreManager(dsn, migrations.All)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sm.Close() })
+
+	// Persist an inbound belonging to hysteria while hysteria is NOT registered
+	// in ContainerMgr (simulating a disabled container with a stale DB row).
+	err = sm.InboundStore().Save(&store.InboundRecord{
+		Tag:           "hy2-persisted",
+		ContainerType: string(contracts.ContainerHysteria),
+		CertSource:    "none",
+		NativeJSON:    []byte(`{"tag":"hy2-persisted"}`),
+	})
+	require.NoError(t, err)
+
+	xray := &chainContainerStub{
+		captureContainer: captureContainer{kind: contracts.ContainerXray},
+		supportsChain:    true,
+	}
+	mgr := container.NewContainerMgr(nil, container.BuildOptions{})
+	mgr.SetForTest(contracts.ContainerXray, xray)
+	certs := &certSpyMgr{certDir: t.TempDir()}
+
+	srv := &EndNodeServer{
+		containerMgr: mgr,
+		certManager:  certs,
+	}
+	srv.SetInboundStore(sm.InboundStore())
+
+	// Direct check finds persisted disabled-container tag and misses absent tag.
+	ct, exists := srv.inboundTagExistsAnywhere("hy2-persisted")
+	assert.True(t, exists)
+	assert.Equal(t, contracts.ContainerHysteria, ct)
+
+	ct, exists = srv.inboundTagExistsAnywhere("not-in-store")
+	assert.False(t, exists)
+	assert.Empty(t, ct)
+
+	// FastAddInbound rejects duplicate tag targeting another container before cert acquisition.
+	fastRsp, err := srv.FastAddInbound(context.Background(), &proto.FastAddInboundReq{
+		InboundBuilderType: proto.BuilderType_VLESSSettingBuilderType,
+		ContainerType:      "xray",
+		Domain:             "dup.example.com",
+		Security:           "tls",
+		Tag:                "hy2-persisted",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1020), fastRsp.Code)
+	assert.Contains(t, fastRsp.Msg, "already exists in container hysteria")
+	assert.Empty(t, certs.obtainCalls, "ObtainNewCert must NOT be called when persisted tag collides")
+	assert.Empty(t, xray.lastTag)
+
+	// AddInbound also rejects duplicate persisted tag before touching xray runtime.
+	dupJSON := base64.StdEncoding.EncodeToString([]byte(`{"tag":"hy2-persisted","port":10001,"protocol":"vless"}`))
+	addRsp, err := srv.AddInbound(context.Background(), &proto.InboundOpReq{InboundInfo: dupJSON})
+	require.NoError(t, err)
+	assert.Equal(t, int32(601), addRsp.Code)
+	assert.Contains(t, addRsp.Msg, "already exists in container hysteria")
+	assert.Empty(t, xray.nativeAdded)
+
+	// FastAddInbound succeeds for a fresh tag not present in ContainerMgr or InboundStore.
+	okRsp, err := srv.FastAddInbound(context.Background(), &proto.FastAddInboundReq{
+		InboundBuilderType: proto.BuilderType_VLESSSettingBuilderType,
+		ContainerType:      "xray",
+		Port:               10002,
+		Security:           "none",
+		Tag:                "xray-fresh",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), okRsp.Code, "unexpected error: %s", okRsp.Msg)
+	assert.Equal(t, "xray-fresh", xray.lastTag)
+
+	// containerMgr == nil still checks inboundStore safely without panicking.
+	nilMgrSrv := &EndNodeServer{}
+	nilMgrSrv.SetInboundStore(sm.InboundStore())
+	ct, exists = nilMgrSrv.inboundTagExistsAnywhere("hy2-persisted")
+	assert.True(t, exists)
+	assert.Equal(t, contracts.ContainerHysteria, ct)
+
+	ct, exists = nilMgrSrv.inboundTagExistsAnywhere("not-in-store")
+	assert.False(t, exists)
+	assert.Empty(t, ct)
+
+	// Non-nil record paired with an error from store.Get is not treated as an existing tag.
+	errSrv := &EndNodeServer{
+		inboundStore: &stubInboundStore{
+			getFn: func(string) (*store.InboundRecord, error) {
+				return &store.InboundRecord{}, errors.New("db read failed")
+			},
+		},
+	}
+	ct, exists = errSrv.inboundTagExistsAnywhere("hy2-persisted")
+	assert.False(t, exists)
+	assert.Empty(t, ct)
 }

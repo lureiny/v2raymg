@@ -18,6 +18,7 @@ import (
 	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription"
 	"github.com/lureiny/v2raymg/pkg/proxy/usermanager"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
+	"github.com/lureiny/v2raymg/pkg/store"
 
 	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/encoding"
@@ -52,6 +53,7 @@ type EndNodeServer struct {
 	userMgr      *usermanager.UserManager
 	containerMgr *container.ContainerMgr
 	subMgr       *subscription.Manager
+	inboundStore store.InboundStore
 }
 
 const (
@@ -80,6 +82,15 @@ func (s *EndNodeServer) ContainerMgr() *container.ContainerMgr {
 		return nil
 	}
 	return s.containerMgr
+}
+
+// SetInboundStore injects the persistent inbound store used for global
+// cross-container tag uniqueness checks (including disabled containers).
+func (s *EndNodeServer) SetInboundStore(st store.InboundStore) {
+	if s == nil {
+		return
+	}
+	s.inboundStore = st
 }
 
 // heartbeatInterval returns the configured cluster heartbeat period, falling back

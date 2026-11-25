@@ -83,14 +83,14 @@ ALTER TABLE inbounds ADD COLUMN remark TEXT NOT NULL DEFAULT '';
 // ChainCapable 由支持动态链式出站的 Container 实现（遵循开闭原则，不污染模式 A 容器）。
 type ChainCapable interface {
     SupportsChainOutbound() bool
-    ValidateChainTarget(spec *chain.OutboundSpec) error
+    ValidateChainURI(rawURI string) error
 }
 ```
 
 | Container | 适配模式 | `SupportsChainOutbound` | 支持的前置 Inbound 协议 | 支持拨号的后端 `chain_uri` 协议 | 架构依据与边界说明 |
 | :--- | :---: | :---: | :--- | :--- | :--- |
-| **`mihomo`** | 模式 B | **支持（主力推荐）** | `vless`, `vmess`, `trojan`, `ss`, `hysteria2`, `tuic`, `anytls` | `vless`(加密 `none`), `vmess`, `trojan`, `ss`(含 `obfs`/`v2ray-plugin`/`shadow-tls`), `hy2`/`hysteria2`(含 `user:pass` 与 `mport`), `tuic`(v5), `anytls`, `socks5`, `http(s)` | REST `PUT /configs?force=false` 原生支持 `proxies[]` + `listener.proxy` 1:1 绑定且热更不断流；**不支持** `httpupgrade`/`xhttp` 出站及 Xray 专属 VLESS `mlkem768` 加密（由 `ValidateChainTarget` 拦截并提示改用 `xray`） |
-| **`xray`** | 模式 B | **支持** | `vless`, `vmess`, `trojan`, `ss` | `vless`(含 `httpupgrade`/`xhttp`/`reality`/`encryption`), `vmess`, `trojan`, `ss`(纯协议及 2022，不含外部 SIP003 插件进程), `socks5`, `http(s)` | 通过 `HandlerService` + `RoutingService` 动态增删 Outbound 与 `inboundTag -> outboundTag` 规则；**不支持** `hy2`/`tuic`/`anytls` 出站（由 `ValidateChainTarget` 拦截并提示改用 `mihomo`） |
+| **`mihomo`** | 模式 B | **支持（主力推荐）** | `vless`, `vmess`, `trojan`, `ss`, `hysteria2`, `tuic`, `anytls` | `vless`(加密 `none`), `vmess`, `trojan`, `ss`(含 `obfs`/`v2ray-plugin`/`shadow-tls`), `hy2`/`hysteria2`(含 `user:pass` 与 `mport`), `tuic`(v5), `anytls`, `socks5`, `http(s)` | REST `PUT /configs?force=false` 原生支持 `proxies[]` + `listener.proxy` 1:1 绑定且热更不断流；**不支持** `httpupgrade`/`xhttp` 出站及 Xray 专属 VLESS `mlkem768` 加密（由 `ValidateChainURI` 拦截并提示改用 `xray`） |
+| **`xray`** | 模式 B | **支持** | `vless`, `vmess`, `trojan`, `ss` | `vless`(含 `httpupgrade`/`xhttp`/`reality`/`encryption`), `vmess`, `trojan`, `ss`(纯协议及 2022，不含外部 SIP003 插件进程), `socks5`, `http(s)` | 通过 `HandlerService` + `RoutingService` 动态增删 Outbound 与 `inboundTag -> outboundTag` 规则；**不支持** `hy2`/`tuic`/`anytls` 出站（由 `ValidateChainURI` 拦截并提示改用 `mihomo`） |
 | **`hysteria`** | 模式 A | **不支持** | 固定 `hysteria-default` | — | 单进程单固定占位 Inbound，无法按新建 Inbound 挂载独立上游（需用 Hy2 做前置入口时请指定 `container="mihomo"`） |
 | **`snell`** | 模式 A | **不支持** | 固定 `snell-default` | — | 单进程单固定 Inbound，且官方闭源 `snell-server` 二进制无上游代理出站能力 |
 
@@ -146,7 +146,7 @@ flowchart TD
 
 1. **Forward 端口分配与动态回收（覆盖 `xray` / `mihomo` / `hysteria` / `snell` 全部 4 容器）**：
    - `FastAddInbound` 先将含 `AccessTags` 的 Inbound 持久化并写入容器内存，再执行 `reconcileUsersForInbound(tag)`：仅对 `CanUserAccessInbound == true` 的用户调用 `AddUser`（`GetBindPort`），未授权用户 **0 端口占用、0 Relay 协程**。
-   - **运行期免重建动态修改 `access_tags`（`SetInboundAccessTags`）**：在 `Container` 接口新增 `SetInboundAccessTags(tag string, accessTags []string) error`（4 个容器统一实现，直连与链式 Inbound 通用），在锁内原子更新内存与 SQLite `inbounds.access_tags`（DB 写入失败回滚内存），**全程不重启、不重载底层代理进程，既有合法用户的长连接零中断**；随后立即调用升级为**双向对账**的 `reconcileUsersForInbound(tag)`（注意：现有 [exec_runner.go](file:///workspace/v2raymg/pkg/proxy/containers/xray/exec_runner.go#L1204-L1226) 与 [container.go](file:///workspace/v2raymg/pkg/proxy/containers/mihomo/container.go#L1041-L1060) 的 `reconcileUsersForInbound` 仅有新增分支，必须补齐“遍历 `listAddedUsers()` 对不再满足 `CanUserAccessInbound` 的失权用户立即 `RemoveUser` 回收端口并断开 Relay”的清理分支）。
+   - **运行期免重建动态修改 `access_tags`（`SetInboundAccessTags`）**：在可选能力接口 `InboundTagUpdater`（[interface.go](file:///workspace/v2raymg/pkg/proxy/core/container/interface.go)）新增 `SetInboundAccessTags(tag string, accessTags []string) error`（4 个容器统一实现，直连与链式 Inbound 通用），在锁内原子更新内存与 SQLite `inbounds.access_tags`（DB 写入失败回滚内存），**全程不重启、不重载底层代理进程，既有合法用户的长连接零中断**；随后立即调用升级为**双向对账**的 `reconcileUsersForInbound(tag)`（注意：现有 [exec_runner.go](file:///workspace/v2raymg/pkg/proxy/containers/xray/exec_runner.go#L1204-L1226) 与 [container.go](file:///workspace/v2raymg/pkg/proxy/containers/mihomo/container.go#L1041-L1060) 的 `reconcileUsersForInbound` 仅有新增分支，必须补齐“遍历 `listAddedUsers()` 对不再满足 `CanUserAccessInbound` 的失权用户立即 `RemoveUser` 回收端口并断开 Relay”的清理分支）。
    - 容器 `handleUserEvent(Add/Update)` 与 30s `reconcileUsers` 对每个 `(user, inbound)` 对执行二次校验：**原先不可见变为可见 $\rightarrow$ 立即 `AddUser` 分配端口；原先可见因撤销 `inbound_tags` 或切换 `group` 变为不可见 $\rightarrow$ 立即 `RemoveUser` 销毁 Forward 规则并释放公网端口**。
    - `UserManager.SetNodeGroups`（[usermanager.go](file:///workspace/v2raymg/pkg/proxy/usermanager/usermanager.go#L267-L281)）更新节点分组后主动触发一次事件广播，消除最长 30s 的对账延迟窗口。
 2. **清理旧 Inbound 端口残留（修复 `ReleaseInboundPorts` 越权撞口隐患）**：
@@ -161,7 +161,7 @@ flowchart TD
    - 未授权用户在私密 Inbound 上无 ForwardRule，调用轮转返回与不存在标签一致的 `no forward rule found`（无存在性探测侧信道）；
    - **顺带修复存量 UDP 轮转退化 Bug**：[usermanager.go](file:///workspace/v2raymg/pkg/proxy/usermanager/usermanager.go#L1035-L1080) `RotateUserPortForInbound` 重建 `tmpRule` / `finalRule` 时补齐拷贝 `Network`、`ListenStack`、`UDPSessionIdleSec`，防止 `mihomo` 的 `hy2`/`tuic` UDP 链式入口轮转端口后退化为 TCP 断流。
 6. **集群用户同步与原子创建**：
-   - `AddUserRequest` 直接支持携带初始 `Role`、`TargetGroup`、`InboundTags` 原子落库并发一次 `UserEventAdd`（消除 [end_node_user.go](file:///workspace/v2raymg/pkg/rpc/server/end_node_user.go#L76-L95) 先无组创建分配全量端口、再 `SetUserGroup` 回收的瞬态抖动）；同步补齐 [copy_user_between_nodes_handler.go](file:///workspace/v2raymg/pkg/http/copy_user_between_nodes_handler.go#L95-L107) 跨节点复制 `inbound_tags`。
+   - `AddUserRequest` 直接支持携带初始 `Role`、`TargetGroup`、`InboundTags` 原子落库并发一次 `UserEventAdd`（消除 [end_node_user.go](file:///workspace/v2raymg/pkg/rpc/server/end_node_user.go#L76-L95) 先无组创建分配全量端口、再 `SetUserGroup` 回收的瞬态抖动）；[copy_user_between_nodes_handler.go](file:///workspace/v2raymg/pkg/http/copy_user_between_nodes_handler.go#L95-L107) 通过 `userToProtoUser`（`GetUsers`）与 `AddUsers` 透明透传 `inbound_tags`（无需直接改动 handler）。
    - `proto.User`（[rpc_server.proto](file:///workspace/v2raymg/pkg/rpc/proto/rpc_server.proto#L7-L25)）新增 `repeated string inbound_tags = 16; bool update_inbound_tags = 17;`；
    - 集群摘要 [hash.go](file:///workspace/v2raymg/pkg/proxy/usermanager/sync/hash.go#L60-L64)：仅当排序去重后的 `len(u.InboundTags) > 0` 时追加 `"inbound_tags"` 标记与 `\x00` 连接串，保证空标签存量用户与旧版本节点 Hash 100% 兼容。
 
@@ -312,7 +312,7 @@ sequenceDiagram
    - 不触碰代理内核、不断开仍然合法的长连接，即时持久化并执行双向 `reconcileUsersForInbound(name)` 回收失权用户端口 / 分配新授权用户端口。
 3. **`POST /api/user` & `PUT /api/user` & `GET /api/user`（MCP: `add_user` / `update_user` / `list_users`）**：
    - 新增 `"inbound_tags": ["home-sh"]`（`PUT /api/user` 使用 `*[]string` 精准区分“不传保持原样”与传 `"inbound_tags": []` 清空用户所有 Inbound 标签）。
-4. **`GET /api/inbounds` & `GET /api/containers`（MCP: `list_inbounds` / `get_node_containers`）增强返回**：
+4. **`GET /api/inbounds` & `GET /api/containers`（MCP: `list_inbounds` / `list_containers`）增强返回**：
    - `GET /api/inbounds` 每个条目返回 `container`、`name`、`inbound_type`（`"direct"`/`"chain"`）、`access_tags`、`remark`、以及链式专有的脱敏 `chain_protocol` 与 `chain_target`；
    - `GET /api/containers` 每个容器增加 `supports_chain` 能力标识。
 

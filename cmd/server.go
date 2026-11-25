@@ -283,6 +283,7 @@ func runEndNode(cfg *appconfig.AppConfig) {
 		nodeMetricCol,
 		nodeStoreAdapter{nodeStore},
 	)
+	rpcServer.SetInboundStore(storeMgr.InboundStore())
 
 	// 9a. Cluster sync — enable on UserManager when configured.
 	if cfg.ClusterUser.Enabled {
