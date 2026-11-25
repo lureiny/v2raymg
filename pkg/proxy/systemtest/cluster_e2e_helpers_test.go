@@ -86,6 +86,9 @@ type clusterOpts struct {
 	// Empty XrayBin makes each node fall back to auto_download.
 	XrayBin   string
 	MihomoBin string
+	// HystBin / SnellBin optionally enable the Mode A containers on every node.
+	HystBin  string
+	SnellBin string
 	// NodeSumSync overrides the node-directory delta sync setting on every end
 	// node; nil keeps the production default (on).
 	NodeSumSync *bool
@@ -172,7 +175,12 @@ func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 		}}
 	}
 
-	configPath := generateE2EConfig(t, e2eServerOpts{
+	xrayConfFile := filepath.Join(dir, "xray.json")
+	if err := writeMinimalXrayConfig(xrayConfFile, xrayGRPCPort); err != nil {
+		t.Fatalf("write xray config for %s: %v", name, err)
+	}
+
+	serverOpts := e2eServerOpts{
 		Dir:          dir,
 		NodeName:     name,
 		HttpPort:     httpPort,
@@ -192,14 +200,35 @@ func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 		NodeSumSync:        c.opts.NodeSumSync,
 		XrayBin:            c.opts.XrayBin,
 		XrayGRPCPort:       xrayGRPCPort,
-		XrayConfFile:       filepath.Join(dir, "xray.json"),
+		XrayConfFile:       xrayConfFile,
 		MihomoBin:          c.opts.MihomoBin,
 		MihomoAPIPort:      mihomoAPIPort,
 		MihomoDataDir:      mihomoDataDir,
 		MihomoConf:         filepath.Join(dir, "mihomo.yaml"),
 		FwdMinPort:         fwdBase,
 		FwdMaxPort:         fwdBase + 500,
-	})
+	}
+	if c.opts.HystBin != "" {
+		hystCert, hystKey, _, _, err := writeTempCert(dir)
+		if err != nil {
+			t.Fatalf("writeTempCert for %s hysteria: %v", name, err)
+		}
+		serverOpts.HystBin = c.opts.HystBin
+		serverOpts.HystConf = filepath.Join(dir, "hysteria.yaml")
+		serverOpts.HystUDPPort = freeUDPPort(t)
+		serverOpts.HystCert = hystCert
+		serverOpts.HystKey = hystKey
+	}
+	if c.opts.SnellBin != "" {
+		snellPort, err := freeTCPPort()
+		if err != nil {
+			t.Fatalf("freeTCPPort for %s snell: %v", name, err)
+		}
+		serverOpts.SnellBin = c.opts.SnellBin
+		serverOpts.SnellConf = filepath.Join(dir, "snell.conf")
+		serverOpts.SnellPort = snellPort
+	}
+	configPath := generateE2EConfig(t, serverOpts)
 
 	logs := &syncBuffer{}
 	cmd := exec.Command(c.bin, "server", "--conf", configPath)

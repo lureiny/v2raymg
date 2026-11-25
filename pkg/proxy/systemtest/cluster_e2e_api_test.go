@@ -20,6 +20,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -195,6 +197,17 @@ func extractE2EMCPText(t *testing.T, res *mcp.CallToolResult) string {
 	return tc.Text
 }
 
+func createStubContainerBin(t *testing.T, dir, name string) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	// Sleep until terminated so Mode A containers load and stay registered
+	// cleanly in CI without downloading external binaries.
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nexec sleep 300\n"), 0o755); err != nil {
+		t.Fatalf("write stub binary %s: %v", p, err)
+	}
+	return p
+}
+
 func TestClusterE2E_FullAPI(t *testing.T) {
 	// Deliberately no network precondition. This suite exercises the HTTP and
 	// cluster planes, not proxy data paths: container binaries are resolved from
@@ -203,10 +216,20 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 	// Requiring a download here would make the whole regression suite hostage to
 	// GitHub reachability. Protocol-level coverage lives in the matrix tests.
 	tmpDir := t.TempDir()
+	hystBin := os.Getenv("HYSTERIA_BIN")
+	if hystBin == "" {
+		hystBin = createStubContainerBin(t, tmpDir, "stub-hysteria")
+	}
+	snellBin := os.Getenv("SNELL_BIN")
+	if snellBin == "" {
+		snellBin = createStubContainerBin(t, tmpDir, "stub-snell")
+	}
 	c := startE2ECluster(t, tmpDir, clusterOpts{
 		HeartbeatIntervalSec: 1,
 		XrayBin:              os.Getenv("XRAY_BIN"),
 		MihomoBin:            os.Getenv("MIHOMO_BIN"),
+		HystBin:              hystBin,
+		SnellBin:             snellBin,
 	})
 	for i := 0; i < 3; i++ {
 		c.addEndNode(t)
@@ -261,8 +284,62 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 	t.Run("GET_containers", func(t *testing.T) {
 		code, body, err := nodeA.apiGet("/api/containers", url.Values{"target": {"all"}})
 		requireOK(t, "GET /api/containers", code, body, err)
-		if !strings.Contains(string(body), "xray") {
-			t.Errorf("containers response has no xray entry: %s", truncate(string(body), 600))
+
+		var parsed struct {
+			Nodes   map[string][]string `json:"nodes"`
+			Failed  map[string]string   `json:"failed"`
+			Details map[string][]struct {
+				Type          string `json:"type"`
+				SupportsChain bool   `json:"supports_chain"`
+			} `json:"details"`
+		}
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			t.Fatalf("decode GET /api/containers: %v (body=%s)", err, truncate(string(body), 600))
+		}
+		if len(parsed.Failed) != 0 {
+			t.Fatalf("GET /api/containers reported failures: %v", parsed.Failed)
+		}
+		wantSupport := map[string]bool{
+			"xray":     true,
+			"mihomo":   true,
+			"hysteria": false,
+			"snell":    false,
+		}
+		for _, nodeName := range c.nodeNames() {
+			nodeContainers := parsed.Nodes[nodeName]
+			if len(nodeContainers) == 0 {
+				t.Errorf("GET /api/containers missing nodes[%q]: %+v", nodeName, parsed)
+				continue
+			}
+			nodeSet := map[string]bool{}
+			for _, ct := range nodeContainers {
+				nodeSet[ct] = true
+			}
+			for wantCT := range wantSupport {
+				if !nodeSet[wantCT] {
+					t.Errorf("nodes[%q] missing container %q: %v", nodeName, wantCT, nodeContainers)
+				}
+			}
+
+			detList := parsed.Details[nodeName]
+			if len(detList) == 0 {
+				t.Errorf("GET /api/containers missing details[%q]: %+v", nodeName, parsed)
+				continue
+			}
+			gotDetail := map[string]bool{}
+			for _, d := range detList {
+				gotDetail[d.Type] = d.SupportsChain
+			}
+			for wantCT, wantChain := range wantSupport {
+				got, ok := gotDetail[wantCT]
+				if !ok {
+					t.Errorf("details[%q] missing container %q: %+v", nodeName, wantCT, detList)
+					continue
+				}
+				if got != wantChain {
+					t.Errorf("details[%q][%q].supports_chain = %v, want %v", nodeName, wantCT, got, wantChain)
+				}
+			}
 		}
 	})
 
@@ -303,6 +380,101 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 			"ttl":    172800,
 		})
 		requireOK(t, "PUT /api/user", code, body, err)
+	})
+
+	t.Run("user_inbound_tags_cluster_propagation", func(t *testing.T) {
+		const (
+			tagUser = "e2e-inbound-tag-user"
+			tagPass = "e2e-inbound-tag-pass-1234"
+		)
+		t.Cleanup(func() {
+			_, _, _ = nodeA.apiDelete("/api/user", map[string]any{
+				"target": "all",
+				"user":   tagUser,
+			})
+		})
+
+		fetchUserInboundTags := func(s *e2eServer) ([]string, bool) {
+			code, body, err := s.apiGet("/api/user", url.Values{"target": {s.name}})
+			if err != nil || code != 200 {
+				return nil, false
+			}
+			var usersByNode map[string][]struct {
+				Name        string   `json:"name"`
+				InboundTags []string `json:"inbound_tags"`
+			}
+			if err := json.Unmarshal(body, &usersByNode); err != nil {
+				return nil, false
+			}
+			for _, u := range usersByNode[s.name] {
+				if u.Name == tagUser {
+					return u.InboundTags, true
+				}
+			}
+			return nil, false
+		}
+
+		// POST /api/user with inbound_tags (whitespace & duplicates normalized).
+		code, body, err := nodeA.apiPost("/api/user", map[string]any{
+			"target":       "all",
+			"user":         tagUser,
+			"pwd":          tagPass,
+			"ttl":          86400,
+			"inbound_tags": []string{" vip ", "hk-home", "vip"},
+		})
+		requireOK(t, "POST /api/user with inbound_tags", code, body, err)
+
+		for _, s := range []*e2eServer{nodeA, nodeB, nodeC} {
+			s := s
+			eventually(t, fmt.Sprintf("%s sees %s initial inbound_tags", s.name, tagUser), 20*time.Second, func() bool {
+				tags, ok := fetchUserInboundTags(s)
+				return ok && reflect.DeepEqual(tags, []string{"hk-home", "vip"})
+			})
+		}
+
+		// PUT /api/user omitting inbound_tags must preserve existing tags.
+		code, body, err = nodeA.apiPut("/api/user", map[string]any{
+			"target": "all",
+			"user":   tagUser,
+			"ttl":    172800,
+		})
+		requireOK(t, "PUT /api/user omit inbound_tags", code, body, err)
+		for _, s := range []*e2eServer{nodeA, nodeB, nodeC} {
+			tags, ok := fetchUserInboundTags(s)
+			if !ok || !reflect.DeepEqual(tags, []string{"hk-home", "vip"}) {
+				t.Errorf("%s did not preserve inbound_tags after omitted PUT: ok=%v tags=%v", s.name, ok, tags)
+			}
+		}
+
+		// PUT /api/user updating inbound_tags fans out across all 3 nodes.
+		code, body, err = nodeB.apiPut("/api/user", map[string]any{
+			"target":       "all",
+			"user":         tagUser,
+			"inbound_tags": []string{"sh-home", "alpha"},
+		})
+		requireOK(t, "PUT /api/user update inbound_tags", code, body, err)
+		for _, s := range []*e2eServer{nodeA, nodeB, nodeC} {
+			s := s
+			eventually(t, fmt.Sprintf("%s sees updated inbound_tags", s.name), 20*time.Second, func() bool {
+				tags, ok := fetchUserInboundTags(s)
+				return ok && reflect.DeepEqual(tags, []string{"alpha", "sh-home"})
+			})
+		}
+
+		// PUT /api/user with explicit [] clears inbound_tags across the cluster.
+		code, body, err = nodeC.apiPut("/api/user", map[string]any{
+			"target":       "all",
+			"user":         tagUser,
+			"inbound_tags": []string{},
+		})
+		requireOK(t, "PUT /api/user clear inbound_tags", code, body, err)
+		for _, s := range []*e2eServer{nodeA, nodeB, nodeC} {
+			s := s
+			eventually(t, fmt.Sprintf("%s sees cleared inbound_tags", s.name), 20*time.Second, func() bool {
+				tags, ok := fetchUserInboundTags(s)
+				return ok && len(tags) == 0
+			})
+		}
 	})
 
 	t.Run("PUT_user_role_fans_out", func(t *testing.T) {
@@ -438,6 +610,280 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 		requireRouted(t, "DELETE /api/inbounds", code, body, err)
 	})
 
+	const sharedChainTag = "e2e-chain-shared"
+	t.Cleanup(func() {
+		_, _, _ = nodeA.apiDelete("/api/inbounds", map[string]any{
+			"target": "all", "container": "mihomo", "name": sharedChainTag,
+		})
+	})
+
+	t.Run("chain_inbound_validation_admin_view_and_dynamic_tags", func(t *testing.T) {
+		const (
+			directTagged = "e2e-direct-tagged"
+			chainSecret  = "super-secret-chain-pw-9988"
+			loopSecret   = "loopback-secret-never-leak"
+		)
+		t.Cleanup(func() {
+			_, _, _ = nodeA.apiDelete("/api/inbounds", map[string]any{
+				"target": nodeA.name, "container": "mihomo", "name": directTagged,
+			})
+		})
+
+		// 1. Validation rejections on POST /api/inbound/fast.
+		validationCases := []struct {
+			name     string
+			body     map[string]any
+			wantCode int
+			wantSub  string
+		}{
+			{
+				name: "chain_without_chain_uri",
+				body: map[string]any{
+					"target":       nodeA.name,
+					"container":    "mihomo",
+					"protocol":     "vless",
+					"inbound_type": "chain",
+				},
+				wantCode: http.StatusBadRequest,
+				wantSub:  "chain_uri",
+			},
+			{
+				name: "direct_with_chain_uri",
+				body: map[string]any{
+					"target":       nodeA.name,
+					"container":    "mihomo",
+					"protocol":     "vless",
+					"inbound_type": "direct",
+					"chain_uri":    "socks5://1.2.3.4:1080",
+				},
+				wantCode: http.StatusBadRequest,
+				wantSub:  "chain_uri",
+			},
+			{
+				name: "unsupported_mode_a_snell",
+				body: map[string]any{
+					"target":       nodeA.name,
+					"container":    "snell",
+					"protocol":     "vless",
+					"inbound_type": "chain",
+					"chain_uri":    "socks5://1.2.3.4:1080",
+				},
+				wantCode: http.StatusInternalServerError,
+				wantSub:  "does not support chain outbound",
+			},
+			{
+				name: "unsupported_mode_a_hysteria",
+				body: map[string]any{
+					"target":       nodeA.name,
+					"container":    "hysteria",
+					"protocol":     "vless",
+					"inbound_type": "chain",
+					"chain_uri":    "socks5://1.2.3.4:1080",
+				},
+				wantCode: http.StatusInternalServerError,
+				wantSub:  "does not support chain outbound",
+			},
+			{
+				name: "loopback_rejected_when_disabled",
+				body: map[string]any{
+					"target":       nodeA.name,
+					"container":    "mihomo",
+					"protocol":     "vless",
+					"inbound_type": "chain",
+					"chain_uri":    "socks5://lbuser:" + loopSecret + "@127.0.0.1:17890",
+				},
+				wantCode: http.StatusInternalServerError,
+				wantSub:  "loopback",
+			},
+		}
+		for _, tc := range validationCases {
+			tc := tc
+			t.Run("reject_"+tc.name, func(t *testing.T) {
+				code, body, err := nodeA.apiPost("/api/inbound/fast", tc.body)
+				if err != nil {
+					t.Fatalf("POST /api/inbound/fast (%s): %v", tc.name, err)
+				}
+				if code != tc.wantCode {
+					t.Fatalf("%s: got status %d, want %d (body=%s)", tc.name, code, tc.wantCode, truncate(string(body), 400))
+				}
+				if !strings.Contains(strings.ToLower(string(body)), strings.ToLower(tc.wantSub)) {
+					t.Errorf("%s: body %q missing %q", tc.name, truncate(string(body), 400), tc.wantSub)
+				}
+				if strings.Contains(string(body), loopSecret) {
+					t.Errorf("SECURITY: %s leaked raw chain_uri password in error response: %s", tc.name, truncate(string(body), 400))
+				}
+			})
+		}
+
+		// 2. Create real chain inbound across all 3 nodes + tagged direct inbound on nodeA.
+		code, body, err := nodeA.apiPost("/api/inbound/fast", map[string]any{
+			"target":       "all",
+			"tag":          sharedChainTag,
+			"container":    "mihomo",
+			"protocol":     "ss",
+			"method":       "aes-256-gcm",
+			"inbound_type": "chain",
+			"chain_uri":    "socks5://chainuser:" + chainSecret + "@203.0.113.10:1080#HK-Home",
+			"access_tags":  []string{"vip", "hk"},
+			"remark":       "HK Home",
+		})
+		requireOK(t, "POST /api/inbound/fast shared chain", code, body, err)
+
+		code, body, err = nodeA.apiPost("/api/inbound/fast", map[string]any{
+			"target":       nodeA.name,
+			"tag":          directTagged,
+			"container":    "mihomo",
+			"protocol":     "ss",
+			"method":       "aes-256-gcm",
+			"inbound_type": "direct",
+			"access_tags":  []string{"tier-a"},
+			"remark":       "Direct Tier A",
+		})
+		requireOK(t, "POST /api/inbound/fast tagged direct", code, body, err)
+
+		// 3. Cross-container duplicate tag rejection (mihomo tag rejected on xray and snell).
+		for _, dupContainer := range []string{"xray", "snell"} {
+			code, body, err = nodeA.apiPost("/api/inbound/fast", map[string]any{
+				"target":    nodeA.name,
+				"tag":       sharedChainTag,
+				"container": dupContainer,
+				"protocol":  "vless",
+			})
+			if err != nil {
+				t.Fatalf("POST /api/inbound/fast duplicate on %s: %v", dupContainer, err)
+			}
+			if code == http.StatusOK {
+				t.Fatalf("expected cross-container duplicate tag %q on %s to be rejected, got 200", sharedChainTag, dupContainer)
+			}
+			if !strings.Contains(string(body), "already exists in container mihomo") {
+				t.Errorf("duplicate tag on %s: expected 'already exists in container mihomo', got: %s", dupContainer, truncate(string(body), 400))
+			}
+		}
+
+		// 4. Admin Control Plane GET /api/inbounds returns all inbounds with redacted chain summary.
+		type inboundItem struct {
+			Container     string   `json:"container"`
+			Name          string   `json:"name"`
+			InboundType   string   `json:"inbound_type"`
+			AccessTags    []string `json:"access_tags"`
+			Remark        string   `json:"remark"`
+			ChainProtocol string   `json:"chain_protocol"`
+			ChainTarget   string   `json:"chain_target"`
+		}
+		fetchInbounds := func(s *e2eServer, target string) map[string][]inboundItem {
+			t.Helper()
+			code, body, err := s.apiGet("/api/inbounds", url.Values{"target": {target}})
+			requireOK(t, fmt.Sprintf("%s GET /api/inbounds?target=%s", s.name, target), code, body, err)
+			if strings.Contains(string(body), chainSecret) || strings.Contains(string(body), "chainuser") {
+				t.Fatalf("SECURITY: GET /api/inbounds leaked raw chain_uri credential: %s", truncate(string(body), 600))
+			}
+			if strings.Contains(string(body), "chain_uri") || strings.Contains(string(body), "chain_outbound_uri") {
+				t.Fatalf("SECURITY: GET /api/inbounds exposed raw chain_uri field: %s", truncate(string(body), 600))
+			}
+			var parsed map[string][]inboundItem
+			if err := json.Unmarshal(body, &parsed); err != nil {
+				t.Fatalf("decode GET /api/inbounds: %v (body=%s)", err, truncate(string(body), 600))
+			}
+			return parsed
+		}
+
+		allInbounds := fetchInbounds(nodeC, "all")
+		for _, nodeName := range c.nodeNames() {
+			var foundChain *inboundItem
+			for i := range allInbounds[nodeName] {
+				it := &allInbounds[nodeName][i]
+				if it.Container == "mihomo" && it.Name == sharedChainTag {
+					foundChain = it
+				}
+			}
+			if foundChain == nil {
+				t.Fatalf("GET /api/inbounds[%s] missing %s: %+v", nodeName, sharedChainTag, allInbounds[nodeName])
+			}
+			if foundChain.InboundType != "chain" ||
+				!reflect.DeepEqual(foundChain.AccessTags, []string{"hk", "vip"}) ||
+				foundChain.Remark != "HK Home" ||
+				foundChain.ChainProtocol != "socks5" ||
+				foundChain.ChainTarget != "203.0.113.10:1080" {
+				t.Errorf("GET /api/inbounds[%s] unexpected chain item: %+v", nodeName, *foundChain)
+			}
+		}
+
+		var foundDirect *inboundItem
+		for i := range allInbounds[nodeA.name] {
+			it := &allInbounds[nodeA.name][i]
+			if it.Container == "mihomo" && it.Name == directTagged {
+				foundDirect = it
+			}
+		}
+		if foundDirect == nil {
+			t.Fatalf("GET /api/inbounds[%s] missing %s", nodeA.name, directTagged)
+		}
+		if foundDirect.InboundType != "direct" ||
+			!reflect.DeepEqual(foundDirect.AccessTags, []string{"tier-a"}) ||
+			foundDirect.Remark != "Direct Tier A" ||
+			foundDirect.ChainProtocol != "" ||
+			foundDirect.ChainTarget != "" {
+			t.Errorf("GET /api/inbounds[%s] unexpected direct item: %+v", nodeA.name, *foundDirect)
+		}
+
+		// 5. Dynamic PUT /api/inbounds/tags across cluster nodes.
+		code, body, err = nodeA.apiPut("/api/inbounds/tags", map[string]any{
+			"target":      "all",
+			"container":   "mihomo",
+			"name":        sharedChainTag,
+			"access_tags": []string{" gold ", "alpha", "gold"},
+		})
+		requireOK(t, "PUT /api/inbounds/tags target=all", code, body, err)
+
+		afterUpdate := fetchInbounds(nodeC, "all")
+		for _, nodeName := range c.nodeNames() {
+			var tags []string
+			for _, it := range afterUpdate[nodeName] {
+				if it.Container == "mihomo" && it.Name == sharedChainTag {
+					tags = it.AccessTags
+				}
+			}
+			if !reflect.DeepEqual(tags, []string{"alpha", "gold"}) {
+				t.Errorf("%s after PUT /api/inbounds/tags: access_tags=%v, want [alpha gold]", nodeName, tags)
+			}
+		}
+
+		// Single-node clear on nodeC leaves nodeA/nodeB untouched.
+		code, body, err = nodeB.apiPut("/api/inbounds/tags", map[string]any{
+			"target":      nodeC.name,
+			"container":   "mihomo",
+			"name":        sharedChainTag,
+			"access_tags": []string{},
+		})
+		requireOK(t, "PUT /api/inbounds/tags clear on nodeC", code, body, err)
+
+		afterClear := fetchInbounds(nodeA, "all")
+		for _, nodeName := range c.nodeNames() {
+			var tags []string
+			for _, it := range afterClear[nodeName] {
+				if it.Container == "mihomo" && it.Name == sharedChainTag {
+					tags = it.AccessTags
+				}
+			}
+			if nodeName == nodeC.name {
+				if len(tags) != 0 {
+					t.Errorf("%s expected cleared access_tags, got %v", nodeName, tags)
+				}
+			} else if !reflect.DeepEqual(tags, []string{"alpha", "gold"}) {
+				t.Errorf("%s expected preserved access_tags [alpha gold], got %v", nodeName, tags)
+			}
+		}
+
+		// Restore uniform tags on nodeC before MCP_3node_full_e2e inspects list_inbounds.
+		code, body, err = nodeA.apiPut("/api/inbounds/tags", map[string]any{
+			"target":      nodeC.name,
+			"container":   "mihomo",
+			"name":        sharedChainTag,
+			"access_tags": []string{"alpha", "gold"},
+		})
+		requireOK(t, "PUT /api/inbounds/tags restore nodeC", code, body, err)
+	})
+
 	t.Run("rotate_ports", func(t *testing.T) {
 		code, body, err := nodeA.apiPost("/api/rotateInboundPort", map[string]any{
 			"target": nodeA.name, "username": apiTestUser, "container": "xray",
@@ -563,11 +1009,12 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 
 		// Create a dedicated normal-role user and wait for cluster sync to all 3 nodes.
 		code, body, err := nodeA.apiPost("/api/user", map[string]any{
-			"target": "all",
-			"user":   mcpNormalUser,
-			"pwd":    mcpNormalPass,
-			"role":   "normal",
-			"ttl":    86400,
+			"target":       "all",
+			"user":         mcpNormalUser,
+			"pwd":          mcpNormalPass,
+			"role":         "normal",
+			"ttl":          86400,
+			"inbound_tags": []string{"mcp-vip"},
 		})
 		requireOK(t, "POST /api/user (mcpNormalUser)", code, body, err)
 		t.Cleanup(func() {
@@ -725,6 +1172,24 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 				t.Errorf("list_containers missing %q: %s", wantNode, truncate(containersText, 800))
 			}
 		}
+		var mcpContainers struct {
+			Details map[string][]struct {
+				Type          string `json:"type"`
+				SupportsChain bool   `json:"supports_chain"`
+			} `json:"details"`
+		}
+		if err := json.Unmarshal([]byte(containersText), &mcpContainers); err != nil {
+			t.Fatalf("decode MCP list_containers: %v (text=%s)", err, truncate(containersText, 600))
+		}
+		for _, wantNode := range c.nodeNames() {
+			det := map[string]bool{}
+			for _, d := range mcpContainers.Details[wantNode] {
+				det[d.Type] = d.SupportsChain
+			}
+			if !det["xray"] || !det["mihomo"] || det["hysteria"] || det["snell"] {
+				t.Errorf("MCP list_containers details[%q] unexpected: %+v", wantNode, mcpContainers.Details[wantNode])
+			}
+		}
 
 		// get_node_groups for nodeB verifies path param + groups updated in node_groups_get_and_set.
 		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{
@@ -738,13 +1203,22 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 			t.Errorf("get_node_groups(%s) expected \"premium\", got: %s", nodeB.name, truncate(txt, 400))
 		}
 
-		// list_inbounds across all 3 nodes.
+		// list_inbounds across all 3 nodes: sees chain inbound summary and redacts credentials.
 		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_inbounds"})
 		if err != nil || res.IsError {
 			t.Fatalf("admin CallTool list_inbounds failed: err=%v res=%+v", err, res)
 		}
-		if txt := extractE2EMCPText(t, res); !json.Valid([]byte(txt)) {
-			t.Errorf("list_inbounds returned invalid JSON: %s", truncate(txt, 400))
+		inboundsText := extractE2EMCPText(t, res)
+		if !json.Valid([]byte(inboundsText)) {
+			t.Errorf("list_inbounds returned invalid JSON: %s", truncate(inboundsText, 400))
+		}
+		if !strings.Contains(inboundsText, sharedChainTag) ||
+			!strings.Contains(inboundsText, `"chain_protocol":"socks5"`) ||
+			!strings.Contains(inboundsText, `"chain_target":"203.0.113.10:1080"`) {
+			t.Errorf("MCP list_inbounds missing chain inbound metadata: %s", truncate(inboundsText, 800))
+		}
+		if strings.Contains(inboundsText, "super-secret-chain-pw-9988") || strings.Contains(inboundsText, "chainuser") {
+			t.Errorf("SECURITY: MCP list_inbounds leaked raw chain_uri credential: %s", truncate(inboundsText, 800))
 		}
 
 		// get_inbound graceful handling + validation error mapping to IsError=true.
@@ -794,6 +1268,9 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 		}
 		if !strings.Contains(adminUsersText, "[REDACTED]") {
 			t.Errorf("admin list_users missing [REDACTED] marker: %s", truncate(adminUsersText, 800))
+		}
+		if !strings.Contains(adminUsersText, `"inbound_tags"`) || !strings.Contains(adminUsersText, `"mcp-vip"`) {
+			t.Errorf("admin list_users missing inbound_tags field/value: %s", truncate(adminUsersText, 800))
 		}
 		if strings.Contains(adminUsersText, normalRealAuthToken) {
 			t.Errorf("SECURITY: admin MCP list_users leaked plaintext auth_token for %s", mcpNormalUser)
