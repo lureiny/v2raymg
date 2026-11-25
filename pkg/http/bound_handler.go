@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/gin-gonic/gin"
@@ -58,36 +59,61 @@ func (handler *InboundAddHandler) help() string {
 	container: 可选，目前仅支持 "xray"（默认）；其他container请使用 POST /api/inbound/fast`
 }
 
+const inboundGetHelp = `GET /api/inbound
+	获取inbound详细配置（仅支持 xray container）
+	query: target, src_tag, container(默认xray)`
+
+// InboundGetReq is the request payload for GET /api/inbound and MCP tool get_inbound.
+type InboundGetReq struct {
+	Target    string `json:"target,omitempty" query:"target" default:"all" jsonschema:"Target node name, node_id, or 'all' to query every cluster node (defaults to 'all')"`
+	SrcTag    string `json:"src_tag,omitempty" query:"src_tag" jsonschema:"Optional inbound tag to filter by; omit or leave empty to fetch all xray inbounds"`
+	Container string `json:"container,omitempty" query:"container" default:"xray" jsonschema:"Container type; only 'xray' is supported by get_inbound (defaults to 'xray')"`
+}
+
+func (s *HttpServer) inboundGetEndpoint() Endpoint[InboundGetReq, any] {
+	return Endpoint[InboundGetReq, any]{
+		Method:         "GET",
+		Path:           "/inbound",
+		Scope:          ScopeAdmin,
+		Help:           inboundGetHelp,
+		MCPName:        "get_inbound",
+		MCPDescription: "Get detailed inbound configuration for the 'xray' container on the target cluster node(s). Only container 'xray' is supported (use list_inbounds to list inbounds across all containers); target defaults to 'all' and container defaults to 'xray'.",
+		ReadOnly:       true,
+		Execute: func(ctx context.Context, caller Caller, req InboundGetReq) (any, error) {
+			if req.Target == "" {
+				req.Target = "all"
+			}
+			if req.Container == "" {
+				req.Container = "xray"
+			}
+			// Only xray is supported; other containers not yet implemented
+			if req.Container != "xray" {
+				return nil, NewEndpointErr(400, fmt.Sprintf("container %q not supported via GET /inbound", req.Container))
+			}
+			nodes := s.GetTargetNodes(req.Target)
+			if len(nodes) == 0 {
+				return nil, NewEndpointErr(502, "no available node")
+			}
+			rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
+			succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(ctx, client.GetInboundReqType, &proto.GetInboundReq{Tag: req.SrcTag}, s.GetClusterToken())
+			if len(succList) > 0 {
+				return succList, nil
+			}
+			if len(failedList) != 0 {
+				errMsg := joinFailedList(failedList)
+				log.Errorf("Err=%s|OpType=getInbound|Target=%s", errMsg, req.Target)
+				return nil, NewEndpointErr(500, errMsg)
+			}
+			return gin.H{"code": 0, "msg": "ok"}, nil
+		},
+	}
+}
+
 // InboundGetHandler GET /inbound — 获取inbound
 type InboundGetHandler struct{ HttpHandlerImp }
 
 func (handler *InboundGetHandler) handlerFunc(c *gin.Context) {
-	target := getTargetFromQuery(c)
-	srcTag := c.DefaultQuery("src_tag", "")
-	containerType := c.DefaultQuery("container", "xray")
-	// Only xray is supported; other containers not yet implemented
-	if containerType != "xray" {
-		jsonErr(c, 400, fmt.Sprintf("container %q not supported via GET /inbound", containerType))
-		return
-	}
-	nodes := handler.getHttpServer().GetTargetNodes(target)
-	if len(nodes) == 0 {
-		jsonErr(c, 502, "no available node")
-		return
-	}
-	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
-	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.GetInboundReqType, &proto.GetInboundReq{Tag: srcTag}, handler.getHttpServer().GetClusterToken())
-	if len(succList) > 0 {
-		c.JSON(200, succList)
-		return
-	}
-	if len(failedList) != 0 {
-		errMsg := joinFailedList(failedList)
-		log.Errorf("Err=%s|OpType=getInbound|Target=%s", errMsg, target)
-		jsonErr(c, 500, errMsg)
-		return
-	}
-	jsonOK(c)
+	endpointHandlerFunc(handler.getHttpServer().inboundGetEndpoint())(c)
 }
 
 func (handler *InboundGetHandler) getHandlers() []gin.HandlerFunc {
@@ -97,7 +123,5 @@ func (handler *InboundGetHandler) getHandlers() []gin.HandlerFunc {
 func (handler *InboundGetHandler) getRelativePath() string { return "/inbound" }
 
 func (handler *InboundGetHandler) help() string {
-	return `GET /api/inbound
-	获取inbound详细配置（仅支持 xray container）
-	query: target, src_tag, container(默认xray)`
+	return inboundGetHelp
 }

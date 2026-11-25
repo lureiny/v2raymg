@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/gin-gonic/gin"
@@ -9,34 +10,59 @@ import (
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
+const inboundListHelp = `GET /api/inbounds
+	列出所有节点的所有 inbound（跨 xray/snell/hysteria/mihomo container）
+	query: target（默认当前节点）
+	返回: [{"container":"xray","name":"tag1"}, ...]`
+
+// InboundListReq is the request payload for GET /api/inbounds and MCP tool list_inbounds.
+type InboundListReq struct {
+	Target string `json:"target,omitempty" query:"target" default:"all" jsonschema:"Target node name, node_id, or 'all' to query every cluster node (defaults to 'all')"`
+}
+
+func (s *HttpServer) inboundListEndpoint() Endpoint[InboundListReq, any] {
+	return Endpoint[InboundListReq, any]{
+		Method:         "GET",
+		Path:           "/inbounds",
+		Scope:          ScopeAdmin,
+		Help:           inboundListHelp,
+		MCPName:        "list_inbounds",
+		MCPDescription: "List all proxy inbounds across all containers (xray, snell, hysteria, mihomo) on the target cluster node(s). Target defaults to 'all' (every cluster node) or accepts a specific node name or node_id.",
+		ReadOnly:       true,
+		Execute: func(ctx context.Context, caller Caller, req InboundListReq) (any, error) {
+			target := req.Target
+			if target == "" {
+				target = "all"
+			}
+			nodes := s.GetTargetNodes(target)
+			if len(nodes) == 0 {
+				return nil, NewEndpointErr(502, "no available node")
+			}
+			rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
+			succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
+				ctx,
+				client.ListInboundReqType,
+				&proto.ListInboundReq{},
+				s.GetClusterToken(),
+			)
+			if len(succList) > 0 {
+				return succList, nil
+			}
+			if len(failedList) != 0 {
+				errMsg := joinFailedList(failedList)
+				log.Errorf("Err=%s|OpType=listInbound|Target=%s", errMsg, target)
+				return nil, NewEndpointErr(500, errMsg)
+			}
+			return []interface{}{}, nil
+		},
+	}
+}
+
 // InboundListHandler GET /inbounds — 列出所有 inbound（跨所有 container）
 type InboundListHandler struct{ HttpHandlerImp }
 
 func (handler *InboundListHandler) handlerFunc(c *gin.Context) {
-	target := getTargetFromQuery(c)
-	nodes := handler.getHttpServer().GetTargetNodes(target)
-	if len(nodes) == 0 {
-		jsonErr(c, 502, "no available node")
-		return
-	}
-	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
-	succList, failedList, _ := rpcClient.ReqToMultiEndNodeServer(
-		c.Request.Context(),
-		client.ListInboundReqType,
-		&proto.ListInboundReq{},
-		handler.getHttpServer().GetClusterToken(),
-	)
-	if len(succList) > 0 {
-		c.JSON(200, succList)
-		return
-	}
-	if len(failedList) != 0 {
-		errMsg := joinFailedList(failedList)
-		log.Errorf("Err=%s|OpType=listInbound|Target=%s", errMsg, target)
-		jsonErr(c, 500, errMsg)
-		return
-	}
-	c.JSON(200, []interface{}{})
+	endpointHandlerFunc(handler.getHttpServer().inboundListEndpoint())(c)
 }
 
 func (handler *InboundListHandler) getHandlers() []gin.HandlerFunc {
@@ -46,10 +72,7 @@ func (handler *InboundListHandler) getHandlers() []gin.HandlerFunc {
 func (handler *InboundListHandler) getRelativePath() string { return "/inbounds" }
 
 func (handler *InboundListHandler) help() string {
-	return `GET /api/inbounds
-	列出所有节点的所有 inbound（跨 xray/snell/hysteria/mihomo container）
-	query: target（默认当前节点）
-	返回: [{"container":"xray","name":"tag1"}, ...]`
+	return inboundListHelp
 }
 
 // InboundDeleteByNameHandler DELETE /inbounds — 按 container + name 删除 inbound

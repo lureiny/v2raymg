@@ -1,7 +1,9 @@
 package http
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -368,103 +370,167 @@ func (handler *UserResetAuthTokenHandler) help() string {
 	  target: 目标节点名，空则默认本机`
 }
 
-// UserListHandler GET /user — 获取用户信息
-// Admin: returns all users across nodes (include_all).
-// Normal user: returns only the caller's own data with auth_token and inbounds.
-type UserListHandler struct{ HttpHandlerImp }
-
-func (handler *UserListHandler) handlerFunc(c *gin.Context) {
-	role, _ := c.Get(auth.ContextKeyRole)
-	if role == "admin" {
-		handler.serveAdmin(c)
-	} else {
-		handler.serveNormal(c)
-	}
-}
-
-// serveAdmin returns all users via RPC GetUsers (admin view).
-func (handler *UserListHandler) serveAdmin(c *gin.Context) {
-	target := getTargetFromQuery(c)
-	nodes := handler.getHttpServer().GetTargetNodes(target)
-	if len(nodes) == 0 {
-		jsonErr(c, 502, "no available node")
-		return
-	}
-	rpcClient := client.NewEndNodeClient(nodes, handler.getHttpServer().GetLocalNode())
-	succList, _, _ := rpcClient.ReqToMultiEndNodeServer(c.Request.Context(), client.GetUsersReqType, &proto.GetUsersReq{IncludeAll: true}, handler.getHttpServer().GetClusterToken())
-
-	result := map[string][]gin.H{}
-	for node, v := range succList {
-		users, ok := v.([]*proto.User)
-		if !ok {
-			continue
-		}
-		list := make([]gin.H, 0, len(users))
-		for _, u := range users {
-			list = append(list, gin.H{
-				"name":                      u.GetName(),
-				"auth_token":                u.GetAuthToken(),
-				"expire_time":               u.GetExpireTime(),
-				"downlink":                  u.GetDownlink(),
-				"uplink":                    u.GetUplink(),
-				"role":                      u.GetRole(),
-				"upload_bps":                u.GetUploadBps(),
-				"download_bps":              u.GetDownloadBps(),
-				"max_clients":               u.GetMaxClients(),
-				"client_recycle_delay_sec":  u.GetClientRecycleDelaySec(),
-				"client_drain_sec":          u.GetClientDrainSec(),
-				"group":                     u.GetGroup(),
-			})
-		}
-		result[node] = list
-	}
-	c.JSON(200, result)
-}
-
-// serveNormal returns the caller's own profile via RPC GetProfile.
-func (handler *UserListHandler) serveNormal(c *gin.Context) {
-	serveUserProfile(c, handler.getHttpServer())
-}
-
-func (handler *UserListHandler) getHandlers() []gin.HandlerFunc {
-	return []gin.HandlerFunc{handler.handlerFunc}
-}
-
-func (handler *UserListHandler) getRelativePath() string { return "/user" }
-
-func (handler *UserListHandler) help() string {
-	return `GET /api/user
+const userListHelpText = `GET /api/user
 	获取用户信息。管理员返回全部用户，普通用户返回自己的数据。
 	query: target`
+
+const profileHelpText = `GET /api/profile
+	获取当前登录用户的个人信息，不区分角色，始终返回完整 profile。
+	query: target`
+
+// UserListReq is the request payload for GET /api/user (MCP tool: list_users).
+type UserListReq struct {
+	Target string `json:"target,omitempty" query:"target" default:"all" jsonschema:"Target node name or node ID (defaults to all nodes)"`
 }
 
-// serveUserProfile is the shared logic for returning a user's own profile.
-// Used by both UserListHandler.serveNormal (GET /user for normal users)
-// and ProfileHandler (GET /profile for any role).
-func serveUserProfile(c *gin.Context, s *HttpServer) {
-	usernameVal, exists := c.Get(auth.ContextKeyUsername)
-	if !exists {
-		c.JSON(401, gin.H{"code": 401, "msg": "JWT required"})
-		return
+// ProfileReq is the request payload for GET /api/profile (MCP tool: get_profile).
+type ProfileReq struct {
+	Target string `json:"target,omitempty" query:"target" default:"all" jsonschema:"Target node name or node ID (defaults to all nodes)"`
+}
+
+func cloneGinHValue(v any) any {
+	switch typed := v.(type) {
+	case gin.H:
+		if typed == nil {
+			return gin.H(nil)
+		}
+		cp := make(gin.H, len(typed))
+		for k, val := range typed {
+			cp[k] = cloneGinHValue(val)
+		}
+		return cp
+	case []gin.H:
+		if typed == nil {
+			return []gin.H(nil)
+		}
+		cp := make([]gin.H, len(typed))
+		for i, item := range typed {
+			if item == nil {
+				cp[i] = nil
+				continue
+			}
+			cp[i] = cloneGinHValue(item).(gin.H)
+		}
+		return cp
+	default:
+		return v
 	}
-	username, _ := usernameVal.(string)
-	target := getTargetFromQuery(c)
+}
+
+// sanitizeUserEntriesForMCP deep-copies a node -> user/profile entry map for
+// MCP callers and redacts non-empty "auth_token" values without mutating resp.
+func sanitizeUserEntriesForMCP(resp map[string][]gin.H) any {
+	if resp == nil {
+		return nil
+	}
+	out := make(map[string][]gin.H, len(resp))
+	for node, entries := range resp {
+		if entries == nil {
+			out[node] = nil
+			continue
+		}
+		copiedEntries := make([]gin.H, len(entries))
+		for i, entry := range entries {
+			if entry == nil {
+				copiedEntries[i] = nil
+				continue
+			}
+			copiedEntry := make(gin.H, len(entry))
+			for k, v := range entry {
+				if k == "auth_token" {
+					if tok, ok := v.(string); ok && tok != "" {
+						copiedEntry[k] = "[REDACTED]"
+						continue
+					}
+				}
+				copiedEntry[k] = cloneGinHValue(v)
+			}
+			copiedEntries[i] = copiedEntry
+		}
+		out[node] = copiedEntries
+	}
+	return out
+}
+
+func (s *HttpServer) userListEndpoint() Endpoint[UserListReq, map[string][]gin.H] {
+	return Endpoint[UserListReq, map[string][]gin.H]{
+		Method:         http.MethodGet,
+		Path:           "/user",
+		Scope:          ScopeUser,
+		Help:           userListHelpText,
+		MCPName:        "list_users",
+		MCPDescription: "List users across cluster nodes. Admins receive all users; normal users receive only their own profile.",
+		ReadOnly:       true,
+		MCPSanitize:    sanitizeUserEntriesForMCP,
+		Execute: func(ctx context.Context, caller Caller, req UserListReq) (map[string][]gin.H, error) {
+			if !caller.IsAdmin() {
+				return s.execUserProfile(ctx, caller, req.Target)
+			}
+			target := req.Target
+			if target == "" {
+				target = "all"
+			}
+			nodes := s.GetTargetNodes(target)
+			if len(nodes) == 0 {
+				return nil, NewEndpointErr(502, "no available node")
+			}
+			rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
+			succList, _, _ := rpcClient.ReqToMultiEndNodeServer(ctx, client.GetUsersReqType, &proto.GetUsersReq{IncludeAll: true}, s.GetClusterToken())
+
+			result := map[string][]gin.H{}
+			for node, v := range succList {
+				users, ok := v.([]*proto.User)
+				if !ok {
+					continue
+				}
+				list := make([]gin.H, 0, len(users))
+				for _, u := range users {
+					list = append(list, gin.H{
+						"name":                     u.GetName(),
+						"auth_token":               u.GetAuthToken(),
+						"expire_time":              u.GetExpireTime(),
+						"downlink":                 u.GetDownlink(),
+						"uplink":                   u.GetUplink(),
+						"role":                     u.GetRole(),
+						"upload_bps":               u.GetUploadBps(),
+						"download_bps":             u.GetDownloadBps(),
+						"max_clients":              u.GetMaxClients(),
+						"client_recycle_delay_sec": u.GetClientRecycleDelaySec(),
+						"client_drain_sec":         u.GetClientDrainSec(),
+						"group":                    u.GetGroup(),
+					})
+				}
+				result[node] = list
+			}
+			return result, nil
+		},
+	}
+}
+
+// execUserProfile is the shared logic for returning a user's own profile.
+// Used by both userListEndpoint (GET /user for normal users)
+// and profileEndpoint (GET /profile for any role).
+func (s *HttpServer) execUserProfile(ctx context.Context, caller Caller, target string) (map[string][]gin.H, error) {
+	if caller.Username == "" {
+		return nil, NewEndpointErr(401, "JWT required")
+	}
+	if target == "" {
+		target = "all"
+	}
 	nodes := s.GetTargetNodes(target)
 	if len(nodes) == 0 {
-		c.JSON(404, gin.H{"code": 404, "msg": "no available node"})
-		return
+		return nil, NewEndpointErr(404, "no available node")
 	}
 
 	rpcClient := client.NewEndNodeClient(nodes, s.GetLocalNode())
 	succList, _, err := rpcClient.ReqToMultiEndNodeServer(
-		c.Request.Context(),
+		ctx,
 		client.GetProfileReqType,
-		&proto.GetProfileReq{Username: username},
+		&proto.GetProfileReq{Username: caller.Username},
 		s.GetClusterToken(),
 	)
 	if err != nil {
-		c.JSON(502, gin.H{"code": 502, "msg": "RPC failed: " + err.Error()})
-		return
+		return nil, NewEndpointErr(502, "RPC failed: "+err.Error())
 	}
 
 	result := map[string][]gin.H{}
@@ -496,15 +562,48 @@ func serveUserProfile(c *gin.Context, s *HttpServer) {
 		}
 		result[nodeName] = []gin.H{entry}
 	}
-	c.JSON(200, result)
+	return result, nil
 }
+
+func (s *HttpServer) profileEndpoint() Endpoint[ProfileReq, map[string][]gin.H] {
+	return Endpoint[ProfileReq, map[string][]gin.H]{
+		Method:         http.MethodGet,
+		Path:           "/profile",
+		Scope:          ScopeUser,
+		Help:           profileHelpText,
+		MCPName:        "get_profile",
+		MCPDescription: "Get the authenticated caller's own profile, traffic usage, and assigned inbounds (requires JWT authentication).",
+		ReadOnly:       true,
+		MCPSanitize:    sanitizeUserEntriesForMCP,
+		Execute: func(ctx context.Context, caller Caller, req ProfileReq) (map[string][]gin.H, error) {
+			return s.execUserProfile(ctx, caller, req.Target)
+		},
+	}
+}
+
+// UserListHandler GET /user — 获取用户信息
+// Admin: returns all users across nodes (include_all).
+// Normal user: returns only the caller's own data with auth_token and inbounds.
+type UserListHandler struct{ HttpHandlerImp }
+
+func (handler *UserListHandler) handlerFunc(c *gin.Context) {
+	endpointHandlerFunc(handler.getHttpServer().userListEndpoint())(c)
+}
+
+func (handler *UserListHandler) getHandlers() []gin.HandlerFunc {
+	return []gin.HandlerFunc{handler.handlerFunc}
+}
+
+func (handler *UserListHandler) getRelativePath() string { return "/user" }
+
+func (handler *UserListHandler) help() string { return userListHelpText }
 
 // ProfileHandler GET /profile — 获取当前登录用户的个人信息（不区分角色）
 // 管理员和普通用户均走 GetProfile 逻辑，返回含 inbounds、traffic_limit 的完整 profile。
 type ProfileHandler struct{ HttpHandlerImp }
 
 func (handler *ProfileHandler) handlerFunc(c *gin.Context) {
-	serveUserProfile(c, handler.getHttpServer())
+	endpointHandlerFunc(handler.getHttpServer().profileEndpoint())(c)
 }
 
 func (handler *ProfileHandler) getHandlers() []gin.HandlerFunc {
@@ -513,8 +612,4 @@ func (handler *ProfileHandler) getHandlers() []gin.HandlerFunc {
 
 func (handler *ProfileHandler) getRelativePath() string { return "/profile" }
 
-func (handler *ProfileHandler) help() string {
-	return `GET /api/profile
-	获取当前登录用户的个人信息，不区分角色，始终返回完整 profile。
-	query: target`
-}
+func (handler *ProfileHandler) help() string { return profileHelpText }
