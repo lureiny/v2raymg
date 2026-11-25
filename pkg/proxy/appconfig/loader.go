@@ -112,6 +112,7 @@ func migrateLegacyConfig(old *legacyConfig) *AppConfig {
 	cfg.EndNode.RpcPort = old.Server.Rpc.Port
 	cfg.EndNode.HttpPort = old.Server.Http.Port
 	cfg.EndNode.HttpToken = old.Server.Http.Token
+	cfg.EndNode.EnablePingCheck = old.Server.PingCheck || old.Server.IcmpPingCheck
 	cfg.EndNode.Ping.EnableICMPPing = old.Server.IcmpPingCheck
 	cfg.EndNode.EnablePrometheus = old.Server.Http.SupportPrometheus
 	cfg.EndNode.OnlyGateway = old.Server.Rpc.OnlyGateway

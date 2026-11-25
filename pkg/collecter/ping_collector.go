@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/collecter/ping"
+	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/appconfig"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
@@ -18,17 +18,17 @@ type pingResults map[string]*ping.PingResult // key: node name
 // PingCollector manages PingCheckers and aggregates their results.
 // It implements the PingCollector interface expected by pkg/rpc/server.
 type PingCollector struct {
-	host              string
-	pingCheckers      map[string]ping.PingChecker
-	pingResultMap     map[string]pingResults
-	mu                sync.RWMutex
-	enableICMPPing    bool
-	enableTCPPing     bool
-	icmpPingInterval  int
-	icmpPingTimeout   int
-	tcpPingInterval   int
-	tcpPingTimeout    int
-	nodeManager       ping.NodeManager
+	host             string
+	pingCheckers     map[string]ping.PingChecker
+	pingResultMap    map[string]pingResults
+	mu               sync.RWMutex
+	enableICMPPing   bool
+	enableTCPPing    bool
+	icmpPingInterval int
+	icmpPingTimeout  int
+	tcpPingInterval  int
+	tcpPingTimeout   int
+	nodeManager      ping.NodeManager
 }
 
 // PingCollectorConfig configures which checkers to enable and the local host.
@@ -55,6 +55,10 @@ func NewPingCollector(cfg PingCollectorConfig) *PingCollector {
 		icmpPingTimeout:  cfg.ICMPPingTimeout,
 		tcpPingInterval:  cfg.TCPPingInterval,
 		tcpPingTimeout:   cfg.TCPPingTimeout,
+	}
+
+	if !cfg.EnableICMPPing && !cfg.EnableTCPPing {
+		return pc
 	}
 
 	// Initialize NodeManager
@@ -107,7 +111,6 @@ func (pc *PingCollector) init() {
 }
 
 func (pc *PingCollector) startChecker(checker ping.PingChecker) {
-	ctx, _ := context.WithCancel(checker.GetContext())
 	go func(ctx context.Context, ch <-chan *ping.PingResult, name string) {
 		for {
 			select {
@@ -128,7 +131,7 @@ func (pc *PingCollector) startChecker(checker ping.PingChecker) {
 				pc.mu.Unlock()
 			}
 		}
-	}(ctx, checker.GetChan(), checker.Name())
+	}(checker.GetContext(), checker.GetChan(), checker.Name())
 	checker.Start()
 }
 

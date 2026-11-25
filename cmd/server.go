@@ -251,8 +251,8 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	statsCol := usermanager.NewBandwidthStatsCollector(userMgr)
 	pingCol := collecter.NewPingCollector(collecter.PingCollectorConfig{
 		Host:             cfg.EndNode.ProxyHost,
-		EnableICMPPing:   cfg.EndNode.Ping.EnableICMPPing,
-		EnableTCPPing:    cfg.EndNode.Ping.EnableTCPPing,
+		EnableICMPPing:   cfg.EndNode.EnablePingCheck && cfg.EndNode.Ping.EnableICMPPing,
+		EnableTCPPing:    cfg.EndNode.EnablePingCheck && cfg.EndNode.Ping.EnableTCPPing,
 		ICMPPingInterval: cfg.EndNode.Ping.ICMPPingInterval,
 		ICMPPingTimeout:  cfg.EndNode.Ping.ICMPPingTimeout,
 		TCPPingInterval:  cfg.EndNode.Ping.TCPPingInterval,
@@ -386,6 +386,7 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	log.Info("shutting down", "signal", sig.String())
 
 	cancel() // stop auto-renew and other ctx-bound background tasks
+	pingCol.StopPing()
 	containerMgr.StopAll()
 }
 

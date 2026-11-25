@@ -259,6 +259,9 @@ type EndNodeConfig struct {
 	// OnlyGateway enables gateway-only mode: the node forwards traffic but does not
 	// expose proxy services itself.
 	OnlyGateway bool `yaml:"only_gateway" json:"only_gateway"`
+	// EnablePingCheck is the master switch controlling whether ICMP/TCP ping
+	// probing and ping node source loading are started. Default: false.
+	EnablePingCheck bool `yaml:"enable_ping_check" json:"enable_ping_check"`
 	// Ping holds ping checker configuration.
 	Ping PingConfig `yaml:"ping" json:"ping"`
 	// ReverseProxy declares that this node sits behind a reverse proxy. See

@@ -704,3 +704,92 @@ end_node:
 	assert.Equal(t, "10.0.0.2", seeds[1].Host)
 	assert.Equal(t, int32(9090), seeds[1].Port)
 }
+
+func TestLoadFromFile_EnablePingCheck(t *testing.T) {
+	writeYAML := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		return path
+	}
+
+	t.Run("defaults_to_false_when_unset", func(t *testing.T) {
+		path := writeYAML(t, `
+node_type: end
+end_node:
+  listen: 127.0.0.1
+  rpc_port: 9090
+  http_port: 8080
+  jwt_secret: test-jwt-secret-key-at-least-32-bytes-long
+`)
+		cfg, err := LoadFromFile(path)
+		require.NoError(t, err)
+		assert.False(t, cfg.EndNode.EnablePingCheck)
+	})
+
+	t.Run("respects_explicit_false_and_true", func(t *testing.T) {
+		pathFalse := writeYAML(t, `
+node_type: end
+end_node:
+  listen: 127.0.0.1
+  rpc_port: 9090
+  http_port: 8080
+  jwt_secret: test-jwt-secret-key-at-least-32-bytes-long
+  enable_ping_check: false
+`)
+		cfgFalse, err := LoadFromFile(pathFalse)
+		require.NoError(t, err)
+		assert.False(t, cfgFalse.EndNode.EnablePingCheck)
+
+		pathTrue := writeYAML(t, `
+node_type: end
+end_node:
+  listen: 127.0.0.1
+  rpc_port: 9090
+  http_port: 8080
+  jwt_secret: test-jwt-secret-key-at-least-32-bytes-long
+  enable_ping_check: true
+`)
+		cfgTrue, err := LoadFromFile(pathTrue)
+		require.NoError(t, err)
+		assert.True(t, cfgTrue.EndNode.EnablePingCheck)
+	})
+
+	t.Run("legacy_migration_maps_ping_check", func(t *testing.T) {
+		pathLegacyTrue := writeYAML(t, `
+server:
+  type: end
+  listen: 127.0.0.1
+  ping_check: true
+  icmp_ping_check: false
+  rpc:
+    port: 9090
+  http:
+    port: 8080
+proxy:
+  host: 127.0.0.1
+`)
+		cfg, err := LoadFromFile(pathLegacyTrue)
+		require.NoError(t, err)
+		assert.True(t, cfg.EndNode.EnablePingCheck)
+		assert.False(t, cfg.EndNode.Ping.EnableICMPPing)
+
+		pathLegacyFalse := writeYAML(t, `
+server:
+  type: end
+  listen: 127.0.0.1
+  ping_check: false
+  icmp_ping_check: false
+  rpc:
+    port: 9090
+  http:
+    port: 8080
+proxy:
+  host: 127.0.0.1
+`)
+		cfgOff, err := LoadFromFile(pathLegacyFalse)
+		require.NoError(t, err)
+		assert.False(t, cfgOff.EndNode.EnablePingCheck)
+		assert.False(t, cfgOff.EndNode.Ping.EnableICMPPing)
+	})
+}
