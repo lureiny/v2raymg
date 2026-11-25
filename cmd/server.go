@@ -333,6 +333,9 @@ func runEndNode(cfg *appconfig.AppConfig) {
 		userMgr,
 		cfg.ClusterUser.Enabled,
 	)
+	// Inject containerMgr explicitly so local handlers (e.g. AuthHysteria2
+	// two-layer access gating) do not fall back to the global RPC singleton.
+	httpServer.SetContainerMgr(containerMgr)
 	if cfg.EndNode.EnablePrometheus {
 		http.RegisterPrometheus(httpServer)
 	}

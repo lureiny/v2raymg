@@ -27,14 +27,16 @@ main.go                    # 程序入口
 pkg/
   proxy/                   # 代理核心(原 proxyrefactor,现为主干)
     core/
-      contracts/           # 领域模型(InboundSpec/UserSpec/ContainerModel/Protocol)
-      container/           # Container 抽象(Manager/Registry/Factory)
+      chain/               # 链式代理后端 URI 解析/安全策略(Plan A)/脱敏与 mihomo/xray 出站渲染
+      contracts/           # 领域模型(InboundSpec/InboundType/InboundMeta/UserSpec/ContainerModel/Protocol)
+      container/           # Container 抽象(Manager/Registry/Factory + ChainCapable/InboundTagUpdater/InboundMetaProvider)
       inbound/             # Inbound 抽象
       subscription/        # 订阅核心(codec + converter:clash/surge/qv2ray)
     containers/
       xray/                # xray 实现(exec + grpc + adapter + profilegen + updater)
       hysteria/            # hysteria 实现
       snell/               # snell 实现
+      mihomo/              # mihomo 实现(模式 B + per-user listener + 1:1 链式出站)
     forward/               # TCP/UDP 转发层(relay + port_allocator + traffic + ratelimit + clientlimit)
     usermanager/           # 用户管理(CRUD + 带宽统计 + 端口轮转 + sync 一致性)
     systemtest/            # 系统测试(xray 协议矩阵 / e2e / 降级链)
@@ -156,6 +158,19 @@ Makefile                   # build / build-full (full_dns tag) / proto
     升级要注意什么"**,完整的设计取舍和 why 留在 annotated tag message 里
     (`git tag -a` 写长文,`git tag -l --format='%(contents)' <tag>` 可读回)。
     两边都不写只写 commit message 的话,运维升级前无处可查。
+12. **服务端链式代理(Chained Proxy)与两层 Tag 物理隔离(Migration 18)** — 详见 `docs/chain-proxy-design.md`:
+    - **协议解析、安全准入与脱敏收口在 `pkg/proxy/core/chain`**:补齐 `pkg/proxy/core/subscription/codec/{socks5,http}.go` 及家宽 URI 兼容后,由 `chain` 包统一负责 `ParseAndValidate`/`ValidateSpec`、`RenderMihomoProxy`/`RenderXrayOutbound` 与 `RedactURI`/`SummarizeURI`。域名按原样保留(Xray 出站设 `domainStrategy: "AsIs"`),不在添加时解析固化 DNS,以支持动态 DDNS 后端。
+    - **后端地址准入策略(方案 A + `allow_loopback_chain_target`)**:`chain.AddressPolicy` 无条件拦截未指定地址、多播/广播、链路本地/云元数据段(`169.254.0.0/16`、`fe80::/10`),以及命中本机地址/`LocalHosts` 上 `reservedManagementPorts` 或 `PortAllocator` 已分配端口的 URI;默认放行公网、Tailscale(`100.64.0.0/10`)、RFC1918 与 IPv6 ULA(`fc00::/7`);默认拒绝 loopback(`127.0.0.0/8`、`::1`、`localhost`),除非显式配置 `end_node.allow_loopback_chain_target: true`(开启后仍拦截本机管理端口与已分配端口)。
+    - **可选容器能力接口(`pkg/proxy/core/container/interface.go`)**:通过窄接口 `ChainCapable`(`SupportsChainOutbound`/`ValidateChainURI`)、`InboundTagUpdater`(`SetInboundAccessTags`)、`InboundMetaProvider`(`GetInboundMeta`) 扩展能力而不破坏 `Container` 契约。模式 B(`mihomo`/`xray`)支持链式出站;模式 A(`hysteria`/`snell`)`SupportsChainOutbound() == false`。
+    - **新建 1:1 不可变绑定 + 全局 tag 防覆盖**:仅允许通过 `POST /api/inbound/fast` 在**全新 inbound** 上设置 `inbound_type="chain"` 与 `chain_uri`(空 `inbound_type` + 非空 `chain_uri` 归一为 `"chain"`),禁止原地修改已有 inbound 的类型或后端 URI。`tag` 必须匹配 `^[a-zA-Z0-9._-]{1,64}$`、禁止 `__` 前缀,并在 `ContainerMgr` 全部已注册容器(及 `InboundStore`)间全局查重,防止 SQLite `INSERT OR REPLACE` 跨容器静默覆盖。
+    - **Loopback 收口与 Fail-Closed 零直连泄漏**:`FastAddInbound` 默认监听地址收紧为 `127.0.0.1`,且 `inbound_type="chain"` 强制锁定 `127.0.0.1`。`mihomo` 切为 `Mode: "rule"` + `IPv6: true` + `proxies[]` + `listener.proxy` + 顶部 `"IN-NAME,<tag>,<proxy>"` 双重锁死;`xray` 启用 `RoutingService`,经 `stdin:` 管道按 `ado` → `adrules -append` → `AddInbound` 顺序注入(失败逆序回滚,`Restore`/`Restart` 重放,启用嗅探时强制 `routeOnly: true`)。后端断连时严格中断,绝不回退 `DIRECT`。
+    - **持久化扩展(SQLite Migration 18)**:`users` 新增 `inbound_tags TEXT NOT NULL DEFAULT '[]'`;`inbounds` 新增 `inbound_type`(`'direct'`)、`access_tags`(`'[]'`)、`chain_outbound_uri`、`remark`。只读查询(`GET /api/inbounds`/MCP `list_inbounds`)仅返回脱敏后的 `chain_protocol` 与 `chain_target`,绝不回显原始 `chain_uri`。
+    - **两层 Tag 命名空间物理隔离与核心不变量**:
+      - Layer 1(Node 层:`local_node_groups` ↔ `UserSpec.TargetGroup`)与 Layer 2(Inbound 层:`InboundMeta.AccessTags` ↔ `UserSpec.InboundTags`)物理隔离、允许同名重用且绝不交叉穿透。`UserManager.CanUserAccessInbound` / `CanUserAccessInboundByUsername` 恒定按「未删除/未过期 → Layer 1 `IsUserVisible` → Layer 2(`len(AccessTags)==0` 放行,否则需交集非空)」顺序判定,同时约束数据面(4 容器 Forward 端口分配与 `AuthHysteria2` 本地鉴权)与用户侧视图(`/sub`、`/api/profile`、普通用户 `GET /api/user`),管理员控制面始终返回全量 inbound。
+      - **`UserEventAdd` 不变量**:4 个容器(`xray`/`mihomo`/`hysteria`/`snell`)在 `UserEventAdd` 与 `UserEventUpdate` 分支均执行 `CanUserAccessInbound`,避免跨组或无标签用户先泄漏 Forward 端口再等对账回收;`UserSpec.Clone()` 必须深拷贝 `InboundTags`;`pkg/proxy/usermanager/sync/hash.go` 仅在排序去重后 `len(InboundTags) > 0` 时折入摘要以兼容存量空标签节点。
+      - **启动顺序与本地接线不变量(`cmd/server.go`)**:`initClusterSync` 必须在调用 `userMgr.EnableClusterSync` **之前**将 `DefaultGroup` 播种进空 `local_node_groups` 并随后 `BackfillClusterFields()`,否则 `cachedNodeGroups` 为空导致首启 Layer 1 Fail-Open;同时 `httpServer` 显式调用 `httpServer.SetContainerMgr(containerMgr)`,确保本地 `AuthHysteria2` 两层 tag 门控不依赖 RPC 全局单例回退。
+      - **UDP 轮转与端口回收不变量(`pkg/proxy/usermanager/usermanager.go`)**:`RotateUserPortForInbound` 重建 `tmpRule` 与 `finalRule` 时必须保留 `Network`、`ListenStack`、`UDPSessionIdleSec`(防止 `hy2`/`tuic` 端口轮转后退化为纯 TCP 断流);`ReleaseInboundPorts` 同步清理对应 `BindPorts` 与 `PortMappings`,防止后端端口复用命中旧映射。
+    - **运行期免重启改签与订阅防重名**:`PUT /api/inbounds/tags`(MCP `set_inbound_tags` / gRPC `SetInboundAccessTags`)支持跨节点、跨全 4 容器在锁内原子更新内存与 SQLite(写库失败回滚内存),不重启代理进程且不断开仍合法用户的连接,并立即触发双向 `reconcileUsersForInbound`。多 inbound 订阅输出 `<NodeName>-<remark|tag>`(chain 默认取 `chain_uri` `#fragment`),`ClashConverter`/`SurgeConverter` 对撞名自动追加 `_2`/`_3` 去重。
 
 > **新增 container 必读** — `docs/container-design-principles.md` 把上述 #1/#3/#4/#5 落成三条可操作的 container 开发原则,并给出"底层是否支持多 inbound / 是否有运行时 API"的适配模式矩阵(A/B/C)。接入新代理内核前必须读完并在设计文档里声明模式。
 
@@ -259,7 +274,8 @@ go test ./pkg/http -run TestMCP_RouteDriftGuard -v
   - `cluster-user-*` — 集群用户体系各阶段设计
   - `inbound-user-tracker-refactor.md` — 延后的用户追踪架构统一方案
   - `http-api-reference.md` — HTTP API 参考
-  - `mcp-guide.md` — 内嵌 MCP Server（`/mcp`）使用与开发指南（配置、鉴权/脱敏、32 工具参考与 `Endpoint[Req, Resp]` 扩展方式）
+  - `mcp-guide.md` — 内嵌 MCP Server（`/mcp`）使用与开发指南（配置、鉴权/脱敏、33 工具参考与 `Endpoint[Req, Resp]` 扩展方式）
+  - `chain-proxy-design.md` — **服务端链式代理（Chained Proxy）与两层 Tag 资源隔离设计方案**（`pkg/proxy/core/chain`、Migration 18、两层隔离与动态打标）
   - `certmgmt-design.md` — 证书管理设计
   - `user-placement-controller-design.md` / `user-sync-design.md` — 多节点用户编排
   - `heartbeat-optimization-design.md` — **集群心跳流量优化(有序聚合 hash + 不一致才拉全量,兼容旧版)设计稿,待评审**

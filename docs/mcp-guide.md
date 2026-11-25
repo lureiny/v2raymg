@@ -11,7 +11,7 @@ v2raymg 在现有 HTTP 管理服务中内嵌了符合 **Model Context Protocol (
   - `POST /mcp`：处理标准 MCP JSON-RPC 2.0 请求（`initialize`、`tools/list`、`tools/call` 等）并返回 JSON 响应。
   - `GET /mcp`：无状态模式下按 MCP 规范返回 `405 Method Not Allowed`。
   - `DELETE /mcp`：无状态模式下按 MCP 规范返回 `204 No Content`。
-- **同源执行（Single Source of Truth）**：全部 32 个业务接口均基于 `pkg/http/endpoint.go` 的 `Endpoint[Req, Resp]` 实现，HTTP 与 MCP 直接调用同一个 `Execute` 函数，鉴权、默认值、参数校验与多节点 gRPC 扇出行为完全一致。
+- **同源执行（Single Source of Truth）**：全部 33 个业务接口均基于 `pkg/http/endpoint.go` 的 `Endpoint[Req, Resp]` 实现，HTTP 与 MCP 直接调用同一个 `Execute` 函数，鉴权、默认值、参数校验与多节点 gRPC 扇出行为完全一致。
 
 ---
 
@@ -62,7 +62,7 @@ level=INFO msg="mcp server registered" read_only=true admin_tools=9 user_tools=3
 |---|---|---|---|
 | `false`（默认） | 任意 | `/mcp` 返回 `404` | `/mcp` 返回 `404` |
 | `true` | `true`（默认） | **9 个**只读工具（关闭集群同步时为 **8 个**，不含 `get_node_groups`） | **3 个**只读工具：`get_node_status`、`list_users`、`get_profile` |
-| `true` | `false` | **32 个**工具（9 只读 + 23 写；关闭集群同步时为 **30 个**；9 个高危写工具带 `DestructiveHint: true`） | **7 个**工具：3 只读 + `rotate_inbound_port`、`rotate_all_ports`、`change_password`、`reset_auth_token` |
+| `true` | `false` | **33 个**工具（9 只读 + 24 写；关闭集群同步时为 **31 个**；9 个高危写工具带 `DestructiveHint: true`） | **7 个**工具：3 只读 + `rotate_inbound_port`、`rotate_all_ports`、`change_password`、`reset_auth_token` |
 
 > **注意**：`get_profile`、`change_password`、`reset_auth_token` 需要用户身份上下文。若使用 `X-Token`（无用户名）调用这三个工具，会返回 `isError: true`（`"JWT required"`）；管理员查看或维护他人账户请改用 `list_users`、`update_user`、`reset_user`、`rotate_inbound_port`（传 `username`）等工具。
 
@@ -71,7 +71,9 @@ level=INFO msg="mcp server registered" read_only=true admin_tools=9 user_tools=3
 ## 4. 安全护栏与敏感字段脱敏
 
 1. **只读优先默认值**：`end_node.mcp.enabled` 默认 `false`，`end_node.mcp.read_only` 默认 `true`，即使开启也不允许 AI 执行任何变更操作，需显式配置 `read_only: false` 才开放写工具。
-2. **代理凭据脱敏（`MCPSanitize`）**：`list_users`、`get_profile` 与 `reset_auth_token` 返回前会在 MCP 适配层深拷贝响应，并将非空的 `auth_token` 统一替换为 `"[REDACTED]"`，避免代理明文密钥进入大模型上下文（原生 HTTP API 行为保持不变，仍返回明文）。
+2. **代理凭据脱敏（`MCPSanitize` 与后端脱敏摘要）**：
+   - `list_users`、`get_profile` 与 `reset_auth_token` 返回前会在 MCP 适配层深拷贝响应，并将非空的 `auth_token` 统一替换为 `"[REDACTED]"`，避免代理明文密钥进入大模型上下文（原生 HTTP API 行为保持不变，仍返回明文）。
+   - `list_inbounds`（及 `GET /api/inbounds`）对 `chain` 入站仅返回脱敏后的 `chain_protocol` 与 `chain_target`（`host:port`），绝不返回包含后端密钥/密码的原始 `chain_uri`。
 3. **高危注解（`ToolAnnotations`）**：
    - 所有 9 个只读工具标记 `ReadOnlyHint: true`。
    - 9 个破坏性/高影响写工具（`delete_user`、`reset_user`、`reset_user_traffic`、`reset_auth_token`、`rotate_all_ports`、`change_password`、`delete_inbound`、`delete_cert`、`update_node_binary`）标记 `DestructiveHint: true`，配合客户端提示人工确认。
@@ -177,7 +179,7 @@ curl -sS -X POST "http://127.0.0.1:8080/mcp" \
 
 ---
 
-## 6. 全量 MCP 工具参考（32 个）
+## 6. 全量 MCP 工具参考（33 个）
 
 ### 通用调用约定
 
@@ -193,23 +195,23 @@ curl -sS -X POST "http://127.0.0.1:8080/mcp" \
 | MCP 工具名 | 对应 HTTP 路由 | 权限 | 参数说明 | 功能与注意事项 |
 |---|---|---|---|---|
 | `get_node_status` | `GET /api/status` | `ScopeUser` | `target?`（默认 `"all"`） | 查询节点内存、CPU、网络收发/速率、TCP 连接数、Goroutine 与版本 |
-| `list_users` | `GET /api/user` | `ScopeUser` | `target?`（默认 `"all"`） | Admin 返回全量用户；普通用户仅返回自身（`auth_token` 已脱敏为 `"[REDACTED]"`） |
-| `get_profile` | `GET /api/profile` | `ScopeUser`（需 JWT） | `target?`（默认 `"all"`） | 返回当前登录用户的完整 profile 与 inbound 端口（`auth_token` 已脱敏） |
+| `list_users` | `GET /api/user` | `ScopeUser` | `target?`（默认 `"all"`） | Admin 返回全量用户（含 `group` 与 Layer 2 `inbound_tags`，`auth_token` 已脱敏为 `"[REDACTED]"`）；普通用户仅返回自身（`inbounds` 仅含通过两层标签校验并分配端口的入站，`auth_token` 已脱敏） |
+| `get_profile` | `GET /api/profile` | `ScopeUser`（需 JWT） | `target?`（默认 `"all"`） | 返回当前登录用户的完整 profile 与已授权 inbound 端口（受 Layer 1/Layer 2 过滤，`auth_token` 已脱敏） |
 | `list_nodes` | `GET /api/node` | `ScopeAdmin` | 无 | 获取集群节点目录（含 `node_id`、`duplicate_name`、`groups`） |
-| `list_containers` | `GET /api/containers` | `ScopeAdmin` | `target?`（默认 `"all"`） | 获取目标节点已启用的 container 类型（`xray`/`mihomo`/`hysteria`/`snell`） |
-| `list_inbounds` | `GET /api/inbounds` | `ScopeAdmin` | `target?`（默认 `"all"`） | 列出全部 container 的 inbound 摘要 |
+| `list_containers` | `GET /api/containers` | `ScopeAdmin` | `target?`（默认 `"all"`） | 获取目标节点已启用的 container 类型（`nodes`）及能力详情（`details.<node>[]` 含 `type` 与 `supports_chain` 布尔值：`xray`/`mihomo` 为 `true`，`hysteria`/`snell` 为 `false`） |
+| `list_inbounds` | `GET /api/inbounds` | `ScopeAdmin` | `target?`（默认 `"all"`） | 列出全部 container 的全量 inbound 元数据（管理员视角不受用户标签过滤），含 `container`、`name`、`inbound_type`（`"direct"`\|`"chain"`）、`access_tags`、`remark` 及链式脱敏摘要 `chain_protocol`、`chain_target`（不含原始 `chain_uri`） |
 | `get_inbound` | `GET /api/inbound` | `ScopeAdmin` | `target?`（默认 `"all"`）、`src_tag?`、`container?`（默认 `"xray"`） | 获取 inbound 详细配置（当前仅支持 `container: "xray"`） |
 | `list_certs` | `GET /api/getCerts` | `ScopeAdmin` | `target?`（默认 `"all"`） | 列出目标节点上的 TLS 证书信息 |
 | `get_node_groups` | `GET /api/node/:name/groups` | `ScopeAdmin`（集群启用） | `name`（必填） | 获取指定节点所属 group 列表 |
 
-### 6.2 写操作工具（23 个，需 `end_node.mcp.read_only: false`）
+### 6.2 写操作工具（24 个，需 `end_node.mcp.read_only: false`）
 
 #### 用户与自助管理（12 个）
 
 | MCP 工具名 | 对应 HTTP 路由 | 权限 | Destructive | 关键参数与说明 |
 |---|---|---|---|---|
-| `add_user` | `POST /api/user` | `ScopeAdmin` | 否 | `user`（必填）、`pwd?`、`ttl?`/`expire?`（`ttl` 优先）、`role?`、`group?`、`upload_bps?`、`download_bps?`、`max_clients?`、`client_recycle_delay_sec?`、`client_drain_sec?`、`target?` |
-| `update_user` | `PUT /api/user` | `ScopeAdmin` | 否 | `user`（必填），其余同 `add_user`；配额字段 `0` 表示保持不变，`-1` 表示取消限制 |
+| `add_user` | `POST /api/user` | `ScopeAdmin` | 否 | `user`（必填）、`pwd?`、`ttl?`/`expire?`（`ttl` 优先）、`role?`、`group?`、`inbound_tags?`（`[]string`，Layer 2 入站访问标签，匹配带 `access_tags` 的受限入站；留空仅可访问未设标签的公开入站）、`upload_bps?`、`download_bps?`、`max_clients?`、`client_recycle_delay_sec?`、`client_drain_sec?`、`target?` |
+| `update_user` | `PUT /api/user` | `ScopeAdmin` | 否 | `user`（必填），其余同 `add_user`；配额字段 `0` 表示保持不变，`-1` 表示取消限制；`inbound_tags?`（`*[]string`：省略或 `null` 保持不变，显式传 `[]` 清空全部标签） |
 | `delete_user` | `DELETE /api/user` | `ScopeAdmin` | **是** | `user`（必填）、`target?`；标记删除用户并回收端口规则 |
 | `reset_user` | `POST /api/user/reset` | `ScopeAdmin` | **是** | `user`（必填）、`target?`；重置用户代理凭据并重建端口规则 |
 | `reset_user_traffic` | `POST /api/user/reset-traffic` | `ScopeAdmin` | **是** | `user`（必填）、`target?`；清零用户累计持久化流量计数 |
@@ -221,13 +223,14 @@ curl -sS -X POST "http://127.0.0.1:8080/mcp" \
 | `rotate_all_ports` | `POST /api/rotateAllPorts` | `ScopeUser` | **是** | `username?`（`X-Token` 必填，普通 JWT 仅能操作自己）、`target?`；轮换用户全部 inbound 转发端口 |
 | `change_password` | `PUT /api/profile/password` | `ScopeUser`（需 JWT） | **是** | `old_password`（必填）、`new_password`（必填）、`target?` |
 
-#### Inbound 管理（3 个）
+#### Inbound 管理（4 个）
 
 | MCP 工具名 | 对应 HTTP 路由 | 权限 | Destructive | 关键参数与说明 |
 |---|---|---|---|---|
 | `add_inbound` | `POST /api/inbound` | `ScopeAdmin` | 否 | `bound_raw_string`（必填，Base64 编码的 xray 原生 inbound JSON）、`container?`（仅 `"xray"`）、`target?` |
 | `delete_inbound` | `DELETE /api/inbounds` | `ScopeAdmin` | **是** | `container`（必填：`xray`/`snell`/`hysteria`/`mihomo`）、`name`（必填，inbound tag）、`target?` |
-| `fast_add_inbound` | `POST /api/inbound/fast` | `ScopeAdmin` | 否 | 支持 `container`（`xray`/`mihomo`/`hysteria`/`snell`）、`protocol`（`vless`/`vmess`/`trojan`/`ss`/`shadowsocks`/`hysteria2`/`tuic`/`anytls`）、`transport`、`security`（`tls`/`reality`/`xtls`/`none`）、`port`、`domain`、`self_signed`、`tag`、`target` 及各类 Reality / SS 插件 / Hysteria2 / TUIC / AnyTLS 专用参数 |
+| `set_inbound_tags` | `PUT /api/inbounds/tags` | `ScopeAdmin` | 否 | `container`（必填：`xray`/`snell`/`hysteria`/`mihomo`）、`name`（必填，inbound tag）、`access_tags?`（`[]string`，全量替换 Layer 2 `access_tags`；传 `[]` 或省略清空并恢复对节点可见用户公开）、`target?`；免重启即时持久化并双向重算 Forward 端口分配/回收 |
+| `fast_add_inbound` | `POST /api/inbound/fast` | `ScopeAdmin` | 否 | 支持 `container`（`xray`/`mihomo`/`hysteria`/`snell`）、`protocol`（`vless`/`vmess`/`trojan`/`ss`/`shadowsocks`/`hysteria2`/`tuic`/`anytls`）、`transport`、`security`（`tls`/`reality`/`xtls`/`none`）、`port`、`domain`、`self_signed`、`tag`、`target`；链式与隔离字段：`inbound_type?`（`"direct"` 默认 \| `"chain"` 仅 `127.0.0.1` 本地链式入口，需 `ChainCapable` 容器如 `xray`/`mihomo`）、`chain_uri?`（`inbound_type="chain"` 时必填，`direct` 时禁止；传入非空且省略 `inbound_type` 时自动视为 `"chain"`）、`access_tags?`（Layer 2 `[]string`）、`remark?`（`chain` 默认取 URI `#fragment`）；以及各类 Reality / SS 插件 / Hysteria2 / TUIC / AnyTLS 专用参数 |
 
 #### 证书与集群节点控制（8 个）
 
