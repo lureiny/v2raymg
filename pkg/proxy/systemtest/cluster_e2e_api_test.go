@@ -16,6 +16,7 @@ package systemtest
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -512,6 +513,75 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 			eventually(t, fmt.Sprintf("%s no longer sees %s", s.name, apiTestUser), 20*time.Second, func() bool {
 				return !userNames(t, s, s.name)[apiTestUser]
 			})
+		}
+	})
+
+	// -------------------------------------------------------------------- MCP
+
+	t.Run("MCP_stateless_smoke", func(t *testing.T) {
+		mcpHeaders := map[string]string{
+			"Accept": "application/json, text/event-stream",
+		}
+		// POST /mcp — tools/list returns the 9 read-only tools.
+		code, body, err := nodeA.apiDoWithHeaders(http.MethodPost, "/mcp", nil, mcpHeaders, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/list",
+			"params":  map[string]any{},
+		})
+		requireOK(t, "POST /mcp tools/list", code, body, err)
+		var listResp struct {
+			Result struct {
+				Tools []struct {
+					Name string `json:"name"`
+				} `json:"tools"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(body, &listResp); err != nil {
+			t.Fatalf("POST /mcp tools/list decode: %v (body=%s)", err, truncate(string(body), 600))
+		}
+		if len(listResp.Result.Tools) != 9 {
+			t.Errorf("POST /mcp tools/list: got %d tools, want 9 (body=%s)",
+				len(listResp.Result.Tools), truncate(string(body), 600))
+		}
+
+		// POST /mcp — tools/call list_nodes returns the converged 3-node cluster.
+		code, body, err = nodeA.apiDoWithHeaders(http.MethodPost, "/mcp", nil, mcpHeaders, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      2,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "list_nodes",
+				"arguments": map[string]any{},
+			},
+		})
+		requireOK(t, "POST /mcp tools/call list_nodes", code, body, err)
+		for _, want := range c.nodeNames() {
+			if !strings.Contains(string(body), want) {
+				t.Errorf("POST /mcp list_nodes missing node %q: %s", want, truncate(string(body), 800))
+			}
+		}
+
+		// GET /mcp — routed to stateless MCP handler (returns 405 per MCP spec).
+		code, body, err = nodeA.apiDoWithHeaders(http.MethodGet, "/mcp", nil, map[string]string{
+			"Accept": "text/event-stream",
+		}, nil)
+		if err != nil {
+			t.Fatalf("GET /mcp: transport error: %v", err)
+		}
+		if code != http.StatusMethodNotAllowed {
+			t.Errorf("GET /mcp stateless: got status %d (body=%s), want 405", code, truncate(string(body), 400))
+		}
+
+		// DELETE /mcp — routed to stateless MCP handler (returns 204 with Mcp-Session-Id).
+		code, body, err = nodeA.apiDoWithHeaders(http.MethodDelete, "/mcp", nil, map[string]string{
+			"Mcp-Session-Id": "e2e-stateless-session",
+		}, nil)
+		if err != nil {
+			t.Fatalf("DELETE /mcp: transport error: %v", err)
+		}
+		if code != http.StatusNoContent {
+			t.Errorf("DELETE /mcp stateless: got status %d (body=%s), want 204", code, truncate(string(body), 400))
 		}
 	})
 

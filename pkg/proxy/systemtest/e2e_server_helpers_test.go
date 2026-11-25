@@ -160,6 +160,8 @@ type e2eServerOpts struct {
 	ClusterUserEnabled bool
 	// EnablePrometheus registers GET /api/metrics.
 	EnablePrometheus bool
+	// EnableMCP registers POST/GET/DELETE /mcp (embedded stateless MCP server).
+	EnableMCP bool
 	// LogLevel defaults to "info". Cluster tests set "debug" because the
 	// node-directory reconcile is logged at debug, and an assertion that it
 	// happened would otherwise pass vacuously against a log that can never
@@ -349,8 +351,12 @@ func generateE2EConfig(t *testing.T, opts e2eServerOpts) string {
 			"jwt_secret":        "e2e-jwt-secret-this-is-32-chars!",
 			"jwt_expire_hours":  24,
 			"enable_prometheus": opts.EnablePrometheus,
-			"only_gateway":      false,
-			"cluster":           clusterSection,
+			"mcp": map[string]any{
+				"enabled":   opts.EnableMCP,
+				"read_only": true,
+			},
+			"only_gateway": false,
+			"cluster":      clusterSection,
 		},
 		"cluster_user": map[string]any{
 			"enabled":              opts.ClusterUserEnabled,
@@ -592,6 +598,10 @@ func (s *e2eServer) apiDelete(path string, body any) (int, []byte, error) {
 // gin route template (not the concrete path), which is what the coverage guard in
 // pkg/http/route_coverage_test.go compares against.
 func (s *e2eServer) apiDo(method, path string, params url.Values, body any) (int, []byte, error) {
+	return s.apiDoWithHeaders(method, path, params, nil, body)
+}
+
+func (s *e2eServer) apiDoWithHeaders(method, path string, params url.Values, headers map[string]string, body any) (int, []byte, error) {
 	recordRouteHit(method, path)
 
 	var reader io.Reader
@@ -615,6 +625,9 @@ func (s *e2eServer) apiDo(method, path string, params url.Values, body any) (int
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("X-Token", s.token)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {

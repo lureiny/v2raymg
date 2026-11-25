@@ -29,29 +29,29 @@ func (s *HttpServer) registerRoutes() {
 	// User routes — any authenticated user (normal or admin)
 	userGroup := r.Group("/api", auth.AuthMiddleware(s.token, s.jwtSecret))
 	s.registerOn(userGroup, &LogoutHandler{}, "POST")
-	s.registerOn(userGroup, &UserListHandler{}, "GET")
-	s.registerOn(userGroup, &ProfileHandler{}, "GET")
+	registerEndpoint(s, userGroup, s.userListEndpoint())
+	registerEndpoint(s, userGroup, s.profileEndpoint())
 	s.registerOn(userGroup, &RotateInboundPortHandler{}, "POST")
 	s.registerOn(userGroup, &RotateAllPortsHandler{}, "POST")
 	s.registerOn(userGroup, &ChangePasswordHandler{}, "PUT")
 	s.registerOn(userGroup, &UserResetAuthTokenHandler{}, "POST")
-	s.registerOn(userGroup, &StatusHandler{}, "GET")
+	registerEndpoint(s, userGroup, s.statusEndpoint())
 
 	// Admin routes — authenticated + admin role required
 	// X-Token holders are automatically treated as admin by AuthMiddleware.
 	adminGroup := r.Group("/api", auth.AuthMiddleware(s.token, s.jwtSecret), auth.AdminOnly())
-	s.registerOn(adminGroup, &NodeHandler{}, "GET")
-	s.registerOn(adminGroup, &ContainersHandler{}, "GET")
-	s.registerOn(adminGroup, &GetCertsHandler{}, "GET")
+	registerEndpoint(s, adminGroup, s.nodeListEndpoint())
+	registerEndpoint(s, adminGroup, s.containersEndpoint())
+	registerEndpoint(s, adminGroup, s.certsListEndpoint())
 	// User CRUD routes — always registered; UserManager is now the single user store.
 	s.registerOn(adminGroup, &UserAddHandler{}, "POST")
 	s.registerOn(adminGroup, &UserUpdateHandler{}, "PUT")
 	s.registerOn(adminGroup, &UserDeleteHandler{}, "DELETE")
 	s.registerOn(adminGroup, &UserResetHandler{}, "POST")
 	s.registerOn(adminGroup, &UserResetTrafficHandler{}, "POST")
-	s.registerOn(adminGroup, &InboundGetHandler{}, "GET")
+	registerEndpoint(s, adminGroup, s.inboundGetEndpoint())
 	s.registerOn(adminGroup, &InboundAddHandler{}, "POST")
-	s.registerOn(adminGroup, &InboundListHandler{}, "GET")
+	registerEndpoint(s, adminGroup, s.inboundListEndpoint())
 	s.registerOn(adminGroup, &InboundDeleteByNameHandler{}, "DELETE")
 	s.registerOn(adminGroup, &FastAddInboundHandler{}, "POST")
 	s.registerOn(adminGroup, &CertHandler{}, "POST")
@@ -66,7 +66,7 @@ func (s *HttpServer) registerRoutes() {
 	s.registerOn(adminGroup, &SetUserClientLimitHandler{}, "PUT")
 	// Node Groups routes — only registered when cluster sync is enabled.
 	if s.clusterEnabled {
-		s.registerOn(adminGroup, &NodeGroupsGetHandler{}, "GET")
+		registerEndpoint(s, adminGroup, s.nodeGroupsGetEndpoint())
 		s.registerOn(adminGroup, &NodeGroupsSetHandler{}, "PUT")
 	}
 }

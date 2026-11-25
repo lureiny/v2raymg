@@ -188,6 +188,7 @@ func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 		// so the suite cannot cover them otherwise.
 		ClusterUserEnabled: true,
 		EnablePrometheus:   true,
+		EnableMCP:          true,
 		NodeSumSync:        c.opts.NodeSumSync,
 		XrayBin:            c.opts.XrayBin,
 		XrayGRPCPort:       xrayGRPCPort,

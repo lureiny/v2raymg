@@ -752,3 +752,139 @@ func TestMCP_DefaultTagsParity(t *testing.T) {
 		}
 	})
 }
+
+func TestMCP_FullWiredHttpServerInit(t *testing.T) {
+	const (
+		testToken     = "full-wired-mcp-token"
+		testJWTSecret = "full-wired-mcp-jwt-secret-32byte"
+	)
+
+	newWiredServer := func(t *testing.T, clusterEnabled, enableMCP, readOnly bool) (*HttpServer, *httptest.Server) {
+		t.Helper()
+		s := NewHttpServer()
+		s.Init(
+			HttpServerConfig{
+				Token:          testToken,
+				Name:           "node-local",
+				JWTSecret:      testJWTSecret,
+				JWTExpireHours: 24,
+				EnableMCP:      enableMCP,
+				MCPReadOnly:    readOnly,
+			},
+			nil,
+			nil,
+			nil,
+			nil,
+			clusterEnabled,
+		)
+		if enableMCP {
+			RegisterMCP(s)
+		}
+		ts := httptest.NewServer(s.RestfulServer)
+		t.Cleanup(ts.Close)
+		return s, ts
+	}
+
+	ctx := context.Background()
+
+	t.Run("clusterEnabled=true MCPReadOnly=true admin sees exact 9 read-only tools and normal user sees 3", func(t *testing.T) {
+		s, ts := newWiredServer(t, true, true, true)
+
+		adminSess := connectMCPClient(t, ts.URL, map[string]string{"X-Token": s.token})
+		res, err := adminSess.ListTools(ctx, &mcp.ListToolsParams{})
+		if err != nil {
+			t.Fatalf("admin ListTools failed: %v", err)
+		}
+
+		wantAdmin := []string{
+			"get_inbound",
+			"get_node_groups",
+			"get_node_status",
+			"get_profile",
+			"list_certs",
+			"list_containers",
+			"list_inbounds",
+			"list_nodes",
+			"list_users",
+		}
+		gotAdmin := toolNames(res.Tools)
+		if strings.Join(gotAdmin, ",") != strings.Join(wantAdmin, ",") {
+			t.Fatalf("admin tools mismatch: got %v want %v", gotAdmin, wantAdmin)
+		}
+
+		for _, tl := range res.Tools {
+			if tl.Annotations == nil || !tl.Annotations.ReadOnlyHint {
+				t.Errorf("tool %q expected ReadOnlyHint=true, got %+v", tl.Name, tl.Annotations)
+			}
+			if tl.Annotations != nil && tl.Annotations.DestructiveHint != nil && *tl.Annotations.DestructiveHint {
+				t.Errorf("tool %q expected DestructiveHint=false, got true", tl.Name)
+			}
+		}
+
+		normalJWT := makeJWT(t, s, "alice", "normal")
+		userSess := connectMCPClient(t, ts.URL, map[string]string{"Authorization": "Bearer " + normalJWT})
+		userRes, err := userSess.ListTools(ctx, &mcp.ListToolsParams{})
+		if err != nil {
+			t.Fatalf("normal user ListTools failed: %v", err)
+		}
+
+		wantUser := []string{"get_node_status", "get_profile", "list_users"}
+		gotUser := toolNames(userRes.Tools)
+		if strings.Join(gotUser, ",") != strings.Join(wantUser, ",") {
+			t.Fatalf("normal user tools mismatch: got %v want %v", gotUser, wantUser)
+		}
+		for _, tl := range userRes.Tools {
+			if tl.Annotations == nil || !tl.Annotations.ReadOnlyHint {
+				t.Errorf("user tool %q expected ReadOnlyHint=true, got %+v", tl.Name, tl.Annotations)
+			}
+		}
+	})
+
+	t.Run("clusterEnabled=false admin sees 8 tools without get_node_groups", func(t *testing.T) {
+		s, ts := newWiredServer(t, false, true, true)
+
+		adminSess := connectMCPClient(t, ts.URL, map[string]string{"X-Token": s.token})
+		res, err := adminSess.ListTools(ctx, &mcp.ListToolsParams{})
+		if err != nil {
+			t.Fatalf("admin ListTools failed: %v", err)
+		}
+
+		want := []string{
+			"get_inbound",
+			"get_node_status",
+			"get_profile",
+			"list_certs",
+			"list_containers",
+			"list_inbounds",
+			"list_nodes",
+			"list_users",
+		}
+		got := toolNames(res.Tools)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("admin tools (clusterEnabled=false) mismatch: got %v want %v", got, want)
+		}
+	})
+
+	t.Run("EnableMCP=false without RegisterMCP returns 404", func(t *testing.T) {
+		s, ts := newWiredServer(t, true, false, true)
+		client := ts.Client()
+
+		for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodDelete} {
+			req, err := http.NewRequest(method, ts.URL+"/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+			if err != nil {
+				t.Fatalf("new %s request: %v", method, err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			req.Header.Set("X-Token", s.token)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("%s /mcp request failed: %v", method, err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusNotFound {
+				t.Errorf("%s /mcp when disabled: expected 404, got %d", method, resp.StatusCode)
+			}
+		}
+	})
+}

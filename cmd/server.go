@@ -337,6 +337,8 @@ func runEndNode(cfg *appconfig.AppConfig) {
 			JWTExpireHours:          cfg.EndNode.JWTExpireHours,
 			EnableSubUserInfoHeader: cfg.Subscription.EnableUserInfoHeader,
 			SubUserInfoHeaderFormat: cfg.Subscription.UserinfoHeaderFormat,
+			EnableMCP:               cfg.EndNode.MCP.Enabled,
+			MCPReadOnly:             cfg.EndNode.MCP.ReadOnly,
 		},
 		localNode,
 		clusterMgr,
@@ -346,6 +348,9 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	)
 	if cfg.EndNode.EnablePrometheus {
 		http.RegisterPrometheus(httpServer)
+	}
+	if cfg.EndNode.MCP.Enabled {
+		http.RegisterMCP(httpServer)
 	}
 
 	// Bind both core listeners synchronously BEFORE serving either, so a bind

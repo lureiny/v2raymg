@@ -38,6 +38,11 @@ func registeredRoutes(t *testing.T) []string {
 	// Registered separately from registerRoutes (only when prometheus is on), but
 	// it is a real route and must be covered like any other.
 	s.RegisterHandler(&MetricHandler{}, "GET")
+	// Registered separately from registerRoutes (only when MCP is on), but its
+	// routes are real and must be covered like any other.
+	s.EnableMCP = true
+	s.MCPReadOnly = true
+	RegisterMCP(s)
 
 	var out []string
 	for _, r := range s.RestfulServer.Routes() {
