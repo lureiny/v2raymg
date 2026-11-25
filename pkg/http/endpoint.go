@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"reflect"
 	"strconv"
 	"strings"
@@ -444,6 +445,23 @@ func registerEndpoint[Req any, Resp any](s *HttpServer, router gin.IRouter, ep E
 	}
 
 	if ep.MCPName != "" {
-		s.mcpRegistrars = append(s.mcpRegistrars, newMCPToolRegistrar(ep))
+		reg := newMCPToolRegistrar(ep)
+		reg.routeKey = method + " " + joinRoutePath(router, ep.Path)
+		s.mcpRegistrars = append(s.mcpRegistrars, reg)
 	}
+}
+
+func joinRoutePath(router gin.IRouter, relativePath string) string {
+	base := ""
+	if bp, ok := router.(interface{ BasePath() string }); ok {
+		base = bp.BasePath()
+	}
+	if base == "" {
+		return relativePath
+	}
+	joined := path.Join(base, relativePath)
+	if strings.HasSuffix(relativePath, "/") && !strings.HasSuffix(joined, "/") {
+		joined += "/"
+	}
+	return joined
 }

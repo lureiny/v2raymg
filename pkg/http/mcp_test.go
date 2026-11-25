@@ -888,3 +888,337 @@ func TestMCP_FullWiredHttpServerInit(t *testing.T) {
 		}
 	})
 }
+
+func TestMCP_FullWired_ReadWriteMode(t *testing.T) {
+	const (
+		testToken     = "full-wired-rw-mcp-token"
+		testJWTSecret = "full-wired-rw-mcp-secret-32bytes"
+	)
+
+	newWiredServer := func(t *testing.T, clusterEnabled, readOnly bool) (*HttpServer, *httptest.Server) {
+		t.Helper()
+		s := NewHttpServer()
+		s.Init(
+			HttpServerConfig{
+				Token:          testToken,
+				Name:           "node-local",
+				JWTSecret:      testJWTSecret,
+				JWTExpireHours: 24,
+				EnableMCP:      true,
+				MCPReadOnly:    readOnly,
+			},
+			nil,
+			nil,
+			nil,
+			nil,
+			clusterEnabled,
+		)
+		RegisterMCP(s)
+		ts := httptest.NewServer(s.RestfulServer)
+		t.Cleanup(ts.Close)
+		return s, ts
+	}
+
+	ctx := context.Background()
+
+	t.Run("MCPReadOnly=true clusterEnabled=true exposes only 9 admin and 3 user read-only tools", func(t *testing.T) {
+		s, ts := newWiredServer(t, true, true)
+
+		adminSess := connectMCPClient(t, ts.URL, map[string]string{"X-Token": s.token})
+		adminRes, err := adminSess.ListTools(ctx, &mcp.ListToolsParams{})
+		if err != nil {
+			t.Fatalf("admin ListTools failed: %v", err)
+		}
+
+		wantAdmin := []string{
+			"get_inbound",
+			"get_node_groups",
+			"get_node_status",
+			"get_profile",
+			"list_certs",
+			"list_containers",
+			"list_inbounds",
+			"list_nodes",
+			"list_users",
+		}
+		gotAdmin := toolNames(adminRes.Tools)
+		if strings.Join(gotAdmin, ",") != strings.Join(wantAdmin, ",") {
+			t.Fatalf("read-only admin tools mismatch: got %d %v, want %d %v", len(gotAdmin), gotAdmin, len(wantAdmin), wantAdmin)
+		}
+		for _, tl := range adminRes.Tools {
+			if tl.Annotations == nil || !tl.Annotations.ReadOnlyHint {
+				t.Errorf("read-only mode exposed non-readonly tool %q: %+v", tl.Name, tl.Annotations)
+			}
+			if tl.Annotations != nil && tl.Annotations.DestructiveHint != nil && *tl.Annotations.DestructiveHint {
+				t.Errorf("read-only mode exposed destructive tool %q", tl.Name)
+			}
+		}
+
+		normalJWT := makeJWT(t, s, "alice", "normal")
+		userSess := connectMCPClient(t, ts.URL, map[string]string{"Authorization": "Bearer " + normalJWT})
+		userRes, err := userSess.ListTools(ctx, &mcp.ListToolsParams{})
+		if err != nil {
+			t.Fatalf("normal user ListTools failed: %v", err)
+		}
+
+		wantUser := []string{"get_node_status", "get_profile", "list_users"}
+		gotUser := toolNames(userRes.Tools)
+		if strings.Join(gotUser, ",") != strings.Join(wantUser, ",") {
+			t.Fatalf("read-only normal user tools mismatch: got %v want %v", gotUser, wantUser)
+		}
+	})
+
+	t.Run("MCPReadOnly=false clusterEnabled=true exposes exact 32 admin tools and 7 user tools with annotations", func(t *testing.T) {
+		s, ts := newWiredServer(t, true, false)
+
+		adminSess := connectMCPClient(t, ts.URL, map[string]string{"X-Token": s.token})
+		adminRes, err := adminSess.ListTools(ctx, &mcp.ListToolsParams{})
+		if err != nil {
+			t.Fatalf("admin ListTools failed: %v", err)
+		}
+
+		wantAdmin := []string{
+			"add_inbound",
+			"add_user",
+			"apply_cert",
+			"change_password",
+			"copy_user_between_nodes",
+			"delete_cert",
+			"delete_inbound",
+			"delete_user",
+			"fast_add_inbound",
+			"get_inbound",
+			"get_node_groups",
+			"get_node_status",
+			"get_profile",
+			"list_certs",
+			"list_containers",
+			"list_inbounds",
+			"list_nodes",
+			"list_users",
+			"reset_auth_token",
+			"reset_user",
+			"reset_user_traffic",
+			"rotate_all_ports",
+			"rotate_inbound_port",
+			"set_gateway",
+			"set_node_groups",
+			"set_ping_check",
+			"set_user_bandwidth",
+			"set_user_client_limit",
+			"set_user_role",
+			"transfer_cert",
+			"update_node_binary",
+			"update_user",
+		}
+		gotAdmin := toolNames(adminRes.Tools)
+		if len(gotAdmin) != 32 || strings.Join(gotAdmin, ",") != strings.Join(wantAdmin, ",") {
+			t.Fatalf("admin tools mismatch: got %d %v, want %d %v", len(gotAdmin), gotAdmin, len(wantAdmin), wantAdmin)
+		}
+
+		readOnlyCount := 0
+		writeCount := 0
+		var destructiveTools []string
+		for _, tl := range adminRes.Tools {
+			if tl.Annotations == nil {
+				t.Errorf("tool %q missing Annotations", tl.Name)
+				continue
+			}
+			if tl.Annotations.ReadOnlyHint {
+				readOnlyCount++
+			} else {
+				writeCount++
+			}
+			if tl.Annotations.DestructiveHint == nil {
+				t.Errorf("tool %q missing DestructiveHint", tl.Name)
+				continue
+			}
+			if *tl.Annotations.DestructiveHint {
+				destructiveTools = append(destructiveTools, tl.Name)
+			}
+		}
+		if readOnlyCount != 9 || writeCount != 23 {
+			t.Errorf("ReadOnlyHint counts mismatch: got readOnly=%d write=%d, want readOnly=9 write=23", readOnlyCount, writeCount)
+		}
+
+		sort.Strings(destructiveTools)
+		wantDestructive := []string{
+			"change_password",
+			"delete_cert",
+			"delete_inbound",
+			"delete_user",
+			"reset_auth_token",
+			"reset_user",
+			"reset_user_traffic",
+			"rotate_all_ports",
+			"update_node_binary",
+		}
+		if strings.Join(destructiveTools, ",") != strings.Join(wantDestructive, ",") {
+			t.Errorf("DestructiveHint=true tools mismatch: got %d %v, want %d %v", len(destructiveTools), destructiveTools, len(wantDestructive), wantDestructive)
+		}
+
+		normalJWT := makeJWT(t, s, "alice", "normal")
+		userSess := connectMCPClient(t, ts.URL, map[string]string{"Authorization": "Bearer " + normalJWT})
+		userRes, err := userSess.ListTools(ctx, &mcp.ListToolsParams{})
+		if err != nil {
+			t.Fatalf("normal user ListTools failed: %v", err)
+		}
+
+		wantUser := []string{
+			"change_password",
+			"get_node_status",
+			"get_profile",
+			"list_users",
+			"reset_auth_token",
+			"rotate_all_ports",
+			"rotate_inbound_port",
+		}
+		gotUser := toolNames(userRes.Tools)
+		if len(gotUser) != 7 || strings.Join(gotUser, ",") != strings.Join(wantUser, ",") {
+			t.Fatalf("normal user tools mismatch: got %d %v, want %d %v", len(gotUser), gotUser, len(wantUser), wantUser)
+		}
+	})
+
+	t.Run("MCPReadOnly=false clusterEnabled=false exposes 30 admin tools without node_groups tools", func(t *testing.T) {
+		s, ts := newWiredServer(t, false, false)
+
+		adminSess := connectMCPClient(t, ts.URL, map[string]string{"X-Token": s.token})
+		adminRes, err := adminSess.ListTools(ctx, &mcp.ListToolsParams{})
+		if err != nil {
+			t.Fatalf("admin ListTools failed: %v", err)
+		}
+
+		wantAdmin := []string{
+			"add_inbound",
+			"add_user",
+			"apply_cert",
+			"change_password",
+			"copy_user_between_nodes",
+			"delete_cert",
+			"delete_inbound",
+			"delete_user",
+			"fast_add_inbound",
+			"get_inbound",
+			"get_node_status",
+			"get_profile",
+			"list_certs",
+			"list_containers",
+			"list_inbounds",
+			"list_nodes",
+			"list_users",
+			"reset_auth_token",
+			"reset_user",
+			"reset_user_traffic",
+			"rotate_all_ports",
+			"rotate_inbound_port",
+			"set_gateway",
+			"set_ping_check",
+			"set_user_bandwidth",
+			"set_user_client_limit",
+			"set_user_role",
+			"transfer_cert",
+			"update_node_binary",
+			"update_user",
+		}
+		gotAdmin := toolNames(adminRes.Tools)
+		if len(gotAdmin) != 30 || strings.Join(gotAdmin, ",") != strings.Join(wantAdmin, ",") {
+			t.Fatalf("clusterEnabled=false admin tools mismatch: got %d %v, want %d %v", len(gotAdmin), gotAdmin, len(wantAdmin), wantAdmin)
+		}
+	})
+}
+
+func TestMCP_RouteDriftGuard(t *testing.T) {
+	s := NewHttpServer()
+	s.Init(
+		HttpServerConfig{
+			Token:          "route-drift-guard-token",
+			Name:           "node-local",
+			JWTSecret:      "route-drift-guard-secret-32bytes",
+			JWTExpireHours: 24,
+			EnableMCP:      true,
+			MCPReadOnly:    false,
+		},
+		nil,
+		nil,
+		nil,
+		nil,
+		true,
+	)
+	RegisterPrometheus(s)
+	RegisterMCP(s)
+
+	nonMCPAllowlist := map[string]bool{
+		"POST /api/login":         true,
+		"POST /api/logout":        true,
+		"POST /api/authHysteria2": true,
+		"GET /sub":                true,
+		"GET /help/*relativePath": true,
+		"GET /api/metrics":        true,
+		"POST /mcp":               true,
+		"GET /mcp":                true,
+		"DELETE /mcp":             true,
+	}
+
+	mcpRoutes := make(map[string]string, len(s.mcpRegistrars))
+	seenToolNames := make(map[string]string, len(s.mcpRegistrars))
+	for _, reg := range s.mcpRegistrars {
+		if reg.routeKey == "" {
+			t.Errorf("MCP tool %q has empty routeKey", reg.name)
+			continue
+		}
+		if prev, dup := mcpRoutes[reg.routeKey]; dup {
+			t.Errorf("duplicate MCP routeKey %q for tools %q and %q", reg.routeKey, prev, reg.name)
+		}
+		mcpRoutes[reg.routeKey] = reg.name
+
+		if prev, dup := seenToolNames[reg.name]; dup {
+			t.Errorf("duplicate MCP tool name %q on routes %q and %q", reg.name, prev, reg.routeKey)
+		}
+		seenToolNames[reg.name] = reg.routeKey
+	}
+
+	registered := make(map[string]bool, len(s.RestfulServer.Routes()))
+	var uncovered []string
+	for _, r := range s.RestfulServer.Routes() {
+		key := r.Method + " " + r.Path
+		registered[key] = true
+
+		_, inMCP := mcpRoutes[key]
+		inAllowlist := nonMCPAllowlist[key]
+		if inMCP && inAllowlist {
+			t.Errorf("route %q is in BOTH s.mcpRegistrars (tool %q) and nonMCPAllowlist", key, mcpRoutes[key])
+		}
+		if !inMCP && !inAllowlist {
+			uncovered = append(uncovered, key)
+		}
+	}
+	if len(uncovered) > 0 {
+		sort.Strings(uncovered)
+		t.Errorf("%d HTTP route(s) are neither registered via registerEndpoint with an MCP tool nor listed in nonMCPAllowlist:\n  %s",
+			len(uncovered), strings.Join(uncovered, "\n  "))
+	}
+
+	var staleAllowlist []string
+	for key := range nonMCPAllowlist {
+		if !registered[key] {
+			staleAllowlist = append(staleAllowlist, key)
+		}
+	}
+	if len(staleAllowlist) > 0 {
+		sort.Strings(staleAllowlist)
+		t.Errorf("nonMCPAllowlist contains %d route(s) not registered on HttpServer:\n  %s",
+			len(staleAllowlist), strings.Join(staleAllowlist, "\n  "))
+	}
+
+	var orphanMCPRoutes []string
+	for key, toolName := range mcpRoutes {
+		if !registered[key] {
+			orphanMCPRoutes = append(orphanMCPRoutes, key+" ("+toolName+")")
+		}
+	}
+	if len(orphanMCPRoutes) > 0 {
+		sort.Strings(orphanMCPRoutes)
+		t.Errorf("s.mcpRegistrars contains %d route(s) not registered on HttpServer:\n  %s",
+			len(orphanMCPRoutes), strings.Join(orphanMCPRoutes, "\n  "))
+	}
+}

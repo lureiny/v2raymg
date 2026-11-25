@@ -31,6 +31,7 @@ func mcpCallerFromContext(ctx context.Context) (Caller, bool) {
 // Endpoint so RegisterMCP can assemble role-scoped MCP servers on demand.
 type mcpToolRegistrar struct {
 	name     string
+	routeKey string
 	scope    AuthScope
 	readOnly bool
 	register func(srv *mcp.Server)
