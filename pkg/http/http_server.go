@@ -26,6 +26,11 @@ type HttpServerConfig struct {
 	// DefaultSubUserInfoFormat. Per-request ?sub_userinfo_format= overrides
 	// this value.
 	SubUserInfoHeaderFormat string
+	// EnableMCP controls whether the embedded Streamable HTTP MCP server (/mcp)
+	// is enabled.
+	EnableMCP bool
+	// MCPReadOnly restricts the embedded MCP server to read-only tools when true.
+	MCPReadOnly bool
 }
 
 // ClusterNodes provides node lookup for routing HTTP requests to cluster members.
@@ -33,7 +38,6 @@ type ClusterNodes interface {
 	GetNodesWithFilter(f cluster.NodeFilter) []*cluster.Node
 	GetClusterToken() string
 }
-
 
 // CertReader provides read access to local certificate files.
 // It is a subset of the full CertManager interface, used only by TransferCertHandler.
@@ -61,6 +65,9 @@ type HttpServer struct {
 	clusterEnabled          bool
 	enableSubUserInfoHeader bool
 	subUserInfoHeaderFormat string
+	EnableMCP               bool
+	MCPReadOnly             bool
+	mcpRegistrars           []mcpToolRegistrar
 }
 
 // Init initializes the HttpServer with config and dependencies.
@@ -78,6 +85,8 @@ func (s *HttpServer) Init(cfg HttpServerConfig, localNode *cluster.LocalNode, cl
 	s.clusterEnabled = clusterEnabled
 	s.enableSubUserInfoHeader = cfg.EnableSubUserInfoHeader
 	s.subUserInfoHeaderFormat = cfg.SubUserInfoHeaderFormat
+	s.EnableMCP = cfg.EnableMCP
+	s.MCPReadOnly = cfg.MCPReadOnly
 	s.registerRoutes()
 }
 
