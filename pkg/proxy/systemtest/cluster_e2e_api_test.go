@@ -14,14 +14,18 @@ package systemtest
 // that calls it.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
@@ -140,6 +144,55 @@ func eventually(t *testing.T, what string, timeout time.Duration, fn func() bool
 		time.Sleep(250 * time.Millisecond)
 	}
 	t.Errorf("%s: still false after %s", what, timeout)
+}
+
+type e2eHeaderRoundTripper struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (h *e2eHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	for k, v := range h.headers {
+		clone.Header.Set(k, v)
+	}
+	base := h.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(clone)
+}
+
+func connectE2EMCPClient(t *testing.T, baseURL string, headers map[string]string) *mcp.ClientSession {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	t.Cleanup(cancel)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "e2e-mcp-client", Version: "1.0.0"}, nil)
+	transport := &mcp.StreamableClientTransport{
+		Endpoint: baseURL + "/mcp",
+		HTTPClient: &http.Client{
+			Transport: &e2eHeaderRoundTripper{headers: headers},
+		},
+	}
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		t.Fatalf("connectE2EMCPClient(%s): %v", baseURL, err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	return session
+}
+
+func extractE2EMCPText(t *testing.T, res *mcp.CallToolResult) string {
+	t.Helper()
+	if res == nil || len(res.Content) == 0 {
+		t.Fatalf("expected non-empty CallToolResult.Content")
+	}
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected *mcp.TextContent, got %T", res.Content[0])
+	}
+	return tc.Text
 }
 
 func TestClusterE2E_FullAPI(t *testing.T) {
@@ -496,6 +549,335 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 		}
 		if code == 200 {
 			t.Errorf("admin route accepted a bad token (status %d)", code)
+		}
+	})
+
+	// ---------------------------------------------------- MCP full 3-node E2E
+	// Runs before DELETE_user_fans_out so apiTestUser exists across the cluster.
+
+	t.Run("MCP_3node_full_e2e", func(t *testing.T) {
+		const (
+			mcpNormalUser = "e2e-mcp-normal"
+			mcpNormalPass = "e2e-mcp-pass-123456"
+		)
+
+		// Create a dedicated normal-role user and wait for cluster sync to all 3 nodes.
+		code, body, err := nodeA.apiPost("/api/user", map[string]any{
+			"target": "all",
+			"user":   mcpNormalUser,
+			"pwd":    mcpNormalPass,
+			"role":   "normal",
+			"ttl":    86400,
+		})
+		requireOK(t, "POST /api/user (mcpNormalUser)", code, body, err)
+		t.Cleanup(func() {
+			_, _, _ = nodeA.apiDelete("/api/user", map[string]any{
+				"target": "all",
+				"user":   mcpNormalUser,
+			})
+		})
+		for _, s := range []*e2eServer{nodeA, nodeB, nodeC} {
+			s := s
+			eventually(t, fmt.Sprintf("%s sees %s", s.name, mcpNormalUser), 20*time.Second, func() bool {
+				return userNames(t, s, s.name)[mcpNormalUser]
+			})
+		}
+
+		// Verify HTTP GET /api/user returns real plaintext auth_token values.
+		code, body, err = nodeA.apiGet("/api/user", url.Values{"target": {nodeA.name}})
+		requireOK(t, "GET /api/user (extract plaintext auth_token)", code, body, err)
+		var httpUsersByNode map[string][]struct {
+			Name      string `json:"name"`
+			AuthToken string `json:"auth_token"`
+		}
+		if err := json.Unmarshal(body, &httpUsersByNode); err != nil {
+			t.Fatalf("decode HTTP GET /api/user: %v (body=%s)", err, truncate(string(body), 600))
+		}
+		var normalRealAuthToken, apiUserRealAuthToken string
+		for _, u := range httpUsersByNode[nodeA.name] {
+			switch u.Name {
+			case mcpNormalUser:
+				normalRealAuthToken = u.AuthToken
+			case apiTestUser:
+				apiUserRealAuthToken = u.AuthToken
+			}
+		}
+		if normalRealAuthToken == "" {
+			t.Fatalf("expected non-empty plaintext auth_token from HTTP GET /api/user for %s", mcpNormalUser)
+		}
+
+		// Login as mcpNormalUser to acquire a real normal-role Bearer JWT.
+		code, body, err = nodeA.apiPost("/api/login", map[string]any{
+			"username": mcpNormalUser,
+			"password": mcpNormalPass,
+		})
+		requireOK(t, "POST /api/login (mcpNormalUser)", code, body, err)
+		var loginRsp struct {
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal(body, &loginRsp); err != nil || loginRsp.Token == "" {
+			t.Fatalf("POST /api/login returned invalid token: err=%v body=%s", err, truncate(string(body), 400))
+		}
+		normalJWT := loginRsp.Token
+
+		// Unauthenticated and invalid-credential POST /mcp requests must return 401.
+		for _, tc := range []struct {
+			name   string
+			header map[string]string
+		}{
+			{"no_auth", nil},
+			{"wrong_x_token", map[string]string{"X-Token": "wrong-mcp-token"}},
+		} {
+			req, reqErr := http.NewRequest(http.MethodPost, nodeA.baseURL+"/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+			if reqErr != nil {
+				t.Fatalf("build raw /mcp request (%s): %v", tc.name, reqErr)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			for k, v := range tc.header {
+				req.Header.Set(k, v)
+			}
+			rsp, doErr := http.DefaultClient.Do(req)
+			if doErr != nil {
+				t.Fatalf("POST /mcp (%s): %v", tc.name, doErr)
+			}
+			_ = rsp.Body.Close()
+			if rsp.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("POST /mcp (%s): got status %d, want 401", tc.name, rsp.StatusCode)
+			}
+		}
+
+		ctx := context.Background()
+
+		// 1. Official MCP SDK client authenticated as Admin via X-Token.
+		adminSess := connectE2EMCPClient(t, nodeA.baseURL, map[string]string{"X-Token": nodeA.token})
+		adminList, err := adminSess.ListTools(ctx, &mcp.ListToolsParams{})
+		if err != nil {
+			t.Fatalf("admin ListTools: %v", err)
+		}
+		gotAdminTools := make([]string, 0, len(adminList.Tools))
+		for _, tl := range adminList.Tools {
+			gotAdminTools = append(gotAdminTools, tl.Name)
+			if tl.Annotations == nil || !tl.Annotations.ReadOnlyHint {
+				t.Errorf("admin tool %q missing ReadOnlyHint=true: %+v", tl.Name, tl.Annotations)
+			}
+		}
+		sort.Strings(gotAdminTools)
+		wantAdminTools := []string{
+			"get_inbound",
+			"get_node_groups",
+			"get_node_status",
+			"get_profile",
+			"list_certs",
+			"list_containers",
+			"list_inbounds",
+			"list_nodes",
+			"list_users",
+		}
+		if strings.Join(gotAdminTools, ",") != strings.Join(wantAdminTools, ",") {
+			t.Fatalf("admin ListTools mismatch: got %v, want %v", gotAdminTools, wantAdminTools)
+		}
+
+		// list_nodes
+		res, err := adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_nodes"})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool list_nodes failed: err=%v res=%+v", err, res)
+		}
+		listNodesText := extractE2EMCPText(t, res)
+		for _, wantNode := range c.nodeNames() {
+			if !strings.Contains(listNodesText, wantNode) {
+				t.Errorf("list_nodes missing %q: %s", wantNode, truncate(listNodesText, 800))
+			}
+		}
+
+		// get_node_status with empty args tests default:"all" fan-out over real 3-node gRPC.
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "get_node_status"})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool get_node_status failed: err=%v res=%+v", err, res)
+		}
+		statusText := extractE2EMCPText(t, res)
+		var statusPayload struct {
+			Nodes []struct {
+				NodeName string `json:"node_name"`
+			} `json:"nodes"`
+		}
+		if err := json.Unmarshal([]byte(statusText), &statusPayload); err != nil {
+			t.Fatalf("decode get_node_status JSON: %v (text=%s)", err, truncate(statusText, 600))
+		}
+		seenStatusNodes := map[string]bool{}
+		for _, n := range statusPayload.Nodes {
+			seenStatusNodes[n.NodeName] = true
+		}
+		for _, wantNode := range c.nodeNames() {
+			if !seenStatusNodes[wantNode] {
+				t.Errorf("get_node_status missing node %q in 3-node fan-out: %s", wantNode, truncate(statusText, 800))
+			}
+		}
+
+		// list_containers with empty args tests default:"all" fan-out across 3 nodes.
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_containers"})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool list_containers failed: err=%v res=%+v", err, res)
+		}
+		containersText := extractE2EMCPText(t, res)
+		for _, wantNode := range c.nodeNames() {
+			if !strings.Contains(containersText, wantNode) {
+				t.Errorf("list_containers missing %q: %s", wantNode, truncate(containersText, 800))
+			}
+		}
+
+		// get_node_groups for nodeB verifies path param + groups updated in node_groups_get_and_set.
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "get_node_groups",
+			Arguments: map[string]any{"name": nodeB.name},
+		})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool get_node_groups failed: err=%v res=%+v", err, res)
+		}
+		if txt := extractE2EMCPText(t, res); !strings.Contains(txt, "premium") {
+			t.Errorf("get_node_groups(%s) expected \"premium\", got: %s", nodeB.name, truncate(txt, 400))
+		}
+
+		// list_inbounds across all 3 nodes.
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_inbounds"})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool list_inbounds failed: err=%v res=%+v", err, res)
+		}
+		if txt := extractE2EMCPText(t, res); !json.Valid([]byte(txt)) {
+			t.Errorf("list_inbounds returned invalid JSON: %s", truncate(txt, 400))
+		}
+
+		// get_inbound graceful handling + validation error mapping to IsError=true.
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "get_inbound",
+			Arguments: map[string]any{"target": nodeA.name, "src_tag": "e2e-nonexistent"},
+		})
+		if err != nil {
+			t.Fatalf("admin CallTool get_inbound transport/protocol error: %v", err)
+		}
+		if txt := extractE2EMCPText(t, res); txt == "" {
+			t.Errorf("get_inbound returned empty text content")
+		}
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "get_inbound",
+			Arguments: map[string]any{"container": "snell"},
+		})
+		if err != nil {
+			t.Fatalf("admin CallTool get_inbound(snell) protocol error: %v", err)
+		}
+		if !res.IsError {
+			t.Errorf("get_inbound(snell) expected IsError=true, got success: %s", extractE2EMCPText(t, res))
+		}
+
+		// list_certs across all 3 nodes.
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_certs"})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool list_certs failed: err=%v res=%+v", err, res)
+		}
+		if txt := extractE2EMCPText(t, res); !json.Valid([]byte(txt)) {
+			t.Errorf("list_certs returned invalid JSON: %s", truncate(txt, 400))
+		}
+
+		// list_users across all 3 nodes: sees both users, redacts auth_token, never leaks plaintext!
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_users"})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool list_users failed: err=%v res=%+v", err, res)
+		}
+		adminUsersText := extractE2EMCPText(t, res)
+		if !strings.Contains(adminUsersText, apiTestUser) || !strings.Contains(adminUsersText, mcpNormalUser) {
+			t.Errorf("admin list_users missing expected users: %s", truncate(adminUsersText, 800))
+		}
+		for _, wantNode := range c.nodeNames() {
+			if !strings.Contains(adminUsersText, wantNode) {
+				t.Errorf("admin list_users missing node %q: %s", wantNode, truncate(adminUsersText, 800))
+			}
+		}
+		if !strings.Contains(adminUsersText, "[REDACTED]") {
+			t.Errorf("admin list_users missing [REDACTED] marker: %s", truncate(adminUsersText, 800))
+		}
+		if strings.Contains(adminUsersText, normalRealAuthToken) {
+			t.Errorf("SECURITY: admin MCP list_users leaked plaintext auth_token for %s", mcpNormalUser)
+		}
+		if apiUserRealAuthToken != "" && strings.Contains(adminUsersText, apiUserRealAuthToken) {
+			t.Errorf("SECURITY: admin MCP list_users leaked plaintext auth_token for %s", apiTestUser)
+		}
+
+		// get_profile with X-Token (no JWT username) must return IsError=true ("JWT required").
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "get_profile"})
+		if err != nil {
+			t.Fatalf("admin CallTool get_profile protocol error: %v", err)
+		}
+		if !res.IsError || !strings.Contains(extractE2EMCPText(t, res), "JWT required") {
+			t.Errorf("admin get_profile expected IsError=true with 'JWT required', got isErr=%v text=%s",
+				res.IsError, extractE2EMCPText(t, res))
+		}
+
+		// 2. Official MCP SDK client authenticated as normal user via Bearer JWT.
+		normalSess := connectE2EMCPClient(t, nodeA.baseURL, map[string]string{
+			"Authorization": "Bearer " + normalJWT,
+		})
+		normalList, err := normalSess.ListTools(ctx, &mcp.ListToolsParams{})
+		if err != nil {
+			t.Fatalf("normal ListTools: %v", err)
+		}
+		gotNormalTools := make([]string, 0, len(normalList.Tools))
+		for _, tl := range normalList.Tools {
+			gotNormalTools = append(gotNormalTools, tl.Name)
+		}
+		sort.Strings(gotNormalTools)
+		wantNormalTools := []string{"get_node_status", "get_profile", "list_users"}
+		if strings.Join(gotNormalTools, ",") != strings.Join(wantNormalTools, ",") {
+			t.Fatalf("normal ListTools mismatch: got %v, want %v", gotNormalTools, wantNormalTools)
+		}
+
+		// Normal user can query get_node_status across all 3 nodes.
+		res, err = normalSess.CallTool(ctx, &mcp.CallToolParams{Name: "get_node_status"})
+		if err != nil || res.IsError {
+			t.Fatalf("normal CallTool get_node_status failed: err=%v res=%+v", err, res)
+		}
+		normalStatusText := extractE2EMCPText(t, res)
+		for _, wantNode := range c.nodeNames() {
+			if !strings.Contains(normalStatusText, wantNode) {
+				t.Errorf("normal get_node_status missing %q: %s", wantNode, truncate(normalStatusText, 800))
+			}
+		}
+
+		// Normal user get_profile returns own data with redacted auth_token across all 3 nodes.
+		res, err = normalSess.CallTool(ctx, &mcp.CallToolParams{Name: "get_profile"})
+		if err != nil || res.IsError {
+			t.Fatalf("normal CallTool get_profile failed: err=%v res=%+v", err, res)
+		}
+		profileText := extractE2EMCPText(t, res)
+		if !strings.Contains(profileText, mcpNormalUser) || !strings.Contains(profileText, "[REDACTED]") {
+			t.Errorf("normal get_profile unexpected output: %s", truncate(profileText, 800))
+		}
+		if strings.Contains(profileText, normalRealAuthToken) {
+			t.Errorf("SECURITY: normal MCP get_profile leaked plaintext auth_token")
+		}
+
+		// Normal user list_users returns ONLY self (never apiTestUser) and redacts auth_token.
+		res, err = normalSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_users"})
+		if err != nil || res.IsError {
+			t.Fatalf("normal CallTool list_users failed: err=%v res=%+v", err, res)
+		}
+		normalUsersText := extractE2EMCPText(t, res)
+		if !strings.Contains(normalUsersText, mcpNormalUser) {
+			t.Errorf("normal list_users missing self (%s): %s", mcpNormalUser, truncate(normalUsersText, 800))
+		}
+		if strings.Contains(normalUsersText, apiTestUser) {
+			t.Errorf("RBAC: normal list_users exposed another user (%s): %s", apiTestUser, truncate(normalUsersText, 800))
+		}
+		if !strings.Contains(normalUsersText, "[REDACTED]") {
+			t.Errorf("normal list_users missing [REDACTED]: %s", truncate(normalUsersText, 800))
+		}
+		if strings.Contains(normalUsersText, normalRealAuthToken) {
+			t.Errorf("SECURITY: normal MCP list_users leaked plaintext auth_token")
+		}
+
+		// Admin-only tool must be rejected for normal JWT.
+		res, err = normalSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_nodes"})
+		if err == nil && (res == nil || !res.IsError) {
+			t.Fatalf("RBAC: normal user calling admin-only list_nodes unexpectedly succeeded: %+v", res)
 		}
 	})
 
