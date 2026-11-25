@@ -187,6 +187,10 @@ end_node:
   # jwt_expire_hours: JWT token validity in hours. Default: 24.
   jwt_expire_hours: 24
   enable_prometheus: false
+  # Embedded Streamable HTTP MCP server (/mcp), protected by the same auth as the HTTP API.
+  mcp:
+    enabled: false               # mount /mcp on the HTTP management server. Default: false.
+    read_only: true              # restrict MCP tools to read-only operations. Default: true.
   # Master switch for active ICMP/TCP ping probing and ping_nodes loading. Default: false.
   enable_ping_check: false
   only_gateway: false

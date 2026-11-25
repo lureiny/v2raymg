@@ -251,6 +251,15 @@ type PingConfig struct {
 	NodeSources []PingNodeSource `yaml:"node_sources" json:"node_sources"`
 }
 
+// MCPConfig holds embedded MCP server settings.
+type MCPConfig struct {
+	// Enabled controls whether the embedded Streamable HTTP MCP endpoint (/mcp)
+	// is mounted on the HTTP management server. Default: false.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// ReadOnly restricts the MCP server to read-only tools when true. Default: true.
+	ReadOnly bool `yaml:"read_only" json:"read_only"`
+}
+
 // EndNodeConfig holds End Node specific configuration.
 type EndNodeConfig struct {
 	NodeConfig `yaml:",inline"`
@@ -286,6 +295,8 @@ type EndNodeConfig struct {
 	JWTExpireHours int `yaml:"jwt_expire_hours" json:"jwt_expire_hours"`
 	// EnablePrometheus enables the Prometheus metrics endpoint.
 	EnablePrometheus bool `yaml:"enable_prometheus" json:"enable_prometheus"`
+	// MCP holds embedded MCP server settings.
+	MCP MCPConfig `yaml:"mcp" json:"mcp"`
 	// MonitorInterfaces is an optional list of network interface names to use for
 	// bandwidth speed monitoring (e.g. ["eth0", "ens3"]).
 	// When empty, the interface with the default route is detected automatically.

@@ -140,6 +140,8 @@ func defaultAppConfig() *AppConfig {
 	cfg.EndNode.Ping.TCPPingInterval = 5
 	cfg.EndNode.Ping.TCPPingTimeout = 1
 	cfg.EndNode.JWTExpireHours = 24
+	cfg.EndNode.MCP.Enabled = false
+	cfg.EndNode.MCP.ReadOnly = true
 	cfg.EndNode.Cluster.NodeSumSync = true
 	cfg.EndNode.Cluster.HeartbeatIntervalSec = 10
 	cfg.ClusterUser = DefaultClusterUserConfig()

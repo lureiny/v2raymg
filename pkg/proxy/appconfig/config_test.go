@@ -793,3 +793,137 @@ proxy:
 		assert.False(t, cfgOff.EndNode.Ping.EnableICMPPing)
 	})
 }
+
+func TestLoadFromFile_MCPConfig(t *testing.T) {
+	writeFile := func(t *testing.T, name, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), name)
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		return path
+	}
+
+	t.Run("yaml_unset_uses_defaults", func(t *testing.T) {
+		path := writeFile(t, "config.yaml", `
+end_node:
+  listen: 127.0.0.1
+  http_port: 8080
+  jwt_secret: test-jwt-secret-key-at-least-32-bytes-long
+`)
+		cfg, err := LoadFromFile(path)
+		require.NoError(t, err)
+		assert.False(t, cfg.EndNode.MCP.Enabled)
+		assert.True(t, cfg.EndNode.MCP.ReadOnly)
+	})
+
+	t.Run("yaml_enabled_true_keeps_read_only_default", func(t *testing.T) {
+		path := writeFile(t, "config.yaml", `
+end_node:
+  listen: 127.0.0.1
+  http_port: 8080
+  jwt_secret: test-jwt-secret-key-at-least-32-bytes-long
+  mcp:
+    enabled: true
+`)
+		cfg, err := LoadFromFile(path)
+		require.NoError(t, err)
+		assert.True(t, cfg.EndNode.MCP.Enabled)
+		assert.True(t, cfg.EndNode.MCP.ReadOnly)
+	})
+
+	t.Run("yaml_enabled_true_read_only_false", func(t *testing.T) {
+		path := writeFile(t, "config.yaml", `
+end_node:
+  listen: 127.0.0.1
+  http_port: 8080
+  jwt_secret: test-jwt-secret-key-at-least-32-bytes-long
+  mcp:
+    enabled: true
+    read_only: false
+`)
+		cfg, err := LoadFromFile(path)
+		require.NoError(t, err)
+		assert.True(t, cfg.EndNode.MCP.Enabled)
+		assert.False(t, cfg.EndNode.MCP.ReadOnly)
+	})
+
+	t.Run("yaml_empty_mcp_mapping_keeps_defaults", func(t *testing.T) {
+		path := writeFile(t, "config.yaml", `
+end_node:
+  listen: 127.0.0.1
+  http_port: 8080
+  jwt_secret: test-jwt-secret-key-at-least-32-bytes-long
+  mcp: {}
+`)
+		cfg, err := LoadFromFile(path)
+		require.NoError(t, err)
+		assert.False(t, cfg.EndNode.MCP.Enabled)
+		assert.True(t, cfg.EndNode.MCP.ReadOnly)
+	})
+
+	t.Run("json_unset_and_overrides", func(t *testing.T) {
+		cases := []struct {
+			name         string
+			endNode      map[string]any
+			wantEnabled  bool
+			wantReadOnly bool
+		}{
+			{
+				name: "unset",
+				endNode: map[string]any{
+					"listen":     "127.0.0.1",
+					"http_port":  8080,
+					"jwt_secret": "test-jwt-secret-key-at-least-32-bytes-long",
+				},
+				wantEnabled:  false,
+				wantReadOnly: true,
+			},
+			{
+				name: "enabled_only",
+				endNode: map[string]any{
+					"listen":     "127.0.0.1",
+					"http_port":  8080,
+					"jwt_secret": "test-jwt-secret-key-at-least-32-bytes-long",
+					"mcp": map[string]any{
+						"enabled": true,
+					},
+				},
+				wantEnabled:  true,
+				wantReadOnly: true,
+			},
+			{
+				name: "enabled_and_writable",
+				endNode: map[string]any{
+					"listen":     "127.0.0.1",
+					"http_port":  8080,
+					"jwt_secret": "test-jwt-secret-key-at-least-32-bytes-long",
+					"mcp": map[string]any{
+						"enabled":   true,
+						"read_only": false,
+					},
+				},
+				wantEnabled:  true,
+				wantReadOnly: false,
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				raw, err := json.Marshal(map[string]any{"end_node": tc.endNode})
+				require.NoError(t, err)
+				path := writeFile(t, "config.json", string(raw))
+				cfg, err := LoadFromFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, tc.wantEnabled, cfg.EndNode.MCP.Enabled)
+				assert.Equal(t, tc.wantReadOnly, cfg.EndNode.MCP.ReadOnly)
+			})
+		}
+	})
+
+	t.Run("example_config_loads_with_mcp_defaults", func(t *testing.T) {
+		examplePath := filepath.Join("..", "..", "..", "config", "config.example.yaml")
+		cfg, err := LoadFromFileWithValidate(examplePath)
+		require.NoError(t, err)
+		assert.False(t, cfg.EndNode.MCP.Enabled)
+		assert.True(t, cfg.EndNode.MCP.ReadOnly)
+	})
+}
