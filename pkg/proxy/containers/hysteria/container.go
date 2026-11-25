@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,16 +44,26 @@ type HysteriaContainer struct {
 	storeMgr    *store.StoreManager
 	certReader  CertReader
 	certMgr     certIssuer // triggers cert issuance if not found
-	// mu guards addedUsers and inboundEnabled against concurrent access between
-	// the user-event handler goroutine (handleUserEvent) and the reconcile-loop
-	// goroutine (reconcileUsers). Held only around map/field reads/writes —
-	// never while calling userMgr.GetBindPort / ReleaseBindPort.
+	// mu guards addedUsers, inboundEnabled, accessTags, and remark against
+	// concurrent access between the user-event handler goroutine, reconcile loop,
+	// and runtime metadata/tag updates. Held only around map/field reads/writes —
+	// never while calling userMgr or store methods.
 	mu sync.Mutex
 	// addedUsers tracks users for whom a forward UDP rule has been allocated.
 	addedUsers map[string]struct{}
 	// inboundEnabled controls whether per-user forward rules are active.
 	// FastAddInbound sets it true; RemoveInboundConfig sets it false.
-	inboundEnabled  bool
+	inboundEnabled bool
+	// accessTags restricts Layer 2 user visibility on the default inbound.
+	accessTags []string
+	// remark is an optional human-readable suffix for subscription node names.
+	remark string
+	// persistMu serializes inbound state + store mutations (FastAddInbound,
+	// RemoveInboundConfig, SetInboundAccessTags, startup restore/save).
+	persistMu sync.Mutex
+	// reconcileMu serializes reconcileUsers sweeps so concurrent tag updates
+	// converge deterministically to the latest accessTags.
+	reconcileMu     sync.Mutex
 	reconcileStopCh chan struct{}
 	reconcileWg     sync.WaitGroup
 	// lifecycleMu guards swaps of the session field (run/stop hooks only).
@@ -64,6 +75,13 @@ type HysteriaContainer struct {
 	// interleaved Start/Stop can never leak an untracked process.
 	procMu sync.Mutex
 }
+
+var (
+	_ container.Container           = (*HysteriaContainer)(nil)
+	_ container.ChainCapable        = (*HysteriaContainer)(nil)
+	_ container.InboundTagUpdater   = (*HysteriaContainer)(nil)
+	_ container.InboundMetaProvider = (*HysteriaContainer)(nil)
+)
 
 // lifecycleSession bundles the stop signal and goroutine tracking for one
 // Start/Stop generation. The run hook installs a fresh session; the stop hook
@@ -84,12 +102,14 @@ type hysteriaHooks struct {
 func (h *hysteriaHooks) GetRunFunc() (func() error, func() error) {
 	run := func() error {
 		// Restore persisted inbound config before starting
+		h.c.persistMu.Lock()
 		if err := h.c.restoreInboundConfig(); err != nil {
 			slog.Warn("hysteria: restore inbound config failed", "err", err)
 		}
 		if err := h.c.saveInboundConfig(); err != nil {
 			slog.Warn("hysteria: save inbound config failed", "err", err)
 		}
+		h.c.persistMu.Unlock()
 
 		// Install a fresh lifecycle session for this generation. A stale
 		// session can survive an interleaved Start/Stop (BaseContainer
@@ -450,12 +470,27 @@ func (hc *HysteriaContainer) Update(ctx context.Context, req container.UpdateReq
 	}, nil
 }
 
+// SupportsChainOutbound reports whether HysteriaContainer supports per-inbound chained outbounds.
+// Mode A single-process containers do not support chained outbounds.
+func (hc *HysteriaContainer) SupportsChainOutbound() bool {
+	return false
+}
+
+// ValidateChainURI rejects chained outbound URIs because Mode A hysteria does
+// not support per-inbound chained outbounds.
+func (hc *HysteriaContainer) ValidateChainURI(rawURI string) error {
+	return fmt.Errorf("hysteria: Mode A container does not support chained outbounds; use mihomo container if Hysteria2 chained inbound is needed")
+}
+
 // RemoveInboundConfig disables the default inbound: tears down all per-user
 // forward rules and persists the disabled state. The hysteria process keeps running.
 func (hc *HysteriaContainer) RemoveInboundConfig(tag string) error {
 	if tag != defaultInboundTag {
 		return fmt.Errorf("hysteria: inbound %q not found", tag)
 	}
+	hc.persistMu.Lock()
+	defer hc.persistMu.Unlock()
+
 	hc.mu.Lock()
 	hc.inboundEnabled = false
 	hc.mu.Unlock()
@@ -520,19 +555,96 @@ func (hc *HysteriaContainer) ListInboundConfigs() []inbound.Inbound {
 	return []inbound.Inbound{hc.inbound}
 }
 
-// FastAddInbound enables the default inbound: sets inboundEnabled true, persists
-// the state, and reconciles forward rules for all current users.
-// tag must equal defaultInboundTag; params are ignored.
-func (hc *HysteriaContainer) FastAddInbound(tag string, _ map[string]any) error {
+// GetInboundMeta returns chain and visibility metadata for the default inbound
+// when tag matches and the inbound is enabled.
+func (hc *HysteriaContainer) GetInboundMeta(tag string) (contracts.InboundMeta, bool) {
+	if tag != defaultInboundTag {
+		return contracts.InboundMeta{}, false
+	}
+	hc.mu.Lock()
+	enabled := hc.inboundEnabled
+	tags := cloneStringSlice(hc.accessTags)
+	remark := hc.remark
+	hc.mu.Unlock()
+	if !enabled {
+		return contracts.InboundMeta{}, false
+	}
+	return contracts.InboundMeta{
+		InboundType: contracts.InboundTypeDirect,
+		AccessTags:  tags,
+		Remark:      remark,
+	}, true
+}
+
+// SetInboundAccessTags updates the default inbound's visibility tags at runtime
+// without restarting the hysteria process, persists the change (rolling back on
+// store error), and immediately reconciles user forward rules.
+func (hc *HysteriaContainer) SetInboundAccessTags(tag string, accessTags []string) error {
+	if tag != defaultInboundTag {
+		return fmt.Errorf("hysteria: inbound %q not found", tag)
+	}
+	normalized, err := contracts.NormalizeAccessTags(accessTags)
+	if err != nil {
+		return err
+	}
+
+	hc.persistMu.Lock()
+	hc.mu.Lock()
+	if !hc.inboundEnabled {
+		hc.mu.Unlock()
+		hc.persistMu.Unlock()
+		return fmt.Errorf("hysteria: inbound %q is disabled", tag)
+	}
+	prevTags := cloneStringSlice(hc.accessTags)
+	hc.accessTags = cloneStringSlice(normalized)
+	hc.mu.Unlock()
+
+	if err := hc.saveInboundConfig(); err != nil {
+		hc.mu.Lock()
+		hc.accessTags = prevTags
+		hc.mu.Unlock()
+		hc.persistMu.Unlock()
+		return fmt.Errorf("hysteria: persist access tags for %q: %w", tag, err)
+	}
+	hc.persistMu.Unlock()
+
+	hc.reconcileUsers()
+	return nil
+}
+
+// FastAddInbound enables the default inbound: validates that chain mode is not
+// requested, normalizes optional access_tags and remark, persists the state
+// (rolling back on store error), and reconciles forward rules for all current users.
+func (hc *HysteriaContainer) FastAddInbound(tag string, params map[string]any) error {
+	meta, err := parseFastAddMetaParams(params, hc.ValidateChainURI)
+	if err != nil {
+		return err
+	}
 	if tag != defaultInboundTag {
 		return fmt.Errorf("hysteria: only the default inbound %q is supported", defaultInboundTag)
 	}
+
+	hc.persistMu.Lock()
 	hc.mu.Lock()
+	prevEnabled := hc.inboundEnabled
+	prevTags := cloneStringSlice(hc.accessTags)
+	prevRemark := hc.remark
 	hc.inboundEnabled = true
+	hc.accessTags = cloneStringSlice(meta.accessTags)
+	hc.remark = meta.remark
 	hc.mu.Unlock()
+
 	if err := hc.saveInboundConfig(); err != nil {
-		slog.Warn("hysteria: save inbound config on enable failed", "err", err)
+		hc.mu.Lock()
+		hc.inboundEnabled = prevEnabled
+		hc.accessTags = prevTags
+		hc.remark = prevRemark
+		hc.mu.Unlock()
+		hc.persistMu.Unlock()
+		return fmt.Errorf("hysteria: save inbound config on enable: %w", err)
 	}
+	hc.persistMu.Unlock()
+
 	hc.reconcileUsers()
 	return nil
 }
@@ -580,98 +692,97 @@ func (hc *HysteriaContainer) startUserEventHandler(s *lifecycleSession) {
 //
 // Per-user UDP forward model (mirrors snell's TCP flow, see
 // pkg/proxy/containers/snell/container.go:handleUserEvent):
-//   - UserEventAdd: allocate a public UDP port via GetBindPort that relays
-//     into hysteria's loopback cfg.Port.
+//   - UserEventAdd / UserEventUpdate: evaluate two-layer visibility via
+//     CanUserAccessInbound; allocate a public UDP port via GetBindPort if
+//     allowed, or tear down any existing rule if denied.
 //   - UserEventRemove: tear down the forward rule and release the port.
-//   - UserEventUpdate: re-evaluate visibility (group changes etc.) and
-//     add/remove the rule accordingly.
 func (hc *HysteriaContainer) handleUserEvent(event usermanager.UserEvent) {
 	if hc.userMgr == nil {
 		return
 	}
 	switch event.Type {
-	case usermanager.UserEventAdd:
+	case usermanager.UserEventAdd, usermanager.UserEventUpdate:
 		hc.mu.Lock()
 		enabled := hc.inboundEnabled
-		_, exists := hc.addedUsers[event.Username]
+		accessTags := cloneStringSlice(hc.accessTags)
 		hc.mu.Unlock()
-		if !enabled || exists {
+
+		if !enabled || !hc.userMgr.CanUserAccessInbound(event.User, accessTags) {
+			hc.revokeUserForwardRule(event.Username, "access denied")
 			return
 		}
-		// GetBindPort is idempotent, so a concurrent Add winning the race
-		// after both threads saw !exists is still correct.
-		_, err := hc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
-			Username:      event.Username,
-			ContainerType: contracts.ContainerHysteria,
-			InboundTag:    defaultInboundTag,
-			TargetPort:    uint32(hc.cfg.Port),
-			Protocol:      contracts.ProtocolHysteria2,
-			Network:       "udp",
-		})
-		if err != nil {
-			slog.Error("hysteria: allocate port failed", "user", event.Username, "err", err)
-			return
-		}
-		hc.mu.Lock()
-		hc.addedUsers[event.Username] = struct{}{}
-		hc.mu.Unlock()
+		hc.ensureUserForwardRule(event.Username, event.User, accessTags)
 
 	case usermanager.UserEventRemove:
-		hc.mu.Lock()
-		delete(hc.addedUsers, event.Username)
+		hc.revokeUserForwardRule(event.Username, "remove")
+	}
+}
+
+func (hc *HysteriaContainer) ensureUserForwardRule(username string, user *contracts.User, checkedTags []string) {
+	hc.mu.Lock()
+	enabled := hc.inboundEnabled
+	_, exists := hc.addedUsers[username]
+	hc.mu.Unlock()
+	if !enabled || exists {
+		return
+	}
+	// GetBindPort is idempotent, so a concurrent Add winning the race
+	// after both threads saw !exists is still correct.
+	port, err := hc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
+		Username:      username,
+		ContainerType: contracts.ContainerHysteria,
+		InboundTag:    defaultInboundTag,
+		TargetPort:    uint32(hc.cfg.Port),
+		Protocol:      contracts.ProtocolHysteria2,
+		Network:       "udp",
+	})
+	if err != nil {
+		slog.Error("hysteria: allocate port failed", "user", username, "err", err)
+		return
+	}
+
+	// Re-check under mu in case RemoveInboundConfig or SetInboundAccessTags
+	// narrowed access while GetBindPort was running unlocked.
+	hc.mu.Lock()
+	enabledAfter := hc.inboundEnabled
+	tagsAfter := cloneStringSlice(hc.accessTags)
+	if enabledAfter && stringSlicesEqual(checkedTags, tagsAfter) {
+		hc.addedUsers[username] = struct{}{}
 		hc.mu.Unlock()
-		port, ok := hc.userMgr.GetUserPortByDstForCleanup(event.Username, uint32(hc.cfg.Port))
-		if !ok {
-			return
-		}
+		return
+	}
+	hc.mu.Unlock()
+
+	if !enabledAfter || !hc.userMgr.CanUserAccessInbound(user, tagsAfter) {
 		if err := hc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
-			Username: event.Username,
+			Username: username,
 			BindPort: port,
 		}); err != nil {
-			slog.Error("hysteria: release port failed", "user", event.Username, "err", err)
+			slog.Error("hysteria: release port after concurrent access change failed", "user", username, "err", err)
 		}
+		return
+	}
 
-	case usermanager.UserEventUpdate:
-		// Re-evaluate visibility after group or other changes.
-		if event.User != nil && !hc.userMgr.IsUserVisible(event.User) {
-			// User no longer belongs to this node — tear down forwarding rule.
-			hc.mu.Lock()
-			delete(hc.addedUsers, event.Username)
-			hc.mu.Unlock()
-			port, ok := hc.userMgr.GetUserPortByDstForCleanup(event.Username, uint32(hc.cfg.Port))
-			if ok {
-				if err := hc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
-					Username: event.Username,
-					BindPort: port,
-				}); err != nil {
-					slog.Error("hysteria: release port on group change failed", "user", event.Username, "err", err)
-				}
-			}
-		} else if event.User != nil {
-			// User became visible (e.g. group changed back) — ensure forwarding rule exists.
-			hc.mu.Lock()
-			enabled := hc.inboundEnabled
-			_, exists := hc.addedUsers[event.Username]
-			hc.mu.Unlock()
-			if !enabled || exists {
-				return
-			}
-			_, err := hc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
-				Username:      event.Username,
-				ContainerType: contracts.ContainerHysteria,
-				InboundTag:    defaultInboundTag,
-				TargetPort:    uint32(hc.cfg.Port),
-				Protocol:      contracts.ProtocolHysteria2,
-				Network:       "udp",
-			})
-			if err != nil {
-				slog.Error("hysteria: allocate port on group change failed", "user", event.Username, "err", err)
-				return
-			}
-			hc.mu.Lock()
-			hc.addedUsers[event.Username] = struct{}{}
-			hc.mu.Unlock()
-		}
+	hc.mu.Lock()
+	if hc.inboundEnabled {
+		hc.addedUsers[username] = struct{}{}
+	}
+	hc.mu.Unlock()
+}
+
+func (hc *HysteriaContainer) revokeUserForwardRule(username, reason string) {
+	hc.mu.Lock()
+	delete(hc.addedUsers, username)
+	hc.mu.Unlock()
+	port, ok := hc.userMgr.GetUserPortByDstForCleanup(username, uint32(hc.cfg.Port))
+	if !ok {
+		return
+	}
+	if err := hc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
+		Username: username,
+		BindPort: port,
+	}); err != nil {
+		slog.Error("hysteria: release port failed", "user", username, "reason", reason, "err", err)
 	}
 }
 
@@ -681,13 +792,19 @@ func (hc *HysteriaContainer) saveInboundConfig() error {
 		return nil
 	}
 
+	hc.mu.Lock()
+	enabled := hc.inboundEnabled
+	accessTags := cloneStringSlice(hc.accessTags)
+	remark := hc.remark
+	hc.mu.Unlock()
+
 	data := map[string]any{
 		"tag":      defaultInboundTag,
 		"protocol": string(contracts.ProtocolHysteria2),
 		"port":     hc.cfg.Port,
 		"listen":   hc.cfg.Listen,
 		"domain":   hc.cfg.Domain,
-		"enabled":  hc.inboundEnabled,
+		"enabled":  enabled,
 	}
 	nativeJSON, err := json.Marshal(data)
 	if err != nil {
@@ -699,6 +816,9 @@ func (hc *HysteriaContainer) saveInboundConfig() error {
 		ContainerType: string(contracts.ContainerHysteria),
 		CertSource:    "none",
 		NativeJSON:    nativeJSON,
+		InboundType:   string(contracts.InboundTypeDirect),
+		AccessTags:    accessTags,
+		Remark:        remark,
 	}
 	return hc.storeMgr.InboundStore().Save(rec)
 }
@@ -746,10 +866,20 @@ func (hc *HysteriaContainer) restoreInboundConfig() error {
 			}
 		}
 
+		accessTags, tagErr := contracts.NormalizeAccessTags(rec.AccessTags)
+		if tagErr != nil {
+			slog.Warn("hysteria: normalize restored access_tags failed", "err", tagErr)
+			accessTags = nil
+		}
+
+		hc.mu.Lock()
 		// Restore enabled state; true is the default when the key is absent (old records).
 		if enabled, ok := data["enabled"].(bool); ok {
 			hc.inboundEnabled = enabled
 		}
+		hc.accessTags = accessTags
+		hc.remark = rec.Remark
+		hc.mu.Unlock()
 
 		// Re-create inbound with restored config.
 		// Actual listen is always 127.0.0.1 (see process.go); keep inbound metadata aligned.
@@ -766,7 +896,7 @@ func (hc *HysteriaContainer) restoreInboundConfig() error {
 }
 
 // GetUserSubscriptions returns subscription specs for the given user.
-// Returns nil when the inbound is disabled.
+// Returns nil when the inbound is disabled or the user is not authorized.
 //
 // The port exposed to the client is the per-user public UDP port allocated
 // by the forward layer (NOT hc.cfg.Port, which is now a loopback internal
@@ -778,8 +908,13 @@ func (hc *HysteriaContainer) GetUserSubscriptions(req contracts.SubscriptionRequ
 	}
 	hc.mu.Lock()
 	enabled := hc.inboundEnabled
+	accessTags := cloneStringSlice(hc.accessTags)
+	remark := hc.remark
 	hc.mu.Unlock()
 	if !enabled {
+		return nil, nil
+	}
+	if !hc.userMgr.CanUserAccessInboundByUsername(req.User.Username, accessTags) {
 		return nil, nil
 	}
 	port, ok := hc.userMgr.GetUserPortByDst(req.User.Username, uint32(hc.cfg.Port))
@@ -788,7 +923,13 @@ func (hc *HysteriaContainer) GetUserSubscriptions(req contracts.SubscriptionRequ
 	}
 
 	nodeName := req.NodeName
-	if nodeName == "" {
+	if remark != "" {
+		if nodeName != "" {
+			nodeName = nodeName + "-" + remark
+		} else {
+			nodeName = remark
+		}
+	} else if nodeName == "" {
 		nodeName = "hysteria2"
 	}
 
@@ -822,44 +963,58 @@ func (hc *HysteriaContainer) GetUserSubscriptions(req contracts.SubscriptionRequ
 
 // Restore rebuilds forward rules for all existing users after restart.
 func (hc *HysteriaContainer) Restore(ctx context.Context) error {
+	hc.persistMu.Lock()
+	if err := hc.restoreInboundConfig(); err != nil {
+		slog.Warn("hysteria: restore inbound config failed", "err", err)
+	}
+	hc.persistMu.Unlock()
 	hc.reconcileUsers()
 	return nil
 }
 
-// reconcileUsers syncs all users from UserManager to ensure forward rules exist.
-// This is called by Restore and periodically by the reconcile loop.
+// reconcileUsers syncs all users from UserManager to ensure forward rules exist
+// only for users passing two-layer visibility (CanUserAccessInbound).
 // GetBindPort is idempotent: if the relay already exists it returns the port;
 // if PortMappings has a stale record (relay dead after restart) it recreates the relay.
 //
 // Concurrency: may run concurrently with handleUserEvent (event handler
 // goroutine). All hc.addedUsers reads/writes happen under hc.mu; userMgr
 // calls (GetBindPort / ReleaseBindPort / ListUsers /
-// GetUserPortByDstForCleanup) are invoked without the lock held.
+// GetUserPortByDstForCleanup) are invoked without hc.mu held.
 func (hc *HysteriaContainer) reconcileUsers() {
 	if hc.userMgr == nil {
 		return
 	}
 
+	hc.reconcileMu.Lock()
+	defer hc.reconcileMu.Unlock()
+
 	users := hc.userMgr.ListUsers()
 
-	// Build a set of visible usernames for fast lookup.
-	visibleSet := make(map[string]struct{}, len(users))
-	for _, u := range users {
-		visibleSet[u.Username] = struct{}{}
-	}
-
-	// Snapshot tracked usernames under the lock so the range below doesn't
-	// race with concurrent handleUserEvent writes.
+	// Snapshot tracked usernames, enabled flag, and accessTags under the lock.
 	hc.mu.Lock()
+	enabled := hc.inboundEnabled
+	accessTags := cloneStringSlice(hc.accessTags)
 	tracked := make([]string, 0, len(hc.addedUsers))
 	for username := range hc.addedUsers {
 		tracked = append(tracked, username)
 	}
 	hc.mu.Unlock()
 
-	// Remove users that are tracked but no longer visible (e.g. group changed).
+	// Build a set of permitted usernames using both Layer 1 and Layer 2 checks.
+	allowedSet := make(map[string]struct{}, len(users))
+	if enabled {
+		for _, u := range users {
+			if hc.userMgr.CanUserAccessInbound(u, accessTags) {
+				allowedSet[u.Username] = struct{}{}
+			}
+		}
+	}
+
+	// Remove users that are tracked but no longer permitted (group/tag change,
+	// expiration/deletion, or inbound disabled).
 	for _, username := range tracked {
-		if _, visible := visibleSet[username]; visible {
+		if _, allowed := allowedSet[username]; allowed {
 			continue
 		}
 		hc.mu.Lock()
@@ -876,31 +1031,77 @@ func (hc *HysteriaContainer) reconcileUsers() {
 		}
 	}
 
-	// Add users that are visible but not yet tracked (only when inbound is enabled).
-	hc.mu.Lock()
-	enabled := hc.inboundEnabled
-	hc.mu.Unlock()
+	// Defense-in-depth: revoke any active forward rules in ForwardManager that
+	// belong to this inbound for users not in allowedSet (e.g. out-of-band rules).
+	if fm := hc.userMgr.GetForwardManager(); fm != nil {
+		for _, r := range fm.GetAllRules() {
+			if r == nil || r.ContainerType != contracts.ContainerHysteria || r.InboundTag != defaultInboundTag {
+				continue
+			}
+			if _, allowed := allowedSet[r.Username]; allowed {
+				continue
+			}
+			hc.mu.Lock()
+			delete(hc.addedUsers, r.Username)
+			hc.mu.Unlock()
+			if r.ListenPort != 0 {
+				if err := hc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
+					Username: r.Username,
+					BindPort: r.ListenPort,
+				}); err != nil {
+					slog.Warn("hysteria: reconcile release active rule failed", "user", r.Username, "err", err)
+				}
+			}
+		}
+	}
+
+	// Add users that are permitted but not yet tracked (only when inbound is enabled).
 	if enabled {
 		for _, user := range users {
+			if _, allowed := allowedSet[user.Username]; !allowed {
+				continue
+			}
 			hc.mu.Lock()
 			_, exists := hc.addedUsers[user.Username]
 			hc.mu.Unlock()
 			if exists {
 				continue
 			}
-			if _, err := hc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
+			port, err := hc.userMgr.GetBindPort(usermanager.GetBindPortRequest{
 				Username:      user.Username,
 				ContainerType: contracts.ContainerHysteria,
 				InboundTag:    defaultInboundTag,
 				TargetPort:    uint32(hc.cfg.Port),
 				Protocol:      contracts.ProtocolHysteria2,
 				Network:       "udp",
-			}); err != nil {
+			})
+			if err != nil {
 				slog.Warn("hysteria: reconcile forward rule failed", "user", user.Username, "err", err)
 				continue
 			}
 			hc.mu.Lock()
-			hc.addedUsers[user.Username] = struct{}{}
+			enabledAfter := hc.inboundEnabled
+			tagsAfter := cloneStringSlice(hc.accessTags)
+			if enabledAfter && stringSlicesEqual(accessTags, tagsAfter) {
+				hc.addedUsers[user.Username] = struct{}{}
+				hc.mu.Unlock()
+				continue
+			}
+			hc.mu.Unlock()
+
+			if !enabledAfter || !hc.userMgr.CanUserAccessInbound(user, tagsAfter) {
+				if err := hc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
+					Username: user.Username,
+					BindPort: port,
+				}); err != nil {
+					slog.Warn("hysteria: reconcile release port after concurrent access change failed", "user", user.Username, "err", err)
+				}
+				continue
+			}
+			hc.mu.Lock()
+			if hc.inboundEnabled {
+				hc.addedUsers[user.Username] = struct{}{}
+			}
 			hc.mu.Unlock()
 		}
 	}
@@ -938,4 +1139,105 @@ func (hc *HysteriaContainer) stopReconcileLoop() {
 		hc.reconcileWg.Wait()
 		hc.reconcileStopCh = nil
 	}
+}
+
+type fastAddMetaParams struct {
+	accessTags []string
+	remark     string
+}
+
+func parseFastAddMetaParams(params map[string]any, validateChain func(string) error) (fastAddMetaParams, error) {
+	var out fastAddMetaParams
+	if len(params) == 0 {
+		return out, nil
+	}
+
+	var chainURI string
+	if rawURI, ok := params["chain_uri"]; ok && rawURI != nil {
+		s, ok := rawURI.(string)
+		if !ok {
+			return out, fmt.Errorf("hysteria: invalid chain_uri type %T: expected string", rawURI)
+		}
+		chainURI = strings.TrimSpace(s)
+	}
+
+	if rawType, ok := params["inbound_type"]; ok && rawType != nil {
+		s, ok := rawType.(string)
+		if !ok {
+			return out, fmt.Errorf("hysteria: invalid inbound_type type %T: expected string", rawType)
+		}
+		inbType, err := contracts.NormalizeInboundType(s)
+		if err != nil {
+			return out, err
+		}
+		if inbType == contracts.InboundTypeChain {
+			return out, validateChain(chainURI)
+		}
+	}
+
+	if chainURI != "" {
+		return out, validateChain(chainURI)
+	}
+
+	if rawTags, ok := params["access_tags"]; ok && rawTags != nil {
+		tags, err := parseStringSliceParam(rawTags)
+		if err != nil {
+			return out, fmt.Errorf("hysteria: invalid access_tags: %w", err)
+		}
+		normalized, err := contracts.NormalizeAccessTags(tags)
+		if err != nil {
+			return out, err
+		}
+		out.accessTags = normalized
+	}
+
+	if rawRemark, ok := params["remark"]; ok && rawRemark != nil {
+		s, ok := rawRemark.(string)
+		if !ok {
+			return out, fmt.Errorf("hysteria: invalid remark type %T: expected string", rawRemark)
+		}
+		out.remark = strings.TrimSpace(s)
+	}
+
+	return out, nil
+}
+
+func parseStringSliceParam(raw any) ([]string, error) {
+	switch v := raw.(type) {
+	case []string:
+		return v, nil
+	case []any:
+		out := make([]string, 0, len(v))
+		for i, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("element %d has type %T, expected string", i, item)
+			}
+			out = append(out, s)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unexpected type %T, expected []string", raw)
+	}
+}
+
+func cloneStringSlice(s []string) []string {
+	if len(s) == 0 {
+		return nil
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
