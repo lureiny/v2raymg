@@ -34,6 +34,9 @@ type Hysteria2Node struct {
 	Obfs         string // "salamander" or ""
 	ObfsPassword string
 
+	Ports     string // port hopping range from ?mport=, e.g. "20000-50000"
+	PinSHA256 string // certificate SHA256 pin from ?pinSHA256=
+
 	// Server-advertised bandwidth (Up/Down) plus server-only masquerade.
 	// Up and Down are bandwidth caps the client config emits to the server
 	// at handshake (clash output side); Masquerade is configured solely
@@ -64,6 +67,12 @@ func (n *Hysteria2Node) Encode() string {
 	if n.ObfsPassword != "" {
 		q.Set("obfs-password", n.ObfsPassword)
 	}
+	if n.Ports != "" {
+		q.Set("mport", n.Ports)
+	}
+	if n.PinSHA256 != "" {
+		q.Set("pinSHA256", n.PinSHA256)
+	}
 
 	u := url.URL{
 		Scheme:   "hysteria2",
@@ -89,7 +98,11 @@ func DecodeHysteria2(uri string) (*Hysteria2Node, error) {
 	}
 	password := ""
 	if u.User != nil {
-		password = u.User.Username()
+		if pwd, hasPwd := u.User.Password(); hasPwd {
+			password = u.User.Username() + ":" + pwd
+		} else {
+			password = u.User.Username()
+		}
 	}
 	if password == "" {
 		return nil, fmt.Errorf("hysteria2: empty password")
@@ -105,6 +118,10 @@ func DecodeHysteria2(uri string) (*Hysteria2Node, error) {
 	} else if raw := q.Get("alpn"); raw != "" {
 		alpn = strings.Split(raw, ",")
 	}
+	pinSHA256 := q.Get("pinSHA256")
+	if pinSHA256 == "" {
+		pinSHA256 = q.Get("pinsha256")
+	}
 	n := &Hysteria2Node{
 		NodeName:     u.Fragment,
 		Host:         u.Hostname(),
@@ -114,8 +131,10 @@ func DecodeHysteria2(uri string) (*Hysteria2Node, error) {
 		ALPN:         alpn,
 		Obfs:         q.Get("obfs"),
 		ObfsPassword: q.Get("obfs-password"),
+		Ports:        q.Get("mport"),
+		PinSHA256:    pinSHA256,
 	}
-	if q.Get("insecure") == "1" {
+	if isTruthyParam(q.Get("insecure")) {
 		n.SkipCertVerify = true
 	}
 	return n, nil

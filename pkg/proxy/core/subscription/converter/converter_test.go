@@ -8,6 +8,7 @@ import (
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription/converter"
+	"gopkg.in/yaml.v3"
 )
 
 // --- CommonConverter tests ---
@@ -477,5 +478,112 @@ func TestConvertURIs_SSnell_Mixed_SurgeFormat(t *testing.T) {
 	}
 	if !strings.Contains(result, "48162") {
 		t.Errorf("expected snell port, got %q", result)
+	}
+}
+
+func TestClashConverter_DeduplicatesDuplicateProxyNames(t *testing.T) {
+	c := &converter.ClashConverter{}
+	specs := []contracts.SubscriptionSpec{
+		{Protocol: contracts.ProtocolTrojan, Host: "a.example.com", Port: 443, Password: "p1", NodeName: "HK"},
+		{Protocol: contracts.ProtocolTrojan, Host: "b.example.com", Port: 443, Password: "p2", NodeName: "HK"},
+		{Protocol: contracts.ProtocolTrojan, Host: "c.example.com", Port: 443, Password: "p3", NodeName: "HK_2"},
+		{Protocol: contracts.ProtocolTrojan, Host: "d.example.com", Port: 443, Password: "p4", NodeName: "HK"},
+	}
+	opts := &converter.ConvertOptions{
+		ProxyGroups: []converter.ProxyGroupConfig{
+			{Name: "Proxy", Type: "select", Proxies: []string{"all"}},
+		},
+	}
+	out, err := c.ConvertWithOptions(specs, opts)
+	if err != nil {
+		t.Fatalf("ConvertWithOptions: %v", err)
+	}
+	var parsed struct {
+		Proxies []struct {
+			Name string `yaml:"name"`
+		} `yaml:"proxies"`
+		ProxyGroups []struct {
+			Name    string   `yaml:"name"`
+			Proxies []string `yaml:"proxies"`
+		} `yaml:"proxy-groups"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	wantNames := []string{"🌿 TROJAN_HK", "🌿 TROJAN_HK_2", "🌿 TROJAN_HK_2_2", "🌿 TROJAN_HK_3"}
+	if len(parsed.Proxies) != len(wantNames) {
+		t.Fatalf("got %d proxies, want %d", len(parsed.Proxies), len(wantNames))
+	}
+	for i, w := range wantNames {
+		if parsed.Proxies[i].Name != w {
+			t.Errorf("proxies[%d].Name = %q, want %q", i, parsed.Proxies[i].Name, w)
+		}
+	}
+}
+
+func TestClashConverter_DeduplicatesRealCollisionWithExistingSuffix(t *testing.T) {
+	c := &converter.ClashConverter{}
+	// Both NodeName="" and InboundTag="" -> all collide on "🌿 TROJAN_"
+	specs := []contracts.SubscriptionSpec{
+		{Protocol: contracts.ProtocolTrojan, Host: "1.1.1.1", Port: 443, Password: "p1"},
+		{Protocol: contracts.ProtocolTrojan, Host: "2.2.2.2", Port: 443, Password: "p2"},
+		{Protocol: contracts.ProtocolTrojan, Host: "3.3.3.3", Port: 443, Password: "p3"},
+	}
+	opts := &converter.ConvertOptions{
+		ProxyGroups: []converter.ProxyGroupConfig{
+			{Name: "Manual", Type: "select", Proxies: []string{"all"}},
+		},
+	}
+	out, err := c.ConvertWithOptions(specs, opts)
+	if err != nil {
+		t.Fatalf("ConvertWithOptions: %v", err)
+	}
+	var parsed struct {
+		Proxies []struct {
+			Name string `yaml:"name"`
+		} `yaml:"proxies"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	wantNames := []string{"🌿 TROJAN_", "🌿 TROJAN__2", "🌿 TROJAN__3"}
+	if len(parsed.Proxies) != len(wantNames) {
+		t.Fatalf("got %d proxies, want %d", len(parsed.Proxies), len(wantNames))
+	}
+	for i, w := range wantNames {
+		if parsed.Proxies[i].Name != w {
+			t.Errorf("proxies[%d].Name = %q, want %q", i, parsed.Proxies[i].Name, w)
+		}
+	}
+}
+
+func TestSurgeConverter_DeduplicatesDuplicateProxyNames(t *testing.T) {
+	c := &converter.SurgeConverter{}
+	specs := []contracts.SubscriptionSpec{
+		{Protocol: contracts.ProtocolTrojan, Host: "1.1.1.1", Port: 443, Password: "p1", NodeName: "SH"},
+		{Protocol: contracts.ProtocolTrojan, Host: "2.2.2.2", Port: 443, Password: "p2", NodeName: "SH"},
+		{Protocol: contracts.ProtocolTrojan, Host: "3.3.3.3", Port: 443, Password: "p3", NodeName: "SH"},
+		{Protocol: contracts.ProtocolSnell, Host: "4.4.4.4", Port: 8000, Password: "psk1", NodeName: "Home"},
+		{Protocol: contracts.ProtocolSnell, Host: "5.5.5.5", Port: 8000, Password: "psk2", NodeName: "Home"},
+	}
+	out, err := c.Convert(specs)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	lines := strings.Split(out, "\n")
+	if len(lines) != 5 {
+		t.Fatalf("got %d lines, want 5:\n%s", len(lines), out)
+	}
+	wants := []string{
+		"🌿 TROJAN_SH=trojan,",
+		"🌿 TROJAN_SH_2=trojan,",
+		"🌿 TROJAN_SH_3=trojan,",
+		"🌿 SNELL_Home = snell,",
+		"🌿 SNELL_Home_2 = snell,",
+	}
+	for i, w := range wants {
+		if !strings.HasPrefix(lines[i], w) {
+			t.Errorf("line[%d] = %q, want prefix %q", i, lines[i], w)
+		}
 	}
 }

@@ -63,6 +63,11 @@ var decoders = map[string]func(string) (Node, error){
 	"tuic":      func(u string) (Node, error) { return DecodeTuic(u) },
 	"anytls":    func(u string) (Node, error) { return DecodeAnyTLS(u) },
 	"snell":     func(u string) (Node, error) { return DecodeSnell(u) },
+	"socks5":    func(u string) (Node, error) { return DecodeSOCKS5(u) },
+	"socks":     func(u string) (Node, error) { return DecodeSOCKS5(u) },
+	"socks5h":   func(u string) (Node, error) { return DecodeSOCKS5(u) },
+	"http":      func(u string) (Node, error) { return DecodeHTTP(u) },
+	"https":     func(u string) (Node, error) { return DecodeHTTP(u) },
 }
 
 // hostPort formats host:port; wraps IPv6 literals in brackets per RFC 3986.

@@ -369,3 +369,29 @@ func TestDecodeTrojan_NonRealityIgnoresPBK(t *testing.T) {
 		t.Errorf("RealityShortID = %q, want empty when security is not reality", n.RealityShortID)
 	}
 }
+
+func TestDecodeTrojan_HTTPUpgrade_H2_SPX(t *testing.T) {
+	rawHU := "trojan://pass@host.com:443?type=httpupgrade&path=%2Fhu&host=hu.host.com&sni=host.com#HU"
+	nHU, err := DecodeTrojan(rawHU)
+	if err != nil {
+		t.Fatalf("DecodeTrojan httpupgrade: %v", err)
+	}
+	if nHU.Transport != "httpupgrade" || nHU.HTTPUpgradePath != "/hu" || nHU.HTTPUpgradeHost != "hu.host.com" {
+		t.Errorf("httpupgrade fields mismatch: %+v", nHU)
+	}
+	if rt, err := DecodeTrojan(nHU.Encode()); err != nil || !reflect.DeepEqual(rt, nHU) {
+		t.Errorf("httpupgrade round-trip mismatch: got %+v, err=%v", rt, err)
+	}
+
+	rawH2 := "trojan://pass@host.com:443?security=reality&type=h2&path=%2Fh2&host=h2.host.com&pbk=pk&sid=s1&spx=%2Fsp#H2"
+	nH2, err := DecodeTrojan(rawH2)
+	if err != nil {
+		t.Fatalf("DecodeTrojan h2: %v", err)
+	}
+	if nH2.Transport != "h2" || nH2.H2Path != "/h2" || nH2.H2Host != "h2.host.com" || nH2.RealitySpiderX != "/sp" {
+		t.Errorf("h2/spx fields mismatch: %+v", nH2)
+	}
+	if rt, err := DecodeTrojan(nH2.Encode()); err != nil || !reflect.DeepEqual(rt, nH2) {
+		t.Errorf("h2 round-trip mismatch: got %+v, err=%v", rt, err)
+	}
+}

@@ -18,14 +18,46 @@ func (c *SurgeConverter) Format() subscription.ClientFormat {
 }
 
 func (c *SurgeConverter) Convert(specs []contracts.SubscriptionSpec) (string, error) {
+	usedNames := make(map[string]bool, len(specs))
 	var lines []string
 	for _, spec := range specs {
 		line, ok := c.convertSpec(spec)
 		if ok {
+			if prefix := surgeProtoPrefix(spec); prefix != "" {
+				baseName := c.nodeName(spec, prefix)
+				dedupName := uniqueProxyName(baseName, usedNames)
+				if dedupName != baseName && strings.HasPrefix(line, baseName) {
+					line = dedupName + line[len(baseName):]
+				}
+			}
 			lines = append(lines, line)
 		}
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+func surgeProtoPrefix(spec contracts.SubscriptionSpec) string {
+	switch spec.Protocol {
+	case contracts.ProtocolVMess:
+		return "VMESS"
+	case contracts.ProtocolTrojan:
+		return "TROJAN"
+	case contracts.ProtocolShadowsocks:
+		return "SS"
+	case contracts.ProtocolSnell:
+		return "SNELL"
+	case contracts.ProtocolHysteria2:
+		return "HYSTERIA2"
+	case contracts.ProtocolTUIC:
+		return "TUIC"
+	case contracts.ProtocolAnyTLS:
+		return "ANYTLS"
+	default:
+		if strings.HasPrefix(spec.URI, "hysteria2://") {
+			return "HYSTERIA2"
+		}
+		return ""
+	}
 }
 
 // convertSpec returns ("", false) for protocols/transports Surge doesn't accept.

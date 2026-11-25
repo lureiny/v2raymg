@@ -3,6 +3,7 @@ package subscription
 import (
 	"errors"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/log"
@@ -159,21 +160,70 @@ func urisToSpecs(uris []string) []contracts.SubscriptionSpec {
 // redactURI returns a log-safe form of uri with any credentials stripped.
 // VMess URIs carry credentials inside a base64-encoded JSON body, so we
 // preserve only the scheme; other schemes keep scheme/host/port/fragment
-// but drop the userinfo portion.
+// but drop the userinfo portion (including base64 userinfo in socks:// and
+// full-string base64 ss:// payloads).
 func redactURI(uri string) string {
-	if strings.HasPrefix(uri, "vmess://") {
+	idx := strings.Index(uri, "://")
+	if idx < 0 {
+		return "[unparseable]"
+	}
+	scheme := strings.ToLower(uri[:idx])
+	if scheme == "vmess" {
 		return "vmess://[redacted]"
 	}
+
+	rest := uri[idx+3:]
+	beforeFrag := rest
+	frag := ""
+	if fragIdx := strings.IndexByte(rest, '#'); fragIdx >= 0 {
+		beforeFrag = rest[:fragIdx]
+		frag = rest[fragIdx:]
+	}
+	beforeQuery := beforeFrag
+	if qIdx := strings.IndexByte(beforeFrag, '?'); qIdx >= 0 {
+		beforeQuery = beforeFrag[:qIdx]
+	}
+
+	// If authority contains '@' (even if base64 userinfo contains unescaped '/'),
+	// strip everything up to the last '@' before attempting url.Parse.
+	if atIdx := strings.LastIndexByte(beforeQuery, '@'); atIdx >= 0 {
+		cleaned := scheme + "://" + beforeQuery[atIdx+1:] + frag
+		if u, err := url.Parse(cleaned); err == nil {
+			u.User = nil
+			u.RawQuery = ""
+			return u.String()
+		}
+		return scheme + "://" + strings.TrimSuffix(beforeQuery[atIdx+1:], "/") + frag
+	}
+
+	// Full-string base64 payloads (ss://BASE64, socks://BASE64) have no '@';
+	// attempt typed decode to recover host:port safely without echoing the blob.
+	if scheme == "ss" || scheme == "socks" {
+		if node, err := codec.Decode(uri); err == nil {
+			switch n := node.(type) {
+			case *codec.ShadowsocksNode:
+				return (&url.URL{Scheme: scheme, Host: formatHostPort(n.Host, n.Port), Fragment: n.NodeName}).String()
+			case *codec.SOCKS5Node:
+				return (&url.URL{Scheme: scheme, Host: formatHostPort(n.Host, n.Port), Fragment: n.NodeName}).String()
+			}
+		}
+		return scheme + "://[redacted]"
+	}
+
 	u, err := url.Parse(uri)
 	if err != nil {
-		if idx := strings.Index(uri, "://"); idx > 0 {
-			return uri[:idx+3] + "[unparseable]"
-		}
-		return "[unparseable]"
+		return scheme + "://[unparseable]"
 	}
 	u.User = nil
 	u.RawQuery = ""
 	return u.String()
+}
+
+func formatHostPort(host string, port uint32) string {
+	if strings.Contains(host, ":") {
+		return "[" + host + "]:" + strconv.FormatUint(uint64(port), 10)
+	}
+	return host + ":" + strconv.FormatUint(uint64(port), 10)
 }
 
 // nodeToSpec converts a typed codec.Node into a SubscriptionSpec.
@@ -196,6 +246,10 @@ func nodeToSpec(node codec.Node, raw string) contracts.SubscriptionSpec {
 		return anytlsNodeToSpec(n, raw)
 	case *codec.SnellNode:
 		return snellNodeToSpec(n, raw)
+	case *codec.SOCKS5Node:
+		return socks5NodeToSpec(n, raw)
+	case *codec.HTTPNode:
+		return httpNodeToSpec(n, raw)
 	default:
 		return contracts.SubscriptionSpec{URI: raw}
 	}
@@ -215,6 +269,9 @@ func vlessNodeToSpec(n *codec.VLessNode, raw string) contracts.SubscriptionSpec 
 	if n.Flow != "" {
 		ext["flow"] = n.Flow
 	}
+	if n.Encryption != "" {
+		ext["encryption"] = n.Encryption
+	}
 	if n.Fingerprint != "" {
 		ext["utls_fingerprint"] = n.Fingerprint
 	}
@@ -223,6 +280,9 @@ func vlessNodeToSpec(n *codec.VLessNode, raw string) contracts.SubscriptionSpec 
 	}
 	if n.RealityShortID != "" {
 		ext["reality_short_ids"] = n.RealityShortID
+	}
+	if n.RealitySpiderX != "" {
+		ext["reality_spider_x"] = n.RealitySpiderX
 	}
 	if n.SkipCertVerify {
 		ext["skip_cert_verify"] = true
@@ -235,6 +295,18 @@ func vlessNodeToSpec(n *codec.VLessNode, raw string) contracts.SubscriptionSpec 
 	}
 	if n.GRPCServiceName != "" {
 		ext["grpc_service_name"] = n.GRPCServiceName
+	}
+	if n.H2Path != "" {
+		ext["http_path"] = n.H2Path
+	}
+	if n.H2Host != "" {
+		ext["http_host"] = n.H2Host
+	}
+	if n.HTTPUpgradePath != "" {
+		ext["httpupgrade_path"] = n.HTTPUpgradePath
+	}
+	if n.HTTPUpgradeHost != "" {
+		ext["httpupgrade_host"] = n.HTTPUpgradeHost
 	}
 	if n.XHTTPPath != "" {
 		ext["xhttp_path"] = n.XHTTPPath
@@ -266,6 +338,12 @@ func vmessNodeToSpec(n *codec.VMessNode, raw string) contracts.SubscriptionSpec 
 	}
 	if n.Fingerprint != "" {
 		ext["utls_fingerprint"] = n.Fingerprint
+	}
+	if n.SkipCertVerify {
+		ext["skip_cert_verify"] = true
+	}
+	if n.Cipher != "" {
+		ext["cipher"] = n.Cipher
 	}
 	if n.AlterId != 0 {
 		ext["alter_id"] = n.AlterId
@@ -328,6 +406,9 @@ func trojanNodeToSpec(n *codec.TrojanNode, raw string) contracts.SubscriptionSpe
 	if n.RealityShortID != "" {
 		ext["reality_short_ids"] = n.RealityShortID
 	}
+	if n.RealitySpiderX != "" {
+		ext["reality_spider_x"] = n.RealitySpiderX
+	}
 	if n.SkipCertVerify {
 		ext["skip_cert_verify"] = true
 	}
@@ -339,6 +420,18 @@ func trojanNodeToSpec(n *codec.TrojanNode, raw string) contracts.SubscriptionSpe
 	}
 	if n.GRPCServiceName != "" {
 		ext["grpc_service_name"] = n.GRPCServiceName
+	}
+	if n.H2Path != "" {
+		ext["http_path"] = n.H2Path
+	}
+	if n.H2Host != "" {
+		ext["http_host"] = n.H2Host
+	}
+	if n.HTTPUpgradePath != "" {
+		ext["httpupgrade_path"] = n.HTTPUpgradePath
+	}
+	if n.HTTPUpgradeHost != "" {
+		ext["httpupgrade_host"] = n.HTTPUpgradeHost
 	}
 	return contracts.SubscriptionSpec{
 		URI:        raw,
@@ -376,6 +469,14 @@ func ssNodeToSpec(n *codec.ShadowsocksNode, raw string) contracts.SubscriptionSp
 		}
 		if _, ok := n.PluginOpts["tls"]; ok {
 			ext["plugin_tls"] = true
+		}
+		if v, ok := n.PluginOpts["password"]; ok && v != "" {
+			ext["plugin_password"] = v
+		} else if v, ok := n.PluginOpts["passwd"]; ok && v != "" {
+			ext["plugin_password"] = v
+		}
+		if v, ok := n.PluginOpts["version"]; ok && v != "" {
+			ext["plugin_version"] = v
 		}
 	}
 	return contracts.SubscriptionSpec{
@@ -506,6 +607,47 @@ func snellNodeToSpec(n *codec.SnellNode, raw string) contracts.SubscriptionSpec 
 		Host:       n.Host,
 		Port:       n.Port,
 		Password:   n.PSK,
+		NodeName:   n.NodeName,
+		Extensions: ext,
+	}
+}
+
+func socks5NodeToSpec(n *codec.SOCKS5Node, raw string) contracts.SubscriptionSpec {
+	ext := map[string]any{}
+	if n.Username != "" {
+		ext["username"] = n.Username
+	}
+	return contracts.SubscriptionSpec{
+		URI:        raw,
+		Protocol:   contracts.ProtocolSOCKS5,
+		Host:       n.Host,
+		Port:       n.Port,
+		Password:   n.Password,
+		NodeName:   n.NodeName,
+		Extensions: ext,
+	}
+}
+
+func httpNodeToSpec(n *codec.HTTPNode, raw string) contracts.SubscriptionSpec {
+	ext := map[string]any{}
+	if n.Username != "" {
+		ext["username"] = n.Username
+	}
+	if n.TLS {
+		ext["security"] = "tls"
+	}
+	if n.SNI != "" {
+		ext["server_name"] = n.SNI
+	}
+	if n.SkipCertVerify {
+		ext["skip_cert_verify"] = true
+	}
+	return contracts.SubscriptionSpec{
+		URI:        raw,
+		Protocol:   contracts.ProtocolHTTP,
+		Host:       n.Host,
+		Port:       n.Port,
+		Password:   n.Password,
 		NodeName:   n.NodeName,
 		Extensions: ext,
 	}

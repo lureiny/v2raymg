@@ -393,3 +393,34 @@ func TestDecodeVLess_NonRealityIgnoresPBK(t *testing.T) {
 		t.Errorf("RealityShortID = %q, want empty when security=tls", n.RealityShortID)
 	}
 }
+
+func TestDecodeVLess_HTTPUpgrade_H2_Encryption_SPX(t *testing.T) {
+	// httpupgrade + encryption
+	rawHU := "vless://uuid@host.com:443?security=tls&type=httpupgrade&path=%2Fupgrade&host=hu.host.com&encryption=mlkem768x25519plus.native#HU"
+	nHU, err := DecodeVLess(rawHU)
+	if err != nil {
+		t.Fatalf("DecodeVLess httpupgrade: %v", err)
+	}
+	if nHU.Transport != "httpupgrade" || nHU.HTTPUpgradePath != "/upgrade" || nHU.HTTPUpgradeHost != "hu.host.com" {
+		t.Errorf("httpupgrade fields mismatch: %+v", nHU)
+	}
+	if nHU.Encryption != "mlkem768x25519plus.native" {
+		t.Errorf("Encryption = %q", nHU.Encryption)
+	}
+	if rt, err := DecodeVLess(nHU.Encode()); err != nil || !reflect.DeepEqual(rt, nHU) {
+		t.Errorf("httpupgrade round-trip mismatch: got %+v, err=%v", rt, err)
+	}
+
+	// h2 + reality spiderX
+	rawH2 := "vless://uuid@host.com:443?security=reality&type=h2&path=%2Fh2&host=h2.host.com&pbk=pk&sid=s1&spx=%2Fspider#H2"
+	nH2, err := DecodeVLess(rawH2)
+	if err != nil {
+		t.Fatalf("DecodeVLess h2: %v", err)
+	}
+	if nH2.Transport != "h2" || nH2.H2Path != "/h2" || nH2.H2Host != "h2.host.com" || nH2.RealitySpiderX != "/spider" {
+		t.Errorf("h2/spx fields mismatch: %+v", nH2)
+	}
+	if rt, err := DecodeVLess(nH2.Encode()); err != nil || !reflect.DeepEqual(rt, nH2) {
+		t.Errorf("h2 round-trip mismatch: got %+v, err=%v", rt, err)
+	}
+}

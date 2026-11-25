@@ -222,3 +222,31 @@ func TestDecodeHysteria2_EmptyPassword_Error(t *testing.T) {
 		t.Error("expected error for empty password")
 	}
 }
+
+func TestDecodeHysteria2_UserPassAndMPortAndPinSHA256(t *testing.T) {
+	raw := "hy2://alice:secret123@sh-home.ddns.example:28443?sni=bing.com&insecure=1&mport=20000-40000&pinSHA256=AB%3ACD%3AEF#SH-Home"
+	n, err := DecodeHysteria2(raw)
+	if err != nil {
+		t.Fatalf("DecodeHysteria2: %v", err)
+	}
+	if n.Password != "alice:secret123" {
+		t.Errorf("Password = %q, want alice:secret123", n.Password)
+	}
+	if n.Ports != "20000-40000" {
+		t.Errorf("Ports = %q, want 20000-40000", n.Ports)
+	}
+	if n.PinSHA256 != "AB:CD:EF" {
+		t.Errorf("PinSHA256 = %q, want AB:CD:EF", n.PinSHA256)
+	}
+	if !n.SkipCertVerify {
+		t.Error("expected SkipCertVerify=true")
+	}
+
+	decoded, err := DecodeHysteria2(n.Encode())
+	if err != nil {
+		t.Fatalf("Decode(Encode): %v", err)
+	}
+	if !reflect.DeepEqual(decoded, n) {
+		t.Errorf("round-trip mismatch\n got  %+v\n want %+v", decoded, n)
+	}
+}

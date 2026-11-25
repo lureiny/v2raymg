@@ -27,7 +27,8 @@ type VMessNode struct {
 	Host     string
 	Port     uint32
 	UUID     string
-	AlterId  int // 0 for AEAD; non-zero for legacy mode
+	AlterId  int    // 0 for AEAD; non-zero for legacy mode
+	Cipher   string // "scy" cipher field, e.g. "auto", "aes-128-gcm", "chacha20-poly1305"
 
 	Security       string
 	SNI            string
@@ -53,20 +54,21 @@ type VMessNode struct {
 func (n *VMessNode) Protocol() contracts.Protocol { return contracts.ProtocolVMess }
 
 type vmessEncodeBody struct {
-	V            string `json:"v"`
-	PS           string `json:"ps"`
-	Add          string `json:"add"`
-	Port         string `json:"port"`
-	ID           string `json:"id"`
-	Aid          string `json:"aid"`
-	Net          string `json:"net"`
-	Type         string `json:"type"`
-	Host         string `json:"host,omitempty"`
-	Path         string `json:"path,omitempty"`
-	TLS          string `json:"tls,omitempty"`
-	SNI          string `json:"sni,omitempty"`
-	FP           string `json:"fp,omitempty"`
-	AllowInsecure bool  `json:"allowInsecure,omitempty"`
+	V             string `json:"v"`
+	PS            string `json:"ps"`
+	Add           string `json:"add"`
+	Port          string `json:"port"`
+	ID            string `json:"id"`
+	Aid           string `json:"aid"`
+	Scy           string `json:"scy,omitempty"`
+	Net           string `json:"net"`
+	Type          string `json:"type"`
+	Host          string `json:"host,omitempty"`
+	Path          string `json:"path,omitempty"`
+	TLS           string `json:"tls,omitempty"`
+	SNI           string `json:"sni,omitempty"`
+	FP            string `json:"fp,omitempty"`
+	AllowInsecure bool   `json:"allowInsecure,omitempty"`
 }
 
 func (n *VMessNode) Encode() string {
@@ -83,6 +85,7 @@ func (n *VMessNode) Encode() string {
 		Port: strconv.FormatUint(uint64(n.Port), 10),
 		ID:   n.UUID,
 		Aid:  strconv.Itoa(n.AlterId),
+		Scy:  n.Cipher,
 		Type: headerType,
 		SNI:  n.SNI,
 		FP:   n.Fingerprint,
@@ -122,13 +125,15 @@ func (n *VMessNode) Encode() string {
 	return "vmess://" + base64.StdEncoding.EncodeToString(data)
 }
 
-// vmessDecodeBody tolerates port/aid being either a JSON number or string.
+// vmessDecodeBody tolerates port/aid being either a JSON number or string,
+// and allowInsecure being bool, number (1/0), or string ("1"/"true").
 type vmessDecodeBody struct {
 	PS            string `json:"ps"`
 	Add           string `json:"add"`
 	Port          any    `json:"port"`
 	ID            string `json:"id"`
 	Aid           any    `json:"aid"`
+	Scy           string `json:"scy"`
 	Net           string `json:"net"`
 	Type          string `json:"type"`
 	Host          string `json:"host"`
@@ -136,11 +141,14 @@ type vmessDecodeBody struct {
 	TLS           string `json:"tls"`
 	SNI           string `json:"sni"`
 	FP            string `json:"fp"`
-	AllowInsecure bool   `json:"allowInsecure"`
+	AllowInsecure any    `json:"allowInsecure"`
 }
 
 func DecodeVMess(uri string) (*VMessNode, error) {
 	body := strings.TrimPrefix(uri, "vmess://")
+	if strings.HasPrefix(strings.ToLower(uri), "vmess://") {
+		body = uri[len("vmess://"):]
+	}
 	var raw []byte
 	for _, enc := range []*base64.Encoding{
 		base64.StdEncoding,
@@ -195,6 +203,7 @@ func DecodeVMess(uri string) (*VMessNode, error) {
 		Port:        port,
 		UUID:        b.ID,
 		AlterId:     anyToInt(b.Aid),
+		Cipher:      b.Scy,
 		SNI:         b.SNI,
 		Fingerprint: b.FP,
 		HeaderType:  headerType,
@@ -202,7 +211,7 @@ func DecodeVMess(uri string) (*VMessNode, error) {
 	}
 	if b.TLS == "tls" {
 		n.Security = "tls"
-		n.SkipCertVerify = b.AllowInsecure
+		n.SkipCertVerify = anyToBool(b.AllowInsecure)
 	}
 
 	switch transport {
@@ -220,6 +229,23 @@ func DecodeVMess(uri string) (*VMessNode, error) {
 	}
 
 	return n, nil
+}
+
+func anyToBool(v any) bool {
+	switch val := v.(type) {
+	case bool:
+		return val
+	case float64:
+		return val != 0
+	case int:
+		return val != 0
+	case int64:
+		return val != 0
+	case string:
+		s := strings.TrimSpace(strings.ToLower(val))
+		return s == "true" || s == "1" || s == "yes"
+	}
+	return false
 }
 
 // anyToUint32 / anyToInt read a VMess JSON field that may be number or string

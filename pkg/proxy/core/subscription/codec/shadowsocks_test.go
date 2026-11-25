@@ -345,3 +345,61 @@ func TestDecodeShadowsocks_EmptyPassword_Error(t *testing.T) {
 		t.Error("expected error for empty password")
 	}
 }
+
+func TestDecodeShadowsocks_FullBase64_OpenWrtFormat(t *testing.T) {
+	// OpenWrt PassWall / SSRPlus full-string base64 format
+	payload := base64.StdEncoding.EncodeToString([]byte("aes-256-gcm:my:pass@home.ddns.example:8388"))
+	n, err := DecodeShadowsocks("ss://" + payload + "#OpenWrt-Home")
+	if err != nil {
+		t.Fatalf("DecodeShadowsocks full base64: %v", err)
+	}
+	if n.Method != "aes-256-gcm" || n.Password != "my:pass" || n.Host != "home.ddns.example" || n.Port != 8388 || n.NodeName != "OpenWrt-Home" {
+		t.Errorf("unexpected decoded node: %+v", n)
+	}
+
+	// IPv6 host + outer ?plugin=
+	v6Payload := base64.RawURLEncoding.EncodeToString([]byte("chacha20-ietf-poly1305:pwd@[2001:db8::1]:8388"))
+	pluginVal := url.QueryEscape("shadow-tls;host=www.microsoft.com;passwd=stls-pw;version=3")
+	n6, err := DecodeShadowsocks("ss://" + v6Payload + "?plugin=" + pluginVal + "#V6Router")
+	if err != nil {
+		t.Fatalf("DecodeShadowsocks full base64 IPv6: %v", err)
+	}
+	if n6.Host != "2001:db8::1" || n6.Port != 8388 || n6.Plugin != "shadow-tls" {
+		t.Errorf("unexpected decoded IPv6 node: %+v", n6)
+	}
+	if n6.PluginOpts["passwd"] != "stls-pw" || n6.PluginOpts["version"] != "3" || n6.PluginOpts["host"] != "www.microsoft.com" {
+		t.Errorf("shadow-tls opts not preserved: %+v", n6.PluginOpts)
+	}
+}
+
+func TestDecodeShadowsocks_ShadowTLS_OptsPreserved(t *testing.T) {
+	userinfo := base64.RawURLEncoding.EncodeToString([]byte("aes-128-gcm:pwd"))
+	pluginVal := url.QueryEscape("shadow-tls;host=cdn.example.com;password=secret-stls;version=3")
+	orig, err := DecodeShadowsocks("ss://" + userinfo + "@host.com:443?plugin=" + pluginVal + "#STLS")
+	if err != nil {
+		t.Fatalf("DecodeShadowsocks: %v", err)
+	}
+	if orig.Plugin != "shadow-tls" {
+		t.Fatalf("Plugin = %q, want shadow-tls", orig.Plugin)
+	}
+	if orig.PluginOpts["password"] != "secret-stls" || orig.PluginOpts["version"] != "3" {
+		t.Errorf("unexpected PluginOpts: %+v", orig.PluginOpts)
+	}
+	rt, err := DecodeShadowsocks(orig.Encode())
+	if err != nil {
+		t.Fatalf("Decode(Encode): %v", err)
+	}
+	if !reflect.DeepEqual(rt, orig) {
+		t.Errorf("round-trip mismatch\n got  %+v\n want %+v", rt, orig)
+	}
+
+	// Shadowrocket ?shadow-tls=base64(json) form
+	stJSON := base64.RawURLEncoding.EncodeToString([]byte(`{"version":3,"password":"stls2","host":"edge.example.com"}`))
+	n2, err := DecodeShadowsocks("ss://" + userinfo + "@host.com:443?shadow-tls=" + stJSON + "#SR")
+	if err != nil {
+		t.Fatalf("DecodeShadowsocks shadow-tls JSON: %v", err)
+	}
+	if n2.Plugin != "shadow-tls" || n2.PluginOpts["password"] != "stls2" || n2.PluginOpts["version"] != "3" || n2.PluginOpts["host"] != "edge.example.com" {
+		t.Errorf("unexpected shadow-tls JSON decode: %+v", n2)
+	}
+}

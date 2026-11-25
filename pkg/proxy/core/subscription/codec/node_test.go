@@ -116,6 +116,43 @@ func TestDecode_DispatchSnell(t *testing.T) {
 	}
 }
 
+func TestDecode_DispatchSOCKS5Aliases(t *testing.T) {
+	for _, uri := range []string{
+		"socks5://alice:secret@host:1080#S5",
+		"socks://YWxpY2U6c2VjcmV0@[2001:db8::1]:1080#S",
+		"socks5h://host:1080#S5H",
+	} {
+		n, err := Decode(uri)
+		if err != nil {
+			t.Fatalf("Decode(%q): %v", uri, err)
+		}
+		if _, ok := n.(*SOCKS5Node); !ok {
+			t.Errorf("Decode(%q): expected *SOCKS5Node, got %T", uri, n)
+		}
+		if n.Protocol() != contracts.ProtocolSOCKS5 {
+			t.Errorf("Decode(%q).Protocol() = %q, want socks5", uri, n.Protocol())
+		}
+	}
+}
+
+func TestDecode_DispatchHTTPAndHTTPS(t *testing.T) {
+	for _, uri := range []string{
+		"http://alice:secret@host:8080#H",
+		"https://alice:secret@host:443?sni=host&insecure=1#HS",
+	} {
+		n, err := Decode(uri)
+		if err != nil {
+			t.Fatalf("Decode(%q): %v", uri, err)
+		}
+		if _, ok := n.(*HTTPNode); !ok {
+			t.Errorf("Decode(%q): expected *HTTPNode, got %T", uri, n)
+		}
+		if n.Protocol() != contracts.ProtocolHTTP {
+			t.Errorf("Decode(%q).Protocol() = %q, want http", uri, n.Protocol())
+		}
+	}
+}
+
 func TestDecode_UnknownScheme(t *testing.T) {
 	_, err := Decode("unknown://foo@host:443")
 	if err == nil {
@@ -169,6 +206,11 @@ func TestDecode_EncodeRoundTrip_AllProtocols(t *testing.T) {
 		"tuic://00112233-4455-6677-8899-aabbccddeeff:pwd@host.com:443?sni=host.com#TUIC",
 		"anytls://pwd@host.com:443?sni=host.com&insecure=1#A",
 		"snell://psk@host.com:443?version=5#N",
+		"socks5://alice:secret@host.com:1080#S5",
+		"socks://YWxpY2U6c2VjcmV0@[2001:db8::1]:1080#SV6",
+		"socks5h://host.com:1080#S5H",
+		"http://alice:secret@host.com:8080#HTTP",
+		"https://alice:secret@host.com:443?sni=host.com&insecure=1#HTTPS",
 	}
 	for _, uri := range cases {
 		n, err := Decode(uri)

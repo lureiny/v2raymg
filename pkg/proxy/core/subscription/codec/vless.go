@@ -24,11 +24,13 @@ type VLessNode struct {
 	Security       string
 	SNI            string
 	Flow           string // e.g. xtls-rprx-vision
+	Encryption     string // e.g. "none" or mlkem768...
 	Fingerprint    string // uTLS fingerprint (not TLS cert pinning)
 	SkipCertVerify bool
 
 	RealityPublicKey string
 	RealityShortID   string
+	RealitySpiderX   string
 
 	Transport string
 
@@ -36,6 +38,12 @@ type VLessNode struct {
 	WSHost string
 
 	GRPCServiceName string
+
+	H2Path string
+	H2Host string
+
+	HTTPUpgradePath string
+	HTTPUpgradeHost string
 
 	XHTTPPath string
 	XHTTPHost string
@@ -56,6 +64,9 @@ func (n *VLessNode) Encode() string {
 	if n.Flow != "" {
 		q.Set("flow", n.Flow)
 	}
+	if n.Encryption != "" {
+		q.Set("encryption", n.Encryption)
+	}
 	if n.Fingerprint != "" {
 		q.Set("fp", n.Fingerprint)
 	}
@@ -66,6 +77,9 @@ func (n *VLessNode) Encode() string {
 		if n.RealityShortID != "" {
 			q.Set("sid", n.RealityShortID)
 		}
+		if n.RealitySpiderX != "" {
+			q.Set("spx", n.RealitySpiderX)
+		}
 	}
 	if n.SkipCertVerify {
 		q.Set("insecure", "1")
@@ -73,6 +87,9 @@ func (n *VLessNode) Encode() string {
 
 	t := n.Transport
 	if t != "" && t != "tcp" {
+		if t == "http" {
+			t = "h2"
+		}
 		q.Set("type", t)
 	}
 	switch t {
@@ -86,6 +103,20 @@ func (n *VLessNode) Encode() string {
 	case "grpc":
 		if n.GRPCServiceName != "" {
 			q.Set("serviceName", n.GRPCServiceName)
+		}
+	case "h2", "http":
+		if n.H2Path != "" {
+			q.Set("path", n.H2Path)
+		}
+		if n.H2Host != "" {
+			q.Set("host", n.H2Host)
+		}
+	case "httpupgrade":
+		if n.HTTPUpgradePath != "" {
+			q.Set("path", n.HTTPUpgradePath)
+		}
+		if n.HTTPUpgradeHost != "" {
+			q.Set("host", n.HTTPUpgradeHost)
 		}
 	case "xhttp", "splithttp":
 		if n.XHTTPPath != "" {
@@ -131,9 +162,12 @@ func DecodeVLess(uri string) (*VLessNode, error) {
 
 	q := u.Query()
 	transport := q.Get("type")
-	if transport == "tcp" {
+	switch transport {
+	case "tcp":
 		// tcp is the default; normalize to "" so Transport has a single canonical form.
 		transport = ""
+	case "http":
+		transport = "h2"
 	}
 	security := q.Get("security")
 	if security == "none" {
@@ -148,14 +182,16 @@ func DecodeVLess(uri string) (*VLessNode, error) {
 		Security:    security,
 		SNI:         q.Get("sni"),
 		Flow:        q.Get("flow"),
+		Encryption:  q.Get("encryption"),
 		Fingerprint: q.Get("fp"),
 		Transport:   transport,
 	}
 	if n.Security == "reality" {
 		n.RealityPublicKey = q.Get("pbk")
 		n.RealityShortID = q.Get("sid")
+		n.RealitySpiderX = q.Get("spx")
 	}
-	if q.Get("insecure") == "1" {
+	if isTruthyParam(q.Get("insecure")) || isTruthyParam(q.Get("allowInsecure")) {
 		n.SkipCertVerify = true
 	}
 
@@ -165,6 +201,12 @@ func DecodeVLess(uri string) (*VLessNode, error) {
 		n.WSHost = q.Get("host")
 	case "grpc":
 		n.GRPCServiceName = q.Get("serviceName")
+	case "h2":
+		n.H2Path = q.Get("path")
+		n.H2Host = q.Get("host")
+	case "httpupgrade":
+		n.HTTPUpgradePath = q.Get("path")
+		n.HTTPUpgradeHost = q.Get("host")
 	case "xhttp", "splithttp":
 		n.XHTTPPath = q.Get("path")
 		n.XHTTPHost = q.Get("host")

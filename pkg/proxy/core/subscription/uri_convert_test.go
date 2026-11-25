@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
@@ -387,5 +388,67 @@ func TestBuildConvertOptions_SkipsInvalidInlineRuleProviderButKeepsValidRemote(t
 	}
 	if opts.RuleProviders[0].URL != "https://example.com/remote.yaml" {
 		t.Fatalf("unexpected remote rule provider URL: %q", opts.RuleProviders[0].URL)
+	}
+}
+
+func TestURIsToSpecs_VMess_SkipCertVerifyAndScy(t *testing.T) {
+	body, _ := json.Marshal(map[string]any{
+		"ps": "HomeVMess", "add": "home.example.com", "port": 443,
+		"id": "uuid-v", "aid": 0, "scy": "aes-128-gcm",
+		"net": "ws", "tls": "tls", "allowInsecure": "1",
+	})
+	spec := firstSpec(t, "vmess://"+base64.StdEncoding.EncodeToString(body))
+	if got, _ := spec.Extensions["skip_cert_verify"].(bool); !got {
+		t.Errorf("skip_cert_verify = %v, want true", spec.Extensions["skip_cert_verify"])
+	}
+	if got, _ := spec.Extensions["cipher"].(string); got != "aes-128-gcm" {
+		t.Errorf("cipher = %q, want aes-128-gcm", got)
+	}
+}
+
+func TestURIsToSpecs_Shadowsocks_ShadowTLS_PasswordAndPasswd(t *testing.T) {
+	userinfo := base64.RawURLEncoding.EncodeToString([]byte("aes-256-gcm:ss-pass"))
+	for _, key := range []string{"password", "passwd"} {
+		pluginVal := url.QueryEscape("shadow-tls;host=www.microsoft.com;" + key + "=stls-secret;version=3")
+		spec := firstSpec(t, "ss://"+userinfo+"@home.example.com:443?plugin="+pluginVal+"#STLS")
+		if got, _ := spec.Extensions["plugin_password"].(string); got != "stls-secret" {
+			t.Errorf("%s: plugin_password = %q, want stls-secret", key, got)
+		}
+		if got, _ := spec.Extensions["plugin_version"].(string); got != "3" {
+			t.Errorf("%s: plugin_version = %q, want 3", key, got)
+		}
+		if got, _ := spec.Extensions["plugin_host"].(string); got != "www.microsoft.com" {
+			t.Errorf("%s: plugin_host = %q, want www.microsoft.com", key, got)
+		}
+	}
+}
+
+func TestRedactURI_StripsAllCredentialsIncludingSocksBase64(t *testing.T) {
+	// socks://base64 with '/' in userinfo
+	credsSlash := base64.StdEncoding.EncodeToString([]byte("user:??"))
+	gotSocks := redactURI("socks://" + credsSlash + "@[2001:db8::1]:1080#Home")
+	if strings.Contains(gotSocks, credsSlash) || strings.Contains(gotSocks, "user") || strings.Contains(gotSocks, "??") {
+		t.Errorf("redactURI leaked socks credentials: %q", gotSocks)
+	}
+	if !strings.Contains(gotSocks, "[2001:db8::1]:1080") {
+		t.Errorf("redactURI dropped host:port: %q", gotSocks)
+	}
+
+	// full-string base64 ss://
+	ssFull := base64.StdEncoding.EncodeToString([]byte("aes-256-gcm:secret-pw@1.2.3.4:8388"))
+	gotSS := redactURI("ss://" + ssFull + "#Router")
+	if strings.Contains(gotSS, ssFull) || strings.Contains(gotSS, "secret-pw") {
+		t.Errorf("redactURI leaked ss full base64 credentials: %q", gotSS)
+	}
+
+	// invalid full-string base64 ss:// must not leak raw blob
+	gotSSBad := redactURI("ss://c2VjcmV0X2Jsb2I=")
+	if strings.Contains(gotSSBad, "c2VjcmV0") {
+		t.Errorf("redactURI leaked unparseable ss blob: %q", gotSSBad)
+	}
+
+	// vmess://
+	if got := redactURI("VMESS://eyJhZGQiOiIxLjIuMy40In0="); got != "vmess://[redacted]" {
+		t.Errorf("redactURI(VMESS) = %q, want vmess://[redacted]", got)
 	}
 }
