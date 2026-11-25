@@ -6,8 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"github.com/lureiny/v2raymg/pkg/log"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -193,6 +193,13 @@ func (u *Updater) Update(ctx context.Context, req container.UpdateRequest) (*con
 			return result, &ErrUpdateFailed{Stage: "restart", Cause: err, Wrapped: ErrRestartFailed}
 		}
 		restarted = true
+		if restorer, ok := u.processCtrl.(interface {
+			Restore(ctx context.Context) error
+		}); ok {
+			if err := restorer.Restore(context.Background()); err != nil {
+				log.Warn("[Xray Updater] failed to restore inbounds after restart", "err", err)
+			}
+		}
 	}
 
 	result.Restarted = restarted

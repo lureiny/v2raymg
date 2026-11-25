@@ -1,8 +1,11 @@
 package xray
 
 import (
+	"archive/zip"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
@@ -273,6 +276,133 @@ func TestErrUpdateFailed_Error(t *testing.T) {
 	expected := "update test-stage failed: test cause"
 	if err.Error() != expected {
 		t.Errorf("Error() = %q, want %q", err.Error(), expected)
+	}
+}
+
+type mockRestorableProcessCtrl struct {
+	isRunning    bool
+	startErr     error
+	stopErr      error
+	restoreCalls int
+	restoreErr   error
+	events       []string
+}
+
+func (m *mockRestorableProcessCtrl) Start() error {
+	m.events = append(m.events, "start")
+	if m.startErr != nil {
+		return m.startErr
+	}
+	m.isRunning = true
+	return nil
+}
+
+func (m *mockRestorableProcessCtrl) Stop() error {
+	m.events = append(m.events, "stop")
+	if m.stopErr != nil {
+		return m.stopErr
+	}
+	m.isRunning = false
+	return nil
+}
+
+func (m *mockRestorableProcessCtrl) IsRunning() bool { return m.isRunning }
+
+func (m *mockRestorableProcessCtrl) Restore(ctx context.Context) error {
+	m.restoreCalls++
+	m.events = append(m.events, "restore")
+	return m.restoreErr
+}
+
+func createTestZipWithBinary(zipPath, binName string, content []byte) error {
+	f, err := os.Create(zipPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	zw := zip.NewWriter(f)
+	w, err := zw.Create(binName)
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(content); err != nil {
+		return err
+	}
+	return zw.Close()
+}
+
+type mockZipDownloader struct {
+	binaryContent []byte
+	binName       string
+}
+
+func (m *mockZipDownloader) DownloadToFile(ctx context.Context, url, output string) error {
+	return createTestZipWithBinary(output, m.binName, m.binaryContent)
+}
+
+func TestUpdater_Update_RestoresAfterRestart(t *testing.T) {
+	tmpDir := t.TempDir()
+	binPath := filepath.Join(tmpDir, "xray")
+	if err := os.WriteFile(binPath, []byte("old"), 0755); err != nil {
+		t.Fatalf("write binary: %v", err)
+	}
+
+	dlDir := filepath.Join(tmpDir, "dl")
+	if err := os.MkdirAll(dlDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	ctrl := &mockRestorableProcessCtrl{isRunning: true}
+	u := &Updater{
+		releaseClient: &mockReleaseClient{
+			release: &tools.GitHubRelease{
+				TagName: "v26.2.6",
+				Assets:  []tools.GitHubAsset{{Name: "Xray-linux-64.zip", URL: "http://example.com/x.zip"}},
+			},
+		},
+		downloader: &mockZipDownloader{
+			binaryContent: []byte("new-xray"),
+			binName:       "xray",
+		},
+		swapper:     &mockSwapper{},
+		processCtrl: ctrl,
+		config: UpdaterConfig{
+			BinaryPath:  binPath,
+			DownloadDir: dlDir,
+			AssetName:   "Xray-linux-64.zip",
+			BinaryName:  "xray",
+		},
+	}
+
+	res, err := u.Update(context.Background(), container.UpdateRequest{
+		TargetTag:     "v26.2.6",
+		RestartPolicy: container.RestartPolicyAlways,
+	})
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	if !res.Restarted {
+		t.Fatal("expected Restarted=true")
+	}
+	if ctrl.restoreCalls != 1 {
+		t.Fatalf("expected Restore called once, got %d", ctrl.restoreCalls)
+	}
+	if len(ctrl.events) != 3 || ctrl.events[0] != "stop" || ctrl.events[1] != "start" || ctrl.events[2] != "restore" {
+		t.Fatalf("unexpected lifecycle order: %v", ctrl.events)
+	}
+
+	// RestartPolicyNever must not restart or restore.
+	ctrl2 := &mockRestorableProcessCtrl{isRunning: true}
+	u.processCtrl = ctrl2
+	res2, err := u.Update(context.Background(), container.UpdateRequest{
+		TargetTag:     "v26.2.6",
+		RestartPolicy: container.RestartPolicyNever,
+	})
+	if err != nil {
+		t.Fatalf("Update RestartPolicyNever failed: %v", err)
+	}
+	if res2.Restarted || ctrl2.restoreCalls != 0 {
+		t.Fatalf("expected no restart/restore on RestartPolicyNever, got restarted=%v restoreCalls=%d", res2.Restarted, ctrl2.restoreCalls)
 	}
 }
 

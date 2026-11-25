@@ -159,8 +159,8 @@ func TestFastAddInbound_Success_VMess(t *testing.T) {
 		t.Errorf("port = %v, want %v", in.Port(), 10001)
 	}
 
-	if in.ListenAddr() != "0.0.0.0" {
-		t.Errorf("listen = %v, want %v", in.ListenAddr(), "0.0.0.0")
+	if in.ListenAddr() != "127.0.0.1" {
+		t.Errorf("listen = %v, want %v", in.ListenAddr(), "127.0.0.1")
 	}
 }
 
@@ -276,9 +276,9 @@ func TestFastAddInbound_DefaultValues(t *testing.T) {
 		t.Errorf("transport = %v, want %v (default)", xrayIn.Transport(), contracts.TransportTCP)
 	}
 
-	// Listen should default to 0.0.0.0
-	if in.ListenAddr() != "0.0.0.0" {
-		t.Errorf("listen = %v, want %v (default)", in.ListenAddr(), "0.0.0.0")
+	// Listen should default to 127.0.0.1
+	if in.ListenAddr() != "127.0.0.1" {
+		t.Errorf("listen = %v, want %v (default)", in.ListenAddr(), "127.0.0.1")
 	}
 }
 

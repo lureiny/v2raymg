@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
@@ -49,14 +50,20 @@ func (e *Executor) GetUserSubscriptions(req contracts.SubscriptionRequest) ([]co
 	e.inboundsMu.RLock()
 	defer e.inboundsMu.RUnlock()
 
-	// Collect inbounds into a slice
+	// Collect inbounds into a deterministic tag-sorted slice
 	inboundList := make([]*XrayInbound, 0, len(e.inbounds))
 	for _, in := range e.inbounds {
 		inboundList = append(inboundList, in)
 	}
+	sort.Slice(inboundList, func(i, j int) bool {
+		return inboundList[i].tag < inboundList[j].tag
+	})
 
 	var specs []contracts.SubscriptionSpec
 	for _, in := range inboundList {
+		if e.userMgr != nil && !e.userMgr.CanUserAccessInboundByUsername(req.User.Username, in.GetAccessTags()) {
+			continue
+		}
 		// Use the inbound's GetSub method which uses the internal mapping
 		spec, err := in.GetSub(req)
 		if err != nil {
@@ -128,10 +135,7 @@ func generateSubscriptionSpec(in *XrayInbound, req contracts.SubscriptionRequest
 
 	extensions := buildSubscriptionExtensions(in, req.User)
 
-	nodeName := req.NodeName
-	if nodeName == "" {
-		nodeName = in.tag
-	}
+	nodeName := resolveSubscriptionNodeName(req.NodeName, in.tag, in.GetMeta())
 
 	spec := contracts.SubscriptionSpec{
 		Protocol:   in.protocol,
@@ -140,7 +144,7 @@ func generateSubscriptionSpec(in *XrayInbound, req contracts.SubscriptionRequest
 		Password:   password,
 		NodeName:   nodeName,
 		InboundTag: in.tag,
-		Username:  req.User.Username,
+		Username:   req.User.Username,
 		Extensions: extensions,
 	}
 
