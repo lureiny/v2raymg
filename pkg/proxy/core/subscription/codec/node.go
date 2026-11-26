@@ -16,6 +16,7 @@ package codec
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 
@@ -43,10 +44,14 @@ type Node interface {
 // concrete decoder still does a full parse of its own input.
 func Decode(uri string) (Node, error) {
 	idx := strings.Index(uri, "://")
-	if idx < 0 {
+	if idx <= 0 {
 		return nil, fmt.Errorf("%w: missing scheme", ErrUnsupportedScheme)
 	}
-	scheme := strings.ToLower(uri[:idx])
+	rawScheme := uri[:idx]
+	if !isValidURIScheme(rawScheme) {
+		return nil, fmt.Errorf("%w: invalid scheme", ErrUnsupportedScheme)
+	}
+	scheme := strings.ToLower(rawScheme)
 	dec, ok := decoders[scheme]
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedScheme, scheme)
@@ -79,15 +84,57 @@ func hostPort(host string, port uint32) string {
 	return fmt.Sprintf("%s:%d", host, port)
 }
 
-// sanitizeURLError strips the raw URL/authority from *url.Error so credentials
-// inside malformed URIs never leak into error strings, RPC responses, or logs.
+// isValidURIScheme checks RFC 3986 §3.1 scheme syntax: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ).
+// Rejects malformed prefixes like "user:secret" so embedded credentials are never echoed as schemes.
+func isValidURIScheme(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		isAlpha := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		if i == 0 {
+			if !isAlpha {
+				return false
+			}
+			continue
+		}
+		isDigit := c >= '0' && c <= '9'
+		if !isAlpha && !isDigit && c != '+' && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// sanitizeURLError strips the raw URL/authority and any echoed URI fragments
+// (such as `invalid port ":SECRET" after host`, escape bytes, or invalid host
+// characters) from *url.Error / *net.AddrError so credentials inside malformed
+// URIs never leak into error strings, RPC responses, or logs.
 func sanitizeURLError(err error) error {
 	if err == nil {
 		return nil
 	}
 	var ue *url.Error
 	if errors.As(err, &ue) && ue.Err != nil {
-		return ue.Err
+		return sanitizeURLError(ue.Err)
+	}
+	var escErr url.EscapeError
+	if errors.As(err, &escErr) {
+		return errors.New("invalid URL escape")
+	}
+	var hostErr url.InvalidHostError
+	if errors.As(err, &hostErr) {
+		return errors.New("invalid character in host name")
+	}
+	var addrErr *net.AddrError
+	if errors.As(err, &addrErr) && addrErr.Err != "" {
+		return errors.New(addrErr.Err)
+	}
+	// Go's net/url.parseAuthority formats `invalid port %q after host`, which
+	// echoes `:SECRET` verbatim when '@' is missing from `scheme://user:SECRET`.
+	if strings.HasPrefix(err.Error(), "invalid port ") {
+		return errors.New("invalid port after host")
 	}
 	return err
 }

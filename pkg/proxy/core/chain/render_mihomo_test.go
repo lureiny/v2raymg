@@ -220,4 +220,18 @@ func TestRenderMihomoProxy_UnsupportedSuggestsXray(t *testing.T) {
 			}
 		})
 	}
+
+	// Uppercase Security="XTLS" must also be rejected case-insensitively.
+	t.Run("vless uppercase XTLS", func(t *testing.T) {
+		_, err := RenderMihomoProxy("out", &OutboundSpec{
+			Protocol: "vless",
+			Host:     "host.com",
+			Port:     443,
+			UUID:     "uuid",
+			Security: "XTLS",
+		})
+		if err == nil {
+			t.Fatal("expected error for uppercase XTLS, got nil")
+		}
+	})
 }

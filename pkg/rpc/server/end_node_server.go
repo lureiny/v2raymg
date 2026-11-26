@@ -6,6 +6,7 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lureiny/v2raymg/pkg/cluster"
@@ -54,6 +55,12 @@ type EndNodeServer struct {
 	containerMgr *container.ContainerMgr
 	subMgr       *subscription.Manager
 	inboundStore store.InboundStore
+
+	// inboundOpMu serializes cross-container tag uniqueness checks and
+	// inbound mutations (FastAddInbound / AddInbound / DeleteInboundByName)
+	// so two concurrent requests targeting different containers with the same
+	// tag cannot race past the check and overwrite SQLite records.
+	inboundOpMu sync.Mutex
 }
 
 const (

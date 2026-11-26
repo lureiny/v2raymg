@@ -175,7 +175,7 @@ func cleanHostLiteral(host string) string {
 }
 
 func normalizeDomain(host string) string {
-	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	return strings.TrimRight(strings.ToLower(strings.TrimSpace(host)), ".")
 }
 
 func isLocalhostDomain(host string) bool {
@@ -184,12 +184,15 @@ func isLocalhostDomain(host string) bool {
 }
 
 func validateDomainSyntax(host string) error {
+	if strings.HasPrefix(host, ".") || strings.Contains(host, "..") {
+		return fmt.Errorf("chain: target host %q contains empty domain label", host)
+	}
 	for _, r := range host {
 		if unicode.IsSpace(r) || unicode.IsControl(r) {
 			return fmt.Errorf("chain: target host %q contains invalid whitespace or control character", host)
 		}
 		switch r {
-		case '/', '\\', '?', '#', '@':
+		case '/', '\\', '?', '#', '@', ':', '[', ']', '%':
 			return fmt.Errorf("chain: target host %q contains invalid delimiter %q", host, r)
 		}
 	}

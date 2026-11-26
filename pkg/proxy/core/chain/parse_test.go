@@ -158,6 +158,15 @@ func TestParseURI_AllProtocols(t *testing.T) {
 			t.Errorf("vmess ALPN = %v, want [h2 http/1.1]", spec.ALPN)
 		}
 	})
+	t.Run("anytls query alpn", func(t *testing.T) {
+		spec, err := ParseURI("anytls://anypass@any.example.com:443?sni=any.example.com&alpn=h2%2Chttp%2F1.1#AnyALPN")
+		if err != nil {
+			t.Fatalf("ParseURI: %v", err)
+		}
+		if !reflect.DeepEqual(spec.ALPN, []string{"h2", "http/1.1"}) {
+			t.Errorf("anytls ALPN = %v, want [h2 http/1.1]", spec.ALPN)
+		}
+	})
 }
 
 func TestParseURI_Errors(t *testing.T) {
@@ -187,6 +196,16 @@ func TestParseURI_ParseErrorsNeverLeakSecrets(t *testing.T) {
 		"ss://" + secret + "@host.example.com:8388%ZZ",
 		"socks5://user:" + secret,
 		"socks5://" + secret,
+		"vless://user:" + secret,
+		"trojan://user:" + secret,
+		"hy2://user:" + secret,
+		"tuic://uuid:" + secret,
+		"anytls://user:" + secret,
+		"snell://user:" + secret,
+		"http://user:" + secret,
+		"https://user:" + secret,
+		"ss://2022-blake3-aes-128-gcm:" + secret,
+		"user:" + secret + "://host.example.com:443",
 		secret,
 	}
 	for _, raw := range malformed {
@@ -195,7 +214,7 @@ func TestParseURI_ParseErrorsNeverLeakSecrets(t *testing.T) {
 			t.Errorf("ParseURI(%q) expected error", raw)
 			continue
 		}
-		if strings.Contains(err.Error(), secret) {
+		if strings.Contains(strings.ToLower(err.Error()), strings.ToLower(secret)) {
 			t.Errorf("ParseURI(%q) leaked secret in error: %v", raw, err)
 		}
 	}

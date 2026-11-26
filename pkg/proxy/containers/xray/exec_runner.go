@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/containers/xray/profilegen"
@@ -561,7 +562,7 @@ func parsePortFromAddr(addr string) int {
 		return 62789
 	}
 	port, err := strconv.Atoi(strings.TrimSpace(addr[idx+1:]))
-	if err != nil {
+	if err != nil || port <= 0 || port > 65535 {
 		return 62789
 	}
 	return port
@@ -728,6 +729,11 @@ func (e *Executor) Restart() error {
 // persisted non-API xray inbounds need restoration. Used by Restart, Reload,
 // and Updater after restarting the xray subprocess.
 func (e *Executor) WaitForAPIReady(ctx context.Context) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 	if e.storeMgr == nil || e.grpcAPIAddress == "" {
 		return nil
 	}
@@ -748,7 +754,11 @@ func (e *Executor) WaitForAPIReady(ctx context.Context) error {
 	timeout := 5 * time.Second
 	if ctx != nil {
 		if deadline, ok := ctx.Deadline(); ok {
-			if remaining := time.Until(deadline); remaining > 0 && remaining < timeout {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				return context.DeadlineExceeded
+			}
+			if remaining < timeout {
 				timeout = remaining
 			}
 		}
@@ -820,7 +830,10 @@ func (e *Executor) RemoveInboundConfig(tag string) error {
 		return fmt.Errorf("inbound %s not found", tag)
 	}
 
-	// Phase 2: Release all user ports (outside lock)
+	// Phase 2: Mark removed before releasing user ports so any concurrent
+	// AddUser racing with RemoveInboundConfig rolls back its forward rule
+	// instead of leaking an orphan listening port.
+	xrayIn.removed.Store(true)
 	_ = xrayIn.ReleaseAllUserPorts()
 
 	// Phase 3: Delete persistent store first — ensures restart won't resurrect the inbound
@@ -1373,8 +1386,10 @@ func (e *Executor) RemoveInboundNative(tag string) error {
 		return nil
 	}
 
-	// Phase 2: Release all user ports (outside lock)
-	// This ensures synchronous completion before gRPC call
+	// Phase 2: Mark removed and release all user ports (outside lock)
+	// This ensures synchronous completion before gRPC call and prevents concurrent
+	// AddUser calls from leaking orphan forward rules.
+	xrayIn.removed.Store(true)
 	_ = xrayIn.ReleaseAllUserPorts()
 
 	// Remove via gRPC
@@ -1544,6 +1559,10 @@ func (e *Executor) syncUserToInbound(username string, user *contracts.User) {
 		}
 		if _, err := inbound.AddUser(username, user); err != nil {
 			log.Warn("[syncUserToInbound] failed to add user to inbound", "user", username, "inbound", inbound.Tag(), "err", err)
+			continue
+		}
+		if e.userMgr != nil && !e.userMgr.CanUserAccessInbound(user, inbound.GetAccessTags()) {
+			_ = inbound.RemoveUser(username)
 		}
 	}
 }
@@ -1615,6 +1634,10 @@ func (e *Executor) reconcileUsers() {
 			}
 			if _, err := inbound.AddUser(user.Username, user); err != nil {
 				log.Warn("[reconcileUsers] failed to add user to inbound", "user", user.Username, "inbound", inbound.Tag(), "err", err)
+				continue
+			}
+			if !e.userMgr.CanUserAccessInbound(user, inbound.GetAccessTags()) {
+				_ = inbound.RemoveUser(user.Username)
 			}
 		}
 	}
@@ -1665,6 +1688,10 @@ func (e *Executor) reconcileUsersForInbound(tag string) {
 		}
 		if _, err := inbound.AddUser(user.Username, user); err != nil {
 			log.Warn("[reconcileUsersForInbound] failed to add user to inbound", "user", user.Username, "inbound", tag, "err", err)
+			continue
+		}
+		if !e.userMgr.CanUserAccessInbound(user, inbound.GetAccessTags()) {
+			_ = inbound.RemoveUser(user.Username)
 		}
 	}
 }
@@ -1768,6 +1795,7 @@ type XrayInbound struct {
 	// Chain proxy & two-layer visibility metadata. accessTags can be updated at
 	// runtime via SetInboundAccessTags while concurrent readers inspect it.
 	metaMu           sync.RWMutex
+	removed          atomic.Bool
 	inboundType      contracts.InboundType
 	accessTags       []string
 	chainOutboundURI string
@@ -2013,6 +2041,9 @@ func (in *XrayInbound) AddUser(email string, user *contracts.User) (uint32, erro
 	if in.userMgr == nil {
 		return 0, fmt.Errorf("user manager not configured for inbound %s", in.tag)
 	}
+	if in.removed.Load() {
+		return 0, nil
+	}
 
 	// Fast path: user already tracked in memory
 	if in.hasAddedUser(email) {
@@ -2033,6 +2064,16 @@ func (in *XrayInbound) AddUser(email string, user *contracts.User) (uint32, erro
 	})
 	if err != nil {
 		return 0, fmt.Errorf("failed to get bind port: %w", err)
+	}
+
+	// If this inbound was concurrently removed while GetBindPort was running,
+	// immediately roll back the newly created rule so we never leak an orphan port.
+	if in.removed.Load() {
+		_ = in.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
+			Username: email,
+			BindPort: bindPort,
+		})
+		return 0, nil
 	}
 
 	in.markAddedUser(email)
@@ -3327,6 +3368,7 @@ func (e *Executor) Restore(ctx context.Context) error {
 
 	cli := e.routingCLI()
 	restoredTags := make(map[string]struct{}, len(records))
+	dbXrayTags := make(map[string]struct{}, len(records))
 	var restoreErrs []error
 
 	for _, rec := range records {
@@ -3338,6 +3380,7 @@ func (e *Executor) Restore(ctx context.Context) error {
 		if rec.Tag == APIInboundTag {
 			continue
 		}
+		dbXrayTags[rec.Tag] = struct{}{}
 
 		inboundType, typeErr := contracts.NormalizeInboundType(rec.InboundType)
 		if typeErr != nil {
@@ -3535,23 +3578,35 @@ func (e *Executor) Restore(ctx context.Context) error {
 	// Evict stale e.inbounds entries that failed or skipped restoration (and are not
 	// running in xray), releasing their forward rules so users cannot hit dead ports.
 	var stale []*XrayInbound
+	keptPorts := make(map[uint32]struct{}, len(restoredTags))
 	e.inboundsMu.Lock()
 	for tag, inb := range e.inbounds {
 		if _, ok := restoredTags[tag]; !ok {
 			stale = append(stale, inb)
 			delete(e.inbounds, tag)
+		} else if inb.Port() != 0 {
+			keptPorts[inb.Port()] = struct{}{}
 		}
 	}
 	e.inboundsMu.Unlock()
 
 	for _, inb := range stale {
 		log.Warn("[Restore] evicting stale inbound not restored after restart/reload", "inbound", inb.Tag())
+		inb.removed.Store(true)
 		if err := inb.ReleaseAllUserPorts(); err != nil {
 			log.Warn("[Restore] failed to release forward rules for stale inbound", "inbound", inb.Tag(), "err", err)
 		}
 		for _, f := range inb.tempCertFiles {
 			if f != "" {
 				_ = os.Remove(f)
+			}
+		}
+		// Only release the port claim when the record no longer exists in DB and
+		// no surviving inbound uses the port; persisted-but-skipped records retain
+		// their port claim so forward rules cannot hijack it before next restore.
+		if _, stillPersisted := dbXrayTags[inb.Tag()]; !stillPersisted {
+			if _, portUsed := keptPorts[inb.Port()]; !portUsed {
+				container.ReleaseInboundPort(e.portClaimer, inb.Port())
 			}
 		}
 	}

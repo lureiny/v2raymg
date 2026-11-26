@@ -820,9 +820,12 @@ func (c *MihomoContainer) RemoveInboundConfig(tag string) error {
 		return fmt.Errorf("mihomo: inbound %q not found", tag)
 	}
 
-	// Phase 2: Release forward rules BEFORE REST push. If this fails we
-	// haven't changed any state yet; caller can retry.
+	// Phase 2: Mark removed and release forward rules BEFORE REST push. If this
+	// or a later phase fails before map delete, unmark removed so the inbound
+	// remains usable until retried.
+	inb.removed.Store(true)
 	if err := inb.ReleaseAllUserPorts(); err != nil {
+		inb.removed.Store(false)
 		return fmt.Errorf("mihomo: release forward rules for inbound %q: %w", tag, err)
 	}
 
@@ -835,11 +838,13 @@ func (c *MihomoContainer) RemoveInboundConfig(tag string) error {
 		snapshot = append(snapshot, v)
 	}
 	if err := c.pushConfigWithSnapshot(snapshot); err != nil {
+		inb.removed.Store(false)
 		return fmt.Errorf("mihomo: push config: %w", err)
 	}
 
 	// Phase 4: Store delete then map delete.
 	if err := c.deleteInboundRecord(tag); err != nil {
+		inb.removed.Store(false)
 		return fmt.Errorf("mihomo: delete inbound record %q (listener already removed from mihomo; retry to finish): %w", tag, err)
 	}
 
@@ -1035,6 +1040,8 @@ func (c *MihomoContainer) buildBaseConfig() mihomoInitialConfig {
 // cycle keeps its claims for the same reason: the records never went away.
 func (c *MihomoContainer) restoreAndPushInbounds() error {
 	var dropped []*MihomoInbound
+	dbMihomoTags := make(map[string]struct{})
+	keptPorts := make(map[uint32]struct{})
 	if c.storeMgr != nil {
 		records, err := c.storeMgr.InboundStore().Load()
 		if err != nil {
@@ -1047,6 +1054,7 @@ func (c *MihomoContainer) restoreAndPushInbounds() error {
 			if rec.ContainerType != string(contracts.ContainerMihomo) {
 				continue
 			}
+			dbMihomoTags[rec.Tag] = struct{}{}
 			inb, err := FromNative(rec.NativeJSON)
 			if err != nil {
 				// A single corrupt record shouldn't block startup. Log and
@@ -1097,6 +1105,9 @@ func (c *MihomoContainer) restoreAndPushInbounds() error {
 				}
 			}
 			nextInbounds[rec.Tag] = inb
+			if inb.Port() != 0 {
+				keptPorts[inb.Port()] = struct{}{}
+			}
 		}
 		for tag, prev := range prevInbounds {
 			if next, kept := nextInbounds[tag]; !kept || next.Port() != prev.Port() {
@@ -1117,8 +1128,14 @@ func (c *MihomoContainer) restoreAndPushInbounds() error {
 	}
 
 	for _, prev := range dropped {
+		prev.removed.Store(true)
 		if err := prev.ReleaseAllUserPorts(); err != nil {
 			log.Warnf("mihomo: release forward rules for dropped inbound %q on restore failed: %v", prev.Tag(), err)
+		}
+		if _, stillPersisted := dbMihomoTags[prev.Tag()]; !stillPersisted {
+			if _, portUsed := keptPorts[prev.Port()]; !portUsed {
+				container.ReleaseInboundPort(c.portClaimer, prev.Port())
+			}
 		}
 	}
 	return c.pushConfig()
@@ -1226,6 +1243,10 @@ func (c *MihomoContainer) syncUserToInbound(username string, user *contracts.Use
 			if _, err := inb.AddUser(username, user); err != nil {
 				log.Warn("mihomo: add user to inbound failed",
 					"user", username, "inbound", inb.Tag(), "err", err)
+				continue
+			}
+			if !c.userMgr.CanUserAccessInbound(user, inb.GetAccessTags()) {
+				_ = inb.RemoveUser(username)
 			}
 		} else {
 			if err := inb.RemoveUser(username); err != nil {
@@ -1330,6 +1351,10 @@ func (c *MihomoContainer) reconcileInboundUsers(inb *MihomoInbound, users []*con
 		if _, err := inb.AddUser(user.Username, user); err != nil {
 			log.Warn("mihomo: reconcile add user failed",
 				"user", user.Username, "inbound", inb.Tag(), "err", err)
+			continue
+		}
+		if !c.userMgr.CanUserAccessInbound(user, inb.GetAccessTags()) {
+			_ = inb.RemoveUser(user.Username)
 		}
 	}
 }

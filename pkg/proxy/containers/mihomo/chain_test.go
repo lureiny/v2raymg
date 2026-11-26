@@ -938,3 +938,45 @@ func TestHandleUserEvent_ExpireRevokesRule(t *testing.T) {
 		t.Fatal("UserEventExpire must immediately revoke forward rule")
 	}
 }
+
+func TestMihomoInbound_AddUserAfterRemoveDoesNotLeakRule(t *testing.T) {
+	c, um, fwdMgr := newTestContainerWithUserMgr(t)
+	srv := newCapturingRESTServer(t, nil)
+	attachRunningREST(c, srv.URL())
+
+	if err := c.FastAddInbound("ephemeral-in", map[string]any{
+		"protocol": "vmess",
+		"port":     10620,
+		"uuid":     "u-eph",
+	}); err != nil {
+		t.Fatalf("FastAddInbound: %v", err)
+	}
+	if err := um.AddUser(usermanager.AddUserRequest{Username: "alice", Password: "pw"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+
+	rawInb, err := c.GetInboundConfig("ephemeral-in")
+	if err != nil {
+		t.Fatalf("GetInboundConfig: %v", err)
+	}
+	inb := rawInb.(*MihomoInbound)
+
+	if err := c.RemoveInboundConfig("ephemeral-in"); err != nil {
+		t.Fatalf("RemoveInboundConfig: %v", err)
+	}
+	if fwdMgr.GetRule("mihomo:ephemeral-in:alice") != nil {
+		t.Fatal("expected rule removed after RemoveInboundConfig")
+	}
+
+	// Stale pointer captured before RemoveInboundConfig must not leak an orphan forward rule.
+	port, err := inb.AddUser("alice", nil)
+	if err != nil {
+		t.Fatalf("AddUser on removed inbound returned error: %v", err)
+	}
+	if port != 0 {
+		t.Fatalf("expected port 0 on removed inbound, got %d", port)
+	}
+	if fwdMgr.GetRule("mihomo:ephemeral-in:alice") != nil {
+		t.Fatal("AddUser on removed inbound leaked orphan forward rule")
+	}
+}

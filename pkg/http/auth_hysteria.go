@@ -52,7 +52,7 @@ func (handler *AuthHysteria2) handlerFunc(c *gin.Context) {
 	parasMap := handler.parseParam(c)
 	srv := handler.getHttpServer()
 	ul := srv.userLister
-	if ul == nil {
+	if ul == nil || parasMap["auth"] == "" {
 		c.JSON(403, gin.H{"ok": false})
 		return
 	}
@@ -79,6 +79,10 @@ func (handler *AuthHysteria2) handlerFunc(c *gin.Context) {
 					hasGate = true
 					checker = ac
 					accessTags = meta.AccessTags
+				} else if len(meta.AccessTags) > 0 {
+					// Restricted inbound cannot be verified without InboundAccessChecker -> Fail-Closed.
+					c.JSON(403, gin.H{"ok": false})
+					return
 				}
 			}
 		}

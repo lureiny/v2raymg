@@ -744,7 +744,14 @@ func (sc *SnellContainer) restoreInboundConfig() error {
 
 	sc.mu.Lock()
 	// Restore enabled state; true is the default when the key is absent (old records).
-	if enabled, ok := data["enabled"].(bool); ok {
+	// If the key is present with a non-boolean type, fail closed.
+	if rawEnabled, exists := data["enabled"]; exists {
+		enabled, ok := rawEnabled.(bool)
+		if !ok {
+			sc.inboundEnabled = false
+			sc.mu.Unlock()
+			return fmt.Errorf("snell: corrupt enabled field in stored inbound config (type %T)", rawEnabled)
+		}
 		sc.inboundEnabled = enabled
 	}
 	sc.accessTags = accessTags

@@ -240,6 +240,11 @@ func TestChainOutboundBinaryValidationMatrix(t *testing.T) {
 				uri:       "vless://11111111-1111-4111-8111-111111111111@exit.example.com:443?security=xtls",
 				wantParts: []string{"xtls", "mihomo"},
 			},
+			{
+				name:      "vless-legacy-xtls-flow",
+				uri:       "vless://11111111-1111-4111-8111-111111111111@exit.example.com:443?security=tls&flow=xtls-rprx-direct",
+				wantParts: []string{"xtls-rprx-vision", "mihomo"},
+			},
 		}
 		for _, tc := range rejectURIs {
 			t.Run("render-rejects-"+tc.name, func(t *testing.T) {
@@ -258,6 +263,7 @@ func TestChainOutboundBinaryValidationMatrix(t *testing.T) {
 			"raw-allowInsecure": `{"outbounds":[{"tag":"o","protocol":"vless","settings":{"vnext":[{"address":"exit.example.com","port":443,"users":[{"id":"11111111-1111-4111-8111-111111111111","encryption":"none"}]}]},"streamSettings":{"network":"tcp","security":"tls","tlsSettings":{"allowInsecure":true}}}]}`,
 			"raw-network-http":  `{"outbounds":[{"tag":"o","protocol":"vless","settings":{"vnext":[{"address":"exit.example.com","port":443,"users":[{"id":"11111111-1111-4111-8111-111111111111","encryption":"none"}]}]},"streamSettings":{"network":"http","security":"tls","httpSettings":{"path":"/h2"}}}]}`,
 			"raw-security-xtls": `{"outbounds":[{"tag":"o","protocol":"vless","settings":{"vnext":[{"address":"exit.example.com","port":443,"users":[{"id":"11111111-1111-4111-8111-111111111111","encryption":"none"}]}]},"streamSettings":{"network":"tcp","security":"xtls"}}]}`,
+			"raw-legacy-flow":   `{"outbounds":[{"tag":"o","protocol":"vless","settings":{"vnext":[{"address":"exit.example.com","port":443,"users":[{"id":"11111111-1111-4111-8111-111111111111","encryption":"none","flow":"xtls-rprx-direct"}]}]},"streamSettings":{"network":"tcp","security":"tls"}}]}`,
 		}
 		for name, body := range rawInvalid {
 			t.Run("binary-rejects-"+name, func(t *testing.T) {
@@ -364,6 +370,10 @@ func TestChainOutboundBinaryValidationMatrix(t *testing.T) {
 			{
 				name: "hy2-pin-sha256-upper-prefix",
 				uri:  fmt.Sprintf("hy2://hy2pass@exit.example.com:443?sni=exit.example.com&pinSHA256=SHA256%%3A%s#HY2-PinUpper", strings.ToUpper(validSHA256Hex)),
+			},
+			{
+				name: "hy2-pin-sha256-colon-separated",
+				uri:  "hy2://hy2pass@exit.example.com:443?sni=exit.example.com&pinSHA256=sha256%3A01%3A23%3A45%3A67%3A89%3Aab%3Acd%3Aef%3A01%3A23%3A45%3A67%3A89%3Aab%3Acd%3Aef%3A01%3A23%3A45%3A67%3A89%3Aab%3Acd%3Aef%3A01%3A23%3A45%3A67%3A89%3Aab%3Acd%3Aef#HY2-PinColon",
 			},
 			{
 				name: "hy2-mport-obfs-insecure",

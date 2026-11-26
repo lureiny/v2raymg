@@ -244,6 +244,19 @@ func TestDecode_MalformedErrorsNeverLeakCredentials(t *testing.T) {
 		"ss://" + secret + "@host.example.com:8388%ZZ",
 		"socks5://user:" + secret,
 		"socks5://" + secret,
+		// Missing '@' with ':' causes Go net/url to emit `invalid port ":SECRET" after host`
+		"vless://user:" + secret,
+		"trojan://user:" + secret,
+		"hy2://user:" + secret,
+		"hysteria2://user:" + secret,
+		"tuic://uuid:" + secret,
+		"anytls://user:" + secret,
+		"snell://user:" + secret,
+		"http://user:" + secret,
+		"https://user:" + secret,
+		"ss://2022-blake3-aes-128-gcm:" + secret,
+		// Malformed scheme containing embedded credentials
+		"user:" + secret + "://host.example.com:443",
 	}
 	for _, raw := range cases {
 		_, err := Decode(raw)
@@ -251,7 +264,7 @@ func TestDecode_MalformedErrorsNeverLeakCredentials(t *testing.T) {
 			t.Errorf("Decode(%q) expected error, got nil", raw)
 			continue
 		}
-		if strings.Contains(err.Error(), secret) {
+		if strings.Contains(strings.ToLower(err.Error()), strings.ToLower(secret)) {
 			t.Errorf("Decode(%q) leaked secret in error: %v", raw, err)
 		}
 	}

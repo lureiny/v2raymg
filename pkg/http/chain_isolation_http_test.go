@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -462,6 +463,36 @@ func TestAuthHysteria2_AccessIsolationGating(t *testing.T) {
 	if code := postAuth(uAllowed.AuthToken); code != http.StatusForbidden {
 		t.Fatalf("expected disabled hysteria-default to Fail-Closed (403), got %d", code)
 	}
+
+	// Empty auth token must always be rejected (403).
+	s.SetContainerMgr(cm)
+	if code := postAuth(""); code != http.StatusForbidden {
+		t.Fatalf("expected empty auth token rejected (403), got %d", code)
+	}
+
+	// Restricted hysteria-default (non-empty AccessTags) with a UserLister that
+	// does NOT implement InboundAccessChecker must Fail-Closed (403).
+	basicLister := &plainUserLister{users: map[string]string{"allowed": uAllowed.AuthToken}}
+	sNoChecker := newTestHttpServer(basicLister)
+	sNoChecker.SetContainerMgr(cm)
+	sNoChecker.RegisterHandler(&AuthHysteria2{}, http.MethodPost)
+	w := httptest.NewRecorder()
+	body, _ := json.Marshal(AuthHysteria2Data{Addr: "1.2.3.4:1234", Auth: uAllowed.AuthToken})
+	req := httptest.NewRequest(http.MethodPost, "/api/authHysteria2", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	sNoChecker.RestfulServer.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected restricted hysteria inbound without InboundAccessChecker to Fail-Closed (403), got %d", w.Code)
+	}
+}
+
+type plainUserLister struct {
+	users map[string]string
+}
+
+func (p *plainUserLister) ListUsersWithPasswd() map[string]string { return p.users }
+func (p *plainUserLister) GetUser(string) (*contracts.User, error) {
+	return nil, errors.New("not found")
 }
 
 func TestUserUpdate_HTTPAndMCPPropagateNonZeroRPCCode(t *testing.T) {

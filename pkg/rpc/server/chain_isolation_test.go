@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1078,4 +1080,121 @@ func TestGetProfile_SynchronousLayer2VisibilityFilter(t *testing.T) {
 	prof2, err := srv.GetProfile(context.Background(), &proto.GetProfileReq{Username: "alice"})
 	require.NoError(t, err)
 	assert.Len(t, prof2.GetInbounds(), 2)
+}
+
+type raceTrackingContainerStub struct {
+	captureContainer
+	mu    sync.Mutex
+	store store.InboundStore
+	delay time.Duration
+	added map[string]inbound.Inbound
+}
+
+func (c *raceTrackingContainerStub) GetInboundConfig(tag string) (inbound.Inbound, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if inb, ok := c.added[tag]; ok {
+		return inb, nil
+	}
+	return nil, errors.New("not found")
+}
+
+func (c *raceTrackingContainerStub) FastAddInbound(tag string, params map[string]any) error {
+	if c.delay > 0 {
+		time.Sleep(c.delay)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.added == nil {
+		c.added = make(map[string]inbound.Inbound)
+	}
+	if _, exists := c.added[tag]; exists {
+		return errors.New("already exists")
+	}
+	inb := inbound.NewDefaultInbound(tag, contracts.ProtocolVLess, 10001)
+	c.added[tag] = inb
+	if c.store != nil {
+		return c.store.Save(&store.InboundRecord{
+			Tag:           tag,
+			ContainerType: string(c.kind),
+			NativeJSON:    []byte(`{"tag":"` + tag + `"}`),
+		})
+	}
+	return nil
+}
+
+func TestFastAddInbound_CorruptStoreFailClosedAndCrossContainerRace(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "race.db")
+	sm, err := store.NewStoreManager(dsn, migrations.All)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sm.Close() })
+
+	// 1. Corrupt access_tags row in InboundStore must cause FastAddInbound to Fail-Closed
+	//    rather than letting another container overwrite the corrupt record.
+	require.NoError(t, sm.InboundStore().Save(&store.InboundRecord{
+		Tag:           "hysteria-default",
+		ContainerType: string(contracts.ContainerHysteria),
+		NativeJSON:    []byte(`{"enabled":false,"port":9443}`),
+		AccessTags:    []string{"vip"},
+	}))
+	_, err = sm.DB().DB().Exec(`UPDATE inbounds SET access_tags = '{corrupt' WHERE tag = 'hysteria-default'`)
+	require.NoError(t, err)
+
+	xrayStub := &raceTrackingContainerStub{
+		captureContainer: captureContainer{kind: contracts.ContainerXray},
+		store:            sm.InboundStore(),
+		delay:            10 * time.Millisecond,
+	}
+	mihomoStub := &raceTrackingContainerStub{
+		captureContainer: captureContainer{kind: contracts.ContainerMihomo},
+		store:            sm.InboundStore(),
+		delay:            10 * time.Millisecond,
+	}
+	mgr := container.NewContainerMgr(nil, container.BuildOptions{})
+	mgr.SetForTest(contracts.ContainerXray, xrayStub)
+	mgr.SetForTest(contracts.ContainerMihomo, mihomoStub)
+
+	srv := &EndNodeServer{containerMgr: mgr}
+	srv.SetInboundStore(sm.InboundStore())
+
+	rsp, err := srv.FastAddInbound(context.Background(), &proto.FastAddInboundReq{
+		InboundBuilderType: proto.BuilderType_VLESSSettingBuilderType,
+		ContainerType:      "xray",
+		Tag:                "hysteria-default",
+		Security:           "none",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1020), rsp.Code, "corrupt DB row must reject FastAddInbound Fail-Closed")
+	assert.Contains(t, rsp.Msg, "check inbound tag")
+
+	// 2. Concurrent FastAddInbound with the same tag targeting xray and mihomo simultaneously:
+	//    exactly one must succeed and the other must fail with collision error.
+	var okCount atomic.Int32
+	var errCount atomic.Int32
+	var wg sync.WaitGroup
+	startCh := make(chan struct{})
+	for _, ct := range []string{"xray", "mihomo", "xray", "mihomo"} {
+		wg.Add(1)
+		go func(containerType string) {
+			defer wg.Done()
+			<-startCh
+			r, callErr := srv.FastAddInbound(context.Background(), &proto.FastAddInboundReq{
+				InboundBuilderType: proto.BuilderType_VLESSSettingBuilderType,
+				ContainerType:      containerType,
+				Tag:                "cross-race-tag",
+				Security:           "none",
+			})
+			require.NoError(t, callErr)
+			if r.Code == 0 {
+				okCount.Add(1)
+			} else {
+				errCount.Add(1)
+			}
+		}(ct)
+	}
+	close(startCh)
+	wg.Wait()
+
+	assert.Equal(t, int32(1), okCount.Load(), "exactly one cross-container FastAddInbound must succeed")
+	assert.Equal(t, int32(3), errCount.Load(), "all other concurrent callers must fail")
 }

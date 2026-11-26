@@ -22,15 +22,29 @@ func RedactURI(rawURI string) string {
 	if idx <= 0 {
 		return "[redacted]"
 	}
-	scheme := strings.ToLower(trimmed[:idx])
+	rawScheme := trimmed[:idx]
+	if !isValidURIScheme(rawScheme) {
+		return "[redacted]"
+	}
+	scheme := strings.ToLower(rawScheme)
 
 	if spec, err := ParseURI(trimmed); err == nil {
 		target := formatHostPort(spec.Host, spec.Port)
 		hasSecret := spec.Password != "" || spec.UUID != "" || spec.Username != ""
+		// If an unescaped '#' inside a numeric password caused the URI to parse
+		// without userinfo (e.g. `socks5://user:1234#SECRET@host:1080`), redact
+		// fail-closed so neither the prefix nor the tail leaks.
+		if !hasSecret && strings.ContainsRune(spec.Remark, '@') {
+			return scheme + "://[redacted]"
+		}
+		frag := spec.Remark
+		if strings.ContainsRune(frag, '@') {
+			frag = ""
+		}
 		u := url.URL{
 			Scheme:   scheme,
 			Host:     target,
-			Fragment: spec.Remark,
+			Fragment: frag,
 		}
 		if hasSecret || scheme == "vmess" || scheme == "ss" {
 			// Insert literal [redacted] userinfo without percent-encoding brackets.
@@ -51,9 +65,18 @@ func RedactURI(rawURI string) string {
 	rest := trimmed[idx+3:]
 	beforeFrag := rest
 	fragSuffix := ""
+	fragHasAt := false
 	if fragIdx := strings.IndexByte(rest, '#'); fragIdx >= 0 {
 		beforeFrag = rest[:fragIdx]
-		fragSuffix = rest[fragIdx:]
+		rawFrag := rest[fragIdx:]
+		// If the fallback fragment contains '@', '#' may have been an unescaped
+		// character inside credentials (e.g. `socks5://user:1234#SECRET@host:1080`).
+		// Never echo such fragments in fallback mode.
+		if strings.ContainsRune(rawFrag, '@') {
+			fragHasAt = true
+		} else {
+			fragSuffix = rawFrag
+		}
 	}
 	beforeQuery := beforeFrag
 	if qIdx := strings.IndexByte(beforeFrag, '?'); qIdx >= 0 {
@@ -70,15 +93,15 @@ func RedactURI(rawURI string) string {
 
 	// Without '@', only schemes that legitimately allow unauthenticated
 	// host:port targets may expose host:port in fallback mode, and only when
-	// port is a valid numeric port [1, 65535]. Credential-bearing schemes
-	// (trojan/vless/vmess/ss/hy2/hysteria2/tuic/anytls/snell/socks) and
-	// unknown schemes always redact fail-closed so a missing '@' never echoes
-	// a password/UUID as the host.
-	switch scheme {
-	case "http", "https", "socks5", "socks5h":
-		addr := strings.TrimSuffix(beforeQuery, "/")
-		if host, port, err := net.SplitHostPort(addr); err == nil && host != "" && isValidPortStr(port) {
-			return scheme + "://" + net.JoinHostPort(host, port) + fragSuffix
+	// port is a valid numeric port [1, 65535] and no '@' appeared in the
+	// fragment (which would indicate a broken user:pass#...@host credential).
+	if !fragHasAt {
+		switch scheme {
+		case "http", "https", "socks5", "socks5h":
+			addr := strings.TrimSuffix(beforeQuery, "/")
+			if host, port, err := net.SplitHostPort(addr); err == nil && host != "" && isValidPortStr(port) {
+				return scheme + "://" + net.JoinHostPort(host, port) + fragSuffix
+			}
 		}
 	}
 	return scheme + "://[redacted]"
@@ -104,7 +127,11 @@ func SummarizeURI(rawURI string) (protocol, target string) {
 		return string(spec.Protocol), formatHostPort(spec.Host, spec.Port)
 	}
 	if idx := strings.Index(trimmed, "://"); idx > 0 {
-		return normalizeSchemeToProtocol(strings.ToLower(trimmed[:idx])), ""
+		rawScheme := trimmed[:idx]
+		if !isValidURIScheme(rawScheme) {
+			return "", ""
+		}
+		return normalizeSchemeToProtocol(strings.ToLower(rawScheme)), ""
 	}
 	return "", ""
 }

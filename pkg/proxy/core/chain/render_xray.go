@@ -49,6 +49,9 @@ func RenderXrayOutbound(outboundTag string, spec *OutboundSpec) ([]byte, error) 
 			"encryption": enc,
 		}
 		if spec.Flow != "" {
+			if isRemovedXrayLegacyXTLSFlow(spec.Flow) {
+				return nil, fmt.Errorf("xray 26+ removed legacy xtls flow %q; use xtls-rprx-vision or use mihomo container instead", spec.Flow)
+			}
 			user["flow"] = spec.Flow
 		}
 		settings = map[string]any{
@@ -161,7 +164,7 @@ func RenderXrayOutbound(outboundTag string, spec *OutboundSpec) ([]byte, error) 
 		settings = map[string]any{
 			"servers": []map[string]any{srv},
 		}
-		if spec.TLS || spec.Security == "tls" {
+		if spec.TLS || strings.EqualFold(spec.Security, "tls") || strings.EqualFold(spec.Security, "xtls") {
 			includeStream = true
 		}
 
@@ -333,4 +336,15 @@ func buildXrayStreamSettings(spec *OutboundSpec) (map[string]any, error) {
 	}
 
 	return stream, nil
+}
+
+func isRemovedXrayLegacyXTLSFlow(flow string) bool {
+	switch strings.ToLower(strings.TrimSpace(flow)) {
+	case "xtls-rprx-origin", "xtls-rprx-origin-udp443",
+		"xtls-rprx-direct", "xtls-rprx-direct-udp443",
+		"xtls-rprx-splice", "xtls-rprx-splice-udp443":
+		return true
+	default:
+		return false
+	}
 }

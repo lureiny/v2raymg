@@ -199,7 +199,7 @@ func DecodeVMess(uri string) (*VMessNode, error) {
 	// Collapse wire-level "tcp" (VMess default) back to canonical empty, and
 	// canonicalize "http" → "h2" here so Encode/Decode are symmetric when a
 	// caller constructs VMessNode{Transport: "http"} directly.
-	transport := b.Net
+	transport := strings.ToLower(strings.TrimSpace(b.Net))
 	switch transport {
 	case "tcp":
 		transport = ""
@@ -221,7 +221,7 @@ func DecodeVMess(uri string) (*VMessNode, error) {
 		HeaderType:  headerType,
 		Transport:   transport,
 	}
-	if b.TLS == "tls" {
+	if strings.EqualFold(strings.TrimSpace(b.TLS), "tls") {
 		n.Security = "tls"
 		n.SkipCertVerify = anyToBool(b.AllowInsecure)
 	}

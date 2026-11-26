@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/inbound"
@@ -62,6 +63,7 @@ type MihomoInbound struct {
 	// accessTags can be mutated at runtime via SetInboundAccessTags while
 	// concurrent event/reconcile/subscription paths read it.
 	metaMu           sync.RWMutex
+	removed          atomic.Bool
 	inboundType      contracts.InboundType
 	accessTags       []string
 	chainOutboundURI string
@@ -722,6 +724,9 @@ func (i *MihomoInbound) AddUser(username string, _ *contracts.User) (uint32, err
 	if i.userMgr == nil {
 		return 0, fmt.Errorf("mihomo: inbound %q has no user manager", i.Tag())
 	}
+	if i.removed.Load() {
+		return 0, nil
+	}
 
 	if i.hasAddedUser(username) {
 		if port, ok := i.userMgr.GetUserPortByDst(username, i.Port()); ok {
@@ -742,6 +747,13 @@ func (i *MihomoInbound) AddUser(username string, _ *contracts.User) (uint32, err
 	})
 	if err != nil {
 		return 0, fmt.Errorf("mihomo: inbound %q: get bind port for %q: %w", i.Tag(), username, err)
+	}
+	if i.removed.Load() {
+		_ = i.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
+			Username: username,
+			BindPort: bindPort,
+		})
+		return 0, nil
 	}
 	i.markAddedUser(username)
 	return bindPort, nil

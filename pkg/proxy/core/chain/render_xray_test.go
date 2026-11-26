@@ -228,6 +228,8 @@ func TestRenderXrayOutbound_UnsupportedSuggestsMihomo(t *testing.T) {
 		{"trojan h2 removed in xray 26", "trojan://tpw@tr.example.com:443?type=h2&path=%2Fh2&host=h2.example.com&sni=tr.example.com", "xhttp"},
 		{"vless http transport removed in xray 26", "vless://uuid-1@home.example.com:443?security=tls&type=http", "xhttp"},
 		{"vless xtls removed in xray 26", "vless://uuid-1@home.example.com:443?security=xtls&flow=xtls-rprx-direct", "xtls"},
+		{"vless legacy flow xtls-rprx-direct removed in xray 26", "vless://uuid-1@home.example.com:443?security=tls&flow=xtls-rprx-direct", "xtls-rprx-vision"},
+		{"vless legacy flow xtls-rprx-splice removed in xray 26", "vless://uuid-1@home.example.com:443?security=tls&flow=xtls-rprx-splice", "xtls-rprx-vision"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -248,4 +250,21 @@ func TestRenderXrayOutbound_UnsupportedSuggestsMihomo(t *testing.T) {
 			}
 		})
 	}
+
+	// Case-insensitive Security="TLS" on HTTP with SkipCertVerify must also be rejected.
+	t.Run("http uppercase TLS insecure", func(t *testing.T) {
+		_, err := RenderXrayOutbound("out", &OutboundSpec{
+			Protocol:       "http",
+			Host:           "proxy.example.com",
+			Port:           443,
+			Security:       "TLS",
+			SkipCertVerify: true,
+		})
+		if err == nil {
+			t.Fatal("expected error for HTTP uppercase TLS with SkipCertVerify")
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "mihomo") {
+			t.Errorf("expected mihomo suggestion, got: %v", err)
+		}
+	})
 }

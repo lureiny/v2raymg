@@ -634,6 +634,10 @@ func TestSnell_CorruptStoreFailClosed(t *testing.T) {
 			name:  "corrupt native_json",
 			query: `UPDATE inbounds SET native_json = '{not-json' WHERE tag = ?`,
 		},
+		{
+			name:  "corrupt non-boolean enabled field",
+			query: `UPDATE inbounds SET native_json = '{"tag":"snell-default","enabled":"false","port":16160}' WHERE tag = ?`,
+		},
 	}
 
 	for _, tc := range cases {

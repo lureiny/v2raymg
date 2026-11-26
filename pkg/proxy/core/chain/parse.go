@@ -25,7 +25,11 @@ func ParseURI(rawURI string) (*OutboundSpec, error) {
 	if idx <= 0 {
 		return nil, fmt.Errorf("chain: missing URI scheme")
 	}
-	scheme := strings.ToLower(trimmed[:idx])
+	rawScheme := trimmed[:idx]
+	if !isValidURIScheme(rawScheme) {
+		return nil, fmt.Errorf("chain: invalid URI scheme")
+	}
+	scheme := strings.ToLower(rawScheme)
 
 	node, err := codec.Decode(trimmed)
 	if err != nil {
@@ -180,6 +184,10 @@ func ParseURI(rawURI string) (*OutboundSpec, error) {
 			DisableSNI:        n.DisableSNI,
 		}
 	case *codec.AnyTLSNode:
+		alpn := slices.Clone(n.ALPN)
+		if len(alpn) == 0 {
+			alpn = parseQueryALPN(trimmed)
+		}
 		spec = &OutboundSpec{
 			Scheme:         scheme,
 			Protocol:       contracts.ProtocolAnyTLS,
@@ -192,7 +200,7 @@ func ParseURI(rawURI string) (*OutboundSpec, error) {
 			SNI:            n.SNI,
 			SkipCertVerify: n.SkipCertVerify,
 			Fingerprint:    n.Fingerprint,
-			ALPN:           slices.Clone(n.ALPN),
+			ALPN:           alpn,
 		}
 	case *codec.SOCKS5Node:
 		spec = &OutboundSpec{
@@ -267,8 +275,32 @@ func parseQueryALPN(rawURI string) []string {
 	return nil
 }
 
-// sanitizeParseError strips raw URLs and host/authority strings from *url.Error
-// and *net.AddrError so secrets embedded in malformed URIs never leak via error
+// isValidURIScheme checks RFC 3986 §3.1 scheme syntax so malformed prefixes
+// carrying embedded credentials (e.g. "user:SECRET://host") are never echoed.
+func isValidURIScheme(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		isAlpha := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		if i == 0 {
+			if !isAlpha {
+				return false
+			}
+			continue
+		}
+		isDigit := c >= '0' && c <= '9'
+		if !isAlpha && !isDigit && c != '+' && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// sanitizeParseError strips raw URLs, host/authority strings, and echoed URI
+// fragments (e.g. `invalid port ":SECRET" after host`) from *url.Error and
+// *net.AddrError so secrets embedded in malformed URIs never leak via error
 // messages, RPC responses, or logs.
 func sanitizeParseError(err error) error {
 	if err == nil {
@@ -278,9 +310,20 @@ func sanitizeParseError(err error) error {
 	if errors.As(err, &ue) && ue.Err != nil {
 		return sanitizeParseError(ue.Err)
 	}
+	var escErr url.EscapeError
+	if errors.As(err, &escErr) {
+		return errors.New("invalid URL escape")
+	}
+	var hostErr url.InvalidHostError
+	if errors.As(err, &hostErr) {
+		return errors.New("invalid character in host name")
+	}
 	var ae *net.AddrError
 	if errors.As(err, &ae) && ae.Err != "" {
 		return errors.New(ae.Err)
+	}
+	if strings.HasPrefix(err.Error(), "invalid port ") {
+		return errors.New("invalid port after host")
 	}
 	return err
 }

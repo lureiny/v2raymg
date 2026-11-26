@@ -56,8 +56,8 @@ func renderMihomoVLESS(name string, spec *OutboundSpec) (map[string]any, error) 
 	if spec.Encryption != "" && spec.Encryption != "none" {
 		return nil, fmt.Errorf("mihomo does not support VLESS encryption %q; use xray container instead", spec.Encryption)
 	}
-	if spec.Security == "xtls" {
-		return nil, fmt.Errorf("mihomo does not support VLESS xtls security; use xray container instead")
+	if strings.EqualFold(spec.Security, "xtls") {
+		return nil, fmt.Errorf("mihomo does not support VLESS xtls security (legacy xtls was also removed in xray 26+; migrate to tls/reality with xtls-rprx-vision)")
 	}
 
 	m := map[string]any{
@@ -84,8 +84,8 @@ func renderMihomoVMess(name string, spec *OutboundSpec) (map[string]any, error) 
 	if spec.UUID == "" {
 		return nil, fmt.Errorf("chain: vmess requires uuid")
 	}
-	if spec.Security == "xtls" {
-		return nil, fmt.Errorf("mihomo does not support VMess xtls security; use xray container instead")
+	if strings.EqualFold(spec.Security, "xtls") {
+		return nil, fmt.Errorf("mihomo does not support VMess xtls security (legacy xtls was also removed in xray 26+; migrate to tls)")
 	}
 
 	cipher := spec.Method
@@ -138,7 +138,7 @@ func renderMihomoTrojan(name string, spec *OutboundSpec) (map[string]any, error)
 }
 
 func applyMihomoSecurity(m map[string]any, spec *OutboundSpec, sniKey string) error {
-	switch spec.Security {
+	switch strings.ToLower(spec.Security) {
 	case "", "none":
 		if spec.Protocol == contracts.ProtocolTrojan {
 			m["tls"] = true
@@ -487,7 +487,7 @@ func renderMihomoHTTP(name string, spec *OutboundSpec) (map[string]any, error) {
 	if spec.Password != "" {
 		m["password"] = spec.Password
 	}
-	if spec.TLS || spec.Security == "tls" {
+	if spec.TLS || strings.EqualFold(spec.Security, "tls") {
 		m["tls"] = true
 		if spec.SNI != "" {
 			m["sni"] = spec.SNI

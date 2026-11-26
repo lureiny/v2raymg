@@ -149,7 +149,7 @@ func TestInboundStore_CorruptAccessTagsFailClosed(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	for _, badJSON := range []string{"{not-json", "123", `"vip"`, "null", `["vip"`} {
+	for _, badJSON := range []string{"{not-json", "123", `"vip"`, "null", " null ", "\tnull\n", `["vip"`} {
 		if _, err := db.DB().Exec(`UPDATE inbounds SET access_tags = ? WHERE tag = 'private-in'`, badJSON); err != nil {
 			t.Fatalf("UPDATE access_tags=%q: %v", badJSON, err)
 		}

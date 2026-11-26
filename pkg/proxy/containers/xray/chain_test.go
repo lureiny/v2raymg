@@ -1321,5 +1321,62 @@ func TestConcurrency_FastAddSameTagChainAndLifecycleOps(t *testing.T) {
 		wg.Wait()
 		// shared-chain should still be healthy and consistent.
 		_ = mustXrayInbound(t, exec, "shared-chain")
+		// Removed dynamic inbounds must not leak orphan forward rules.
+		for g := 0; g < 3; g++ {
+			tag := fmt.Sprintf("dyn-chain-%d", g)
+			assert.Nil(t, h.fm.GetRule("xray:"+tag+":alice"), "removed inbound %s leaked orphan forward rule", tag)
+		}
 	})
+
+	t.Run("AddUser on removed inbound does not leak forward rule", func(t *testing.T) {
+		h := newChainTestHarness(t, true)
+		exec := h.newExecutor(t, "", "")
+		require.NoError(t, h.userMgr.AddUser(usermanager.AddUserRequest{
+			Username:    "alice",
+			Password:    "pass123",
+			Role:        "user",
+			TargetGroup: "vip",
+		}))
+		require.NoError(t, exec.FastAddInbound("ephemeral", map[string]any{
+			"protocol": "vmess",
+			"security": "none",
+			"port":     36690,
+		}))
+		xi := mustXrayInbound(t, exec, "ephemeral")
+		require.NoError(t, exec.RemoveInboundConfig("ephemeral"))
+		assert.Nil(t, h.fm.GetRule("xray:ephemeral:alice"))
+
+		// Stale pointer captured before RemoveInboundConfig must not create a new forward rule.
+		u := h.userMgr.GetUserForSync("alice")
+		port, err := xi.AddUser("alice", u)
+		require.NoError(t, err)
+		assert.Equal(t, uint32(0), port)
+		assert.Nil(t, h.fm.GetRule("xray:ephemeral:alice"))
+	})
+}
+
+func TestWaitForAPIReady_RespectsCancelledAndExpiredContext(t *testing.T) {
+	h := newChainTestHarness(t, false)
+	exec := h.newExecutor(t, "", "")
+	require.NoError(t, h.storeMgr.InboundStore().Save(&store.InboundRecord{
+		Tag:           "saved-in",
+		ContainerType: string(contracts.ContainerXray),
+		NativeJSON:    []byte(`{"tag":"saved-in","port":36695,"protocol":"vmess"}`),
+	}))
+	// Point to an unused address so WaitForReady would block 5s if ctx were ignored.
+	exec.grpcAPIAddress = "127.0.0.1:1"
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	err := exec.WaitForAPIReady(canceledCtx)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Less(t, time.Since(start), time.Second, "cancelled ctx must return immediately")
+
+	expiredCtx, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelExpired()
+	start = time.Now()
+	err = exec.WaitForAPIReady(expiredCtx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), time.Second, "expired ctx must return immediately")
 }

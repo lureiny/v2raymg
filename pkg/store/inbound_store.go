@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // InboundRecord holds persistent data for a single inbound.
@@ -125,13 +126,16 @@ func scanInboundRow(scanner interface{ Scan(dest ...any) error }) (*InboundRecor
 	if r.InboundType == "" {
 		r.InboundType = "direct"
 	}
-	if accessTagsStr != "" && accessTagsStr != "[]" {
-		if accessTagsStr == "null" {
-			return nil, fmt.Errorf("corrupt access_tags for inbound %q: null is not a valid tag list", r.Tag)
-		}
-		if err := json.Unmarshal([]byte(accessTagsStr), &r.AccessTags); err != nil {
+	trimmedTags := strings.TrimSpace(accessTagsStr)
+	if trimmedTags != "" && trimmedTags != "[]" {
+		var tags []string
+		if err := json.Unmarshal([]byte(trimmedTags), &tags); err != nil {
 			return nil, fmt.Errorf("corrupt access_tags for inbound %q: %w", r.Tag, err)
 		}
+		if tags == nil {
+			return nil, fmt.Errorf("corrupt access_tags for inbound %q: null is not a valid tag list", r.Tag)
+		}
+		r.AccessTags = tags
 	}
 	return &r, nil
 }

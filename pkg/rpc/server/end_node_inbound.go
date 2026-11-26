@@ -93,6 +93,12 @@ func (s *EndNodeServer) AddInbound(ctx context.Context, inboundOpReq *proto.Inbo
 			inboundOpRsp.Code = 601
 			return inboundOpRsp, nil
 		}
+	}
+
+	s.inboundOpMu.Lock()
+	defer s.inboundOpMu.Unlock()
+
+	if nativeHeader.Tag != "" {
 		if existingCT, exists := s.inboundTagExistsAnywhere(nativeHeader.Tag); exists {
 			errMsg := fmt.Sprintf("inbound tag %q already exists in container %s", nativeHeader.Tag, existingCT)
 			log.Error("add inbound failed", "err", errMsg)
@@ -297,7 +303,11 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		fastAddInboundRsp.Msg = fmt.Sprintf("invalid tag %q: %v", tag, err)
 		return fastAddInboundRsp, nil
 	}
-	if existingCT, exists := s.inboundTagConflictsForFastAdd(tag, c.Type(), inboundType); exists {
+	if existingCT, exists, checkErr := s.inboundTagConflictsForFastAdd(tag, c.Type(), inboundType); checkErr != nil {
+		fastAddInboundRsp.Code = 1020
+		fastAddInboundRsp.Msg = fmt.Sprintf("check inbound tag %q failed: %v", tag, checkErr)
+		return fastAddInboundRsp, nil
+	} else if exists {
 		fastAddInboundRsp.Code = 1020
 		fastAddInboundRsp.Msg = fmt.Sprintf("inbound tag %q already exists in container %s", tag, existingCT)
 		return fastAddInboundRsp, nil
@@ -420,6 +430,22 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 	if err := params.FillDefaults(reqParams, protocol, newCertMgrAdapter(s.certManager), scratchDir); err != nil {
 		fastAddInboundRsp.Code = 1020
 		fastAddInboundRsp.Msg = err.Error()
+		return fastAddInboundRsp, nil
+	}
+
+	// Re-check cross-container tag uniqueness and execute container FastAddInbound
+	// under inboundOpMu so concurrent requests targeting different containers with
+	// the same tag cannot race past the early check and overwrite InboundStore.
+	s.inboundOpMu.Lock()
+	defer s.inboundOpMu.Unlock()
+
+	if existingCT, exists, checkErr := s.inboundTagConflictsForFastAdd(tag, c.Type(), inboundType); checkErr != nil {
+		fastAddInboundRsp.Code = 1020
+		fastAddInboundRsp.Msg = fmt.Sprintf("check inbound tag %q failed: %v", tag, checkErr)
+		return fastAddInboundRsp, nil
+	} else if exists {
+		fastAddInboundRsp.Code = 1020
+		fastAddInboundRsp.Msg = fmt.Sprintf("inbound tag %q already exists in container %s", tag, existingCT)
 		return fastAddInboundRsp, nil
 	}
 
@@ -547,6 +573,9 @@ func (s *EndNodeServer) DeleteInboundByName(ctx context.Context, req *proto.Dele
 		return rsp, nil
 	}
 
+	s.inboundOpMu.Lock()
+	defer s.inboundOpMu.Unlock()
+
 	if err := c.RemoveInboundConfig(name); err != nil {
 		errMsg := fmt.Sprintf("delete inbound failed: %v", err)
 		log.Error("DeleteInboundByName failed", "container", req.GetContainer(), "name", name, "err", err)
@@ -636,10 +665,11 @@ func (s *EndNodeServer) inboundTagExistsAnywhere(tag string) (contracts.Containe
 // inbound across registered containers or InboundStore. It allows re-enabling
 // a disabled Mode A record (stored with enabled=false in NativeJSON) when the
 // request targets the same container and is not creating a chain inbound, while
-// still rejecting cross-container collisions and enabled duplicates.
-func (s *EndNodeServer) inboundTagConflictsForFastAdd(tag string, targetCT contracts.ContainerType, inboundType contracts.InboundType) (contracts.ContainerType, bool) {
+// still rejecting cross-container collisions, enabled duplicates, and failing
+// closed if InboundStore returns a read/corruption error.
+func (s *EndNodeServer) inboundTagConflictsForFastAdd(tag string, targetCT contracts.ContainerType, inboundType contracts.InboundType) (contracts.ContainerType, bool, error) {
 	if s == nil || tag == "" {
-		return "", false
+		return "", false, nil
 	}
 	if s.containerMgr != nil {
 		for _, ct := range s.containerMgr.Types() {
@@ -648,26 +678,26 @@ func (s *EndNodeServer) inboundTagConflictsForFastAdd(tag string, targetCT contr
 				continue
 			}
 			if inb, err := c.GetInboundConfig(tag); err == nil && inb != nil {
-				return ct, true
+				return ct, true, nil
 			}
 		}
 	}
 	if s.inboundStore != nil {
 		rec, err := s.inboundStore.Get(tag)
 		if err != nil {
-			log.Warn("check inbound tag in store failed", "tag", tag, "err", err)
-			return "", false
+			log.Warn("check inbound tag in store failed (fail-closed)", "tag", tag, "err", err)
+			return "", false, err
 		}
 		if rec != nil {
 			if inboundType != contracts.InboundTypeChain &&
 				contracts.ContainerType(rec.ContainerType) == targetCT &&
 				isStoredInboundDisabled(rec) {
-				return "", false
+				return "", false, nil
 			}
-			return contracts.ContainerType(rec.ContainerType), true
+			return contracts.ContainerType(rec.ContainerType), true, nil
 		}
 	}
-	return "", false
+	return "", false, nil
 }
 
 func isStoredInboundDisabled(rec *store.InboundRecord) bool {

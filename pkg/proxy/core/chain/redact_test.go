@@ -152,6 +152,11 @@ func TestRedactURI_MalformedNeverLeaks(t *testing.T) {
 		{"socks5://user:TOPSECRET", "TOPSECRET", "socks5://[redacted]"},
 		{"http://user:TOPSECRET", "TOPSECRET", "http://[redacted]"},
 		{"customproto://TOPSECRET:443", "TOPSECRET", "customproto://[redacted]"},
+		// Invalid scheme containing credentials must redact to [redacted]
+		{"user:TOPSECRET://host.example.com:443", "TOPSECRET", "[redacted]"},
+		// Unescaped '#' in password/secret before '@' in malformed URI must not leak via fallback fragment
+		{"socks5://user:1234?bad=%ZZ#TOPSECRET@host.example.com:1080", "TOPSECRET", "socks5://[redacted]"},
+		{"trojan://u:p@host.example.com:443?bad=%ZZ#TOPSECRET@other.example.com:443", "TOPSECRET", "trojan://[redacted]@host.example.com:443"},
 	}
 	for _, tc := range malformed {
 		got := RedactURI(tc.uri)
