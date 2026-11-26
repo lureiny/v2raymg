@@ -89,3 +89,50 @@ func TestAllocateSpecificPort_RejectsUnbindableAndClosed(t *testing.T) {
 		t.Fatalf("closed manager: want ErrPortAllocationFail, got %v", err)
 	}
 }
+
+func TestDefaultForwardManager_IsPortAllocated(t *testing.T) {
+	m, err := NewDefaultForwardManager(PortAllocatorConfig{
+		MinPort:  28840,
+		MaxPort:  28849,
+		Reserved: []uint32{54321, 19090},
+	})
+	if err != nil {
+		t.Fatalf("NewDefaultForwardManager: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	// Reserved management ports report allocated.
+	if !m.IsPortAllocated(54321) || !m.IsPortAllocated(19090) {
+		t.Fatal("reserved ports must report IsPortAllocated=true")
+	}
+	if m.IsPortAllocated(28845) {
+		t.Fatal("unallocated port must report IsPortAllocated=false")
+	}
+
+	// Claimed container port reports allocated until released.
+	if err := m.AllocateSpecificPort(28845); err != nil {
+		t.Fatalf("AllocateSpecificPort: %v", err)
+	}
+	if !m.IsPortAllocated(28845) {
+		t.Fatal("claimed container port must report IsPortAllocated=true")
+	}
+	m.ReleasePort(28845)
+	if m.IsPortAllocated(28845) {
+		t.Fatal("released container port must report IsPortAllocated=false")
+	}
+
+	// Forward rule port reports allocated until removed.
+	rule, err := m.AddRule(retryTestRule("alloc-check"))
+	if err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+	if !m.IsPortAllocated(rule.ListenPort) {
+		t.Fatalf("active forward rule port %d must report IsPortAllocated=true", rule.ListenPort)
+	}
+	if err := m.RemoveRule(rule.RuleKey()); err != nil {
+		t.Fatalf("RemoveRule: %v", err)
+	}
+	if m.IsPortAllocated(rule.ListenPort) {
+		t.Fatalf("removed forward rule port %d must report IsPortAllocated=false", rule.ListenPort)
+	}
+}

@@ -77,7 +77,7 @@ func (n *AnyTLSNode) Encode() string {
 func DecodeAnyTLS(uri string) (*AnyTLSNode, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("anytls: parse URI: %w", err)
+		return nil, fmt.Errorf("anytls: parse URI: %w", sanitizeURLError(err))
 	}
 	if u.Scheme != "anytls" {
 		return nil, fmt.Errorf("anytls: unexpected scheme %q", u.Scheme)

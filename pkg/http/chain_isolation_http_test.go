@@ -27,16 +27,18 @@ import (
 type chainTestRPCServer struct {
 	proto.UnimplementedEndNodeAccessServer
 
-	mu             sync.Mutex
-	fastAddReqs    []*proto.FastAddInboundReq
-	setTagsReqs    []*proto.SetInboundAccessTagsReq
-	addUserReqs    []*proto.UserOpReq
-	updateUserReqs []*proto.UserOpReq
-	users          []*proto.User
-	inbounds       []*proto.InboundInfo
-	containers     []string
-	containerInfos []*proto.ContainerInfo
-	setTagsErrMsg  string
+	mu                 sync.Mutex
+	fastAddReqs        []*proto.FastAddInboundReq
+	setTagsReqs        []*proto.SetInboundAccessTagsReq
+	addUserReqs        []*proto.UserOpReq
+	updateUserReqs     []*proto.UserOpReq
+	users              []*proto.User
+	inbounds           []*proto.InboundInfo
+	containers         []string
+	containerInfos     []*proto.ContainerInfo
+	setTagsErrMsg      string
+	updateUsersErrCode int32
+	updateUsersErrMsg  string
 }
 
 func (s *chainTestRPCServer) FastAddInbound(_ context.Context, req *proto.FastAddInboundReq) (*proto.FastAddInboundRsp, error) {
@@ -89,7 +91,12 @@ func (s *chainTestRPCServer) AddUsers(_ context.Context, req *proto.UserOpReq) (
 func (s *chainTestRPCServer) UpdateUsers(_ context.Context, req *proto.UserOpReq) (*proto.UserOpRsp, error) {
 	s.mu.Lock()
 	s.updateUserReqs = append(s.updateUserReqs, req)
+	errCode := s.updateUsersErrCode
+	errMsg := s.updateUsersErrMsg
 	s.mu.Unlock()
+	if errCode != 0 {
+		return &proto.UserOpRsp{Code: errCode, Msg: errMsg}, nil
+	}
 	return &proto.UserOpRsp{Code: 0}, nil
 }
 
@@ -443,5 +450,55 @@ func TestAuthHysteria2_AccessIsolationGating(t *testing.T) {
 	}
 	if code := postAuth(uWrongGroup.AuthToken); code != http.StatusForbidden {
 		t.Fatalf("expected Layer-1 hidden user rejected (403), got %d", code)
+	}
+
+	// Disabled hysteria-default (registered container with hasMeta=false and empty ListInboundConfigs)
+	// must Fail-Closed with 403 even for an otherwise-valid visible user.
+	cmDisabled := container.NewContainerMgr(nil, container.BuildOptions{})
+	cmDisabled.SetForTest(contracts.ContainerHysteria, &chainHysteriaStubContainer{
+		hasMeta: false,
+	})
+	s.SetContainerMgr(cmDisabled)
+	if code := postAuth(uAllowed.AuthToken); code != http.StatusForbidden {
+		t.Fatalf("expected disabled hysteria-default to Fail-Closed (403), got %d", code)
+	}
+}
+
+func TestUserUpdate_HTTPAndMCPPropagateNonZeroRPCCode(t *testing.T) {
+	const token = "update-err-cluster-token"
+	rpcA := &chainTestRPCServer{
+		updateUsersErrCode: 202,
+		updateUsersErrMsg:  "user not found: ghost",
+	}
+	nodeA := startChainTestNode(t, "node-a", "id-a", token, rpcA)
+	s, ts := setupChainHTTPServer(t, token, nodeA)
+
+	// HTTP PUT /api/user must return non-200 error status when UpdateUsers returns non-zero Code.
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/user", strings.NewReader(`{"user":"ghost","role":"admin"}`))
+	req.Header.Set("X-Token", s.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/user: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("PUT /api/user returned HTTP 200 on non-zero RPC Code")
+	}
+
+	// MCP update_user must also surface IsError=true with the error message.
+	adminSess := connectMCPClient(t, ts.URL, map[string]string{"X-Token": s.token})
+	mcpRes, err := adminSess.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "update_user",
+		Arguments: map[string]any{"user": "ghost", "role": "admin"},
+	})
+	if err != nil {
+		t.Fatalf("MCP CallTool error: %v", err)
+	}
+	if !mcpRes.IsError {
+		t.Fatalf("expected MCP update_user IsError=true, got %+v", mcpRes)
+	}
+	if txt := extractText(t, mcpRes); !strings.Contains(txt, "user not found: ghost") {
+		t.Fatalf("expected MCP error text to include RPC error message, got %q", txt)
 	}
 }

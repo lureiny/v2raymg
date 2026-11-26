@@ -132,19 +132,34 @@ func TestRedactURI_And_SummarizeURI(t *testing.T) {
 
 func TestRedactURI_MalformedNeverLeaks(t *testing.T) {
 	malformed := []struct {
-		uri    string
-		secret string
+		uri       string
+		secret    string
+		wantExact string
 	}{
-		{"vmess://c2VjcmV0X2pzb24=", "c2VjcmV0X2pzb24"},
-		{"ss://c2VjcmV0X3NzX2Jsb2I=", "c2VjcmV0X3NzX2Jsb2I"},
-		{"socks://c2VjcmV0X3NvY2tz", "c2VjcmV0X3NvY2tz"},
-		{"vless://secret-uuid@host:badport?pbk=secret-pbk", "secret-uuid"},
-		{"raw-secret-without-scheme", "raw-secret-without-scheme"},
+		{"vmess://c2VjcmV0X2pzb24=", "c2VjcmV0X2pzb24", "vmess://[redacted]"},
+		{"ss://c2VjcmV0X3NzX2Jsb2I=", "c2VjcmV0X3NzX2Jsb2I", "ss://[redacted]"},
+		{"socks://c2VjcmV0X3NvY2tz", "c2VjcmV0X3NvY2tz", "socks://[redacted]"},
+		{"vless://secret-uuid@host:badport?pbk=secret-pbk", "secret-uuid", "vless://[redacted]"},
+		{"raw-secret-without-scheme", "raw-secret-without-scheme", "[redacted]"},
+		// Missing '@' on credential-bearing schemes must fail-closed as scheme://[redacted]
+		{"trojan://TOPSECRET:443", "TOPSECRET", "trojan://[redacted]"},
+		{"vless://TOPSECRET:443", "TOPSECRET", "vless://[redacted]"},
+		{"hy2://TOPSECRET:443", "TOPSECRET", "hy2://[redacted]"},
+		{"hysteria2://TOPSECRET:443", "TOPSECRET", "hysteria2://[redacted]"},
+		{"anytls://TOPSECRET:443", "TOPSECRET", "anytls://[redacted]"},
+		{"tuic://TOPSECRET:443", "TOPSECRET", "tuic://[redacted]"},
+		{"snell://TOPSECRET:443", "TOPSECRET", "snell://[redacted]"},
+		{"socks5://user:TOPSECRET", "TOPSECRET", "socks5://[redacted]"},
+		{"http://user:TOPSECRET", "TOPSECRET", "http://[redacted]"},
+		{"customproto://TOPSECRET:443", "TOPSECRET", "customproto://[redacted]"},
 	}
 	for _, tc := range malformed {
 		got := RedactURI(tc.uri)
 		if strings.Contains(got, tc.secret) {
 			t.Errorf("RedactURI(%q) leaked %q: %q", tc.uri, tc.secret, got)
+		}
+		if tc.wantExact != "" && got != tc.wantExact {
+			t.Errorf("RedactURI(%q) = %q, want %q", tc.uri, got, tc.wantExact)
 		}
 		_, target := SummarizeURI(tc.uri)
 		if strings.Contains(target, tc.secret) {

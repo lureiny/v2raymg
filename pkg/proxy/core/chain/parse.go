@@ -1,7 +1,9 @@
 package chain
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"slices"
 	"strings"
@@ -27,7 +29,7 @@ func ParseURI(rawURI string) (*OutboundSpec, error) {
 
 	node, err := codec.Decode(trimmed)
 	if err != nil {
-		return nil, fmt.Errorf("chain: decode %s URI: %w", scheme, err)
+		return nil, fmt.Errorf("chain: decode %s URI: %w", scheme, sanitizeParseError(err))
 	}
 
 	var spec *OutboundSpec
@@ -78,6 +80,7 @@ func ParseURI(rawURI string) (*OutboundSpec, error) {
 			Security:        n.Security,
 			TLS:             n.Security == "tls",
 			SNI:             n.SNI,
+			ALPN:            slices.Clone(n.ALPN),
 			Fingerprint:     n.Fingerprint,
 			SkipCertVerify:  n.SkipCertVerify,
 			WSPath:          n.WSPath,
@@ -85,6 +88,8 @@ func ParseURI(rawURI string) (*OutboundSpec, error) {
 			H2Path:          n.H2Path,
 			H2Host:          n.H2Host,
 			GRPCServiceName: n.GRPCServiceName,
+			HTTPUpgradePath: n.HTTPUpgradePath,
+			HTTPUpgradeHost: n.HTTPUpgradeHost,
 			XHTTPPath:       n.XHTTPPath,
 			XHTTPHost:       n.XHTTPHost,
 		}
@@ -260,4 +265,22 @@ func parseQueryALPN(rawURI string) []string {
 		return out
 	}
 	return nil
+}
+
+// sanitizeParseError strips raw URLs and host/authority strings from *url.Error
+// and *net.AddrError so secrets embedded in malformed URIs never leak via error
+// messages, RPC responses, or logs.
+func sanitizeParseError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		return sanitizeParseError(ue.Err)
+	}
+	var ae *net.AddrError
+	if errors.As(err, &ae) && ae.Err != "" {
+		return errors.New(ae.Err)
+	}
+	return err
 }

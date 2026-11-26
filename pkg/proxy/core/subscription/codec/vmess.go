@@ -32,6 +32,7 @@ type VMessNode struct {
 
 	Security       string
 	SNI            string
+	ALPN           []string
 	Fingerprint    string // uTLS fingerprint (not TLS cert pinning)
 	SkipCertVerify bool
 
@@ -46,6 +47,9 @@ type VMessNode struct {
 	H2Host string
 
 	GRPCServiceName string
+
+	HTTPUpgradePath string
+	HTTPUpgradeHost string
 
 	XHTTPPath string
 	XHTTPHost string
@@ -67,6 +71,7 @@ type vmessEncodeBody struct {
 	Path          string `json:"path,omitempty"`
 	TLS           string `json:"tls,omitempty"`
 	SNI           string `json:"sni,omitempty"`
+	ALPN          string `json:"alpn,omitempty"`
 	FP            string `json:"fp,omitempty"`
 	AllowInsecure bool   `json:"allowInsecure,omitempty"`
 }
@@ -88,6 +93,7 @@ func (n *VMessNode) Encode() string {
 		Scy:  n.Cipher,
 		Type: headerType,
 		SNI:  n.SNI,
+		ALPN: strings.Join(n.ALPN, ","),
 		FP:   n.Fingerprint,
 	}
 	if n.Security == "tls" {
@@ -115,6 +121,10 @@ func (n *VMessNode) Encode() string {
 		b.Host = n.H2Host
 	case "grpc":
 		b.Path = n.GRPCServiceName
+	case "httpupgrade":
+		b.Net = "httpupgrade"
+		b.Path = n.HTTPUpgradePath
+		b.Host = n.HTTPUpgradeHost
 	case "xhttp", "splithttp":
 		b.Net = "xhttp"
 		b.Path = n.XHTTPPath
@@ -140,6 +150,7 @@ type vmessDecodeBody struct {
 	Path          string `json:"path"`
 	TLS           string `json:"tls"`
 	SNI           string `json:"sni"`
+	ALPN          any    `json:"alpn"`
 	FP            string `json:"fp"`
 	AllowInsecure any    `json:"allowInsecure"`
 }
@@ -205,6 +216,7 @@ func DecodeVMess(uri string) (*VMessNode, error) {
 		AlterId:     anyToInt(b.Aid),
 		Cipher:      b.Scy,
 		SNI:         b.SNI,
+		ALPN:        anyToStringList(b.ALPN),
 		Fingerprint: b.FP,
 		HeaderType:  headerType,
 		Transport:   transport,
@@ -223,6 +235,9 @@ func DecodeVMess(uri string) (*VMessNode, error) {
 		n.H2Host = b.Host
 	case "grpc":
 		n.GRPCServiceName = b.Path
+	case "httpupgrade":
+		n.HTTPUpgradePath = b.Path
+		n.HTTPUpgradeHost = b.Host
 	case "xhttp":
 		n.XHTTPPath = b.Path
 		n.XHTTPHost = b.Host
@@ -270,4 +285,39 @@ func anyToInt(v any) int {
 		return n
 	}
 	return 0
+}
+
+func anyToStringList(v any) []string {
+	switch val := v.(type) {
+	case string:
+		if strings.TrimSpace(val) == "" {
+			return nil
+		}
+		var out []string
+		for _, part := range strings.Split(val, ",") {
+			if s := strings.TrimSpace(part); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []any:
+		var out []string
+		for _, item := range val {
+			if s, ok := item.(string); ok {
+				if trimmed := strings.TrimSpace(s); trimmed != "" {
+					out = append(out, trimmed)
+				}
+			}
+		}
+		return out
+	case []string:
+		var out []string
+		for _, item := range val {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	}
+	return nil
 }

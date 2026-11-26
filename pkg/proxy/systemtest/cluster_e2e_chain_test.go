@@ -213,7 +213,7 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 	// - nodeA: xray direct (public) + xray chain (access_tags=["vip"]) -> backendA
 	// - nodeB: mihomo direct (public) + mihomo chain (access_tags=["vip","home-b"]) -> backendB
 	// - nodeC: xray chain (access_tags=["vip"]) -> backendC
-	fastAddSS := func(targetNode, tag, cont, inboundType, chainURI, remark string, accessTags []string) {
+	fastAddSSWithPort := func(targetNode, tag, cont, inboundType, chainURI, remark string, accessTags []string, port int) {
 		payload := map[string]any{
 			"target":       targetNode,
 			"tag":          tag,
@@ -222,6 +222,9 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 			"transport":    "tcp",
 			"security":     "none",
 			"inbound_type": inboundType,
+		}
+		if port > 0 {
+			payload["port"] = port
 		}
 		if chainURI != "" {
 			payload["chain_uri"] = chainURI
@@ -235,8 +238,13 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 		code, body, err := nodeA.apiPost("/api/inbound/fast", payload)
 		requireOK(t, fmt.Sprintf("POST /api/inbound/fast(%s/%s)", targetNode, tag), code, body, err)
 	}
+	fastAddSS := func(targetNode, tag, cont, inboundType, chainURI, remark string, accessTags []string) {
+		fastAddSSWithPort(targetNode, tag, cont, inboundType, chainURI, remark, accessTags, 0)
+	}
 
-	fastAddSS(nodeA.name, "a-xray-direct", "xray", "direct", "", "DirectA", nil)
+	nodeADirectBackendPort, err := freeTCPPort()
+	require.NoError(t, err)
+	fastAddSSWithPort(nodeA.name, "a-xray-direct", "xray", "direct", "", "DirectA", nil, nodeADirectBackendPort)
 	fastAddSS(nodeA.name, "a-xray-chain", "xray", "chain",
 		fmt.Sprintf("socks5://userA:secretPassA@127.0.0.1:%d#ChainXrayA", backendA.Port()), "", []string{"vip"})
 
@@ -246,6 +254,47 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 
 	fastAddSS(nodeC.name, "c-xray-chain", "xray", "chain",
 		fmt.Sprintf("socks5://userC:secretPassC@127.0.0.1:%d#ChainXrayC", backendC.Port()), "", []string{"vip"})
+
+	// Negative checks on real cluster node (even with AllowLoopbackChainTarget=true):
+	// custom xray grpc_port, mihomo API port, and claimed local container inbound port must all be rejected!
+	for _, tc := range []struct {
+		name string
+		port int
+	}{
+		{"custom-xray-grpc-port", nodeA.xrayGRPCPort},
+		{"custom-mihomo-api-port", nodeA.mihomoAPIPort},
+		{"claimed-local-container-port", nodeADirectBackendPort},
+	} {
+		code, body, reqErr := nodeA.apiPost("/api/inbound/fast", map[string]any{
+			"target":       nodeA.name,
+			"tag":          "neg-" + tc.name,
+			"container":    "xray",
+			"protocol":     "ss",
+			"transport":    "tcp",
+			"security":     "none",
+			"inbound_type": "chain",
+			"chain_uri":    fmt.Sprintf("socks5://127.0.0.1:%d", tc.port),
+		})
+		require.NoError(t, reqErr)
+		require.NotEqual(t, 200, code, "chain_uri targeting %s (port %d) MUST be rejected; body=%s", tc.name, tc.port, string(body))
+	}
+
+	// Negative check: Xray 26.2.6 rejects insecure=1 chain URI with error pointing to mihomo.
+	{
+		code, body, reqErr := nodeA.apiPost("/api/inbound/fast", map[string]any{
+			"target":       nodeA.name,
+			"tag":          "neg-xray-insecure",
+			"container":    "xray",
+			"protocol":     "ss",
+			"transport":    "tcp",
+			"security":     "none",
+			"inbound_type": "chain",
+			"chain_uri":    fmt.Sprintf("vless://11111111-1111-4111-8111-111111111111@127.0.0.1:%d?security=tls&insecure=1", backendA.Port()),
+		})
+		require.NoError(t, reqErr)
+		require.NotEqual(t, 200, code, "xray chain with insecure=1 MUST be rejected; body=%s", string(body))
+		require.Contains(t, strings.ToLower(string(body)), "mihomo")
+	}
 
 	// Create 3 normal-role users with target="all" testing Layer 1 vs Layer 2 same-name isolation:
 	// - carol: group="vip", inbound_tags=["vip"] -> sees nodeA + nodeB (direct+chain), NOT nodeC (group="sg")
@@ -580,6 +629,55 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 			!isPortOpen(fmt.Sprintf("127.0.0.1:%d", alicePortB))
 	})
 
+	// Heartbeat delta-sync propagation test (single-node mutation, NOT target="all"):
+	// Mutate alice's inbound_tags ONLY on nodeA -> nodeB must receive via heartbeat sync
+	// and dynamically open alice's forward port on b-mihomo-chain!
+	code, body, err = nodeA.apiPut("/api/user", map[string]any{
+		"target":       nodeA.name,
+		"user":         aliceUser,
+		"inbound_tags": []string{"promo"},
+	})
+	requireOK(t, "PUT /api/user single-node grant alice promo on nodeA only", code, body, err)
+
+	var hbAlicePortA, hbAlicePortB int
+	eventually(t, "heartbeat delta-sync propagates alice inbound_tags from nodeA to nodeB data plane", 25*time.Second, func() bool {
+		prof := fetchProfileInbounds(t, nodeB, aliceJWT)
+		pa := prof[nodeA.name]["a-xray-chain"].Port
+		pb := prof[nodeB.name]["b-mihomo-chain"].Port
+		if pa > 0 && pb > 0 && isPortOpen(fmt.Sprintf("127.0.0.1:%d", pb)) {
+			hbAlicePortA = pa
+			hbAlicePortB = pb
+			return true
+		}
+		return false
+	})
+	eventually(t, "heartbeat delta-sync exposes ChainMihomoB in alice /sub", 15*time.Second, func() bool {
+		uris, err := nodeC.getRawSub(aliceUser, alicePass)
+		if err != nil {
+			return false
+		}
+		_, ok := extractSuffixSetAndSSMap(t, uris, []string{"-DirectA", "-ChainXrayA", "-DirectB", "-ChainMihomoB"})
+		return ok
+	})
+
+	// Now revoke alice's inbound_tags ONLY on nodeC (a node where alice isn't even Layer-1 visible)
+	// and verify heartbeat delta-sync propagates the clear to BOTH nodeA and nodeB and closes both ports.
+	code, body, err = nodeC.apiPut("/api/user", map[string]any{
+		"target":       nodeC.name,
+		"user":         aliceUser,
+		"inbound_tags": []string{},
+	})
+	requireOK(t, "PUT /api/user single-node revoke alice tags on nodeC only", code, body, err)
+
+	eventually(t, "heartbeat delta-sync revokes alice chain ports on nodeA and nodeB", 25*time.Second, func() bool {
+		prof := fetchProfileInbounds(t, nodeA, aliceJWT)
+		_, hasA := prof[nodeA.name]["a-xray-chain"]
+		_, hasB := prof[nodeB.name]["b-mihomo-chain"]
+		return !hasA && !hasB &&
+			!isPortOpen(fmt.Sprintf("127.0.0.1:%d", hbAlicePortA)) &&
+			!isPortOpen(fmt.Sprintf("127.0.0.1:%d", hbAlicePortB))
+	})
+
 	// Dynamic Layer 1 node-group switch on nodeC: add "vip" so carol gains c-xray-chain.
 	setNodeGroups(nodeA, nodeC, []string{"sg", "vip"})
 
@@ -653,16 +751,156 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 	_ = persistB.Close()
 
 	// =========================================================================
-	// Phase 4: Fail-Closed Proof on Real Cluster Nodes
+	// Phase 4: Real Process Restart & Recovery (Xray on nodeA + Mihomo on nodeB)
+	// =========================================================================
+	c.restartWithConfigEdit(t, nodeA, "chain-recovery-xray", func(map[string]any) {})
+	c.restartWithConfigEdit(t, nodeB, "chain-recovery-mihomo", func(map[string]any) {})
+	c.waitConverged(t, 60*time.Second)
+	c.waitFanoutReady(t, 60*time.Second)
+
+	// Verify chain inbounds survived full process restart and remain redacted in GET /api/inbounds.
+	restartedInbounds := fetchAdminInbounds(t, nodeC, "all", []string{
+		"secretPassA", "secretPassB", "secretPassC",
+		"userA", "userB", "userC",
+		"chain_uri", "chain_outbound_uri",
+	})
+	require.Equal(t, "chain", restartedInbounds[nodeA.name]["a-xray-chain"].InboundType)
+	require.Equal(t, fmt.Sprintf("127.0.0.1:%d", backendA.Port()), restartedInbounds[nodeA.name]["a-xray-chain"].ChainTarget)
+	require.Equal(t, "chain", restartedInbounds[nodeB.name]["b-mihomo-chain"].InboundType)
+	require.Equal(t, fmt.Sprintf("127.0.0.1:%d", backendB.Port()), restartedInbounds[nodeB.name]["b-mihomo-chain"].ChainTarget)
+
+	var carolPostRestartSub map[string]string
+	eventually(t, "carol /sub recovers all 4 URIs after nodeA+nodeB restart", 25*time.Second, func() bool {
+		uris, err := nodeC.getRawSub(carolUser, carolPass)
+		if err != nil {
+			return false
+		}
+		m, ok := extractSuffixSetAndSSMap(t, uris, []string{"-DirectA", "-ChainXrayA", "-DirectB", "-ChainMihomoB"})
+		if !ok {
+			return false
+		}
+		carolPostRestartSub = m
+		return true
+	})
+
+	carolPostRestartXray := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "carol-restart-a"), xrayBin, carolPostRestartSub["-ChainXrayA"])
+	carolPostRestartMihomo := spawnMihomoSSClient(t, uniqueClientDir(t, tmpDir, "carol-restart-b"), mihomoBin, carolPostRestartSub["-ChainMihomoB"])
+
+	dialsA = backendA.DialCount()
+	got, err = sendEchoViaSocks5(carolPostRestartXray, "127.0.0.1", echoSrv.Port(), "after-restart-xray\n")
+	require.NoError(t, err)
+	require.Equal(t, "after-restart-xray\n", got)
+	require.Greater(t, backendA.DialCount(), dialsA, "recovered Xray chain must route through backendA")
+
+	dialsB = backendB.DialCount()
+	got, err = sendEchoViaSocks5(carolPostRestartMihomo, "127.0.0.1", echoSrv.Port(), "after-restart-mihomo\n")
+	require.NoError(t, err)
+	require.Equal(t, "after-restart-mihomo\n", got)
+	require.Greater(t, backendB.DialCount(), dialsB, "recovered Mihomo chain must route through backendB")
+
+	// =========================================================================
+	// Phase 5: Chain Inbound Deletion (DELETE /api/inbounds) + Tag & Port Reuse
+	// =========================================================================
+	reusePortXray, err := freeTCPPort()
+	require.NoError(t, err)
+	reusePortMihomo, err := freeTCPPort()
+	require.NoError(t, err)
+
+	fastAddSSWithPort(nodeA.name, "a-del-reuse", "xray", "chain",
+		fmt.Sprintf("socks5://userA:secretPassA@127.0.0.1:%d#ReuseXrayA", backendA.Port()), "", []string{"vip"}, reusePortXray)
+	fastAddSSWithPort(nodeB.name, "b-del-reuse", "mihomo", "chain",
+		fmt.Sprintf("socks5://userB:secretPassB@127.0.0.1:%d#ReuseMihomoB", backendB.Port()), "", []string{"vip"}, reusePortMihomo)
+
+	var delFwdPortA, delFwdPortB int
+	eventually(t, "carol gets forward ports on temporary deletable chain inbounds", 20*time.Second, func() bool {
+		prof := fetchProfileInbounds(t, nodeC, carolJWT)
+		pa := prof[nodeA.name]["a-del-reuse"].Port
+		pb := prof[nodeB.name]["b-del-reuse"].Port
+		if pa > 0 && pb > 0 && isPortOpen(fmt.Sprintf("127.0.0.1:%d", pa)) && isPortOpen(fmt.Sprintf("127.0.0.1:%d", pb)) {
+			delFwdPortA = pa
+			delFwdPortB = pb
+			return true
+		}
+		return false
+	})
+
+	// Delete both chain inbounds via DELETE /api/inbounds.
+	code, body, err = nodeC.apiDelete("/api/inbounds", map[string]any{
+		"target":    nodeA.name,
+		"container": "xray",
+		"name":      "a-del-reuse",
+	})
+	requireOK(t, "DELETE /api/inbounds(nodeA/a-del-reuse)", code, body, err)
+
+	code, body, err = nodeC.apiDelete("/api/inbounds", map[string]any{
+		"target":    nodeB.name,
+		"container": "mihomo",
+		"name":      "b-del-reuse",
+	})
+	requireOK(t, "DELETE /api/inbounds(nodeB/b-del-reuse)", code, body, err)
+
+	eventually(t, "deleted chain inbounds vanish from /api/profile and close forward ports", 15*time.Second, func() bool {
+		prof := fetchProfileInbounds(t, nodeC, carolJWT)
+		_, hasA := prof[nodeA.name]["a-del-reuse"]
+		_, hasB := prof[nodeB.name]["b-del-reuse"]
+		return !hasA && !hasB &&
+			!isPortOpen(fmt.Sprintf("127.0.0.1:%d", delFwdPortA)) &&
+			!isPortOpen(fmt.Sprintf("127.0.0.1:%d", delFwdPortB))
+	})
+
+	afterDelInbounds := fetchAdminInbounds(t, nodeC, "all", nil)
+	require.NotContains(t, afterDelInbounds[nodeA.name], "a-del-reuse")
+	require.NotContains(t, afterDelInbounds[nodeB.name], "b-del-reuse")
+
+	// Re-create using the EXACT SAME tags and EXACT SAME explicit backend ports (proving full port+tag release).
+	fastAddSSWithPort(nodeA.name, "a-del-reuse", "xray", "chain",
+		fmt.Sprintf("socks5://userA:secretPassA@127.0.0.1:%d#RebornXrayA", backendA.Port()), "", []string{"vip"}, reusePortXray)
+	fastAddSSWithPort(nodeB.name, "b-del-reuse", "mihomo", "chain",
+		fmt.Sprintf("socks5://userB:secretPassB@127.0.0.1:%d#RebornMihomoB", backendB.Port()), "", []string{"vip"}, reusePortMihomo)
+
+	var rebornSub map[string]string
+	eventually(t, "carol /sub includes re-created chain inbounds after tag+port reuse", 20*time.Second, func() bool {
+		uris, err := nodeC.getRawSub(carolUser, carolPass)
+		if err != nil {
+			return false
+		}
+		m, ok := extractSuffixSetAndSSMap(t, uris, []string{
+			"-DirectA", "-ChainXrayA", "-RebornXrayA",
+			"-DirectB", "-ChainMihomoB", "-RebornMihomoB",
+		})
+		if !ok {
+			return false
+		}
+		rebornSub = m
+		return true
+	})
+
+	rebornXrayClient := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "carol-reborn-a"), xrayBin, rebornSub["-RebornXrayA"])
+	rebornMihomoClient := spawnMihomoSSClient(t, uniqueClientDir(t, tmpDir, "carol-reborn-b"), mihomoBin, rebornSub["-RebornMihomoB"])
+
+	dialsA = backendA.DialCount()
+	got, err = sendEchoViaSocks5(rebornXrayClient, "127.0.0.1", echoSrv.Port(), "reborn-xray\n")
+	require.NoError(t, err)
+	require.Equal(t, "reborn-xray\n", got)
+	require.Greater(t, backendA.DialCount(), dialsA)
+
+	dialsB = backendB.DialCount()
+	got, err = sendEchoViaSocks5(rebornMihomoClient, "127.0.0.1", echoSrv.Port(), "reborn-mihomo\n")
+	require.NoError(t, err)
+	require.Equal(t, "reborn-mihomo\n", got)
+	require.Greater(t, backendB.DialCount(), dialsB)
+
+	// =========================================================================
+	// Phase 6: Fail-Closed Proof on Real Cluster Nodes
 	// =========================================================================
 	require.NoError(t, backendA.Close())
 	require.NoError(t, backendB.Close())
 	echoHitsAtShutdown := echoSrv.Hits()
 
-	_, failErrA := sendEchoViaSocks5(carolChainXraySocks, "127.0.0.1", echoSrv.Port(), "must-fail-closed-a\n")
+	_, failErrA := sendEchoViaSocks5(carolPostRestartXray, "127.0.0.1", echoSrv.Port(), "must-fail-closed-a\n")
 	require.Error(t, failErrA, "nodeA Xray chain MUST fail closed when backendA is down")
 
-	_, failErrB := sendEchoViaSocks5(carolChainMihomoSocks, "127.0.0.1", echoSrv.Port(), "must-fail-closed-b\n")
+	_, failErrB := sendEchoViaSocks5(carolPostRestartMihomo, "127.0.0.1", echoSrv.Port(), "must-fail-closed-b\n")
 	require.Error(t, failErrB, "nodeB Mihomo chain MUST fail closed when backendB is down")
 
 	require.Equal(t, echoHitsAtShutdown, echoSrv.Hits(), "chain inbounds MUST NOT leak directly to echoSrv when backends are down")

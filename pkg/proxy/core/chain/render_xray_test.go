@@ -14,8 +14,11 @@ func decodeXrayJSON(t *testing.T, raw []byte) map[string]any {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatalf("json.Unmarshal: %v\n%s", err, raw)
 	}
-	if m["domainStrategy"] != "AsIs" {
-		t.Errorf("domainStrategy = %v, want AsIs", m["domainStrategy"])
+	if m["targetStrategy"] != "AsIs" {
+		t.Errorf("targetStrategy = %v, want AsIs", m["targetStrategy"])
+	}
+	if _, legacy := m["domainStrategy"]; legacy {
+		t.Errorf("unexpected legacy domainStrategy field in xray outbound: %v", m["domainStrategy"])
 	}
 	return m
 }
@@ -79,12 +82,12 @@ func TestRenderXrayOutbound_AllSupportedProtocols(t *testing.T) {
 		}
 	})
 
-	t.Run("vmess ws tls allowInsecure scy", func(t *testing.T) {
+	t.Run("vmess ws tls scy alpn", func(t *testing.T) {
 		body, _ := json.Marshal(map[string]any{
 			"ps": "VM", "add": "vm.ddns.example", "port": 8443,
 			"id": "vm-id", "aid": 0, "scy": "chacha20-poly1305",
 			"net": "ws", "path": "/vm", "host": "ws.example.com",
-			"tls": "tls", "sni": "vm.ddns.example", "allowInsecure": true,
+			"tls": "tls", "sni": "vm.ddns.example", "alpn": "h2,http/1.1",
 		})
 		spec, err := ParseURI("vmess://" + base64.StdEncoding.EncodeToString(body))
 		if err != nil {
@@ -103,13 +106,40 @@ func TestRenderXrayOutbound_AllSupportedProtocols(t *testing.T) {
 			t.Errorf("vmess cipher = %v, want chacha20-poly1305", user["security"])
 		}
 		tlsSettings := m["streamSettings"].(map[string]any)["tlsSettings"].(map[string]any)
-		if tlsSettings["allowInsecure"] != true {
-			t.Errorf("allowInsecure = %v, want true", tlsSettings["allowInsecure"])
+		alpn, _ := tlsSettings["alpn"].([]any)
+		if len(alpn) != 2 || alpn[0] != "h2" || alpn[1] != "http/1.1" {
+			t.Errorf("alpn = %v, want [h2 http/1.1]", tlsSettings["alpn"])
 		}
 	})
 
-	t.Run("trojan h2", func(t *testing.T) {
-		spec, err := ParseURI("trojan://tpw@tr.example.com:443?type=h2&path=%2Fh2&host=h2.example.com&sni=tr.example.com")
+	t.Run("vmess httpupgrade tls", func(t *testing.T) {
+		body, _ := json.Marshal(map[string]any{
+			"ps": "VMHU", "add": "vmhu.ddns.example", "port": 443,
+			"id": "vm-id-2", "aid": 0, "scy": "auto",
+			"net": "httpupgrade", "path": "/vmup", "host": "hu.example.com",
+			"tls": "tls", "sni": "vmhu.ddns.example",
+		})
+		spec, err := ParseURI("vmess://" + base64.StdEncoding.EncodeToString(body))
+		if err != nil {
+			t.Fatalf("ParseURI: %v", err)
+		}
+		b, err := RenderXrayOutbound("vmhu-out", spec)
+		if err != nil {
+			t.Fatalf("RenderXrayOutbound: %v", err)
+		}
+		m := decodeXrayJSON(t, b)
+		ss := m["streamSettings"].(map[string]any)
+		if ss["network"] != "httpupgrade" || ss["security"] != "tls" {
+			t.Errorf("stream mismatch: %+v", ss)
+		}
+		hu := ss["httpupgradeSettings"].(map[string]any)
+		if hu["path"] != "/vmup" || hu["host"] != "hu.example.com" {
+			t.Errorf("httpupgradeSettings mismatch: %+v", hu)
+		}
+	})
+
+	t.Run("trojan grpc tls", func(t *testing.T) {
+		spec, err := ParseURI("trojan://tpw@tr.example.com:443?type=grpc&serviceName=trsvc&sni=tr.example.com")
 		if err != nil {
 			t.Fatalf("ParseURI: %v", err)
 		}
@@ -122,7 +152,7 @@ func TestRenderXrayOutbound_AllSupportedProtocols(t *testing.T) {
 			t.Errorf("protocol = %v", m["protocol"])
 		}
 		ss := m["streamSettings"].(map[string]any)
-		if ss["network"] != "http" || ss["security"] != "tls" {
+		if ss["network"] != "grpc" || ss["security"] != "tls" {
 			t.Errorf("stream mismatch: %+v", ss)
 		}
 	})
@@ -156,7 +186,7 @@ func TestRenderXrayOutbound_AllSupportedProtocols(t *testing.T) {
 			t.Errorf("protocol = %v, want socks", m5["protocol"])
 		}
 
-		httpsSpec, err := ParseURI("https://alice:pwd@proxy.example.com:443?sni=proxy.example.com&insecure=1")
+		httpsSpec, err := ParseURI("https://alice:pwd@proxy.example.com:443?sni=proxy.example.com")
 		if err != nil {
 			t.Fatalf("ParseURI: %v", err)
 		}
@@ -178,14 +208,26 @@ func TestRenderXrayOutbound_AllSupportedProtocols(t *testing.T) {
 func TestRenderXrayOutbound_UnsupportedSuggestsMihomo(t *testing.T) {
 	ui := base64.RawURLEncoding.EncodeToString([]byte("aes-128-gcm:pwd"))
 	plugin := url.QueryEscape("shadow-tls;host=bing.com;password=stls;version=3")
+	vmessInsecureBody, _ := json.Marshal(map[string]any{
+		"ps": "VM", "add": "vm.ddns.example", "port": 8443,
+		"id": "vm-id", "aid": 0, "net": "ws", "tls": "tls", "allowInsecure": true,
+	})
 	cases := []struct {
-		name string
-		uri  string
+		name      string
+		uri       string
+		wantExtra string
 	}{
-		{"hysteria2", "hy2://user:pass@home.example.com:443?sni=home.example.com"},
-		{"tuic", "tuic://00112233-4455-6677-8899-aabbccddeeff:pwd@home.example.com:443"},
-		{"anytls", "anytls://pwd@home.example.com:443?sni=home.example.com"},
-		{"ss with plugin", "ss://" + ui + "@home.example.com:443?plugin=" + plugin},
+		{"hysteria2", "hy2://user:pass@home.example.com:443?sni=home.example.com", ""},
+		{"tuic", "tuic://00112233-4455-6677-8899-aabbccddeeff:pwd@home.example.com:443", ""},
+		{"anytls", "anytls://pwd@home.example.com:443?sni=home.example.com", ""},
+		{"ss with plugin", "ss://" + ui + "@home.example.com:443?plugin=" + plugin, ""},
+		{"vless tls insecure", "vless://uuid-1@home.example.com:443?security=tls&insecure=1", "allowinsecure"},
+		{"trojan tls insecure", "trojan://tpw@home.example.com:443?insecure=1", "allowinsecure"},
+		{"vmess allowInsecure", "vmess://" + base64.StdEncoding.EncodeToString(vmessInsecureBody), "allowinsecure"},
+		{"https insecure", "https://alice:pwd@proxy.example.com:443?sni=proxy.example.com&insecure=1", "allowinsecure"},
+		{"trojan h2 removed in xray 26", "trojan://tpw@tr.example.com:443?type=h2&path=%2Fh2&host=h2.example.com&sni=tr.example.com", "xhttp"},
+		{"vless http transport removed in xray 26", "vless://uuid-1@home.example.com:443?security=tls&type=http", "xhttp"},
+		{"vless xtls removed in xray 26", "vless://uuid-1@home.example.com:443?security=xtls&flow=xtls-rprx-direct", "xtls"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -197,8 +239,12 @@ func TestRenderXrayOutbound_UnsupportedSuggestsMihomo(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
-			if !strings.Contains(strings.ToLower(err.Error()), "mihomo") {
+			lower := strings.ToLower(err.Error())
+			if !strings.Contains(lower, "mihomo") {
 				t.Errorf("error should suggest mihomo, got: %v", err)
+			}
+			if tc.wantExtra != "" && !strings.Contains(lower, tc.wantExtra) {
+				t.Errorf("error should mention %q, got: %v", tc.wantExtra, err)
 			}
 		})
 	}

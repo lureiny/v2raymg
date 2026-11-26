@@ -11,7 +11,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
@@ -381,6 +383,23 @@ func TestChainCapable_InterfaceAndValidation(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mihomo")
 	assert.NotContains(t, err.Error(), "supersecret")
+
+	// Xray 26.2.6 removed allowInsecure, network=http (h2), and security=xtls.
+	err = exec.ValidateChainURI("vless://11111111-1111-4111-8111-111111111111@hk.example.com:443?security=tls&insecure=1#Insec")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mihomo")
+	assert.NotContains(t, err.Error(), "11111111-1111-4111-8111-111111111111")
+
+	err = exec.ValidateChainURI("trojan://secret-h2@hk.example.com:443?security=tls&type=h2&path=%2Fh2#H2")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mihomo")
+	assert.Contains(t, err.Error(), "xhttp")
+	assert.NotContains(t, err.Error(), "secret-h2")
+
+	err = exec.ValidateChainURI("vless://22222222-2222-4222-8222-222222222222@hk.example.com:443?security=xtls#XTLS")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mihomo")
+	assert.NotContains(t, err.Error(), "22222222-2222-4222-8222-222222222222")
 }
 
 func TestFastAddInbound_ListenDefaultAndChainValidation(t *testing.T) {
@@ -400,9 +419,11 @@ func TestFastAddInbound_ListenDefaultAndChainValidation(t *testing.T) {
 			"protocol": "vmess",
 			"security": "none",
 			"listen":   "0.0.0.0",
+			"port":     int32(36588),
 		}))
 		inPub := mustXrayInbound(t, exec, "direct-pub")
 		assert.Equal(t, "0.0.0.0", inPub.ListenAddr())
+		assert.Equal(t, uint32(36588), inPub.Port(), "int32 port from RPC FastAddInboundReq must be honored")
 	})
 
 	t.Run("chain validation rejects non-127.0.0.1 listen, invalid tag, mismatched fields", func(t *testing.T) {
@@ -423,6 +444,17 @@ func TestFastAddInbound_ListenDefaultAndChainValidation(t *testing.T) {
 			"inbound_type": "chain",
 			"chain_uri":    testChainVLESSURI,
 			"listen":       "0.0.0.0",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "127.0.0.1")
+
+		// Reject explicit non-127.0.0.1 listen_addr on chain inbound.
+		err = exec.FastAddInbound("chain-pub-addr", map[string]any{
+			"protocol":     "vmess",
+			"security":     "none",
+			"inbound_type": "chain",
+			"chain_uri":    testChainVLESSURI,
+			"listen_addr":  "0.0.0.0",
 		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "127.0.0.1")
@@ -1037,4 +1069,257 @@ func TestTwoLayerIsolation_UserEventsReconcileAndSubscription(t *testing.T) {
 func statErr(path string) error {
 	_, err := os.Stat(path)
 	return err
+}
+
+func TestGenerateDefaultConfig_UsesConfiguredGRPCPort(t *testing.T) {
+	h := newChainTestHarness(t, false)
+	cfgPath := filepath.Join(t.TempDir(), "custom-port.json")
+	exec, err := NewExecutor(ExecutorConfig{
+		BinaryPath:     "/nonexistent/xray",
+		ConfigFilePath: cfgPath,
+		ContainerType:  container.ContainerXray,
+		GRPCAPIAddress: "127.0.0.1:54321",
+		PortClaimer:    h.fm,
+		StoreMgr:       h.storeMgr,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { exec.Close() })
+
+	require.NoError(t, exec.EnsureConfig())
+	generatedPath := exec.ConfigFile()
+	t.Cleanup(func() { _ = os.Remove(generatedPath) })
+
+	data, err := os.ReadFile(generatedPath)
+	require.NoError(t, err)
+
+	var cfg map[string]any
+	require.NoError(t, json.Unmarshal(data, &cfg))
+	inbounds, ok := cfg["inbounds"].([]any)
+	require.True(t, ok)
+	foundAPI := false
+	for _, raw := range inbounds {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if m["tag"] == "api" {
+			foundAPI = true
+			assert.Equal(t, float64(54321), m["port"], "api inbound port should match configured GRPCAPIAddress")
+		}
+	}
+	assert.True(t, foundAPI, "generated config must include api inbound")
+}
+
+func TestRestore_EvictsStaleInboundsAndClampsChainListen(t *testing.T) {
+	h := newChainTestHarness(t, true)
+	exec := h.newExecutor(t, "", "")
+
+	require.NoError(t, h.userMgr.AddUser(usermanager.AddUserRequest{
+		Username:    "alice",
+		Password:    "pass123",
+		Role:        "user",
+		TargetGroup: "vip",
+		InboundTags: []string{"vip"},
+	}))
+
+	require.NoError(t, exec.FastAddInbound("a-chain", map[string]any{
+		"protocol":     "vmess",
+		"security":     "none",
+		"port":         36520,
+		"inbound_type": "chain",
+		"chain_uri":    testChainVLESSURI,
+		"access_tags":  []string{"vip"},
+	}))
+	require.NoError(t, exec.FastAddInbound("b-stale", map[string]any{
+		"protocol":    "vless",
+		"security":    "tls",
+		"self_signed": true,
+		"port":        36521,
+	}))
+	exec.reconcileUsers()
+	require.Len(t, h.fm.GetAllRules(), 2)
+
+	staleCerts := slices.Clone(mustXrayInbound(t, exec, "b-stale").tempCertFiles)
+	require.Len(t, staleCerts, 2)
+
+	// Tamper persisted native_json for a-chain to have "listen": "0.0.0.0" to verify Restore clamps it to 127.0.0.1.
+	recA, err := h.storeMgr.InboundStore().Get("a-chain")
+	require.NoError(t, err)
+	var nativeA map[string]any
+	require.NoError(t, json.Unmarshal(recA.NativeJSON, &nativeA))
+	nativeA["listen"] = "0.0.0.0"
+	recA.NativeJSON, err = json.Marshal(nativeA)
+	require.NoError(t, err)
+	require.NoError(t, h.storeMgr.InboundStore().Save(recA))
+
+	// Simulate b-stale failing/disappearing on restart: remove from store and clear xray runtime.
+	require.NoError(t, h.storeMgr.InboundStore().Delete("b-stale"))
+	h.mu.Lock()
+	h.grpcInbounds = make(map[string]*proxyman.InboundHandlerConfig)
+	h.cliOutbounds = make(map[string]json.RawMessage)
+	h.cliRules = make(map[string]string)
+	h.events = nil
+	h.mu.Unlock()
+
+	require.NoError(t, exec.Restore(context.Background()))
+
+	// a-chain restored with listen clamped to 127.0.0.1.
+	xiA := mustXrayInbound(t, exec, "a-chain")
+	assert.Equal(t, "127.0.0.1", xiA.ListenAddr())
+	var restoredNativeA map[string]any
+	require.NoError(t, json.Unmarshal(xiA.nativeJSON, &restoredNativeA))
+	assert.Equal(t, "127.0.0.1", restoredNativeA["listen"])
+
+	// b-stale evicted from memory, forward rules released, temp cert files deleted.
+	assertNoInbound(t, exec, "b-stale")
+	assert.Nil(t, h.fm.GetRule("xray:b-stale:alice"), "stale inbound forward rule must be released")
+	assert.NotNil(t, h.fm.GetRule("xray:a-chain:alice"), "restored inbound forward rule must remain active")
+	for _, f := range staleCerts {
+		assert.True(t, os.IsNotExist(statErr(f)), "stale temp cert file %s should be cleaned", f)
+	}
+
+	// Now simulate a persisted inbound that fails grpc AddInbound during Restore:
+	// Restore must return an error AND evict it from e.inbounds / release its forward rules.
+	h.mu.Lock()
+	h.grpcInbounds = make(map[string]*proxyman.InboundHandlerConfig)
+	h.failAddInbErr = errors.New("grpc rejected inbound")
+	h.mu.Unlock()
+
+	err = exec.Restore(context.Background())
+	require.Error(t, err)
+	assertNoInbound(t, exec, "a-chain")
+	assert.Nil(t, h.fm.GetRule("xray:a-chain:alice"), "failed-to-restore inbound must have forward rule released")
+}
+
+func TestConcurrency_FastAddSameTagChainAndLifecycleOps(t *testing.T) {
+	t.Run("concurrent same-tag FastAddInbound preserves winner routing and outbound", func(t *testing.T) {
+		h := newChainTestHarness(t, true)
+		exec := h.newExecutor(t, "", "")
+
+		// Inject a tiny delay in CLI calls so unsynchronized callers would interleave rmrules/rmo with winner's ado/adrules.
+		baseRunner := h.cliRunner()
+		exec.routingRunner = func(ctx context.Context, binaryPath string, args []string, stdin []byte) ([]byte, error) {
+			time.Sleep(5 * time.Millisecond)
+			return baseRunner(ctx, binaryPath, args, stdin)
+		}
+
+		const workers = 6
+		var successes atomic.Int32
+		var failures atomic.Int32
+		var wg sync.WaitGroup
+		startCh := make(chan struct{})
+
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				<-startCh
+				err := exec.FastAddInbound("race-chain", map[string]any{
+					"protocol":     "vmess",
+					"security":     "none",
+					"port":         36600 + idx,
+					"inbound_type": "chain",
+					"chain_uri":    testChainVLESSURI,
+				})
+				if err == nil {
+					successes.Add(1)
+				} else {
+					failures.Add(1)
+				}
+			}(i)
+		}
+		close(startCh)
+		wg.Wait()
+
+		assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent same-tag FastAddInbound must succeed")
+		assert.Equal(t, int32(workers-1), failures.Load(), "all losing concurrent callers must return error")
+
+		// Winner's inbound, outbound, and routing rule MUST all remain intact (no direct traffic leak).
+		_ = mustXrayInbound(t, exec, "race-chain")
+		h.mu.Lock()
+		_, hasInb := h.grpcInbounds["race-chain"]
+		_, hasOut := h.cliOutbounds["__chain_out__:race-chain"]
+		outTag, hasRule := h.cliRules["__chain_rule__:race-chain"]
+		h.mu.Unlock()
+		assert.True(t, hasInb, "winner grpc inbound missing")
+		assert.True(t, hasOut, "winner chain outbound was clobbered by concurrent loser")
+		assert.True(t, hasRule, "winner chain routing rule was clobbered by concurrent loser")
+		assert.Equal(t, "__chain_out__:race-chain", outTag)
+	})
+
+	t.Run("concurrent FastAddInbound, SetInboundAccessTags, RemoveInboundConfig, and handleUserEvent", func(t *testing.T) {
+		h := newChainTestHarness(t, true)
+		exec := h.newExecutor(t, "", "")
+
+		require.NoError(t, h.userMgr.AddUser(usermanager.AddUserRequest{
+			Username:    "alice",
+			Password:    "pass123",
+			Role:        "user",
+			TargetGroup: "vip",
+			InboundTags: []string{"vip"},
+		}))
+		require.NoError(t, exec.FastAddInbound("shared-chain", map[string]any{
+			"protocol":     "vmess",
+			"security":     "none",
+			"port":         36620,
+			"inbound_type": "chain",
+			"chain_uri":    testChainVLESSURI,
+			"access_tags":  []string{"vip"},
+		}))
+
+		var wg sync.WaitGroup
+		tagSets := [][]string{{"vip"}, {"other"}, {"vip", "other"}, nil}
+
+		// Goroutines mutating tags on shared-chain
+		for g := 0; g < 3; g++ {
+			wg.Add(1)
+			go func(id int) {
+				defer wg.Done()
+				for i := 0; i < 10; i++ {
+					_ = exec.SetInboundAccessTags("shared-chain", tagSets[(id+i)%len(tagSets)])
+					_, _ = exec.GetInboundMeta("shared-chain")
+				}
+			}(g)
+		}
+
+		// Goroutines adding and removing distinct chain inbounds
+		for g := 0; g < 3; g++ {
+			wg.Add(1)
+			go func(id int) {
+				defer wg.Done()
+				tag := fmt.Sprintf("dyn-chain-%d", id)
+				for i := 0; i < 5; i++ {
+					if err := exec.FastAddInbound(tag, map[string]any{
+						"protocol":     "vmess",
+						"security":     "none",
+						"port":         36630 + id*10 + i,
+						"inbound_type": "chain",
+						"chain_uri":    testChainVLESSURI,
+					}); err == nil {
+						_ = exec.RemoveInboundConfig(tag)
+					}
+				}
+			}(g)
+		}
+
+		// Goroutine firing user events concurrently
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 15; i++ {
+				u := h.userMgr.GetUserForSync("alice")
+				if u != nil {
+					_ = exec.handleUserEvent(usermanager.UserEvent{
+						Type:     usermanager.UserEventUpdate,
+						Username: "alice",
+						User:     u,
+					})
+				}
+			}
+		}()
+
+		wg.Wait()
+		// shared-chain should still be healthy and consistent.
+		_ = mustXrayInbound(t, exec, "shared-chain")
+	})
 }

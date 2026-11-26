@@ -2,11 +2,10 @@ package subscription
 
 import (
 	"errors"
-	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/chain"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription/codec"
 )
@@ -157,73 +156,10 @@ func urisToSpecs(uris []string) []contracts.SubscriptionSpec {
 	return specs
 }
 
-// redactURI returns a log-safe form of uri with any credentials stripped.
-// VMess URIs carry credentials inside a base64-encoded JSON body, so we
-// preserve only the scheme; other schemes keep scheme/host/port/fragment
-// but drop the userinfo portion (including base64 userinfo in socks:// and
-// full-string base64 ss:// payloads).
+// redactURI delegates to chain.RedactURI so subscription logging and chain
+// proxy handling share a single fail-closed credential redactor.
 func redactURI(uri string) string {
-	idx := strings.Index(uri, "://")
-	if idx < 0 {
-		return "[unparseable]"
-	}
-	scheme := strings.ToLower(uri[:idx])
-	if scheme == "vmess" {
-		return "vmess://[redacted]"
-	}
-
-	rest := uri[idx+3:]
-	beforeFrag := rest
-	frag := ""
-	if fragIdx := strings.IndexByte(rest, '#'); fragIdx >= 0 {
-		beforeFrag = rest[:fragIdx]
-		frag = rest[fragIdx:]
-	}
-	beforeQuery := beforeFrag
-	if qIdx := strings.IndexByte(beforeFrag, '?'); qIdx >= 0 {
-		beforeQuery = beforeFrag[:qIdx]
-	}
-
-	// If authority contains '@' (even if base64 userinfo contains unescaped '/'),
-	// strip everything up to the last '@' before attempting url.Parse.
-	if atIdx := strings.LastIndexByte(beforeQuery, '@'); atIdx >= 0 {
-		cleaned := scheme + "://" + beforeQuery[atIdx+1:] + frag
-		if u, err := url.Parse(cleaned); err == nil {
-			u.User = nil
-			u.RawQuery = ""
-			return u.String()
-		}
-		return scheme + "://" + strings.TrimSuffix(beforeQuery[atIdx+1:], "/") + frag
-	}
-
-	// Full-string base64 payloads (ss://BASE64, socks://BASE64) have no '@';
-	// attempt typed decode to recover host:port safely without echoing the blob.
-	if scheme == "ss" || scheme == "socks" {
-		if node, err := codec.Decode(uri); err == nil {
-			switch n := node.(type) {
-			case *codec.ShadowsocksNode:
-				return (&url.URL{Scheme: scheme, Host: formatHostPort(n.Host, n.Port), Fragment: n.NodeName}).String()
-			case *codec.SOCKS5Node:
-				return (&url.URL{Scheme: scheme, Host: formatHostPort(n.Host, n.Port), Fragment: n.NodeName}).String()
-			}
-		}
-		return scheme + "://[redacted]"
-	}
-
-	u, err := url.Parse(uri)
-	if err != nil {
-		return scheme + "://[unparseable]"
-	}
-	u.User = nil
-	u.RawQuery = ""
-	return u.String()
-}
-
-func formatHostPort(host string, port uint32) string {
-	if strings.Contains(host, ":") {
-		return "[" + host + "]:" + strconv.FormatUint(uint64(port), 10)
-	}
-	return host + ":" + strconv.FormatUint(uint64(port), 10)
+	return chain.RedactURI(uri)
 }
 
 // nodeToSpec converts a typed codec.Node into a SubscriptionSpec.
@@ -366,11 +302,20 @@ func vmessNodeToSpec(n *codec.VMessNode, raw string) contracts.SubscriptionSpec 
 	if n.GRPCServiceName != "" {
 		ext["grpc_service_name"] = n.GRPCServiceName
 	}
+	if n.HTTPUpgradePath != "" {
+		ext["httpupgrade_path"] = n.HTTPUpgradePath
+	}
+	if n.HTTPUpgradeHost != "" {
+		ext["httpupgrade_host"] = n.HTTPUpgradeHost
+	}
 	if n.XHTTPPath != "" {
 		ext["xhttp_path"] = n.XHTTPPath
 	}
 	if n.XHTTPHost != "" {
 		ext["xhttp_host"] = n.XHTTPHost
+	}
+	if len(n.ALPN) > 0 {
+		ext["alpn"] = n.ALPN
 	}
 	return contracts.SubscriptionSpec{
 		URI:        raw,

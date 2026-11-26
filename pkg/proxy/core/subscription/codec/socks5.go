@@ -2,6 +2,7 @@ package codec
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -136,14 +137,18 @@ func splitValidHostPort(addr string) (string, uint32, error) {
 	}
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
-		return "", 0, fmt.Errorf("invalid host:port %q: %w", addr, err)
+		var addrErr *net.AddrError
+		if errors.As(err, &addrErr) && addrErr.Err != "" {
+			return "", 0, fmt.Errorf("invalid host:port: %s", addrErr.Err)
+		}
+		return "", 0, fmt.Errorf("invalid host:port")
 	}
 	if host == "" {
 		return "", 0, fmt.Errorf("empty host")
 	}
 	port, err := strconv.ParseUint(portStr, 10, 32)
 	if err != nil || port == 0 || port > 65535 {
-		return "", 0, fmt.Errorf("missing or invalid port %q", portStr)
+		return "", 0, fmt.Errorf("missing or invalid port")
 	}
 	return host, uint32(port), nil
 }

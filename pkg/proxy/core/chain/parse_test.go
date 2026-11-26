@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
@@ -139,6 +140,24 @@ func TestParseURI_AllProtocols(t *testing.T) {
 			t.Errorf("https mismatch: %+v", spec)
 		}
 	})
+	t.Run("vmess httpupgrade and alpn", func(t *testing.T) {
+		body, _ := json.Marshal(map[string]any{
+			"ps": "HomeVMHU", "add": "hu.ddns.example", "port": 443,
+			"id": "vm-uuid-hu", "aid": 0, "scy": "auto",
+			"net": "httpupgrade", "path": "/up", "host": "cdn.example.com",
+			"tls": "tls", "sni": "hu.ddns.example", "alpn": "h2,http/1.1",
+		})
+		spec, err := ParseURI("vmess://" + base64.StdEncoding.EncodeToString(body))
+		if err != nil {
+			t.Fatalf("ParseURI: %v", err)
+		}
+		if spec.Transport != "httpupgrade" || spec.HTTPUpgradePath != "/up" || spec.HTTPUpgradeHost != "cdn.example.com" {
+			t.Errorf("vmess httpupgrade mismatch: %+v", spec)
+		}
+		if !reflect.DeepEqual(spec.ALPN, []string{"h2", "http/1.1"}) {
+			t.Errorf("vmess ALPN = %v, want [h2 http/1.1]", spec.ALPN)
+		}
+	})
 }
 
 func TestParseURI_Errors(t *testing.T) {
@@ -151,6 +170,33 @@ func TestParseURI_Errors(t *testing.T) {
 	} {
 		if _, err := ParseURI(raw); err == nil {
 			t.Errorf("ParseURI(%q) expected error", raw)
+		}
+	}
+}
+
+func TestParseURI_ParseErrorsNeverLeakSecrets(t *testing.T) {
+	const secret = "SUPER_SECRET_CRED_9911"
+	malformed := []string{
+		"vless://" + secret + "@host.example.com:443%ZZ",
+		"trojan://" + secret + "@host.example.com:443%ZZ",
+		"hy2://user:" + secret + "@host.example.com:443%ZZ",
+		"tuic://uuid:" + secret + "@host.example.com:443%ZZ",
+		"anytls://" + secret + "@host.example.com:443%ZZ",
+		"snell://" + secret + "@host.example.com:443%ZZ",
+		"http://user:" + secret + "@host.example.com:8080%ZZ",
+		"ss://" + secret + "@host.example.com:8388%ZZ",
+		"socks5://user:" + secret,
+		"socks5://" + secret,
+		secret,
+	}
+	for _, raw := range malformed {
+		_, err := ParseURI(raw)
+		if err == nil {
+			t.Errorf("ParseURI(%q) expected error", raw)
+			continue
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("ParseURI(%q) leaked secret in error: %v", raw, err)
 		}
 	}
 }

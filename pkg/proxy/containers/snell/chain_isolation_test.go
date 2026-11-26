@@ -616,3 +616,119 @@ func TestSnell_StorePersistenceAndRestore(t *testing.T) {
 		t.Fatal("disabled inbound must not allocate rules after restore")
 	}
 }
+
+func TestSnell_CorruptStoreFailClosed(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+	}{
+		{
+			name:  "corrupt access_tags JSON",
+			query: `UPDATE inbounds SET access_tags = '{not-json' WHERE tag = ?`,
+		},
+		{
+			name:  "invalid access_tags value",
+			query: `UPDATE inbounds SET access_tags = '["bad,tag"]' WHERE tag = ?`,
+		},
+		{
+			name:  "corrupt native_json",
+			query: `UPDATE inbounds SET native_json = '{not-json' WHERE tag = ?`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sm, fm, um := newIsolationTestDeps(t, []string{"vip"})
+			if err := um.AddUser(usermanager.AddUserRequest{
+				Username:    "carol",
+				Password:    "pw",
+				TargetGroup: "vip",
+				InboundTags: []string{"vip"},
+			}); err != nil {
+				t.Fatalf("AddUser: %v", err)
+			}
+
+			sc, err := NewSnellContainer(
+				SnellConfig{Listen: "127.0.0.1", Port: 16160, PSK: "testpsk"},
+				WithStoreMgr(sm),
+				WithUserManager(um),
+			)
+			if err != nil {
+				t.Fatalf("NewSnellContainer: %v", err)
+			}
+			if err := sc.FastAddInbound(defaultInboundTag, map[string]any{
+				"access_tags": []string{"vip"},
+			}); err != nil {
+				t.Fatalf("FastAddInbound: %v", err)
+			}
+			if err := sc.Restore(context.Background()); err != nil {
+				t.Fatalf("initial Restore: %v", err)
+			}
+			carolKey := string(contracts.ContainerSnell) + ":" + defaultInboundTag + ":carol"
+			if fm.GetRule(carolKey) == nil {
+				t.Fatal("expected initial rule for carol")
+			}
+
+			if _, err := sm.DB().DB().Exec(tc.query, defaultInboundTag); err != nil {
+				t.Fatalf("corrupt SQL: %v", err)
+			}
+
+			if err := sc.Restore(context.Background()); err == nil {
+				t.Fatalf("expected Restore error for %s", tc.name)
+			}
+			if _, ok := sc.GetInboundMeta(defaultInboundTag); ok {
+				t.Fatal("GetInboundMeta must return false (Fail-Closed) on corrupt persisted record")
+			}
+			if len(sc.ListInboundConfigs()) != 0 {
+				t.Fatal("ListInboundConfigs must be empty (Fail-Closed)")
+			}
+			if fm.GetRule(carolKey) != nil {
+				t.Fatal("existing forward rules must be revoked when Fail-Closed")
+			}
+			subs, err := sc.GetUserSubscriptions(contracts.SubscriptionRequest{
+				User: contracts.UserSpec{Username: "carol"},
+				Host: "example.com",
+			})
+			if err != nil {
+				t.Fatalf("GetUserSubscriptions: %v", err)
+			}
+			if len(subs) != 0 {
+				t.Fatalf("expected 0 subscriptions when Fail-Closed, got %+v", subs)
+			}
+		})
+	}
+}
+
+func TestSnell_UserEventExpireRevokesRule(t *testing.T) {
+	sm, fm, um := newIsolationTestDeps(t, []string{"vip"})
+	sc, err := NewSnellContainer(
+		SnellConfig{Listen: "127.0.0.1", Port: 16160, PSK: "testpsk"},
+		WithStoreMgr(sm),
+		WithUserManager(um),
+	)
+	if err != nil {
+		t.Fatalf("NewSnellContainer: %v", err)
+	}
+	if err := um.AddUser(usermanager.AddUserRequest{
+		Username:    "carol",
+		Password:    "pw",
+		TargetGroup: "vip",
+	}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	if err := sc.Restore(context.Background()); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	carolKey := string(contracts.ContainerSnell) + ":" + defaultInboundTag + ":carol"
+	if fm.GetRule(carolKey) == nil {
+		t.Fatal("expected initial rule for carol")
+	}
+
+	sc.handleUserEvent(usermanager.UserEvent{
+		Type:     usermanager.UserEventExpire,
+		Username: "carol",
+	})
+	if fm.GetRule(carolKey) != nil {
+		t.Fatal("UserEventExpire must immediately revoke carol's forward rule")
+	}
+}

@@ -128,3 +128,36 @@ func TestInboundStore_SaveLoadGetDelete(t *testing.T) {
 		t.Errorf("expected nil after Delete, got %+v", gotDeleted)
 	}
 }
+
+func TestInboundStore_CorruptAccessTagsFailClosed(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "corrupt.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := store.Migrate(db, migrations.All); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	s := store.NewSQLiteInboundStore(db)
+
+	if err := s.Save(&store.InboundRecord{
+		Tag:           "private-in",
+		ContainerType: "xray",
+		NativeJSON:    []byte(`{"tag":"private-in"}`),
+		AccessTags:    []string{"vip"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	for _, badJSON := range []string{"{not-json", "123", `"vip"`, "null", `["vip"`} {
+		if _, err := db.DB().Exec(`UPDATE inbounds SET access_tags = ? WHERE tag = 'private-in'`, badJSON); err != nil {
+			t.Fatalf("UPDATE access_tags=%q: %v", badJSON, err)
+		}
+		if rec, err := s.Get("private-in"); err == nil || rec != nil {
+			t.Errorf("Get with corrupt access_tags=%q expected fail-closed error, got rec=%+v err=%v", badJSON, rec, err)
+		}
+		if recs, err := s.Load(); err == nil || len(recs) > 0 {
+			t.Errorf("Load with corrupt access_tags=%q expected fail-closed error, got recs=%d err=%v", badJSON, len(recs), err)
+		}
+	}
+}

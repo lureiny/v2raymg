@@ -101,7 +101,7 @@ func DecodeShadowsocks(uri string) (*ShadowsocksNode, error) {
 
 	u, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("ss: parse URI: %w", err)
+		return nil, fmt.Errorf("ss: parse URI: %w", sanitizeURLError(err))
 	}
 	if u.Scheme != "ss" {
 		return nil, fmt.Errorf("ss: unexpected scheme %q", u.Scheme)

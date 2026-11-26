@@ -406,6 +406,128 @@ func TestUpdater_Update_RestoresAfterRestart(t *testing.T) {
 	}
 }
 
+type mockReadyRestorableProcessCtrl struct {
+	mockRestorableProcessCtrl
+	waitReadyCalls int
+	waitReadyErr   error
+}
+
+func (m *mockReadyRestorableProcessCtrl) WaitForAPIReady(ctx context.Context) error {
+	m.waitReadyCalls++
+	m.events = append(m.events, "wait_ready")
+	return m.waitReadyErr
+}
+
+func TestUpdater_Update_WaitsForAPIReadyAndSurfacesRestoreErrors(t *testing.T) {
+	newUpdater := func(t *testing.T, ctrl ProcessController) *Updater {
+		t.Helper()
+		tmpDir := t.TempDir()
+		binPath := filepath.Join(tmpDir, "xray")
+		if err := os.WriteFile(binPath, []byte("old"), 0755); err != nil {
+			t.Fatalf("write binary: %v", err)
+		}
+		dlDir := filepath.Join(tmpDir, "dl")
+		if err := os.MkdirAll(dlDir, 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		return &Updater{
+			releaseClient: &mockReleaseClient{
+				release: &tools.GitHubRelease{
+					TagName: "v26.2.6",
+					Assets:  []tools.GitHubAsset{{Name: "Xray-linux-64.zip", URL: "http://example.com/x.zip"}},
+				},
+			},
+			downloader: &mockZipDownloader{
+				binaryContent: []byte("new-xray"),
+				binName:       "xray",
+			},
+			swapper:     &mockSwapper{},
+			processCtrl: ctrl,
+			config: UpdaterConfig{
+				BinaryPath:  binPath,
+				DownloadDir: dlDir,
+				AssetName:   "Xray-linux-64.zip",
+				BinaryName:  "xray",
+			},
+		}
+	}
+
+	t.Run("waits for API readiness before calling Restore", func(t *testing.T) {
+		ctrl := &mockReadyRestorableProcessCtrl{
+			mockRestorableProcessCtrl: mockRestorableProcessCtrl{isRunning: true},
+		}
+		u := newUpdater(t, ctrl)
+		res, err := u.Update(context.Background(), container.UpdateRequest{
+			TargetTag:     "v26.2.6",
+			RestartPolicy: container.RestartPolicyAlways,
+		})
+		if err != nil {
+			t.Fatalf("Update failed: %v", err)
+		}
+		if !res.Restarted {
+			t.Fatal("expected Restarted=true")
+		}
+		want := []string{"stop", "start", "wait_ready", "restore"}
+		if len(ctrl.events) != len(want) {
+			t.Fatalf("events = %v, want %v", ctrl.events, want)
+		}
+		for i := range want {
+			if ctrl.events[i] != want[i] {
+				t.Fatalf("events = %v, want %v", ctrl.events, want)
+			}
+		}
+	})
+
+	t.Run("WaitForAPIReady failure surfaces stage=restore error and skips Restore", func(t *testing.T) {
+		ctrl := &mockReadyRestorableProcessCtrl{
+			mockRestorableProcessCtrl: mockRestorableProcessCtrl{isRunning: true},
+			waitReadyErr:              errors.New("grpc not ready"),
+		}
+		u := newUpdater(t, ctrl)
+		res, err := u.Update(context.Background(), container.UpdateRequest{
+			TargetTag:     "v26.2.6",
+			RestartPolicy: container.RestartPolicyAlways,
+		})
+		if err == nil {
+			t.Fatal("expected error when WaitForAPIReady fails")
+		}
+		var updateErr *ErrUpdateFailed
+		if !errors.As(err, &updateErr) || updateErr.Stage != "restore" {
+			t.Fatalf("expected ErrUpdateFailed{Stage: restore}, got %v", err)
+		}
+		if !res.Restarted {
+			t.Fatal("expected Restarted=true when process already restarted")
+		}
+		if ctrl.restoreCalls != 0 {
+			t.Fatalf("Restore must not be called when WaitForAPIReady fails, got %d calls", ctrl.restoreCalls)
+		}
+	})
+
+	t.Run("Restore failure surfaces stage=restore error", func(t *testing.T) {
+		ctrl := &mockReadyRestorableProcessCtrl{
+			mockRestorableProcessCtrl: mockRestorableProcessCtrl{
+				isRunning:  true,
+				restoreErr: errors.New("replay failed"),
+			},
+		}
+		u := newUpdater(t, ctrl)
+		res, err := u.Update(context.Background(), container.UpdateRequest{
+			TargetTag:     "v26.2.6",
+			RestartPolicy: container.RestartPolicyAlways,
+		})
+		if err == nil {
+			t.Fatal("expected error when Restore fails")
+		}
+		var updateErr *ErrUpdateFailed
+		if !errors.As(err, &updateErr) || updateErr.Stage != "restore" {
+			t.Fatalf("expected ErrUpdateFailed{Stage: restore}, got %v", err)
+		}
+		if !res.Restarted {
+			t.Fatal("expected Restarted=true")
+		}
+	})
+}
+
 func TestUpdater_Update_ChecksumVerified_True(t *testing.T) {
 	// Test with no checksum name - should result in checksumVerified=false
 	// (can't verify without checksum file)

@@ -47,7 +47,7 @@ func (n *SnellNode) Encode() string {
 func DecodeSnell(uri string) (*SnellNode, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("snell: parse URI: %w", err)
+		return nil, fmt.Errorf("snell: parse URI: %w", sanitizeURLError(err))
 	}
 	if u.Scheme != "snell" {
 		return nil, fmt.Errorf("snell: unexpected scheme %q", u.Scheme)

@@ -125,7 +125,7 @@ func (n *TrojanNode) Encode() string {
 func DecodeTrojan(uri string) (*TrojanNode, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("trojan: parse URI: %w", err)
+		return nil, fmt.Errorf("trojan: parse URI: %w", sanitizeURLError(err))
 	}
 	if u.Scheme != "trojan" {
 		return nil, fmt.Errorf("trojan: unexpected scheme %q", u.Scheme)

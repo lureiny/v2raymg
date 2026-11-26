@@ -75,9 +75,9 @@ func NewForwardManager(opts ...ForwardManagerOption) (*DefaultForwardManager, er
 
 // managedRule is an active forwarding rule with its relay and traffic counter.
 type managedRule struct {
-	rule              ForwardRule
-	relay             Relay
-	counter           *TrafficCounter
+	rule             ForwardRule
+	relay            Relay
+	counter          *TrafficCounter
 	userBandwidthLim *userBandwidthLimiter // shared per-user limiter, nil if no user limit set
 	clientLimiter    ClientLimiter         // remote IP based client limiter, nil if no client limit set
 }
@@ -95,14 +95,14 @@ type managedRule struct {
 //   - User-level client limiters (userClientLimiters) are shared across all rules of the same user.
 //   - User-level client limit configs (userClientLimitConfigs) store config for rules without active limiter.
 type DefaultForwardManager struct {
-	mu           sync.RWMutex
-	allocator    *PortAllocator
-	traffic      *TrafficRegistry
-	rules        map[string]*managedRule // key = ruleKey
-	closed       bool
-	userBandwidth         map[string]*userBandwidthLimiter // key = username
-	userClientLimiters    map[string]ClientLimiter       // key = username, active limiter instances
-	userClientLimitConfigs map[string]ClientLimitConfig  // key = username, stored config (may have no active limiter)
+	mu                     sync.RWMutex
+	allocator              *PortAllocator
+	traffic                *TrafficRegistry
+	rules                  map[string]*managedRule // key = ruleKey
+	closed                 bool
+	userBandwidth          map[string]*userBandwidthLimiter // key = username
+	userClientLimiters     map[string]ClientLimiter         // key = username, active limiter instances
+	userClientLimitConfigs map[string]ClientLimitConfig     // key = username, stored config (may have no active limiter)
 	// defaultListenStack is the fallback IP stack for wildcard listeners when a
 	// rule does not set ForwardRule.ListenStack: "dual" (default), "ipv4", or "ipv6".
 	defaultListenStack string
@@ -271,7 +271,7 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 	}
 	config := ClientLimitConfig{
 		MaxClients:              effectiveMaxClients,
-		RecycleDelaySec:        recycleDelay,
+		RecycleDelaySec:         recycleDelay,
 		SingleDirectionDrainSec: drainSec,
 	}
 	// An explicit `rule.MaxClients < 0` signals "this rule wants passthrough"
@@ -408,11 +408,11 @@ func (m *DefaultForwardManager) AddRule(rule ForwardRule) (*ForwardRule, error) 
 	}
 
 	m.rules[key] = &managedRule{
-		rule:              rule,
-		relay:             relay,
-		counter:           counter,
-		userBandwidthLim:  userBandwidthLim,
-		clientLimiter:     clientLimiter,
+		rule:             rule,
+		relay:            relay,
+		counter:          counter,
+		userBandwidthLim: userBandwidthLim,
+		clientLimiter:    clientLimiter,
 	}
 
 	log.Info("[ForwardManager] rule added", "key", key, "listen", relay.ListenAddr(), "target", rule.TargetAddr, "user", rule.Username)
@@ -571,16 +571,16 @@ func (m *DefaultForwardManager) GetAllTrafficRecords(reset bool) []ForwardTraffi
 	for key, mr := range m.rules {
 		upload, download, active := mr.counter.Snapshot(reset)
 		records = append(records, ForwardTrafficRecord{
-			RuleKey:            key,
-			Username:           mr.rule.Username,
-			ContainerType:      mr.rule.ContainerType,
-			InboundTag:         mr.rule.InboundTag,
-			Protocol:           mr.rule.Protocol,
-			ListenPort:         mr.rule.ListenPort,
-			TargetAddr:         mr.rule.TargetAddr,
-			UplinkBytes:        upload,
-			DownlinkBytes:      download,
-			ActiveConnections:  active,
+			RuleKey:           key,
+			Username:          mr.rule.Username,
+			ContainerType:     mr.rule.ContainerType,
+			InboundTag:        mr.rule.InboundTag,
+			Protocol:          mr.rule.Protocol,
+			ListenPort:        mr.rule.ListenPort,
+			TargetAddr:        mr.rule.TargetAddr,
+			UplinkBytes:       upload,
+			DownlinkBytes:     download,
+			ActiveConnections: active,
 		})
 	}
 
@@ -600,15 +600,15 @@ func (m *DefaultForwardManager) QueryTrafficStats(query TrafficQuery) TrafficQue
 		upload, download, active := mr.counter.Snapshot(query.Reset)
 
 		record := ForwardTrafficRecord{
-			RuleKey:            key,
-			Username:           mr.rule.Username,
-			ContainerType:      mr.rule.ContainerType,
-			InboundTag:         mr.rule.InboundTag,
-			ListenPort:         mr.rule.ListenPort,
-			TargetAddr:         mr.rule.TargetAddr,
-			UplinkBytes:        upload,
-			DownlinkBytes:      download,
-			ActiveConnections:  active,
+			RuleKey:           key,
+			Username:          mr.rule.Username,
+			ContainerType:     mr.rule.ContainerType,
+			InboundTag:        mr.rule.InboundTag,
+			ListenPort:        mr.rule.ListenPort,
+			TargetAddr:        mr.rule.TargetAddr,
+			UplinkBytes:       upload,
+			DownlinkBytes:     download,
+			ActiveConnections: active,
 		}
 
 		// Apply filters
@@ -959,6 +959,22 @@ func (m *DefaultForwardManager) AllocateSpecificPort(port uint32) error {
 // affect relays or rules.
 func (m *DefaultForwardManager) ReleasePort(port uint32) {
 	m.allocator.Release(port)
+}
+
+// IsPortAllocated reports whether port is currently allocated or reserved in
+// the shared PortAllocator (covering forward rules, claimed container inbound
+// ports, and reserved management ports).
+func (m *DefaultForwardManager) IsPortAllocated(port uint32) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	alloc := m.allocator
+	m.mu.RUnlock()
+	if alloc == nil {
+		return false
+	}
+	return alloc.IsAllocated(port) || alloc.IsReserved(port)
 }
 
 // Close stops all relays and releases all ports.

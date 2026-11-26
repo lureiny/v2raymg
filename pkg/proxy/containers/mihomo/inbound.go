@@ -788,7 +788,7 @@ func (i *MihomoInbound) ReleaseAllUserPorts() error {
 	if i.userMgr == nil {
 		return nil
 	}
-	if err := i.userMgr.ReleaseInboundPorts(i.Tag()); err != nil {
+	if err := i.userMgr.ReleaseInboundPorts(i.Tag(), i.Port()); err != nil {
 		return err
 	}
 	i.addedUsersMu.Lock()

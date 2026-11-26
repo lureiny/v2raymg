@@ -61,19 +61,24 @@ func (handler *AuthHysteria2) handlerFunc(c *gin.Context) {
 		accessTags []string
 		checker    InboundAccessChecker
 	)
-	if ac, ok := ul.(InboundAccessChecker); ok {
-		if cm := srv.getContainerMgr(); cm != nil {
-			if hyContainer, ok := cm.Get(contracts.ContainerHysteria); ok {
-				if mp, ok := hyContainer.(container.InboundMetaProvider); ok {
+	if cm := srv.getContainerMgr(); cm != nil {
+		if hyContainer, ok := cm.Get(contracts.ContainerHysteria); ok {
+			if mp, ok := hyContainer.(container.InboundMetaProvider); ok {
+				meta, found := mp.GetInboundMeta("hysteria-default")
+				if !found {
+					if inbs := hyContainer.ListInboundConfigs(); len(inbs) > 0 {
+						meta, found = mp.GetInboundMeta(inbs[0].Tag())
+					}
+				}
+				if !found {
+					// hysteria-default is disabled (no active inbound metadata) -> Fail-Closed.
+					c.JSON(403, gin.H{"ok": false})
+					return
+				}
+				if ac, ok := ul.(InboundAccessChecker); ok {
 					hasGate = true
 					checker = ac
-					if meta, found := mp.GetInboundMeta("hysteria-default"); found {
-						accessTags = meta.AccessTags
-					} else if inbs := hyContainer.ListInboundConfigs(); len(inbs) > 0 {
-						if meta, found := mp.GetInboundMeta(inbs[0].Tag()); found {
-							accessTags = meta.AccessTags
-						}
-					}
+					accessTags = meta.AccessTags
 				}
 			}
 		}

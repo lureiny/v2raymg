@@ -787,3 +787,295 @@ func TestInboundTagUniqueness_PersistedStoreDisabledContainer(t *testing.T) {
 	assert.False(t, exists)
 	assert.Empty(t, ct)
 }
+
+func TestFastAddInbound_RealForwardManagerBlocksClaimedAndReservedPorts(t *testing.T) {
+	fm, err := forward.NewDefaultForwardManager(forward.PortAllocatorConfig{
+		MinPort:  38000,
+		MaxPort:  38099,
+		Reserved: []uint32{54321, 19090},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = fm.Close() })
+
+	// Claim a container port (not a forward rule) and also add a live forward rule.
+	require.NoError(t, fm.AllocateSpecificPort(38050))
+	t.Cleanup(func() { fm.ReleasePort(38050) })
+
+	rule, err := fm.AddRule(forward.ForwardRule{
+		Username:      "alice",
+		ContainerType: contracts.ContainerXray,
+		InboundTag:    "existing",
+		TargetAddr:    "127.0.0.1:10001",
+		Network:       "tcp",
+	})
+	require.NoError(t, err)
+
+	xray := &chainContainerStub{
+		captureContainer: captureContainer{
+			kind:     contracts.ContainerXray,
+			inbounds: []inbound.Inbound{inbound.NewDefaultInbound("existing", contracts.ProtocolVLess, 38051)},
+		},
+		supportsChain: true,
+	}
+	mgr := container.NewContainerMgr(nil, container.BuildOptions{})
+	mgr.SetForTest(contracts.ContainerXray, xray)
+
+	um := usermanager.NewUserManager(fm, "node-1")
+	certs := &certSpyMgr{certDir: t.TempDir()}
+	srv := &EndNodeServer{
+		cfg: appconfig.EndNodeConfig{
+			NodeConfig: appconfig.NodeConfig{
+				RpcPort:   50051,
+				ProxyHost: "node1.example.com",
+			},
+			HttpPort:                 8080,
+			AllowLoopbackChainTarget: true,
+		},
+		containerMgr: mgr,
+		certManager:  certs,
+		userMgr:      um,
+	}
+
+	// Claimed container port (38050), live forward port, custom reserved management ports (54321, 19090),
+	// and active container inbound port (38051) must all be rejected before cert acquisition.
+	for _, port := range []uint32{38050, rule.ListenPort, 54321, 19090, 38051} {
+		rsp, rpcErr := srv.FastAddInbound(context.Background(), &proto.FastAddInboundReq{
+			InboundBuilderType: proto.BuilderType_VLESSSettingBuilderType,
+			Domain:             "blocked.example.com",
+			Security:           "tls",
+			InboundType:        "chain",
+			ChainUri:           fmt.Sprintf("socks5://127.0.0.1:%d", port),
+		})
+		require.NoError(t, rpcErr)
+		assert.Equal(t, int32(1020), rsp.Code, "port %d must be rejected by DefaultForwardManager/container policy", port)
+		assert.Contains(t, rsp.Msg, "reserved or allocated port")
+		assert.Empty(t, certs.obtainCalls, "port %d must be rejected before ObtainNewCert", port)
+	}
+
+	// Unallocated external loopback port succeeds.
+	okRsp, rpcErr := srv.FastAddInbound(context.Background(), &proto.FastAddInboundReq{
+		InboundBuilderType: proto.BuilderType_VLESSSettingBuilderType,
+		Domain:             "ok.example.com",
+		Security:           "tls",
+		InboundType:        "chain",
+		ChainUri:           "socks5://127.0.0.1:7890",
+	})
+	require.NoError(t, rpcErr)
+	assert.Equal(t, int32(0), okRsp.Code, "unexpected error: %s", okRsp.Msg)
+}
+
+func TestFastAddInbound_ModeAReEnableAndListenAddrLock(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "modea.db")
+	sm, err := store.NewStoreManager(dsn, migrations.All)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sm.Close() })
+
+	// Seed disabled hysteria-default and snell-default, plus an enabled xray record.
+	require.NoError(t, sm.InboundStore().Save(&store.InboundRecord{
+		Tag:           "hysteria-default",
+		ContainerType: string(contracts.ContainerHysteria),
+		CertSource:    "none",
+		NativeJSON:    []byte(`{"enabled":false,"port":9443}`),
+		InboundType:   "direct",
+	}))
+	require.NoError(t, sm.InboundStore().Save(&store.InboundRecord{
+		Tag:           "snell-default",
+		ContainerType: string(contracts.ContainerSnell),
+		CertSource:    "none",
+		NativeJSON:    []byte(`{"enabled":false,"port":16160}`),
+		InboundType:   "direct",
+	}))
+	require.NoError(t, sm.InboundStore().Save(&store.InboundRecord{
+		Tag:           "xray-enabled",
+		ContainerType: string(contracts.ContainerXray),
+		CertSource:    "none",
+		NativeJSON:    []byte(`{"tag":"xray-enabled","port":10001}`),
+		InboundType:   "direct",
+	}))
+
+	hysteriaStub := &chainContainerStub{
+		captureContainer: captureContainer{kind: contracts.ContainerHysteria},
+		supportsChain:    false,
+	}
+	snellStub := &chainContainerStub{
+		captureContainer: captureContainer{kind: contracts.ContainerSnell},
+		supportsChain:    false,
+	}
+	xrayStub := &chainContainerStub{
+		captureContainer: captureContainer{kind: contracts.ContainerXray},
+		supportsChain:    true,
+	}
+	mgr := container.NewContainerMgr(nil, container.BuildOptions{})
+	mgr.SetForTest(contracts.ContainerHysteria, hysteriaStub)
+	mgr.SetForTest(contracts.ContainerSnell, snellStub)
+	mgr.SetForTest(contracts.ContainerXray, xrayStub)
+
+	certs := &certSpyMgr{certDir: t.TempDir()}
+	srv := &EndNodeServer{
+		cfg:          appconfig.EndNodeConfig{AllowLoopbackChainTarget: true},
+		containerMgr: mgr,
+		certManager:  certs,
+	}
+	srv.SetInboundStore(sm.InboundStore())
+
+	// 1. Same-container direct FastAddInbound re-enables disabled hysteria-default and snell-default.
+	rsp, err := srv.FastAddInbound(context.Background(), &proto.FastAddInboundReq{
+		InboundBuilderType: proto.BuilderType_Hysteria2SettingBuilderType,
+		ContainerType:      "hysteria",
+		Tag:                "hysteria-default",
+		Domain:             "hy2.example.com",
+		InboundType:        "direct",
+		AccessTags:         []string{"vip"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), rsp.Code, "disabled hysteria-default should be re-enableable: %s", rsp.Msg)
+	assert.Equal(t, "hysteria-default", hysteriaStub.lastTag)
+
+	// Re-enabling a disabled Mode A inbound as chain must still be rejected.
+	rsp, err = srv.FastAddInbound(context.Background(), &proto.FastAddInboundReq{
+		InboundBuilderType: proto.BuilderType_Hysteria2SettingBuilderType,
+		ContainerType:      "hysteria",
+		Tag:                "hysteria-default",
+		Domain:             "hy2.example.com",
+		InboundType:        "chain",
+		ChainUri:           "socks5://127.0.0.1:7890",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1020), rsp.Code)
+
+	rsp, err = srv.FastAddInbound(context.Background(), &proto.FastAddInboundReq{
+		InboundBuilderType: proto.BuilderType_VLESSSettingBuilderType,
+		ContainerType:      "snell",
+		Tag:                "snell-default",
+		Security:           "none",
+		InboundType:        "direct",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), rsp.Code, "disabled snell-default should be re-enableable: %s", rsp.Msg)
+	assert.Equal(t, "snell-default", snellStub.lastTag)
+
+	// 2. Cross-container collision with disabled hysteria-default is still REJECTED.
+	rsp, err = srv.FastAddInbound(context.Background(), &proto.FastAddInboundReq{
+		InboundBuilderType: proto.BuilderType_VLESSSettingBuilderType,
+		ContainerType:      "xray",
+		Tag:                "hysteria-default",
+		Security:           "none",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1020), rsp.Code)
+	assert.Contains(t, rsp.Msg, "already exists in container hysteria")
+
+	// 3. Enabled record in same container is still REJECTED.
+	rsp, err = srv.FastAddInbound(context.Background(), &proto.FastAddInboundReq{
+		InboundBuilderType: proto.BuilderType_VLESSSettingBuilderType,
+		ContainerType:      "xray",
+		Tag:                "xray-enabled",
+		Security:           "none",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1020), rsp.Code)
+	assert.Contains(t, rsp.Msg, "already exists in container xray")
+
+	// 4. Chain inbound rejects non-loopback extra_params["listen_addr"] before ObtainNewCert,
+	//    and valid chain locks both listen and listen_addr to 127.0.0.1.
+	certs.obtainCalls = nil
+	rsp, err = srv.FastAddInbound(context.Background(), &proto.FastAddInboundReq{
+		InboundBuilderType: proto.BuilderType_VLESSSettingBuilderType,
+		ContainerType:      "xray",
+		Domain:             "listenaddr.example.com",
+		Security:           "tls",
+		InboundType:        "chain",
+		ChainUri:           "socks5://127.0.0.1:7890",
+		ExtraParams:        map[string]string{"listen_addr": "0.0.0.0"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1020), rsp.Code)
+	assert.Contains(t, rsp.Msg, "127.0.0.1")
+	assert.Empty(t, certs.obtainCalls, "ObtainNewCert must not run when listen_addr is invalid")
+
+	rsp, err = srv.FastAddInbound(context.Background(), &proto.FastAddInboundReq{
+		InboundBuilderType: proto.BuilderType_VLESSSettingBuilderType,
+		ContainerType:      "xray",
+		Domain:             "listenaddr-ok.example.com",
+		Security:           "tls",
+		InboundType:        "chain",
+		ChainUri:           "socks5://127.0.0.1:7890",
+		ExtraParams:        map[string]string{"listen_addr": "127.0.0.1"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), rsp.Code, "unexpected error: %s", rsp.Msg)
+	assert.Equal(t, "127.0.0.1", xrayStub.lastParams["listen"])
+	assert.Equal(t, "127.0.0.1", xrayStub.lastParams["listen_addr"])
+}
+
+func TestUpdateUsers_ErrorReturnsNonZeroCode(t *testing.T) {
+	um := usermanager.NewUserManager(nil, "node-1")
+	srv := &EndNodeServer{userMgr: um}
+
+	// Updating a non-existent user must return non-zero Code so RPC clients / HTTP / MCP propagate errors.
+	rsp, err := srv.UpdateUsers(context.Background(), &proto.UserOpReq{
+		Users: []*proto.User{
+			{Name: "does-not-exist", Role: "admin"},
+		},
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, int32(0), rsp.GetCode(), "UpdateUsers must set non-zero Code on error")
+	assert.NotEmpty(t, rsp.GetMsg())
+
+	// Also verify invalid inbound_tags returns non-zero Code even for an existing user.
+	require.NoError(t, um.AddUser(usermanager.AddUserRequest{Username: "alice", Password: "pw"}))
+	rsp2, err := srv.UpdateUsers(context.Background(), &proto.UserOpReq{
+		Users: []*proto.User{
+			{Name: "alice", UpdateInboundTags: true, InboundTags: []string{"bad,tag"}},
+		},
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, int32(0), rsp2.GetCode(), "UpdateUsers must set non-zero Code on invalid inbound_tags")
+	assert.NotEmpty(t, rsp2.GetMsg())
+}
+
+func TestGetProfile_SynchronousLayer2VisibilityFilter(t *testing.T) {
+	ngs := newTestNGStore("vip")
+	fm := &chainForwardMgrStub{
+		rules: []*forward.ForwardRule{
+			{Username: "alice", InboundTag: "direct-pub", ContainerType: contracts.ContainerXray, ListenPort: 10001},
+			{Username: "alice", InboundTag: "chain-vip", ContainerType: contracts.ContainerXray, ListenPort: 10002},
+		},
+	}
+	um := usermanager.NewUserManager(fm, "node-1")
+	um.EnableClusterSync("default", ngs)
+
+	require.NoError(t, um.AddUser(usermanager.AddUserRequest{
+		Username:    "alice",
+		Password:    "pw",
+		TargetGroup: "vip",
+		InboundTags: nil, // lacks "vip" tag even though stale forward rule still exists in fm
+	}))
+
+	xray := &chainContainerStub{
+		captureContainer: captureContainer{kind: contracts.ContainerXray},
+		metas: map[string]contracts.InboundMeta{
+			"direct-pub": {InboundType: contracts.InboundTypeDirect, AccessTags: nil},
+			"chain-vip":  {InboundType: contracts.InboundTypeChain, AccessTags: []string{"vip"}},
+		},
+	}
+	mgr := container.NewContainerMgr(nil, container.BuildOptions{})
+	mgr.SetForTest(contracts.ContainerXray, xray)
+
+	srv := &EndNodeServer{
+		userMgr:      um,
+		containerMgr: mgr,
+	}
+
+	prof, err := srv.GetProfile(context.Background(), &proto.GetProfileReq{Username: "alice"})
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), prof.GetCode())
+	require.Len(t, prof.GetInbounds(), 1, "GetProfile must synchronously exclude Layer-2 unauthorized inbound")
+	assert.Equal(t, "direct-pub", prof.GetInbounds()[0].GetTag())
+
+	// Granting "vip" immediately exposes chain-vip in GetProfile.
+	require.NoError(t, um.SetUserInboundTags("alice", []string{"vip"}))
+	prof2, err := srv.GetProfile(context.Background(), &proto.GetProfileReq{Username: "alice"})
+	require.NoError(t, err)
+	assert.Len(t, prof2.GetInbounds(), 2)
+}

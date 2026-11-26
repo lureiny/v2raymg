@@ -16,6 +16,7 @@ package codec
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
@@ -43,7 +44,7 @@ type Node interface {
 func Decode(uri string) (Node, error) {
 	idx := strings.Index(uri, "://")
 	if idx < 0 {
-		return nil, fmt.Errorf("%w: missing scheme in %q", ErrUnsupportedScheme, uri)
+		return nil, fmt.Errorf("%w: missing scheme", ErrUnsupportedScheme)
 	}
 	scheme := strings.ToLower(uri[:idx])
 	dec, ok := decoders[scheme]
@@ -76,4 +77,17 @@ func hostPort(host string, port uint32) string {
 		return fmt.Sprintf("[%s]:%d", host, port)
 	}
 	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// sanitizeURLError strips the raw URL/authority from *url.Error so credentials
+// inside malformed URIs never leak into error strings, RPC responses, or logs.
+func sanitizeURLError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		return ue.Err
+	}
+	return err
 }

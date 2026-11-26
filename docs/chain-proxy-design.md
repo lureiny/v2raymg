@@ -177,15 +177,15 @@ flowchart TD
    - **新增 `socks5.go`**：支持 `socks5://`、`socks://`、`socks5h://`，同时兼容标准明文 `socks5://user:pass@host:port` 与 v2rayN `socks://BASE64(user:pass)@[ipv6]:port` 格式（家宽光猫/软路由最常见轻量落地协议）。
    - **新增 `http.go`**：支持 `http://`、`https://` 代理 URI（含 Basic Auth、`?sni=`、`?insecure=1`）。
    - **补齐存量解码器 5 处家宽高频缺口**：
-     - [vmess.go](file:///workspace/v2raymg/pkg/proxy/core/subscription/codec/vmess.go#L139)：兼容 v2rayN 导出的数字/字符串 `"allowInsecure": 1|"1"|true`（家宽无 80/443 公网端口普遍用自签 TLS）及 `"scy"` 加密方式；
-     - [hysteria2.go](file:///workspace/v2raymg/pkg/proxy/core/subscription/codec/hysteria2.go#L90-L92)：完整保留 `hy2://user:pass@host:port` 中的 `:pass`（原实现只取 `Username()` 截断了 userpass 认证），并解析家宽防运营商 UDP QoS 最常用的端口跳跃参数 `?mport=20000-50000` 与 `?pinSHA256=`；
+     - [vmess.go](file:///workspace/v2raymg/pkg/proxy/core/subscription/codec/vmess.go#L139)：兼容 v2rayN 导出的数字/字符串 `"allowInsecure": 1|"1"|true`（家宽无 80/443 公网端口普遍用自签 TLS，支持 `mihomo` 出站）、`"scy"` 加密方式、`"alpn"` 以及 `net=httpupgrade` 的 `path`/`host`；
+     - [hysteria2.go](file:///workspace/v2raymg/pkg/proxy/core/subscription/codec/hysteria2.go#L90-L92)：完整保留 `hy2://user:pass@host:port` 中的 `:pass`（原实现只取 `Username()` 截断了 userpass 认证），并解析家宽防运营商 UDP QoS 最常用的端口跳跃参数 `?mport=20000-50000` 与 `?pinSHA256=`（渲染 `mihomo` `fingerprint` 时自动剥离可选大小写无关的 `sha256:` 前缀）；
      - [shadowsocks.go](file:///workspace/v2raymg/pkg/proxy/core/subscription/codec/shadowsocks.go#L73-L93)：兼容 OpenWrt PassWall/SSRPlus 导出的整串 Base64 `ss://BASE64(method:pass@host:port)#tag`，完整保留 `shadow-tls` 插件密码与版本；
      - [vless.go](file:///workspace/v2raymg/pkg/proxy/core/subscription/codec/vless.go#L162-L172) / [trojan.go](file:///workspace/v2raymg/pkg/proxy/core/subscription/codec/trojan.go#L149-L155)：补齐 `type=httpupgrade` / `type=h2` 的 `path`、`host` 及 VLESS `encryption` 参数。
 2. **新建 `pkg/proxy/core/chain/` 包**：
-   - `ParseAndValidate(rawURI string, policy AddressPolicy) (*OutboundSpec, error)`：调用 `codec.Decode` 产出协议无关的 `OutboundSpec`，执行端口范围、防自环及 SSRF 安全策略校验，并提取 URI `#fragment` 作为默认 `Remark`；
+   - `ParseAndValidate(rawURI string, policy AddressPolicy) (*OutboundSpec, error)`：调用 `codec.Decode` 产出协议无关的 `OutboundSpec`，执行端口范围、防自环及 SSRF 安全策略校验（含 `0.0.0.0/8` 及非标准/尾部点号 IPv4 字面量拦截），并提取 URI `#fragment` 作为默认 `Remark`；
    - `RenderMihomoProxy(proxyName string, spec *OutboundSpec) (map[string]any, error)`：渲染 `mihomo` `proxies[]` 字典；
-   - `RenderXrayOutbound(outboundTag string, spec *OutboundSpec) ([]byte, error)`：渲染 `xray` 原生 Outbound JSON（`domainStrategy: "AsIs"`）；
-   - `RedactURI(rawURI string) string`：统一剥离所有协议（含 `vmess://` 整串 JSON 与 `socks://` Base64 userinfo）的密钥信息供日志与查询脱敏使用。
+   - `RenderXrayOutbound(outboundTag string, spec *OutboundSpec) ([]byte, error)`：渲染 `xray` 原生 Outbound JSON（使用 Xray 26+ 真实生效字段 `"targetStrategy": "AsIs"`；由于 Xray 26.2.6 已移除 `allowInsecure`、`network: "http"` (`h2`) 与 `security: "xtls"`，渲染阶段直接明确拒绝并提示改用 `mihomo` 或 `xhttp`）；
+   - `RedactURI(rawURI string) string`：统一剥离所有协议（含 `vmess://` 整串 JSON、`socks://` Base64 userinfo 以及缺失 `@` 的畸形含密协议 URI）的密钥信息供日志、错误返回与查询脱敏使用（解析报错同时剥离 `*url.Error` 中的原始 URL）。
 
 ### 4.2 `mihomo` 容器动态 Outbound 编排（已实机验证）
 
@@ -242,10 +242,10 @@ sequenceDiagram
 ### 漏洞 2：自环死锁风暴、管理端口 SSRF 与家宽 DDNS / 组网地址策略（已确认方案 A）
 - **现状隐患**：若管理员误将 `chain_uri` 指向本节点自身的公网转发端口、容器端口或管理端口（`62789`、`9090`、`http_port`、`rpc_port`），要么瞬间形成无限代理死循环耗尽全节点 FD，要么引发通过代理探测本地管理 API 的 SSRF；反之，若直接照搬 [ssrf.go](file:///workspace/v2raymg/pkg/proxy/core/subscription/ssrf.go#L44-L89) 一刀切封禁所有非公网 IP，则会误杀通过 **Tailscale（`100.64.0.0/10`）/ WireGuard（RFC1918）** 内网打洞接入前置机的无公网 IP 家宽。
 - **定稿策略（方案 A）**：
-  1. **无条件硬拦截**：未指定地址（`0.0.0.0`/`::`）、多播、云元数据与链路本地段（`169.254.0.0/16`、`fe80::/10`）、以及目标指向本机 IP / Loopback / `ProxyHost` 且端口命中 `reservedManagementPorts` 或 `PortAllocator` 已分配端口的 URI；
+  1. **无条件硬拦截**：未指定及 `0.0.0.0/8` 地址（`0.0.0.0/8`、`::`）、非标准/尾部点号数值 IPv4 字面量（如 `127.1`、`2130706433`、`0177.0.0.1`、`0x7f000001`、`127.0.0.1.`）、多播、云元数据与链路本地段（`169.254.0.0/16`、`fe80::/10`）、以及目标指向本机 IP / Loopback / `ProxyHost` 且端口命中 `reservedManagementPorts` 或 `DefaultForwardManager.IsPortAllocated`（覆盖已分配 Forward 端口、已声明容器端口及自定义管理预留端口）的 URI；
   2. **默认放行公网与内网组网段**：默认允许公网 IP/域名 + Tailscale CGNAT（`100.64.0.0/10`）+ RFC1918 私网段（`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`）+ IPv6 ULA（`fc00::/7`）；
   3. **Loopback 默认拦截 + 配置开关**：默认拒绝 `127.0.0.0/8` 与 `::1`，在 `end_node` 配置新增 `allow_loopback_chain_target: false`（默认 `false`，供本机 `frps` 端口映射场景按需显式开启，开启后仍硬拦截本机管理端口与 `PortAllocator` 自管端口）；
-  4. **动态 DDNS 域名保鲜**：`chain_uri` 若为 DDNS 域名，在 `mihomo` 与 `xray`（`domainStrategy: "AsIs"`）中均原样保留域名，绝不在添加时解析固化为静态 IP，确保家宽 PPPoE 重拨换 IP 后自动随 DNS TTL 恢复。
+  4. **动态 DDNS 域名保鲜**：`chain_uri` 若为 DDNS 域名，在 `mihomo` 与 `xray`（`"targetStrategy": "AsIs"`）中均原样保留域名，绝不在添加时解析固化为静态 IP，确保家宽 PPPoE 重拨换 IP 后自动随 DNS TTL 恢复。
 
 ### 漏洞 3：限速与并发控制边界（已确认：复用现有用户级限速）
 - **定稿边界**：首期不引入单 Inbound 独立限速桶，直接 100% 复用现有 Forward 层的用户级带宽限速（`upload_bps` / `download_bps` $\rightarrow$ `DefaultForwardManager.userBandwidth[username]`，见 [forward_manager.go](file:///workspace/v2raymg/pkg/proxy/forward/forward_manager.go#L103)）与用户级最大客户端限制（`max_clients` $\rightarrow$ `userClientLimiters[username]`）。

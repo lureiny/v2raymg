@@ -841,3 +841,100 @@ func TestSetInboundAccessTags_ConcurrentAccessSafe(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestRestore_PreservesAddedUsersForRevocationAndReleasesDropped(t *testing.T) {
+	c, um, fwdMgr := newTestContainerWithUserMgr(t)
+	srv := newCapturingRESTServer(t, nil)
+	attachRunningREST(c, srv.URL())
+
+	um.EnableClusterSync("default", &memNodeGroupsStore{groups: []string{"vip"}})
+
+	if err := c.FastAddInbound("in-keep", map[string]any{
+		"protocol":     "vmess",
+		"port":         10601,
+		"uuid":         "u-keep",
+		"inbound_type": "chain",
+		"chain_uri":    "socks5://100.64.0.2:1080#Keep",
+		"access_tags":  []string{"vip"},
+	}); err != nil {
+		t.Fatalf("FastAddInbound in-keep: %v", err)
+	}
+	if err := c.FastAddInbound("in-drop", map[string]any{
+		"protocol": "vmess",
+		"port":     10602,
+		"uuid":     "u-drop",
+	}); err != nil {
+		t.Fatalf("FastAddInbound in-drop: %v", err)
+	}
+
+	for _, req := range []usermanager.AddUserRequest{
+		{Username: "alice", Password: "pw", TargetGroup: "vip", InboundTags: []string{"vip"}},
+		{Username: "carol", Password: "pw", TargetGroup: "vip", InboundTags: []string{"vip"}},
+	} {
+		if err := um.AddUser(req); err != nil {
+			t.Fatalf("AddUser(%s): %v", req.Username, err)
+		}
+	}
+	c.reconcileUsers()
+
+	if fwdMgr.GetRule("mihomo:in-keep:alice") == nil || fwdMgr.GetRule("mihomo:in-keep:carol") == nil {
+		t.Fatal("expected initial rules on in-keep")
+	}
+	if fwdMgr.GetRule("mihomo:in-drop:alice") == nil || fwdMgr.GetRule("mihomo:in-drop:carol") == nil {
+		t.Fatal("expected initial rules on in-drop")
+	}
+
+	// Revoke alice's tag without firing handleUserEvent, and remove in-drop from store
+	// to simulate restart/reload against updated store state.
+	if err := um.SetUserInboundTags("alice", nil); err != nil {
+		t.Fatalf("SetUserInboundTags: %v", err)
+	}
+	if err := c.storeMgr.InboundStore().Delete("in-drop"); err != nil {
+		t.Fatalf("Delete in-drop: %v", err)
+	}
+
+	if err := c.Restore(context.Background()); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	// Dropped inbound's forward rules must be released.
+	if fwdMgr.GetRule("mihomo:in-drop:alice") != nil || fwdMgr.GetRule("mihomo:in-drop:carol") != nil {
+		t.Fatal("dropped inbound forward rules must be released on Restore")
+	}
+	// Preserved addedUsers snapshot on in-keep enables reconcileUsers to revoke alice!
+	if fwdMgr.GetRule("mihomo:in-keep:alice") != nil {
+		t.Fatal("revoked user alice must have forward rule removed after Restore")
+	}
+	if fwdMgr.GetRule("mihomo:in-keep:carol") == nil {
+		t.Fatal("authorized user carol must retain forward rule after Restore")
+	}
+}
+
+func TestHandleUserEvent_ExpireRevokesRule(t *testing.T) {
+	c, um, fwdMgr := newTestContainerWithUserMgr(t)
+	srv := newCapturingRESTServer(t, nil)
+	attachRunningREST(c, srv.URL())
+
+	if err := c.FastAddInbound("exp-in", map[string]any{
+		"protocol": "vmess",
+		"port":     10610,
+		"uuid":     "u-exp",
+	}); err != nil {
+		t.Fatalf("FastAddInbound: %v", err)
+	}
+	if err := um.AddUser(usermanager.AddUserRequest{Username: "alice", Password: "pw"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	c.reconcileUsers()
+	if fwdMgr.GetRule("mihomo:exp-in:alice") == nil {
+		t.Fatal("expected initial rule")
+	}
+
+	c.handleUserEvent(usermanager.UserEvent{
+		Type:     usermanager.UserEventExpire,
+		Username: "alice",
+	})
+	if fwdMgr.GetRule("mihomo:exp-in:alice") != nil {
+		t.Fatal("UserEventExpire must immediately revoke forward rule")
+	}
+}

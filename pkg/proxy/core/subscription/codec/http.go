@@ -57,7 +57,7 @@ func (n *HTTPNode) Encode() string {
 func DecodeHTTP(uri string) (*HTTPNode, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("http: parse URI: %w", err)
+		return nil, fmt.Errorf("http: parse URI: %w", sanitizeURLError(err))
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("http: unexpected scheme %q", u.Scheme)

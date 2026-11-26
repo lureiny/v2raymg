@@ -117,17 +117,20 @@ func TestRenderMihomoProxy_AllSupportedProtocols(t *testing.T) {
 		}
 	})
 
-	t.Run("hysteria2 user:pass mport pinSHA256", func(t *testing.T) {
-		spec, err := ParseURI("hy2://alice:secret@home.ddns.example:28443?sni=bing.com&insecure=1&mport=20000-40000&pinSHA256=ABCD#H")
-		if err != nil {
-			t.Fatalf("ParseURI: %v", err)
-		}
-		m, err := RenderMihomoProxy("hy2-out", spec)
-		if err != nil {
-			t.Fatalf("RenderMihomoProxy: %v", err)
-		}
-		if m["type"] != "hysteria2" || m["password"] != "alice:secret" || m["ports"] != "20000-40000" || m["fingerprint"] != "ABCD" {
-			t.Errorf("unexpected hy2 dict: %+v", m)
+	t.Run("hysteria2 user:pass mport pinSHA256 strips sha256 prefix", func(t *testing.T) {
+		hexPin := strings.Repeat("ab", 32)
+		for _, rawPin := range []string{hexPin, "sha256:" + hexPin, "SHA256:" + hexPin} {
+			spec, err := ParseURI("hy2://alice:secret@home.ddns.example:28443?sni=bing.com&insecure=1&mport=20000-40000&pinSHA256=" + url.QueryEscape(rawPin) + "#H")
+			if err != nil {
+				t.Fatalf("ParseURI(%q): %v", rawPin, err)
+			}
+			m, err := RenderMihomoProxy("hy2-out", spec)
+			if err != nil {
+				t.Fatalf("RenderMihomoProxy(%q): %v", rawPin, err)
+			}
+			if m["type"] != "hysteria2" || m["password"] != "alice:secret" || m["ports"] != "20000-40000" || m["fingerprint"] != hexPin {
+				t.Errorf("rawPin=%q: unexpected hy2 dict: %+v", rawPin, m)
+			}
 		}
 	})
 

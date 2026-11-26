@@ -104,9 +104,8 @@ func (h *hysteriaHooks) GetRunFunc() (func() error, func() error) {
 		// Restore persisted inbound config before starting
 		h.c.persistMu.Lock()
 		if err := h.c.restoreInboundConfig(); err != nil {
-			slog.Warn("hysteria: restore inbound config failed", "err", err)
-		}
-		if err := h.c.saveInboundConfig(); err != nil {
+			slog.Error("hysteria: restore inbound config failed; keeping inbound disabled (fail-closed)", "err", err)
+		} else if err := h.c.saveInboundConfig(); err != nil {
 			slog.Warn("hysteria: save inbound config failed", "err", err)
 		}
 		h.c.persistMu.Unlock()
@@ -713,7 +712,7 @@ func (hc *HysteriaContainer) handleUserEvent(event usermanager.UserEvent) {
 		}
 		hc.ensureUserForwardRule(event.Username, event.User, accessTags)
 
-	case usermanager.UserEventRemove:
+	case usermanager.UserEventRemove, usermanager.UserEventExpire:
 		hc.revokeUserForwardRule(event.Username, "remove")
 	}
 }
@@ -824,74 +823,75 @@ func (hc *HysteriaContainer) saveInboundConfig() error {
 }
 
 // restoreInboundConfig restores the inbound config from store.
+// Fails closed (disables the inbound and returns an error) whenever the
+// persisted record cannot be loaded, decoded, or its access_tags are invalid.
 func (hc *HysteriaContainer) restoreInboundConfig() error {
 	if hc.storeMgr == nil {
 		return nil
 	}
 
-	records, err := hc.storeMgr.InboundStore().Load()
+	rec, err := hc.storeMgr.InboundStore().Get(defaultInboundTag)
 	if err != nil {
-		return fmt.Errorf("hysteria: load inbound records: %w", err)
-	}
-
-	for _, rec := range records {
-		if rec.Tag != defaultInboundTag {
-			continue
-		}
-		if rec.ContainerType != string(contracts.ContainerHysteria) {
-			continue
-		}
-
-		var data map[string]any
-		if err := json.Unmarshal(rec.NativeJSON, &data); err != nil {
-			slog.Warn("hysteria: unmarshal stored inbound config failed", "err", err)
-			return nil
-		}
-
-		// Only restore from store if the config field is at its zero/default value,
-		// so explicit config always wins over persisted state.
-		if hc.cfg.Port == 0 {
-			if port, ok := data["port"].(float64); ok {
-				hc.cfg.Port = int(port)
-			}
-		}
-		if hc.cfg.Listen == "" {
-			if listen, ok := data["listen"].(string); ok {
-				hc.cfg.Listen = listen
-			}
-		}
-		if hc.cfg.Domain == "" {
-			if domain, ok := data["domain"].(string); ok {
-				hc.cfg.Domain = domain
-			}
-		}
-
-		accessTags, tagErr := contracts.NormalizeAccessTags(rec.AccessTags)
-		if tagErr != nil {
-			slog.Warn("hysteria: normalize restored access_tags failed", "err", tagErr)
-			accessTags = nil
-		}
-
 		hc.mu.Lock()
-		// Restore enabled state; true is the default when the key is absent (old records).
-		if enabled, ok := data["enabled"].(bool); ok {
-			hc.inboundEnabled = enabled
-		}
-		hc.accessTags = accessTags
-		hc.remark = rec.Remark
+		hc.inboundEnabled = false
 		hc.mu.Unlock()
-
-		// Re-create inbound with restored config.
-		// Actual listen is always 127.0.0.1 (see process.go); keep inbound metadata aligned.
-		hc.inbound = inbound.NewDefaultInbound(
-			defaultInboundTag,
-			contracts.ProtocolHysteria2,
-			uint32(hc.cfg.Port),
-		)
-		hc.inbound.(*inbound.DefaultInbound).SetListenAddr("127.0.0.1")
+		return fmt.Errorf("hysteria: load inbound record %q: %w", defaultInboundTag, err)
+	}
+	if rec == nil || rec.ContainerType != string(contracts.ContainerHysteria) {
 		return nil
 	}
 
+	var data map[string]any
+	if err := json.Unmarshal(rec.NativeJSON, &data); err != nil {
+		hc.mu.Lock()
+		hc.inboundEnabled = false
+		hc.mu.Unlock()
+		return fmt.Errorf("hysteria: unmarshal stored inbound config: %w", err)
+	}
+
+	accessTags, tagErr := contracts.NormalizeAccessTags(rec.AccessTags)
+	if tagErr != nil {
+		hc.mu.Lock()
+		hc.inboundEnabled = false
+		hc.mu.Unlock()
+		return fmt.Errorf("hysteria: normalize restored access_tags: %w", tagErr)
+	}
+
+	// Only restore from store if the config field is at its zero/default value,
+	// so explicit config always wins over persisted state.
+	if hc.cfg.Port == 0 {
+		if port, ok := data["port"].(float64); ok {
+			hc.cfg.Port = int(port)
+		}
+	}
+	if hc.cfg.Listen == "" {
+		if listen, ok := data["listen"].(string); ok {
+			hc.cfg.Listen = listen
+		}
+	}
+	if hc.cfg.Domain == "" {
+		if domain, ok := data["domain"].(string); ok {
+			hc.cfg.Domain = domain
+		}
+	}
+
+	hc.mu.Lock()
+	// Restore enabled state; true is the default when the key is absent (old records).
+	if enabled, ok := data["enabled"].(bool); ok {
+		hc.inboundEnabled = enabled
+	}
+	hc.accessTags = accessTags
+	hc.remark = rec.Remark
+	hc.mu.Unlock()
+
+	// Re-create inbound with restored config.
+	// Actual listen is always 127.0.0.1 (see process.go); keep inbound metadata aligned.
+	hc.inbound = inbound.NewDefaultInbound(
+		defaultInboundTag,
+		contracts.ProtocolHysteria2,
+		uint32(hc.cfg.Port),
+	)
+	hc.inbound.(*inbound.DefaultInbound).SetListenAddr("127.0.0.1")
 	return nil
 }
 
@@ -964,12 +964,13 @@ func (hc *HysteriaContainer) GetUserSubscriptions(req contracts.SubscriptionRequ
 // Restore rebuilds forward rules for all existing users after restart.
 func (hc *HysteriaContainer) Restore(ctx context.Context) error {
 	hc.persistMu.Lock()
-	if err := hc.restoreInboundConfig(); err != nil {
-		slog.Warn("hysteria: restore inbound config failed", "err", err)
-	}
+	err := hc.restoreInboundConfig()
 	hc.persistMu.Unlock()
+	if err != nil {
+		slog.Error("hysteria: restore inbound config failed; keeping inbound disabled (fail-closed)", "err", err)
+	}
 	hc.reconcileUsers()
-	return nil
+	return err
 }
 
 // reconcileUsers syncs all users from UserManager to ensure forward rules exist

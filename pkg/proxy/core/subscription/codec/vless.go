@@ -143,7 +143,7 @@ func (n *VLessNode) Encode() string {
 func DecodeVLess(uri string) (*VLessNode, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("vless: parse URI: %w", err)
+		return nil, fmt.Errorf("vless: parse URI: %w", sanitizeURLError(err))
 	}
 	if u.Scheme != "vless" {
 		return nil, fmt.Errorf("vless: unexpected scheme %q", u.Scheme)

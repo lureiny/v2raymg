@@ -229,3 +229,30 @@ func TestDecode_EncodeRoundTrip_AllProtocols(t *testing.T) {
 		}
 	}
 }
+
+func TestDecode_MalformedErrorsNeverLeakCredentials(t *testing.T) {
+	const secret = "CODEC_TOP_SECRET_8822"
+	cases := []string{
+		secret,
+		"vless://" + secret + "@host.example.com:443%ZZ",
+		"trojan://" + secret + "@host.example.com:443%ZZ",
+		"hy2://u:" + secret + "@host.example.com:443%ZZ",
+		"tuic://uuid:" + secret + "@host.example.com:443%ZZ",
+		"anytls://" + secret + "@host.example.com:443%ZZ",
+		"snell://" + secret + "@host.example.com:443%ZZ",
+		"http://u:" + secret + "@host.example.com:8080%ZZ",
+		"ss://" + secret + "@host.example.com:8388%ZZ",
+		"socks5://user:" + secret,
+		"socks5://" + secret,
+	}
+	for _, raw := range cases {
+		_, err := Decode(raw)
+		if err == nil {
+			t.Errorf("Decode(%q) expected error, got nil", raw)
+			continue
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("Decode(%q) leaked secret in error: %v", raw, err)
+		}
+	}
+}

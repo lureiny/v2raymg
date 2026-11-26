@@ -10,10 +10,12 @@ import (
 
 // RenderXrayOutbound renders a single Xray outbound JSON object (ready for
 // wrapping in `{"outbounds":[...]}` when fed to `xray api ado`) with
-// `domainStrategy: "AsIs"` so DDNS hostnames are not pinned or leaked locally.
+// `targetStrategy: "AsIs"` so DDNS hostnames are not pinned or leaked locally.
 //
 // Returns a descriptive error suggesting `mihomo` for protocols Xray does not
-// support natively (hysteria2, tuic, anytls) or Shadowsocks SIP003 plugins.
+// support natively (hysteria2, tuic, anytls), Shadowsocks SIP003 plugins, or
+// features removed in Xray 26+ (allowInsecure/skip-cert-verify, legacy http/h2
+// transport, legacy xtls security).
 func RenderXrayOutbound(outboundTag string, spec *OutboundSpec) ([]byte, error) {
 	if spec == nil {
 		return nil, fmt.Errorf("chain: nil outbound spec")
@@ -174,7 +176,7 @@ func RenderXrayOutbound(outboundTag string, spec *OutboundSpec) ([]byte, error) 
 		"tag":            outboundTag,
 		"protocol":       protocol,
 		"settings":       settings,
-		"domainStrategy": "AsIs",
+		"targetStrategy": "AsIs",
 	}
 
 	if includeStream {
@@ -249,17 +251,7 @@ func buildXrayStreamSettings(spec *OutboundSpec) (map[string]any, error) {
 			stream["grpcSettings"] = grpc
 		}
 	case "h2", "http":
-		stream["network"] = "http"
-		httpSettings := map[string]any{}
-		if spec.H2Path != "" {
-			httpSettings["path"] = spec.H2Path
-		}
-		if spec.H2Host != "" {
-			httpSettings["host"] = splitCommaList(spec.H2Host)
-		}
-		if len(httpSettings) > 0 {
-			stream["httpSettings"] = httpSettings
-		}
+		return nil, fmt.Errorf("xray 26+ removed legacy http/h2 transport; migrate to xhttp or use mihomo container instead")
 	case "httpupgrade":
 		stream["network"] = "httpupgrade"
 		hu := map[string]any{}
@@ -294,13 +286,13 @@ func buildXrayStreamSettings(spec *OutboundSpec) (map[string]any, error) {
 	switch security {
 	case "":
 	case "tls":
+		if spec.SkipCertVerify {
+			return nil, fmt.Errorf("xray 26+ removed allowInsecure (skip-cert-verify); use mihomo container instead or use a trusted TLS certificate")
+		}
 		stream["security"] = "tls"
 		tlsSettings := map[string]any{}
 		if spec.SNI != "" {
 			tlsSettings["serverName"] = spec.SNI
-		}
-		if spec.SkipCertVerify {
-			tlsSettings["allowInsecure"] = true
 		}
 		if len(spec.ALPN) > 0 {
 			tlsSettings["alpn"] = spec.ALPN
@@ -335,17 +327,7 @@ func buildXrayStreamSettings(spec *OutboundSpec) (map[string]any, error) {
 		}
 		stream["realitySettings"] = rs
 	case "xtls":
-		stream["security"] = "xtls"
-		xtlsSettings := map[string]any{}
-		if spec.SNI != "" {
-			xtlsSettings["serverName"] = spec.SNI
-		}
-		if spec.SkipCertVerify {
-			xtlsSettings["allowInsecure"] = true
-		}
-		if len(xtlsSettings) > 0 {
-			stream["xtlsSettings"] = xtlsSettings
-		}
+		return nil, fmt.Errorf("xray 26+ removed legacy xtls security; use tls/reality with xtls-rprx-vision or use mihomo container instead")
 	default:
 		return nil, fmt.Errorf("xray does not support security %q", spec.Security)
 	}

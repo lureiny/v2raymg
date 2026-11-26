@@ -1034,13 +1034,15 @@ func (c *MihomoContainer) buildBaseConfig() mihomoInitialConfig {
 // earlier claim and be indistinguishable from a real conflict. A Stop/Start
 // cycle keeps its claims for the same reason: the records never went away.
 func (c *MihomoContainer) restoreAndPushInbounds() error {
+	var dropped []*MihomoInbound
 	if c.storeMgr != nil {
 		records, err := c.storeMgr.InboundStore().Load()
 		if err != nil {
 			return fmt.Errorf("load inbound records: %w", err)
 		}
 		c.inboundsMu.Lock()
-		clear(c.inbounds)
+		prevInbounds := c.inbounds
+		nextInbounds := make(map[string]*MihomoInbound, len(records))
 		for _, rec := range records {
 			if rec.ContainerType != string(contracts.ContainerMihomo) {
 				continue
@@ -1086,15 +1088,38 @@ func (c *MihomoContainer) restoreAndPushInbounds() error {
 			if c.userMgr != nil {
 				inb.SetUserManager(c.userMgr)
 			}
-			c.inbounds[rec.Tag] = inb
+			// Preserve prior addedUsers snapshot for same-tag same-port inbounds
+			// so subsequent reconcileUsers can still revoke rules for users who
+			// lost access across the restore.
+			if prev, existed := prevInbounds[rec.Tag]; existed && prev.Port() == inb.Port() {
+				for _, u := range prev.listAddedUsers() {
+					inb.markAddedUser(u)
+				}
+			}
+			nextInbounds[rec.Tag] = inb
 		}
+		for tag, prev := range prevInbounds {
+			if next, kept := nextInbounds[tag]; !kept || next.Port() != prev.Port() {
+				dropped = append(dropped, prev)
+			}
+		}
+		c.inbounds = nextInbounds
 		c.inboundsMu.Unlock()
 	} else {
 		// No store configured: still clear the map so the restore path is
 		// idempotent across retries.
 		c.inboundsMu.Lock()
+		for _, prev := range c.inbounds {
+			dropped = append(dropped, prev)
+		}
 		clear(c.inbounds)
 		c.inboundsMu.Unlock()
+	}
+
+	for _, prev := range dropped {
+		if err := prev.ReleaseAllUserPorts(); err != nil {
+			log.Warnf("mihomo: release forward rules for dropped inbound %q on restore failed: %v", prev.Tag(), err)
+		}
 	}
 	return c.pushConfig()
 }
@@ -1183,7 +1208,7 @@ func (c *MihomoContainer) handleUserEvent(event usermanager.UserEvent) {
 			return
 		}
 		c.syncUserToInbound(event.Username, event.User)
-	case usermanager.UserEventRemove:
+	case usermanager.UserEventRemove, usermanager.UserEventExpire:
 		c.removeUserFromInbounds(event.Username)
 	}
 }

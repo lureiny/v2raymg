@@ -439,3 +439,142 @@ func TestRotateUserPortForInbound_PreservesNetworkListenStackUDPIdle(t *testing.
 		t.Errorf("UDPSessionIdleSec = %d, want 120", rotated.UDPSessionIdleSec)
 	}
 }
+
+func TestReleaseInboundPorts_ClearsPersistedPortMappingsWithoutActiveRule(t *testing.T) {
+	storeMgr := openTestStoreManager(t)
+	fwdMgr, err := forward.NewDefaultForwardManager(forward.PortAllocatorConfig{
+		MinPort: 23000,
+		MaxPort: 23999,
+	})
+	if err != nil {
+		t.Fatalf("NewDefaultForwardManager: %v", err)
+	}
+	t.Cleanup(func() { _ = fwdMgr.Close() })
+
+	um, err := NewUserManagerWithStore(fwdMgr, storeMgr, "test-node")
+	if err != nil {
+		t.Fatalf("NewUserManagerWithStore: %v", err)
+	}
+
+	if err := um.AddUser(AddUserRequest{Username: "alice", Password: "pw"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+
+	portA, err := um.GetBindPort(GetBindPortRequest{
+		Username:      "alice",
+		TargetPort:    11001,
+		ContainerType: contracts.ContainerXray,
+		InboundTag:    "in-stale",
+	})
+	if err != nil {
+		t.Fatalf("GetBindPort in-stale: %v", err)
+	}
+	portB, err := um.GetBindPort(GetBindPortRequest{
+		Username:      "alice",
+		TargetPort:    11002,
+		ContainerType: contracts.ContainerXray,
+		InboundTag:    "in-keep",
+	})
+	if err != nil {
+		t.Fatalf("GetBindPort in-keep: %v", err)
+	}
+
+	// Simulate active forward rule gone (e.g. after process restart before reconcile),
+	// while persisted PortMappings[11001] and BindPorts still hold portA.
+	if err := fwdMgr.RemoveRulesByInbound("in-stale"); err != nil {
+		t.Fatalf("RemoveRulesByInbound: %v", err)
+	}
+	if fwdMgr.GetRule("xray:in-stale:alice") != nil {
+		t.Fatal("expected no active forward rule for in-stale")
+	}
+
+	// Passing explicit dstPort cleans persisted PortMappings[11001] & BindPorts[portA]
+	// even with zero active forward rules.
+	if err := um.ReleaseInboundPorts("in-stale", 11001); err != nil {
+		t.Fatalf("ReleaseInboundPorts: %v", err)
+	}
+
+	if _, ok := um.GetUserPortByDst("alice", 11001); ok {
+		t.Error("expected PortMappings[11001] cleared despite absent active forward rule")
+	}
+	if gotB, ok := um.GetUserPortByDst("alice", 11002); !ok || gotB != portB {
+		t.Errorf("expected PortMappings[11002]=%d preserved, got (%d, %v)", portB, gotB, ok)
+	}
+	alice, _ := um.GetUser("alice")
+	for _, p := range alice.BindPorts {
+		if p == portA {
+			t.Errorf("BindPorts still contains stale port %d: %v", portA, alice.BindPorts)
+		}
+	}
+
+	persisted, err := storeMgr.UserStore().Get("alice")
+	if err != nil {
+		t.Fatalf("UserStore.Get: %v", err)
+	}
+	if _, ok := persisted.PortMappings[11001]; ok {
+		t.Errorf("persisted PortMappings still contains 11001: %+v", persisted.PortMappings)
+	}
+	if persisted.PortMappings[11002] != portB {
+		t.Errorf("persisted PortMappings[11002] = %d, want %d", persisted.PortMappings[11002], portB)
+	}
+}
+
+func TestSyncUpsertUser_TombstoneSyncsInboundTags(t *testing.T) {
+	um := NewUserManager(nil, "node-b")
+	if err := um.AddUser(AddUserRequest{
+		Username:    "alice",
+		Password:    "pw",
+		TargetGroup: "vip",
+		InboundTags: []string{"old-tag"},
+	}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	u, _ := um.GetUser("alice")
+
+	tombstone := u.Clone()
+	tombstone.MarkDeleting()
+	tombstone.InboundTags = []string{"tombstone-tag"}
+	tombstone.UpdatedAtUs = u.UpdatedAtUs + 1000
+	tombstone.OriginNode = "node-a"
+	tombstone.Hash = "remote-hash"
+
+	applied, err := um.SyncUpsertUser(tombstone)
+	if err != nil || !applied {
+		t.Fatalf("SyncUpsertUser tombstone: applied=%v err=%v", applied, err)
+	}
+	// Mutating incoming slice afterwards must not alias stored tombstone
+	tombstone.InboundTags[0] = "mutated"
+
+	got := um.GetUserIncludingDeleting("alice")
+	if got == nil {
+		t.Fatal("GetUserIncludingDeleting(alice) returned nil")
+	}
+	if !got.IsDeleting() {
+		t.Fatal("expected user marked deleting")
+	}
+	if !reflect.DeepEqual(got.InboundTags, []string{"tombstone-tag"}) {
+		t.Errorf("tombstone InboundTags = %v, want [tombstone-tag]", got.InboundTags)
+	}
+
+	// Also verify inserting a brand-new tombstone preserves deep-copied InboundTags.
+	newTombstone := u.Clone()
+	newTombstone.Username = "bob"
+	newTombstone.MarkDeleting()
+	newTombstone.InboundTags = []string{"new-tomb-tag"}
+	newTombstone.UpdatedAtUs = u.UpdatedAtUs + 2000
+	newTombstone.OriginNode = "node-a"
+	newTombstone.Hash = "remote-hash-bob"
+
+	applied, err = um.SyncUpsertUser(newTombstone)
+	if err != nil || !applied {
+		t.Fatalf("SyncUpsertUser new tombstone: applied=%v err=%v", applied, err)
+	}
+	newTombstone.InboundTags[0] = "mutated"
+	gotBob := um.GetUserIncludingDeleting("bob")
+	if gotBob == nil || !gotBob.IsDeleting() {
+		t.Fatalf("expected bob tombstone stored, got %+v", gotBob)
+	}
+	if !reflect.DeepEqual(gotBob.InboundTags, []string{"new-tomb-tag"}) {
+		t.Errorf("bob tombstone InboundTags = %v, want [new-tomb-tag]", gotBob.InboundTags)
+	}
+}

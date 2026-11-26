@@ -19,6 +19,7 @@ import (
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/params"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
+	"github.com/lureiny/v2raymg/pkg/store"
 )
 
 // getXrayRuntimeAPI gets the xray container's RuntimeAPI.
@@ -296,19 +297,21 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 		fastAddInboundRsp.Msg = fmt.Sprintf("invalid tag %q: %v", tag, err)
 		return fastAddInboundRsp, nil
 	}
-	if existingCT, exists := s.inboundTagExistsAnywhere(tag); exists {
+	if existingCT, exists := s.inboundTagConflictsForFastAdd(tag, c.Type(), inboundType); exists {
 		fastAddInboundRsp.Code = 1020
 		fastAddInboundRsp.Msg = fmt.Sprintf("inbound tag %q already exists in container %s", tag, existingCT)
 		return fastAddInboundRsp, nil
 	}
 
 	if inboundType == contracts.InboundTypeChain {
-		if extraListen, ok := fastAddInboundReq.GetExtraParams()["listen"]; ok {
-			trimmedListen := strings.TrimSpace(extraListen)
-			if trimmedListen != "" && trimmedListen != "127.0.0.1" {
-				fastAddInboundRsp.Code = 1020
-				fastAddInboundRsp.Msg = fmt.Sprintf("chain inbound listen must be 127.0.0.1, got %q", extraListen)
-				return fastAddInboundRsp, nil
+		for _, listenKey := range []string{"listen", "listen_addr"} {
+			if extraListen, ok := fastAddInboundReq.GetExtraParams()[listenKey]; ok {
+				trimmedListen := strings.TrimSpace(extraListen)
+				if trimmedListen != "" && trimmedListen != "127.0.0.1" {
+					fastAddInboundRsp.Code = 1020
+					fastAddInboundRsp.Msg = fmt.Sprintf("chain inbound %s must be 127.0.0.1, got %q", listenKey, extraListen)
+					return fastAddInboundRsp, nil
+				}
 			}
 		}
 		cc, ok := c.(container.ChainCapable)
@@ -401,6 +404,7 @@ func (s *EndNodeServer) FastAddInbound(ctx context.Context, fastAddInboundReq *p
 	reqParams["remark"] = remark
 	if inboundType == contracts.InboundTypeChain {
 		reqParams["listen"] = "127.0.0.1"
+		reqParams["listen_addr"] = "127.0.0.1"
 	}
 
 	// Container-agnostic normalisation: credential auto-fill + cert-source
@@ -628,6 +632,56 @@ func (s *EndNodeServer) inboundTagExistsAnywhere(tag string) (contracts.Containe
 	return "", false
 }
 
+// inboundTagConflictsForFastAdd checks whether tag collides with any existing
+// inbound across registered containers or InboundStore. It allows re-enabling
+// a disabled Mode A record (stored with enabled=false in NativeJSON) when the
+// request targets the same container and is not creating a chain inbound, while
+// still rejecting cross-container collisions and enabled duplicates.
+func (s *EndNodeServer) inboundTagConflictsForFastAdd(tag string, targetCT contracts.ContainerType, inboundType contracts.InboundType) (contracts.ContainerType, bool) {
+	if s == nil || tag == "" {
+		return "", false
+	}
+	if s.containerMgr != nil {
+		for _, ct := range s.containerMgr.Types() {
+			c, ok := s.containerMgr.Get(ct)
+			if !ok {
+				continue
+			}
+			if inb, err := c.GetInboundConfig(tag); err == nil && inb != nil {
+				return ct, true
+			}
+		}
+	}
+	if s.inboundStore != nil {
+		rec, err := s.inboundStore.Get(tag)
+		if err != nil {
+			log.Warn("check inbound tag in store failed", "tag", tag, "err", err)
+			return "", false
+		}
+		if rec != nil {
+			if inboundType != contracts.InboundTypeChain &&
+				contracts.ContainerType(rec.ContainerType) == targetCT &&
+				isStoredInboundDisabled(rec) {
+				return "", false
+			}
+			return contracts.ContainerType(rec.ContainerType), true
+		}
+	}
+	return "", false
+}
+
+func isStoredInboundDisabled(rec *store.InboundRecord) bool {
+	if rec == nil || len(rec.NativeJSON) == 0 {
+		return false
+	}
+	var data map[string]any
+	if err := json.Unmarshal(rec.NativeJSON, &data); err != nil {
+		return false
+	}
+	enabled, ok := data["enabled"].(bool)
+	return ok && !enabled
+}
+
 func generateInboundTag(protocol string, inboundType contracts.InboundType) (string, error) {
 	var raw [4]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -654,6 +708,19 @@ func (s *EndNodeServer) buildChainAddressPolicy() chain.AddressPolicy {
 	}
 	if s.Port > 0 {
 		reservedPorts[uint32(s.Port)] = struct{}{}
+	}
+	if s.containerMgr != nil {
+		for _, ct := range s.containerMgr.Types() {
+			c, ok := s.containerMgr.Get(ct)
+			if !ok {
+				continue
+			}
+			for _, inb := range c.ListInboundConfigs() {
+				if inb != nil && inb.Port() > 0 {
+					reservedPorts[inb.Port()] = struct{}{}
+				}
+			}
+		}
 	}
 
 	policy := chain.AddressPolicy{

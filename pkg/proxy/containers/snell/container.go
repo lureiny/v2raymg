@@ -107,9 +107,8 @@ func (h *snellHooks) GetRunFunc() (func() error, func() error) {
 		// Restore persisted inbound config before starting
 		h.c.persistMu.Lock()
 		if err := h.c.restoreInboundConfig(); err != nil {
-			slog.Warn("snell: restore inbound config failed", "err", err)
-		}
-		if err := h.c.saveInboundConfig(); err != nil {
+			slog.Error("snell: restore inbound config failed; keeping inbound disabled (fail-closed)", "err", err)
+		} else if err := h.c.saveInboundConfig(); err != nil {
 			slog.Warn("snell: save inbound config failed", "err", err)
 		}
 		h.c.persistMu.Unlock()
@@ -592,7 +591,7 @@ func (sc *SnellContainer) handleUserEvent(event usermanager.UserEvent) {
 		}
 		sc.ensureUserForwardRule(event.Username, event.User, accessTags)
 
-	case usermanager.UserEventRemove:
+	case usermanager.UserEventRemove, usermanager.UserEventExpire:
 		sc.revokeUserForwardRule(event.Username, "remove")
 	}
 }
@@ -700,64 +699,65 @@ func (sc *SnellContainer) saveInboundConfig() error {
 }
 
 // restoreInboundConfig restores the inbound config from store.
+// Fails closed (disables the inbound and returns an error) whenever the
+// persisted record cannot be loaded, decoded, or its access_tags are invalid.
 func (sc *SnellContainer) restoreInboundConfig() error {
 	if sc.storeMgr == nil {
 		return nil
 	}
 
-	records, err := sc.storeMgr.InboundStore().Load()
+	rec, err := sc.storeMgr.InboundStore().Get(defaultInboundTag)
 	if err != nil {
-		return fmt.Errorf("snell: load inbound records: %w", err)
-	}
-
-	for _, rec := range records {
-		if rec.Tag != defaultInboundTag {
-			continue
-		}
-		if rec.ContainerType != string(contracts.ContainerSnell) {
-			continue
-		}
-
-		var data map[string]any
-		if err := json.Unmarshal(rec.NativeJSON, &data); err != nil {
-			slog.Warn("snell: unmarshal stored inbound config failed", "err", err)
-			return nil
-		}
-
-		// Restore port and psk from stored config (listen is always 127.0.0.1).
-		if port, ok := data["port"].(float64); ok {
-			sc.cfg.Port = int(port)
-		}
-		if psk, ok := data["psk"].(string); ok && psk != "" {
-			sc.cfg.PSK = psk
-			sc.psk = psk
-		}
-
-		accessTags, tagErr := contracts.NormalizeAccessTags(rec.AccessTags)
-		if tagErr != nil {
-			slog.Warn("snell: normalize restored access_tags failed", "err", tagErr)
-			accessTags = nil
-		}
-
 		sc.mu.Lock()
-		// Restore enabled state; true is the default when the key is absent (old records).
-		if enabled, ok := data["enabled"].(bool); ok {
-			sc.inboundEnabled = enabled
-		}
-		sc.accessTags = accessTags
-		sc.remark = rec.Remark
+		sc.inboundEnabled = false
 		sc.mu.Unlock()
-
-		// Re-create inbound with restored config; listen is always loopback.
-		sc.inbound = inbound.NewDefaultInbound(
-			defaultInboundTag,
-			contracts.ProtocolSnell,
-			uint32(sc.cfg.Port),
-		)
-		sc.inbound.(*inbound.DefaultInbound).SetListenAddr("127.0.0.1")
+		return fmt.Errorf("snell: load inbound record %q: %w", defaultInboundTag, err)
+	}
+	if rec == nil || rec.ContainerType != string(contracts.ContainerSnell) {
 		return nil
 	}
 
+	var data map[string]any
+	if err := json.Unmarshal(rec.NativeJSON, &data); err != nil {
+		sc.mu.Lock()
+		sc.inboundEnabled = false
+		sc.mu.Unlock()
+		return fmt.Errorf("snell: unmarshal stored inbound config: %w", err)
+	}
+
+	accessTags, tagErr := contracts.NormalizeAccessTags(rec.AccessTags)
+	if tagErr != nil {
+		sc.mu.Lock()
+		sc.inboundEnabled = false
+		sc.mu.Unlock()
+		return fmt.Errorf("snell: normalize restored access_tags: %w", tagErr)
+	}
+
+	// Restore port and psk from stored config (listen is always 127.0.0.1).
+	if port, ok := data["port"].(float64); ok {
+		sc.cfg.Port = int(port)
+	}
+	if psk, ok := data["psk"].(string); ok && psk != "" {
+		sc.cfg.PSK = psk
+		sc.psk = psk
+	}
+
+	sc.mu.Lock()
+	// Restore enabled state; true is the default when the key is absent (old records).
+	if enabled, ok := data["enabled"].(bool); ok {
+		sc.inboundEnabled = enabled
+	}
+	sc.accessTags = accessTags
+	sc.remark = rec.Remark
+	sc.mu.Unlock()
+
+	// Re-create inbound with restored config; listen is always loopback.
+	sc.inbound = inbound.NewDefaultInbound(
+		defaultInboundTag,
+		contracts.ProtocolSnell,
+		uint32(sc.cfg.Port),
+	)
+	sc.inbound.(*inbound.DefaultInbound).SetListenAddr("127.0.0.1")
 	return nil
 }
 
@@ -810,12 +810,13 @@ func (sc *SnellContainer) GetUserSubscriptions(req contracts.SubscriptionRequest
 // Restore rebuilds forward rules for all existing users after restart.
 func (sc *SnellContainer) Restore(ctx context.Context) error {
 	sc.persistMu.Lock()
-	if err := sc.restoreInboundConfig(); err != nil {
-		slog.Warn("snell: restore inbound config failed", "err", err)
-	}
+	err := sc.restoreInboundConfig()
 	sc.persistMu.Unlock()
+	if err != nil {
+		slog.Error("snell: restore inbound config failed; keeping inbound disabled (fail-closed)", "err", err)
+	}
 	sc.reconcileUsers()
-	return nil
+	return err
 }
 
 // reconcileUsers syncs all users from UserManager to ensure forward rules exist

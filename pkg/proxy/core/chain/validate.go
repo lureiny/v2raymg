@@ -7,6 +7,8 @@ import (
 	"unicode"
 )
 
+var ipv4ThisNetworkPrefix = netip.MustParsePrefix("0.0.0.0/8")
+
 // AddressPolicy implements Confirmed Decision #1 (Plan A) for backend chain targets:
 //   - Unconditionally rejects empty host, out-of-range ports, unspecified, multicast,
 //     broadcast, link-local / cloud metadata (169.254.0.0/16, fe80::/10), and any
@@ -58,6 +60,22 @@ func ValidateSpec(spec *OutboundSpec, policy AddressPolicy) error {
 		return err
 	}
 
+	// Reject trailing-dot IP literals (e.g. "127.0.0.1.", "169.254.169.254.")
+	// and non-standard inet_aton numeric IPv4 forms (e.g. "127.1", "2130706433",
+	// "0177.0.0.1", "0x7f000001") that would otherwise bypass IP policy checks.
+	trimmedHost := strings.TrimRight(host, ".")
+	if trimmedHost == "" {
+		return fmt.Errorf("chain: empty target host")
+	}
+	if trimmedHost != host {
+		if _, err := netip.ParseAddr(trimmedHost); err == nil {
+			return fmt.Errorf("chain: trailing-dot IP literal %q is not allowed", spec.Host)
+		}
+	}
+	if isNumericIPv4Literal(trimmedHost) {
+		return fmt.Errorf("chain: non-standard numeric IPv4 host %q is not allowed", spec.Host)
+	}
+
 	isLoopbackHost := isLocalhostDomain(host)
 	if isLoopbackHost && !policy.AllowLoopback {
 		return fmt.Errorf("chain: loopback target %q rejected (allow_loopback_chain_target is disabled)", spec.Host)
@@ -77,6 +95,9 @@ func validateIPTarget(rawIP netip.Addr, port uint32, policy AddressPolicy) error
 	}
 	if ip.IsUnspecified() {
 		return fmt.Errorf("chain: unspecified address %s is not allowed", ip)
+	}
+	if ip.Is4() && ipv4ThisNetworkPrefix.Contains(ip) {
+		return fmt.Errorf("chain: this-network address %s (0.0.0.0/8) is not allowed", ip)
 	}
 	if ip.IsMulticast() || ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() {
 		return fmt.Errorf("chain: multicast address %s is not allowed", ip)
@@ -173,4 +194,44 @@ func validateDomainSyntax(host string) error {
 		}
 	}
 	return nil
+}
+
+// isNumericIPv4Literal reports whether host looks like an inet_aton / WHATWG
+// numeric IPv4 literal (1-4 dot-separated decimal, octal, or 0x-prefixed hex
+// integers, e.g. "127.1", "2130706433", "0177.0.0.1", "0x7f000001").
+func isNumericIPv4Literal(host string) bool {
+	if host == "" {
+		return false
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) < 1 || len(parts) > 4 {
+		return false
+	}
+	for _, p := range parts {
+		if !isInetAtonPart(p) {
+			return false
+		}
+	}
+	return true
+}
+
+func isInetAtonPart(s string) bool {
+	if s == "" {
+		return false
+	}
+	if len(s) > 2 && (strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X")) {
+		for i := 2; i < len(s); i++ {
+			c := s[i]
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return false
+			}
+		}
+		return true
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }

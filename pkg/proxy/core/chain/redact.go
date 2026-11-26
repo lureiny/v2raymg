@@ -62,21 +62,34 @@ func RedactURI(rawURI string) string {
 
 	if atIdx := strings.LastIndexByte(beforeQuery, '@'); atIdx >= 0 {
 		addr := strings.TrimSuffix(beforeQuery[atIdx+1:], "/")
-		if host, port, err := net.SplitHostPort(addr); err == nil && host != "" && port != "" {
+		if host, port, err := net.SplitHostPort(addr); err == nil && host != "" && isValidPortStr(port) {
 			return scheme + "://[redacted]@" + net.JoinHostPort(host, port) + fragSuffix
 		}
 		return scheme + "://[redacted]"
 	}
 
-	if scheme == "ss" || scheme == "socks" {
-		return scheme + "://[redacted]"
-	}
-
-	addr := strings.TrimSuffix(beforeQuery, "/")
-	if host, port, err := net.SplitHostPort(addr); err == nil && host != "" && port != "" {
-		return scheme + "://" + net.JoinHostPort(host, port) + fragSuffix
+	// Without '@', only schemes that legitimately allow unauthenticated
+	// host:port targets may expose host:port in fallback mode, and only when
+	// port is a valid numeric port [1, 65535]. Credential-bearing schemes
+	// (trojan/vless/vmess/ss/hy2/hysteria2/tuic/anytls/snell/socks) and
+	// unknown schemes always redact fail-closed so a missing '@' never echoes
+	// a password/UUID as the host.
+	switch scheme {
+	case "http", "https", "socks5", "socks5h":
+		addr := strings.TrimSuffix(beforeQuery, "/")
+		if host, port, err := net.SplitHostPort(addr); err == nil && host != "" && isValidPortStr(port) {
+			return scheme + "://" + net.JoinHostPort(host, port) + fragSuffix
+		}
 	}
 	return scheme + "://[redacted]"
+}
+
+func isValidPortStr(port string) bool {
+	if port == "" {
+		return false
+	}
+	p, err := strconv.ParseUint(port, 10, 32)
+	return err == nil && p >= 1 && p <= 65535
 }
 
 // SummarizeURI extracts only the canonical protocol name and host:port target

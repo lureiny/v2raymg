@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/forward"
 	"github.com/lureiny/v2raymg/pkg/proxy/usermanager"
@@ -36,10 +37,19 @@ func (s *EndNodeServer) GetProfile(ctx context.Context, req *proto.GetProfileReq
 		Downlink:      user.TrafficTotalDownlink,
 		ProxyPassword: user.AuthToken,
 	}
-	if s.userMgr.IsUserVisible(user) {
+	if !user.IsDeleting() && !user.IsExpired() && s.userMgr.IsUserVisible(user) {
 		if fm := s.userMgr.GetForwardManager(); fm != nil {
 			rules := fm.GetRulesByUser(user.Username)
 			for _, r := range rules {
+				if s.containerMgr != nil {
+					if c, ok := s.containerMgr.Get(r.ContainerType); ok {
+						if mp, ok := c.(container.InboundMetaProvider); ok {
+							if meta, found := mp.GetInboundMeta(r.InboundTag); found && !s.userMgr.CanUserAccessInbound(user, meta.AccessTags) {
+								continue
+							}
+						}
+					}
+				}
 				rsp.Inbounds = append(rsp.Inbounds, &proto.ProfileInbound{
 					Tag:       r.InboundTag,
 					Container: string(r.ContainerType),
@@ -204,6 +214,7 @@ func (s *EndNodeServer) UpdateUsers(ctx context.Context, updateUsersReq *proto.U
 		}
 	}
 	if len(errMsgs) > 0 {
+		updateUsersRsp.Code = 202
 		updateUsersRsp.Msg = strings.Join(errMsgs, "|")
 	}
 	return updateUsersRsp, nil

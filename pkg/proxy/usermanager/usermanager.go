@@ -5,6 +5,7 @@ package usermanager
 import (
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -1494,49 +1495,80 @@ func (m *UserManager) ReleaseBindPort(req ReleaseBindPortRequest) error {
 // This is called when an inbound is stopped or destroyed.
 // It removes forward rules for all users associated with this inbound and
 // clears the corresponding BindPorts and PortMappings entries.
-func (m *UserManager) ReleaseInboundPorts(inboundTag string) error {
-	if inboundTag == "" {
+// Optional dstPorts allow clearing persisted PortMappings[dstPort] (and their
+// BindPorts entries) even when no active forward rule currently exists.
+func (m *UserManager) ReleaseInboundPorts(inboundTag string, dstPorts ...uint32) error {
+	if inboundTag == "" && len(dstPorts) == 0 {
 		return nil // idempotent
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Get all forward rules for this inbound via ForwardManager
-	if m.forwardMgr == nil {
-		return nil // idempotent
-	}
-
 	type userInboundPorts struct {
 		fwdPorts map[uint32]struct{}
 		dstPorts map[uint32]struct{}
 	}
 	affected := make(map[string]*userInboundPorts)
-	for _, r := range m.forwardMgr.GetAllRules() {
-		if r == nil || r.InboundTag != inboundTag {
-			continue
-		}
-		entry, ok := affected[r.Username]
-		if !ok {
-			entry = &userInboundPorts{
-				fwdPorts: make(map[uint32]struct{}),
-				dstPorts: make(map[uint32]struct{}),
+	if inboundTag != "" && m.forwardMgr != nil {
+		for _, r := range m.forwardMgr.GetAllRules() {
+			if r == nil || r.InboundTag != inboundTag {
+				continue
 			}
-			affected[r.Username] = entry
-		}
-		if r.ListenPort != 0 {
-			entry.fwdPorts[r.ListenPort] = struct{}{}
-		}
-		if _, portStr, err := net.SplitHostPort(r.TargetAddr); err == nil {
-			if p, err := strconv.ParseUint(portStr, 10, 32); err == nil && p > 0 {
-				entry.dstPorts[uint32(p)] = struct{}{}
+			entry, ok := affected[r.Username]
+			if !ok {
+				entry = &userInboundPorts{
+					fwdPorts: make(map[uint32]struct{}),
+					dstPorts: make(map[uint32]struct{}),
+				}
+				affected[r.Username] = entry
 			}
+			if r.ListenPort != 0 {
+				entry.fwdPorts[r.ListenPort] = struct{}{}
+			}
+			if _, portStr, err := net.SplitHostPort(r.TargetAddr); err == nil {
+				if p, err := strconv.ParseUint(portStr, 10, 32); err == nil && p > 0 {
+					entry.dstPorts[uint32(p)] = struct{}{}
+				}
+			}
+		}
+
+		// Remove all rules for this inbound tag
+		if err := m.forwardMgr.RemoveRulesByInbound(inboundTag); err != nil {
+			return err
 		}
 	}
 
-	// Remove all rules for this inbound tag
-	if err := m.forwardMgr.RemoveRulesByInbound(inboundTag); err != nil {
-		return err
+	explicitDst := make(map[uint32]struct{}, len(dstPorts))
+	for _, p := range dstPorts {
+		if p != 0 {
+			explicitDst[p] = struct{}{}
+		}
+	}
+	if len(explicitDst) > 0 {
+		for username, user := range m.users {
+			if user == nil || len(user.PortMappings) == 0 {
+				continue
+			}
+			for dst := range explicitDst {
+				fwdPort, hasMapping := user.PortMappings[dst]
+				if !hasMapping {
+					continue
+				}
+				entry, ok := affected[username]
+				if !ok {
+					entry = &userInboundPorts{
+						fwdPorts: make(map[uint32]struct{}),
+						dstPorts: make(map[uint32]struct{}),
+					}
+					affected[username] = entry
+				}
+				entry.dstPorts[dst] = struct{}{}
+				if fwdPort != 0 {
+					entry.fwdPorts[fwdPort] = struct{}{}
+				}
+			}
+		}
 	}
 
 	for username, entry := range affected {
@@ -1694,10 +1726,11 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 	// Case 1: incoming is a tombstone (deleted).
 	if incoming.IsDeleting() {
 		if !exists {
-			// Remote deleted a user we never had — just store the tombstone.
-			m.users[incoming.Username] = incoming
+			// Remote deleted a user we never had — store an isolated clone of the tombstone.
+			stored := incoming.Clone()
+			m.users[stored.Username] = stored
 			if m.store != nil {
-				if err := m.store.Save(incoming); err != nil {
+				if err := m.store.Save(stored); err != nil {
 					return false, fmt.Errorf("SyncUpsertUser: persist tombstone: %w", err)
 				}
 			}
@@ -1705,7 +1738,7 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 			// forward layer accumulated for this username (e.g. from an earlier
 			// applyRuntimeSideEffects during a non-tombstone sync).
 			if m.forwardMgr != nil {
-				m.forwardMgr.DropUser(incoming.Username)
+				m.forwardMgr.DropUser(stored.Username)
 			}
 			return true, nil
 		}
@@ -1718,6 +1751,7 @@ func (m *UserManager) SyncUpsertUser(incoming *contracts.User) (bool, error) {
 		existing.OriginNode = incoming.OriginNode
 		existing.Hash = incoming.Hash
 		existing.TargetGroup = incoming.TargetGroup
+		existing.InboundTags = slices.Clone(incoming.InboundTags)
 
 		if m.store != nil {
 			if err := m.store.Save(existing); err != nil {

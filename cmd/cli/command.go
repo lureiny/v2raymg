@@ -204,7 +204,7 @@ func InitPromptAndRegister() *prompt.Prompt {
 			{Text: "recycle_delay_sec", Description: "client recycle delay sec (0=no change)", Default: int(0)},
 			{Text: "drain_sec", Description: "client drain sec (0=no change)", Default: int(0)},
 			{Text: "group", Description: "cluster group (empty=no change)", Default: ""},
-			{Text: "inbound_tags", Description: "comma-separated Layer 2 inbound access tags (empty=no change, 'clear' or '[]'=clear)", Default: ""},
+			{Text: "inbound_tags", Description: "comma-separated Layer 2 inbound access tags (empty=no change, '[]' recommended to clear; 'clear' legacy alias)", Default: ""},
 		}),
 		prompt.WithGetSuggestMethod(GetSuggest),
 	)

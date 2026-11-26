@@ -451,4 +451,41 @@ func TestRedactURI_StripsAllCredentialsIncludingSocksBase64(t *testing.T) {
 	if got := redactURI("VMESS://eyJhZGQiOiIxLjIuMy40In0="); got != "vmess://[redacted]" {
 		t.Errorf("redactURI(VMESS) = %q, want vmess://[redacted]", got)
 	}
+
+	// credential-bearing schemes missing '@' must never echo secret
+	for _, tc := range []struct {
+		uri  string
+		want string
+	}{
+		{"trojan://TOPSECRET:443", "trojan://[redacted]"},
+		{"vless://TOPSECRET:443", "vless://[redacted]"},
+		{"hy2://TOPSECRET:443", "hy2://[redacted]"},
+		{"anytls://TOPSECRET:443", "anytls://[redacted]"},
+		{"socks5://user:TOPSECRET", "socks5://[redacted]"},
+	} {
+		got := redactURI(tc.uri)
+		if strings.Contains(got, "TOPSECRET") {
+			t.Errorf("redactURI(%q) leaked secret: %q", tc.uri, got)
+		}
+		if got != tc.want {
+			t.Errorf("redactURI(%q) = %q, want %q", tc.uri, got, tc.want)
+		}
+	}
+}
+
+func TestUrisToSpecs_VMessHTTPUpgradeAndALPN(t *testing.T) {
+	body := `{"ps":"VMHU","add":"vm.example.com","port":443,"id":"uuid-1","aid":0,"net":"httpupgrade","path":"/up","host":"cdn.example.com","tls":"tls","alpn":"h2,http/1.1"}`
+	uri := "vmess://" + base64.StdEncoding.EncodeToString([]byte(body))
+	specs := urisToSpecs([]string{uri})
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %d", len(specs))
+	}
+	ext := specs[0].Extensions
+	if ext["httpupgrade_path"] != "/up" || ext["httpupgrade_host"] != "cdn.example.com" {
+		t.Errorf("httpupgrade extensions mismatch: %+v", ext)
+	}
+	alpn, _ := ext["alpn"].([]string)
+	if len(alpn) != 2 || alpn[0] != "h2" || alpn[1] != "http/1.1" {
+		t.Errorf("alpn extension = %v, want [h2 http/1.1]", ext["alpn"])
+	}
 }

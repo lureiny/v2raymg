@@ -377,10 +377,21 @@ func renderMihomoHysteria2(name string, spec *OutboundSpec) (map[string]any, err
 	if spec.ObfsPassword != "" {
 		m["obfs-password"] = spec.ObfsPassword
 	}
-	if spec.PinSHA256 != "" {
-		m["fingerprint"] = spec.PinSHA256
+	if fp := normalizeMihomoFingerprint(spec.PinSHA256); fp != "" {
+		m["fingerprint"] = fp
 	}
 	return m, nil
+}
+
+// normalizeMihomoFingerprint strips an optional case-insensitive "sha256:"
+// prefix from URI pinSHA256 values because Mihomo expects raw hex (with or
+// without colons) in `fingerprint`.
+func normalizeMihomoFingerprint(raw string) string {
+	s := strings.TrimSpace(raw)
+	if len(s) >= len("sha256:") && strings.EqualFold(s[:len("sha256:")], "sha256:") {
+		s = strings.TrimSpace(s[len("sha256:"):])
+	}
+	return s
 }
 
 func renderMihomoTUIC(name string, spec *OutboundSpec) (map[string]any, error) {

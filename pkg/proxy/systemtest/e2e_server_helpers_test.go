@@ -422,6 +422,10 @@ type e2eServer struct {
 	name string
 	// rpcPort is this node's gRPC port, used to seed later nodes' static_nodes.
 	rpcPort int
+	// xrayGRPCPort and mihomoAPIPort record custom container management ports
+	// configured on this node (used by chain address policy negative E2E checks).
+	xrayGRPCPort  int
+	mihomoAPIPort int
 	// cfgPath is this node's config file, so a test can restart it with changes.
 	cfgPath string
 	// logs captures stdout+stderr while the process runs. Cluster tests read it

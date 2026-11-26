@@ -243,14 +243,16 @@ func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 	}
 
 	srv := &e2eServer{
-		cmd:     cmd,
-		baseURL: fmt.Sprintf("http://127.0.0.1:%d", httpPort),
-		token:   e2eHTTPToken,
-		dir:     dir,
-		name:    name,
-		rpcPort: rpcPort,
-		cfgPath: configPath,
-		logs:    logs,
+		cmd:           cmd,
+		baseURL:       fmt.Sprintf("http://127.0.0.1:%d", httpPort),
+		token:         e2eHTTPToken,
+		dir:           dir,
+		name:          name,
+		rpcPort:       rpcPort,
+		xrayGRPCPort:  xrayGRPCPort,
+		mihomoAPIPort: mihomoAPIPort,
+		cfgPath:       configPath,
+		logs:          logs,
 	}
 	c.ends = append(c.ends, srv)
 

@@ -87,7 +87,7 @@ func (n *Hysteria2Node) Encode() string {
 func DecodeHysteria2(uri string) (*Hysteria2Node, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("hysteria2: parse URI: %w", err)
+		return nil, fmt.Errorf("hysteria2: parse URI: %w", sanitizeURLError(err))
 	}
 	if u.Scheme != "hysteria2" && u.Scheme != "hy2" {
 		return nil, fmt.Errorf("hysteria2: unexpected scheme %q", u.Scheme)

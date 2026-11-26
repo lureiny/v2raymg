@@ -620,3 +620,121 @@ func TestHysteria_StorePersistenceAndRestore(t *testing.T) {
 		t.Fatal("disabled inbound must not allocate rules after restore")
 	}
 }
+
+func TestHysteria_CorruptStoreFailClosed(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+	}{
+		{
+			name:  "corrupt access_tags JSON",
+			query: `UPDATE inbounds SET access_tags = '{not-json' WHERE tag = ?`,
+		},
+		{
+			name:  "invalid access_tags value",
+			query: `UPDATE inbounds SET access_tags = '["bad,tag"]' WHERE tag = ?`,
+		},
+		{
+			name:  "corrupt native_json",
+			query: `UPDATE inbounds SET native_json = '{not-json' WHERE tag = ?`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sm, fm, um := newIsolationTestDeps(t, []string{"vip"})
+			if err := um.AddUser(usermanager.AddUserRequest{
+				Username:    "carol",
+				Password:    "pw",
+				TargetGroup: "vip",
+				InboundTags: []string{"vip"},
+			}); err != nil {
+				t.Fatalf("AddUser: %v", err)
+			}
+
+			hc, err := NewHysteriaContainer(
+				HysteriaConfig{Listen: "127.0.0.1", Port: 9443},
+				WithStoreMgr(sm),
+				WithUserManager(um),
+			)
+			if err != nil {
+				t.Fatalf("NewHysteriaContainer: %v", err)
+			}
+			if err := hc.FastAddInbound(defaultInboundTag, map[string]any{
+				"access_tags": []string{"vip"},
+			}); err != nil {
+				t.Fatalf("FastAddInbound: %v", err)
+			}
+			if err := hc.Restore(context.Background()); err != nil {
+				t.Fatalf("initial Restore: %v", err)
+			}
+			carolKey := string(contracts.ContainerHysteria) + ":" + defaultInboundTag + ":carol"
+			if fm.GetRule(carolKey) == nil {
+				t.Fatal("expected initial rule for carol")
+			}
+
+			// Corrupt persisted record directly in SQLite.
+			if _, err := sm.DB().DB().Exec(tc.query, defaultInboundTag); err != nil {
+				t.Fatalf("corrupt SQL: %v", err)
+			}
+
+			// Restore MUST return an error and Fail-Closed (disable inbound, revoke rules, hide meta & subs).
+			if err := hc.Restore(context.Background()); err == nil {
+				t.Fatalf("expected Restore error for %s", tc.name)
+			}
+			if _, ok := hc.GetInboundMeta(defaultInboundTag); ok {
+				t.Fatal("GetInboundMeta must return false (Fail-Closed) on corrupt persisted record")
+			}
+			if len(hc.ListInboundConfigs()) != 0 {
+				t.Fatal("ListInboundConfigs must be empty (Fail-Closed)")
+			}
+			if fm.GetRule(carolKey) != nil {
+				t.Fatal("existing forward rules must be revoked when Fail-Closed")
+			}
+			subs, err := hc.GetUserSubscriptions(contracts.SubscriptionRequest{
+				User: contracts.UserSpec{Username: "carol"},
+				Host: "example.com",
+			})
+			if err != nil {
+				t.Fatalf("GetUserSubscriptions: %v", err)
+			}
+			if len(subs) != 0 {
+				t.Fatalf("expected 0 subscriptions when Fail-Closed, got %+v", subs)
+			}
+		})
+	}
+}
+
+func TestHysteria_UserEventExpireRevokesRule(t *testing.T) {
+	sm, fm, um := newIsolationTestDeps(t, []string{"vip"})
+	hc, err := NewHysteriaContainer(
+		HysteriaConfig{Listen: "127.0.0.1", Port: 9443},
+		WithStoreMgr(sm),
+		WithUserManager(um),
+	)
+	if err != nil {
+		t.Fatalf("NewHysteriaContainer: %v", err)
+	}
+	if err := um.AddUser(usermanager.AddUserRequest{
+		Username:    "carol",
+		Password:    "pw",
+		TargetGroup: "vip",
+	}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	if err := hc.Restore(context.Background()); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	carolKey := string(contracts.ContainerHysteria) + ":" + defaultInboundTag + ":carol"
+	if fm.GetRule(carolKey) == nil {
+		t.Fatal("expected initial rule for carol")
+	}
+
+	hc.handleUserEvent(usermanager.UserEvent{
+		Type:     usermanager.UserEventExpire,
+		Username: "carol",
+	})
+	if fm.GetRule(carolKey) != nil {
+		t.Fatal("UserEventExpire must immediately revoke carol's forward rule")
+	}
+}
