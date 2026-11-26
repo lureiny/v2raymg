@@ -98,7 +98,14 @@ func TestCountLinesInFile_NoLargePerCallAlloc(t *testing.T) {
 			}
 		}
 	})
-	if allocs := res.AllocedBytesPerOp(); allocs >= 4096 {
-		t.Fatalf("countLinesInFile allocated %d B/op (expected < 4096 B/op without 256 KB per-call buffer)", allocs)
+	maxAllocs := int64(4096)
+	if raceDetectorEnabled {
+		// Go's race runtime randomly drops ~25% of sync.Pool.Put calls, so a
+		// 32 KB pooled buffer averages ~8-12 KB/op under -race while still
+		// catching any 256 KB per-call regression.
+		maxAllocs = 64 * 1024
+	}
+	if allocs := res.AllocedBytesPerOp(); allocs >= maxAllocs {
+		t.Fatalf("countLinesInFile allocated %d B/op (expected < %d B/op without 256 KB per-call buffer)", allocs, maxAllocs)
 	}
 }

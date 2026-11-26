@@ -370,15 +370,18 @@ func (hc *HysteriaContainer) Init(config any) error {
 	if !ok || cfg == nil {
 		return fmt.Errorf("hysteria: invalid config type, expected *HysteriaConfig")
 	}
-	hc.cfg = *cfg
-
-	hc.inbound = inbound.NewDefaultInbound(
+	inb := inbound.NewDefaultInbound(
 		defaultInboundTag,
 		contracts.ProtocolHysteria2,
 		uint32(cfg.Port),
 	)
 	// Actual listen is always 127.0.0.1 (see process.go); keep inbound metadata aligned.
-	hc.inbound.(*inbound.DefaultInbound).SetListenAddr("127.0.0.1")
+	inb.SetListenAddr("127.0.0.1")
+
+	hc.mu.Lock()
+	hc.cfg = *cfg
+	hc.inbound = inb
+	hc.mu.Unlock()
 
 	return nil
 }
@@ -506,6 +509,7 @@ func (hc *HysteriaContainer) releaseAllForwardRules() {
 		return
 	}
 	hc.mu.Lock()
+	targetPort := uint32(hc.cfg.Port)
 	users := make([]string, 0, len(hc.addedUsers))
 	for u := range hc.addedUsers {
 		users = append(users, u)
@@ -513,7 +517,7 @@ func (hc *HysteriaContainer) releaseAllForwardRules() {
 	hc.mu.Unlock()
 
 	for _, username := range users {
-		port, ok := hc.userMgr.GetUserPortByDstForCleanup(username, uint32(hc.cfg.Port))
+		port, ok := hc.userMgr.GetUserPortByDstForCleanup(username, targetPort)
 		if !ok {
 			continue
 		}
@@ -536,22 +540,24 @@ func (hc *HysteriaContainer) GetInboundConfig(tag string) (inbound.Inbound, erro
 	}
 	hc.mu.Lock()
 	enabled := hc.inboundEnabled
+	inb := hc.inbound
 	hc.mu.Unlock()
-	if !enabled {
+	if !enabled || inb == nil {
 		return nil, fmt.Errorf("hysteria: inbound %q is disabled", tag)
 	}
-	return hc.inbound, nil
+	return inb, nil
 }
 
 // ListInboundConfigs returns the single default inbound, or empty if disabled.
 func (hc *HysteriaContainer) ListInboundConfigs() []inbound.Inbound {
 	hc.mu.Lock()
 	enabled := hc.inboundEnabled
+	inb := hc.inbound
 	hc.mu.Unlock()
-	if !enabled {
+	if !enabled || inb == nil {
 		return nil
 	}
-	return []inbound.Inbound{hc.inbound}
+	return []inbound.Inbound{inb}
 }
 
 // GetInboundMeta returns chain and visibility metadata for the default inbound
@@ -721,6 +727,7 @@ func (hc *HysteriaContainer) ensureUserForwardRule(username string, user *contra
 	hc.mu.Lock()
 	enabled := hc.inboundEnabled
 	_, exists := hc.addedUsers[username]
+	targetPort := uint32(hc.cfg.Port)
 	hc.mu.Unlock()
 	if !enabled || exists {
 		return
@@ -731,7 +738,7 @@ func (hc *HysteriaContainer) ensureUserForwardRule(username string, user *contra
 		Username:      username,
 		ContainerType: contracts.ContainerHysteria,
 		InboundTag:    defaultInboundTag,
-		TargetPort:    uint32(hc.cfg.Port),
+		TargetPort:    targetPort,
 		Protocol:      contracts.ProtocolHysteria2,
 		Network:       "udp",
 	})
@@ -771,9 +778,10 @@ func (hc *HysteriaContainer) ensureUserForwardRule(username string, user *contra
 
 func (hc *HysteriaContainer) revokeUserForwardRule(username, reason string) {
 	hc.mu.Lock()
+	targetPort := uint32(hc.cfg.Port)
 	delete(hc.addedUsers, username)
 	hc.mu.Unlock()
-	port, ok := hc.userMgr.GetUserPortByDstForCleanup(username, uint32(hc.cfg.Port))
+	port, ok := hc.userMgr.GetUserPortByDstForCleanup(username, targetPort)
 	if !ok {
 		return
 	}
@@ -795,14 +803,17 @@ func (hc *HysteriaContainer) saveInboundConfig() error {
 	enabled := hc.inboundEnabled
 	accessTags := cloneStringSlice(hc.accessTags)
 	remark := hc.remark
+	port := hc.cfg.Port
+	listen := hc.cfg.Listen
+	domain := hc.cfg.Domain
 	hc.mu.Unlock()
 
 	data := map[string]any{
 		"tag":      defaultInboundTag,
 		"protocol": string(contracts.ProtocolHysteria2),
-		"port":     hc.cfg.Port,
-		"listen":   hc.cfg.Listen,
-		"domain":   hc.cfg.Domain,
+		"port":     port,
+		"listen":   listen,
+		"domain":   domain,
 		"enabled":  enabled,
 	}
 	nativeJSON, err := json.Marshal(data)
@@ -857,6 +868,20 @@ func (hc *HysteriaContainer) restoreInboundConfig() error {
 		return fmt.Errorf("hysteria: normalize restored access_tags: %w", tagErr)
 	}
 
+	// Validate enabled before mutating runtime fields; fail closed on corrupt type.
+	var restoredEnabled *bool
+	if rawEnabled, exists := data["enabled"]; exists {
+		enabled, ok := rawEnabled.(bool)
+		if !ok {
+			hc.mu.Lock()
+			hc.inboundEnabled = false
+			hc.mu.Unlock()
+			return fmt.Errorf("hysteria: corrupt enabled field in stored inbound config (type %T)", rawEnabled)
+		}
+		restoredEnabled = &enabled
+	}
+
+	hc.mu.Lock()
 	// Only restore from store if the config field is at its zero/default value,
 	// so explicit config always wins over persisted state.
 	if hc.cfg.Port == 0 {
@@ -874,31 +899,21 @@ func (hc *HysteriaContainer) restoreInboundConfig() error {
 			hc.cfg.Domain = domain
 		}
 	}
-
-	hc.mu.Lock()
-	// Restore enabled state; true is the default when the key is absent (old records).
-	// If the key is present with a non-boolean type, fail closed.
-	if rawEnabled, exists := data["enabled"]; exists {
-		enabled, ok := rawEnabled.(bool)
-		if !ok {
-			hc.inboundEnabled = false
-			hc.mu.Unlock()
-			return fmt.Errorf("hysteria: corrupt enabled field in stored inbound config (type %T)", rawEnabled)
-		}
-		hc.inboundEnabled = enabled
+	if restoredEnabled != nil {
+		hc.inboundEnabled = *restoredEnabled
 	}
 	hc.accessTags = accessTags
 	hc.remark = rec.Remark
-	hc.mu.Unlock()
-
 	// Re-create inbound with restored config.
 	// Actual listen is always 127.0.0.1 (see process.go); keep inbound metadata aligned.
-	hc.inbound = inbound.NewDefaultInbound(
+	inb := inbound.NewDefaultInbound(
 		defaultInboundTag,
 		contracts.ProtocolHysteria2,
 		uint32(hc.cfg.Port),
 	)
-	hc.inbound.(*inbound.DefaultInbound).SetListenAddr("127.0.0.1")
+	inb.SetListenAddr("127.0.0.1")
+	hc.inbound = inb
+	hc.mu.Unlock()
 	return nil
 }
 
@@ -917,6 +932,8 @@ func (hc *HysteriaContainer) GetUserSubscriptions(req contracts.SubscriptionRequ
 	enabled := hc.inboundEnabled
 	accessTags := cloneStringSlice(hc.accessTags)
 	remark := hc.remark
+	targetPort := uint32(hc.cfg.Port)
+	certFile := hc.cfg.CertFile
 	hc.mu.Unlock()
 	if !enabled {
 		return nil, nil
@@ -924,7 +941,7 @@ func (hc *HysteriaContainer) GetUserSubscriptions(req contracts.SubscriptionRequ
 	if !hc.userMgr.CanUserAccessInboundByUsername(req.User.Username, accessTags) {
 		return nil, nil
 	}
-	port, ok := hc.userMgr.GetUserPortByDst(req.User.Username, uint32(hc.cfg.Port))
+	port, ok := hc.userMgr.GetUserPortByDst(req.User.Username, targetPort)
 	if !ok {
 		return nil, nil
 	}
@@ -943,7 +960,7 @@ func (hc *HysteriaContainer) GetUserSubscriptions(req contracts.SubscriptionRequ
 	// hysteria2://password@host:port/?[params]#nodeName
 	// Standard URI scheme: https://v2.hysteria.network/zh/docs/developers/URI-Scheme/
 	params := ""
-	if hc.cfg.CertFile != "" {
+	if certFile != "" {
 		// self-signed cert → insecure=1
 		params = "insecure=1"
 	}
@@ -999,10 +1016,11 @@ func (hc *HysteriaContainer) reconcileUsers() {
 
 	users := hc.userMgr.ListUsers()
 
-	// Snapshot tracked usernames, enabled flag, and accessTags under the lock.
+	// Snapshot tracked usernames, enabled flag, accessTags, and targetPort under the lock.
 	hc.mu.Lock()
 	enabled := hc.inboundEnabled
 	accessTags := cloneStringSlice(hc.accessTags)
+	targetPort := uint32(hc.cfg.Port)
 	tracked := make([]string, 0, len(hc.addedUsers))
 	for username := range hc.addedUsers {
 		tracked = append(tracked, username)
@@ -1028,7 +1046,7 @@ func (hc *HysteriaContainer) reconcileUsers() {
 		hc.mu.Lock()
 		delete(hc.addedUsers, username)
 		hc.mu.Unlock()
-		port, ok := hc.userMgr.GetUserPortByDstForCleanup(username, uint32(hc.cfg.Port))
+		port, ok := hc.userMgr.GetUserPortByDstForCleanup(username, targetPort)
 		if ok {
 			if err := hc.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
 				Username: username,
@@ -1079,7 +1097,7 @@ func (hc *HysteriaContainer) reconcileUsers() {
 				Username:      user.Username,
 				ContainerType: contracts.ContainerHysteria,
 				InboundTag:    defaultInboundTag,
-				TargetPort:    uint32(hc.cfg.Port),
+				TargetPort:    targetPort,
 				Protocol:      contracts.ProtocolHysteria2,
 				Network:       "udp",
 			})
