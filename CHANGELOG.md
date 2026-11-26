@@ -4,49 +4,57 @@
 > 对应的 annotated tag message 里(`git tag -l --format='%(contents)' v2.9.0`),
 > 这里只留"改了什么、升级要注意什么"。
 
-## 2026-07-29 — v2.10.0 反代感知的广播地址 + http_token 自动生成
+## 2026-11-26 — v2.10.0 服务端链式代理 + 两层 Tag 隔离 + 内嵌 MCP + 反代 grpcs:// 与泄漏修复
 
-节点现在可以广播"反向代理的地址"而不是自己的地址,并用 `grpcs://` 拨对端。
-**本节点的 gRPC server 仍然是明文 h2c** —— TLS 由反代终止,服务端零改动。
+本次版本合入四组主要能力与稳定性修复：服务端链式代理（Chained Proxy）与两层 Tag 物理隔离、内嵌无状态 MCP Server（`/mcp`）、反代感知广播地址（`grpcs://`）与 `http_token` 自动生成，以及多项内存 / Goroutine 泄漏修复。
 
 ### Highlights
 
-- 新增 `end_node.reverse_proxy.grpc_addr`,形如 `grpcs://cluster.example.com:443`。
-  留空 = 广播 `grpc://{proxy_host}:{rpc_port}`,**与 v2.9 逐字节一致**。缺 scheme 按
-  `grpc://`,缺端口按 grpc→80 / grpcs→443(比照 http/https)
-- `proto.Node` 新增 `bool tls = 6`。**传输方式被声明,不被探测** —— 客户端"试 TLS
-  失败回退明文"是典型降级面,一个 RST 就能打回明文,所以没有任何回退逻辑
-- `static_nodes` 支持 URL 标量(`"grpcs://node2.example.com:443"`),与原
-  `{host, port}` mapping 共存。种子必须能表达协议,否则拨不到反代后面的节点
-- **`end_node.http_token` 留空时自动生成**,存进数据库(`local_secrets`,migration 17),
-  重启保持不变,**只在生成那一次把明文打进日志**。它是纯本机凭据,从不跨节点比较
-- 顺带修一个**当前就存在的鉴权绕过**:`getAuthHandlerFunc` 没有空值守卫,
-  `http_token` 为空时不带 `X-Token` 的请求 `"" == ""` 直接通过 —— `/api/metrics`
-  一直是无鉴权的。现在空 token 一律拒绝
-- 顺带修 `IsComplete` / `StaticNode.IsValide` 的 `Port > 1000`:它会把 443
-  (grpcs 默认端口)判为"不完整"丢弃,反代后面的节点根本进不了目录
-- 顺带修拨号地址拼接:`fmt.Sprintf("%s:%d")` 对 IPv6 字面量会拼出
-  `2001:db8::1:9090`,改用 `net.JoinHostPort`
+#### 1. 服务端链式代理（Chained Proxy）与两层 Tag 物理隔离（Migration 18）
+- **1:1 链式入站（`inbound_type="chain"`）**：`POST /api/inbound/fast` 支持在新建 inbound 时绑定 `chain_uri`（支持 `socks5`/`http`/`ss`/`vmess`/`vless`/`trojan`/`hy2`/`tuic` 及家宽 URI 兼容）与可选 `remark`、`access_tags`；禁止原地篡改已有 inbound 的类型或后端 URI，并在全容器与持久化层做全局 tag 防覆盖校验
+- **Loopback 收口与 Fail-Closed 零直连泄漏**：`FastAddInbound` 默认监听地址收紧为 `127.0.0.1`，chain 入站强制锁定 `listen` / `listen_addr` 为 `127.0.0.1`；`mihomo` 采用 `Mode: "rule"` + `IPv6: true` + `listener.proxy` + 顶部 `IN-NAME` 规则双重锁定，`xray` 启用 `RoutingService` 并按 `ado` → `adrules -append` → `AddInbound` 顺序注入（失败逆序回滚，重启等待 gRPC 就绪后重放），后端断连时严格 Fail-Closed，不回落直连
+- **后端地址安全准入（方案 A）**：`pkg/proxy/core/chain` 统一拦截未指定地址、非标准/尾部点号数值 IPv4、多播/广播、链路本地/云元数据段（`169.254.0.0/16`、`fe80::/10`）及本机管理/已分配端口；默认拒绝 loopback，显式配置 `end_node.allow_loopback_chain_target: true` 后可放行（仍拦截管理/已分配端口）；域名原样保留以支持 DDNS（Xray 出站设 `targetStrategy: "AsIs"`）
+- **两层 Tag 命名空间物理隔离**：Layer 1（Node 层 `local_node_groups` ↔ `UserSpec.TargetGroup`）与 Layer 2（Inbound 层 `InboundMeta.AccessTags` ↔ `UserSpec.InboundTags`）物理隔离、允许同名重用且绝不交叉穿透，同时约束数据面（4 容器 Forward 端口分配与本地 `AuthHysteria2`）与用户视图（`/sub`、`/api/profile`、普通用户 `GET /api/user`）
+- **运行期免重启改签与脱敏查询**：新增 `PUT /api/inbounds/tags`（gRPC `SetInboundAccessTags` / MCP `set_inbound_tags`）跨节点原子更新 `access_tags` 并即时对账，不重启代理进程；`GET /api/inbounds`（及 MCP `list_inbounds`）仅返回脱敏后的 `chain_protocol` 与 `chain_target`，绝不回显原始 `chain_uri`；多 inbound 订阅输出 `<NodeName>-<remark|tag>` 并在 Clash/Surge 转换时自动去重
+
+#### 2. 内嵌无状态 MCP Server（`/mcp`）
+- 在现有 `end_node.http_port` 上挂载 Stateless Streamable HTTP MCP 端点 `/mcp`（基于官方 Go SDK），通过统一 `Endpoint[Req, Resp]` 抽象与 HTTP API 共享执行函数、参数校验、鉴权中间件与多节点 gRPC 扇出（详见 `docs/mcp-guide.md`）
+- 新增 `end_node.mcp.enabled`（默认 `false`，关闭时返回 404）与 `end_node.mcp.read_only`（默认 `true`）；全开放时向 Admin 暴露 33 个工具（9 只读 + 24 写，9 个高危写工具标记 `DestructiveHint: true`）、向普通用户暴露 7 个工具，物理隔离 `adminServer` 与 `userServer`
+- MCP 响应层对 `auth_token` 统一脱敏为 `"[REDACTED]"`，且新增路由/MCP 漂移守卫测试防止新接口遗漏
+
+#### 3. 内存 / Goroutine 泄漏与热点分配修复
+- **Ping 采集器有界化**：关闭 `pro-bing` 的 `RecordRtts`/`RecordTTLs` 并限定每轮 `Count` 与 `Timeout`，以原子索引与 `WaitGroup` 收口生命周期；新增 `end_node.enable_ping_check`（默认 `false`），双探测均关闭时短路 `PingCollector` 并在停服时停止
+- **Xray 生命周期与退出清理**：`xray.Executor` 以 `lifecycleMu` 串行化启动/停止，启动失败回滚事件订阅与对账循环，新增幂等 `Close()` 退订 `UserManager` 事件
+- **JWT 黑名单与状态采集**：`tokenBlacklist` 记录过期时间并支持懒清理与周期扫除；`GetStatus` 行数统计改用 `sync.Pool` 复用 32 KB 缓冲流式读取，消除每秒高频大块内存分配
+
+#### 4. 反代感知的广播地址（`grpcs://`）+ `http_token` 自动生成（Migration 17）
+- 新增 `end_node.reverse_proxy.grpc_addr`，形如 `grpcs://cluster.example.com:443`。留空 = 广播 `grpc://{proxy_host}:{rpc_port}`，**与 v2.9 逐字节一致**。缺 scheme 按 `grpc://`，缺端口按 grpc→80 / grpcs→443（比照 http/https）；本节点 gRPC server 仍为明文 h2c，TLS 由反代终止
+- `proto.Node` 新增 `bool tls = 6`。**传输方式被声明，不被探测** —— 没有任何 TLS 失败回退明文的降级逻辑
+- `static_nodes` 支持 URL 标量（`"grpcs://node2.example.com:443"`），与原 `{host, port}` mapping 共存
+- **`end_node.http_token` 留空时自动生成**，存进数据库（`local_secrets`，migration 17），重启保持不变，**只在生成那一次把明文打进日志**。它是纯本机凭据，从不跨节点比较
+- 顺带修一个**既有鉴权绕过**：`getAuthHandlerFunc` 原无空值守卫，`http_token` 为空时不带 `X-Token` 的请求 `"" == ""` 直接通过 —— `/api/metrics` 此前无鉴权；现空 token 一律拒绝
+- 顺带修 `IsComplete` / `StaticNode.IsValide` 的 `Port > 1000`（防止 443 被丢弃）以及拨号地址拼接改用 `net.JoinHostPort`（修复 IPv6 字面量）
 
 ### ⚠️ 升级注意
 
-**不配 `reverse_proxy` 时行为与 v2.9 完全一致**,proto / 配置 / 静态节点写法全部向后兼容。
-但 migration 17 动了 DB,是单向的。
+**不配 `reverse_proxy` / `mcp` / `chain` 入站时默认行为与 v2.9 兼容**，proto / 配置 / 静态节点写法全部向后兼容。
 
-启用 `grpcs://` 必须按顺序走:
+**数据库迁移与回滚（Migration 17 & 18）**：Migration 17 与 18 仅包含 `ADD COLUMN ... DEFAULT ...` 与新建 `local_secrets` 表，迁移器对 `Version <= maxVersion` 是跳过而非报错（只有版本**断档**才报错），因此 **v2.9 二进制可以直接打开 v2.10 的库**（已实测）。但需注意：若在 v2.10 中已经创建了 `inbound_type="chain"` 的入站或配置了 `access_tags`/`inbound_tags`，回滚到 v2.9 后老二进制会忽略这些新增列（chain 入站将失去链式出站隔离语义、Layer 2 tag 门控不再执行），请在回滚前先清理相关 chain 入站或确认影响范围。
 
-```
-1. 全集群升到 v2.10(不配 reverse_proxy)  → 行为与 v2.9 一致,零风险
-2. 逐台配 grpc:// 反代(无 TLS)           → 老节点也能拨通,仍然兼容
-3. 全部升完后才改成 grpcs://              → 此时已无老节点
-```
+**唯一会因默认行为收紧而受影响的场景**：`enable_prometheus: true` **且** `http_token` 留空**且**抓取端不带 `X-Token` 的组合。此前 `getAuthHandlerFunc` 没有空值守卫，空 token 时 `"" == ""` 让 `/api/metrics` 事实上无鉴权；现在 token 会被自动生成、空 token 也一律拒绝，这个端点开始要求认证。升级前请给抓取端配上 token（启动日志会打印一次），或显式设置 `http_token`。其余 `/api/*` 路由不受影响（主鉴权中间件原本就有 `xtoken != ""` 守卫，JWT 登录不受影响）。
 
-老节点不认识线上的 `tls` 标志,只会用明文拨 —— 所以第 3 步之前开 grpcs 会让老节点
-连不上该节点。配了 `grpcs://` 时启动会打 WARN 提醒这个前置条件。
-
-**已知后果**:CLI 的 `--domain` 缺省取 `node.GetHost()`,配了反代后该值变成集群面地址,
-不再适合当证书域名。配了反代就显式传 `--domain`。根因是 `proxy_host` 一个字段扛了
-三重身份(广播拨号 / 订阅链接 / ping 目标),拆分留作后续。
+**其他配置与内核注意**：
+- **Xray 26.2.6+ 链式出站限制**：Xray 26.2.6 已移除 `allowInsecure`、`network: "http"`（`h2`）与 `security: "xtls"`，在 Xray 容器上添加含这三类参数的 `chain_uri` 会被直接拒绝，请改用 `mihomo` 容器（或将传输改为 `xhttp`）。
+- **`end_node.enable_ping_check` 默认 `false`**：如依赖节点间 ICMP/TCP ping 指标，请在配置中显式设为 `true`（或通过 `SetPingCheck` RPC 开启）。
+- **`FastAddInbound` 默认监听地址收紧为 `127.0.0.1`**：如需直连监听公网接口请显式传入 `listen_addr`（`chain` 入站强制锁定 `127.0.0.1`）。
+- **启用 `grpcs://` 必须按顺序走**：
+  ```
+  1. 全集群升到 v2.10(不配 reverse_proxy)  → 行为与 v2.9 一致,零风险
+  2. 逐台配 grpc:// 反代(无 TLS)           → 老节点也能拨通,仍然兼容
+  3. 全部升完后才改成 grpcs://              → 此时已无老节点
+  ```
+  老节点不认识线上的 `tls` 标志，只会用明文拨 —— 所以第 3 步之前开 grpcs 会让老节点连不上该节点。配了 `grpcs://` 时启动会打 WARN 提醒这个前置条件。
+- **已知后果**：CLI 的 `--domain` 缺省取 `node.GetHost()`，配了反代后该值变成集群面地址，不再适合当证书域名。配了反代就显式传 `--domain`。根因是 `proxy_host` 一个字段扛了三重身份（广播拨号 / 订阅链接 / ping 目标），拆分留作后续。
 
 ## 2026-07-28 — v2.9.1 管理 API 监听地址与 gRPC 解耦
 
