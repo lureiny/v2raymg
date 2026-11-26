@@ -3403,7 +3403,8 @@ func (e *Executor) syncInboundsFromXray() {
 
 	for _, inboundCfg := range inbounds {
 		tag := inboundCfg.GetTag()
-		if tag == "" || tag == APIInboundTag {
+		proxyType := inboundCfg.GetProxySettings().GetType()
+		if tag == "" || tag == APIInboundTag || strings.Contains(strings.ToLower(proxyType), "dokodemo") {
 			continue
 		}
 

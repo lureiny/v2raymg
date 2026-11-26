@@ -96,6 +96,9 @@ type clusterOpts struct {
 	// static_nodes entry, reproducing a config written before the field was
 	// dropped. It must be silently ignored and change nothing.
 	LegacySeedName string
+	// AllowLoopbackChainTarget forwards end_node.allow_loopback_chain_target to
+	// every cluster node config.
+	AllowLoopbackChainTarget bool
 }
 
 type e2eCluster struct {
@@ -194,19 +197,20 @@ func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 		HeartbeatIntervalSec: c.opts.HeartbeatIntervalSec,
 		// Node-groups routes are only registered when the cluster-user layer is on,
 		// so the suite cannot cover them otherwise.
-		ClusterUserEnabled: true,
-		EnablePrometheus:   true,
-		EnableMCP:          true,
-		NodeSumSync:        c.opts.NodeSumSync,
-		XrayBin:            c.opts.XrayBin,
-		XrayGRPCPort:       xrayGRPCPort,
-		XrayConfFile:       xrayConfFile,
-		MihomoBin:          c.opts.MihomoBin,
-		MihomoAPIPort:      mihomoAPIPort,
-		MihomoDataDir:      mihomoDataDir,
-		MihomoConf:         filepath.Join(dir, "mihomo.yaml"),
-		FwdMinPort:         fwdBase,
-		FwdMaxPort:         fwdBase + 500,
+		ClusterUserEnabled:       true,
+		EnablePrometheus:         true,
+		EnableMCP:                true,
+		NodeSumSync:              c.opts.NodeSumSync,
+		AllowLoopbackChainTarget: c.opts.AllowLoopbackChainTarget,
+		XrayBin:                  c.opts.XrayBin,
+		XrayGRPCPort:             xrayGRPCPort,
+		XrayConfFile:             xrayConfFile,
+		MihomoBin:                c.opts.MihomoBin,
+		MihomoAPIPort:            mihomoAPIPort,
+		MihomoDataDir:            mihomoDataDir,
+		MihomoConf:               filepath.Join(dir, "mihomo.yaml"),
+		FwdMinPort:               fwdBase,
+		FwdMaxPort:               fwdBase + 500,
 	}
 	if c.opts.HystBin != "" {
 		hystCert, hystKey, _, _, err := writeTempCert(dir)

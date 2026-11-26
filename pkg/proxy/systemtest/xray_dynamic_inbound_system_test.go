@@ -383,7 +383,7 @@ func writeMinimalXrayConfig(path string, apiPort int) error {
 		},
 		"inbounds": []map[string]any{
 			{
-				"tag": "api-in", "listen": "127.0.0.1", "port": apiPort,
+				"tag": "api", "listen": "127.0.0.1", "port": apiPort,
 				"protocol": "dokodemo-door",
 				"settings": map[string]any{"address": "127.0.0.1"},
 			},
@@ -392,8 +392,9 @@ func writeMinimalXrayConfig(path string, apiPort int) error {
 			{"protocol": "freedom", "tag": "direct"},
 		},
 		"routing": map[string]any{
+			"domainStrategy": "AsIs",
 			"rules": []map[string]any{
-				{"inboundTag": []string{"api-in"}, "outboundTag": "api"},
+				{"inboundTag": []string{"api"}, "outboundTag": "api"},
 			},
 		},
 	}

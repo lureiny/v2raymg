@@ -58,8 +58,19 @@ func (c *ExecutorConfig) Decode(cfg map[string]any) error {
 		}
 		c.ConfigFilePath = v
 	}
-	if v, ok := cfg["grpc_port"].(float64); ok {
-		c.GRPCAPIAddress = fmt.Sprintf("127.0.0.1:%d", int(v))
+	var grpcPort int
+	switch v := cfg["grpc_port"].(type) {
+	case int:
+		grpcPort = v
+	case int64:
+		grpcPort = int(v)
+	case uint64:
+		grpcPort = int(v)
+	case float64:
+		grpcPort = int(v)
+	}
+	if grpcPort > 0 {
+		c.GRPCAPIAddress = fmt.Sprintf("127.0.0.1:%d", grpcPort)
 	}
 	if v, ok := cfg["debug"].(bool); ok {
 		c.Debug = v

@@ -167,6 +167,9 @@ type e2eServerOpts struct {
 	// happened would otherwise pass vacuously against a log that can never
 	// contain the line.
 	LogLevel string
+	// AllowLoopbackChainTarget enables end_node.allow_loopback_chain_target so
+	// cluster E2E tests can mount loopback test SOCKS5 chain backends.
+	AllowLoopbackChainTarget bool
 
 	// Xray container — required
 	XrayBin      string // path to xray binary; empty → auto_download
@@ -341,16 +344,17 @@ func generateE2EConfig(t *testing.T, opts e2eServerOpts) string {
 			"containers": containers,
 		},
 		"end_node": map[string]any{
-			"name":              opts.NodeName,
-			"proxy_host":        "127.0.0.1",
-			"listen":            "127.0.0.1",
-			"http_listen":       "127.0.0.1",
-			"rpc_port":          opts.RpcPort,
-			"http_port":         opts.HttpPort,
-			"http_token":        e2eHTTPToken,
-			"jwt_secret":        "e2e-jwt-secret-this-is-32-chars!",
-			"jwt_expire_hours":  24,
-			"enable_prometheus": opts.EnablePrometheus,
+			"name":                        opts.NodeName,
+			"proxy_host":                  "127.0.0.1",
+			"listen":                      "127.0.0.1",
+			"http_listen":                 "127.0.0.1",
+			"rpc_port":                    opts.RpcPort,
+			"http_port":                   opts.HttpPort,
+			"http_token":                  e2eHTTPToken,
+			"jwt_secret":                  "e2e-jwt-secret-this-is-32-chars!",
+			"jwt_expire_hours":            24,
+			"enable_prometheus":           opts.EnablePrometheus,
+			"allow_loopback_chain_target": opts.AllowLoopbackChainTarget,
 			"mcp": map[string]any{
 				"enabled":   opts.EnableMCP,
 				"read_only": true,
