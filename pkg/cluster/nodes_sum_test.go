@@ -378,3 +378,42 @@ func TestComputeNodesSum_IgnoresNodeID(t *testing.T) {
 		t.Errorf("a changed node_id altered the digest (%x vs %x)", sumWith, sumOther)
 	}
 }
+
+// TestComputeNodesSum_IgnoresTLS is the same wire-compatibility guard as
+// TestComputeNodesSum_IgnoresNodeID, one field later. A peer from before this
+// release cannot see the tls flag, so folding it in would make the two sides
+// compute different sums for an identical member set — every heartbeat a
+// mismatch, every round two full directories, and a mixed cluster that never
+// converges.
+//
+// host and port ARE folded, deliberately: when a node starts advertising a
+// reverse proxy's address those change, and that is a real membership change
+// that should trigger a resync. Only the transport is invisible to the digest.
+func TestComputeNodesSum_IgnoresTLS(t *testing.T) {
+	plaintext := []*proto.Node{
+		{Name: "a", Host: "cluster.example.com", Port: 443, NodeId: "id-a"},
+		{Name: "b", Host: "10.0.0.2", Port: 5000, NodeId: "id-b"},
+	}
+	secured := []*proto.Node{
+		{Name: "a", Host: "cluster.example.com", Port: 443, NodeId: "id-a", Tls: true},
+		{Name: "b", Host: "10.0.0.2", Port: 5000, NodeId: "id-b"},
+	}
+
+	sumPlain, _ := cluster.ComputeNodesSum(plaintext)
+	sumTLS, _ := cluster.ComputeNodesSum(secured)
+	if !bytes.Equal(sumPlain, sumTLS) {
+		t.Fatalf("tls changed the digest (%x vs %x); a peer that cannot see the field would "+
+			"disagree with one that can, and the two would reconcile forever", sumPlain, sumTLS)
+	}
+
+	// The complement: moving to a proxy address DOES change the digest, because
+	// host/port are what the cluster agrees on.
+	moved := []*proto.Node{
+		{Name: "a", Host: "10.0.0.1", Port: 5000, NodeId: "id-a", Tls: true},
+		{Name: "b", Host: "10.0.0.2", Port: 5000, NodeId: "id-b"},
+	}
+	sumMoved, _ := cluster.ComputeNodesSum(moved)
+	if bytes.Equal(sumTLS, sumMoved) {
+		t.Error("a changed address must change the digest: it is a real membership change")
+	}
+}

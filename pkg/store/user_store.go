@@ -39,20 +39,68 @@ func NewSQLiteUserStore(db *DB) *SQLiteUserStore {
 	return &SQLiteUserStore{db: db}
 }
 
+const selectUserColumns = `
+		username, auth_token, expiry_time,
+		traffic_limit, upload_limit, download_limit,
+		bandwidth_upload_bps, bandwidth_download_bps,
+		max_clients, client_recycle_delay_sec, client_drain_sec,
+		port_mappings,
+		traffic_total_uplink, traffic_total_downlink,
+		role, login_password,
+		target_group, updated_at_us, origin_node, hash,
+		deletion_state, inbound_tags`
+
+func scanUserRow(scanner interface{ Scan(dest ...any) error }, caller string) (*contracts.User, error) {
+	u := &contracts.User{}
+	var expiryStr sql.NullString
+	var portMappingsStr string
+	var inboundTagsStr string
+
+	if err := scanner.Scan(
+		&u.Username, &u.AuthToken, &expiryStr,
+		&u.TrafficLimit, &u.UploadLimit, &u.DownloadLimit,
+		&u.BandwidthUploadBps, &u.BandwidthDownloadBps,
+		&u.MaxClients, &u.ClientRecycleDelaySec, &u.ClientDrainSec,
+		&portMappingsStr,
+		&u.TrafficTotalUplink, &u.TrafficTotalDownlink,
+		&u.Role, &u.LoginPassword,
+		&u.TargetGroup, &u.UpdatedAtUs, &u.OriginNode, &u.Hash,
+		&u.DeletionState, &inboundTagsStr,
+	); err != nil {
+		return nil, err
+	}
+
+	if expiryStr.Valid && expiryStr.String != "" {
+		t, parseErr := time.Parse(time.RFC3339, expiryStr.String)
+		if parseErr != nil {
+			// Fallback: SQLite datetime('now') format
+			t, parseErr = time.Parse("2006-01-02 15:04:05", expiryStr.String)
+			if parseErr != nil {
+				return nil, fmt.Errorf("%s parse expiry_time %q: %w", caller, expiryStr.String, parseErr)
+			}
+		}
+		u.ExpiryTime = t
+	}
+
+	if portMappingsStr != "" && portMappingsStr != "{}" {
+		if err := json.Unmarshal([]byte(portMappingsStr), &u.PortMappings); err != nil {
+			log.Printf("%s: failed to parse port_mappings for user %s: %v", caller, u.Username, err)
+		}
+	}
+
+	if inboundTagsStr != "" && inboundTagsStr != "[]" && inboundTagsStr != "null" {
+		if err := json.Unmarshal([]byte(inboundTagsStr), &u.InboundTags); err != nil {
+			log.Printf("%s: failed to parse inbound_tags for user %s: %v", caller, u.Username, err)
+		}
+	}
+
+	return u, nil
+}
+
 // Load reads all user rows from the database and returns them as User objects.
 // Fields not persisted (BindPorts, Extensions, Protocol) are left at zero values.
 func (s *SQLiteUserStore) Load() ([]*contracts.User, error) {
-	rows, err := s.db.DB().Query(`
-		SELECT username, auth_token, expiry_time,
-		       traffic_limit, upload_limit, download_limit,
-		       bandwidth_upload_bps, bandwidth_download_bps,
-		       max_clients, client_recycle_delay_sec, client_drain_sec,
-		       port_mappings,
-		       traffic_total_uplink, traffic_total_downlink,
-		       role, login_password,
-		       target_group, updated_at_us, origin_node, hash,
-		       deletion_state
-		FROM users`)
+	rows, err := s.db.DB().Query(`SELECT` + selectUserColumns + ` FROM users`)
 	if err != nil {
 		return nil, fmt.Errorf("SQLiteUserStore.Load: %w", err)
 	}
@@ -60,44 +108,10 @@ func (s *SQLiteUserStore) Load() ([]*contracts.User, error) {
 
 	var users []*contracts.User
 	for rows.Next() {
-		u := &contracts.User{}
-		var expiryStr sql.NullString
-		var portMappingsStr string
-
-		if err := rows.Scan(
-			&u.Username, &u.AuthToken, &expiryStr,
-			&u.TrafficLimit, &u.UploadLimit, &u.DownloadLimit,
-			&u.BandwidthUploadBps, &u.BandwidthDownloadBps,
-			&u.MaxClients, &u.ClientRecycleDelaySec, &u.ClientDrainSec,
-			&portMappingsStr,
-			&u.TrafficTotalUplink, &u.TrafficTotalDownlink,
-			&u.Role, &u.LoginPassword,
-			&u.TargetGroup, &u.UpdatedAtUs, &u.OriginNode, &u.Hash,
-			&u.DeletionState,
-		); err != nil {
+		u, err := scanUserRow(rows, "SQLiteUserStore.Load")
+		if err != nil {
 			return nil, fmt.Errorf("SQLiteUserStore.Load scan: %w", err)
 		}
-
-		if expiryStr.Valid && expiryStr.String != "" {
-			t, parseErr := time.Parse(time.RFC3339, expiryStr.String)
-			if parseErr != nil {
-				// Fallback: SQLite datetime('now') format
-				t, parseErr = time.Parse("2006-01-02 15:04:05", expiryStr.String)
-				if parseErr != nil {
-					return nil, fmt.Errorf("SQLiteUserStore.Load parse expiry_time %q: %w", expiryStr.String, parseErr)
-				}
-			}
-			u.ExpiryTime = t
-		}
-
-		// Parse port_mappings JSON
-		if portMappingsStr != "" && portMappingsStr != "{}" {
-			if err := json.Unmarshal([]byte(portMappingsStr), &u.PortMappings); err != nil {
-				// Log warning but don't fail
-				log.Printf("SQLiteUserStore.Load: failed to parse port_mappings for user %s: %v", u.Username, err)
-			}
-		}
-
 		users = append(users, u)
 	}
 
@@ -130,6 +144,14 @@ func (s *SQLiteUserStore) Save(user *contracts.User) error {
 		}
 	}
 
+	// Serialize inbound_tags to JSON array
+	inboundTagsJSON := "[]"
+	if len(user.InboundTags) > 0 {
+		if data, err := json.Marshal(user.InboundTags); err == nil {
+			inboundTagsJSON = string(data)
+		}
+	}
+
 	_, err := s.db.DB().Exec(`
 		INSERT OR REPLACE INTO users (
 			username, auth_token, expiry_time,
@@ -140,9 +162,9 @@ func (s *SQLiteUserStore) Save(user *contracts.User) error {
 			traffic_total_uplink, traffic_total_downlink,
 			role, login_password,
 			target_group, updated_at_us, origin_node, hash,
-			deletion_state,
+			deletion_state, inbound_tags,
 			updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
 		user.Username, user.AuthToken, expiryArg,
 		user.TrafficLimit, user.UploadLimit, user.DownloadLimit,
 		user.BandwidthUploadBps, user.BandwidthDownloadBps,
@@ -151,7 +173,7 @@ func (s *SQLiteUserStore) Save(user *contracts.User) error {
 		user.TrafficTotalUplink, user.TrafficTotalDownlink,
 		role, user.LoginPassword,
 		user.TargetGroup, user.UpdatedAtUs, user.OriginNode, user.Hash,
-		user.DeletionState,
+		user.DeletionState, inboundTagsJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("SQLiteUserStore.Save: %w", err)
@@ -171,73 +193,20 @@ func (s *SQLiteUserStore) Delete(username string) error {
 // Get returns a single user by username, including tombstones (DeletionState != "").
 // Returns (nil, nil) if the user does not exist.
 func (s *SQLiteUserStore) Get(username string) (*contracts.User, error) {
-	row := s.db.DB().QueryRow(`
-		SELECT username, auth_token, expiry_time,
-		       traffic_limit, upload_limit, download_limit,
-		       bandwidth_upload_bps, bandwidth_download_bps,
-		       max_clients, client_recycle_delay_sec, client_drain_sec,
-		       port_mappings,
-		       traffic_total_uplink, traffic_total_downlink,
-		       role, login_password,
-		       target_group, updated_at_us, origin_node, hash,
-		       deletion_state
-		FROM users WHERE username = ?`, username)
-
-	u := &contracts.User{}
-	var expiryStr sql.NullString
-	var portMappingsStr string
-
-	if err := row.Scan(
-		&u.Username, &u.AuthToken, &expiryStr,
-		&u.TrafficLimit, &u.UploadLimit, &u.DownloadLimit,
-		&u.BandwidthUploadBps, &u.BandwidthDownloadBps,
-		&u.MaxClients, &u.ClientRecycleDelaySec, &u.ClientDrainSec,
-		&portMappingsStr,
-		&u.TrafficTotalUplink, &u.TrafficTotalDownlink,
-		&u.Role, &u.LoginPassword,
-		&u.TargetGroup, &u.UpdatedAtUs, &u.OriginNode, &u.Hash,
-		&u.DeletionState,
-	); err != nil {
+	row := s.db.DB().QueryRow(`SELECT`+selectUserColumns+` FROM users WHERE username = ?`, username)
+	u, err := scanUserRow(row, "SQLiteUserStore.Get")
+	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("SQLiteUserStore.Get: %w", err)
 	}
-
-	if expiryStr.Valid && expiryStr.String != "" {
-		t, parseErr := time.Parse(time.RFC3339, expiryStr.String)
-		if parseErr != nil {
-			t, parseErr = time.Parse("2006-01-02 15:04:05", expiryStr.String)
-			if parseErr != nil {
-				return nil, fmt.Errorf("SQLiteUserStore.Get parse expiry_time %q: %w", expiryStr.String, parseErr)
-			}
-		}
-		u.ExpiryTime = t
-	}
-
-	if portMappingsStr != "" && portMappingsStr != "{}" {
-		if err := json.Unmarshal([]byte(portMappingsStr), &u.PortMappings); err != nil {
-			log.Printf("SQLiteUserStore.Get: failed to parse port_mappings for user %s: %v", u.Username, err)
-		}
-	}
-
 	return u, nil
 }
 
 // ListByGroup returns all users with the given target_group.
 func (s *SQLiteUserStore) ListByGroup(group string) ([]*contracts.User, error) {
-	rows, err := s.db.DB().Query(`
-		SELECT username, auth_token, expiry_time,
-		       traffic_limit, upload_limit, download_limit,
-		       bandwidth_upload_bps, bandwidth_download_bps,
-		       max_clients, client_recycle_delay_sec, client_drain_sec,
-		       port_mappings,
-		       traffic_total_uplink, traffic_total_downlink,
-		       role, login_password,
-		       target_group, updated_at_us, origin_node, hash,
-		       deletion_state
-		FROM users WHERE target_group = ?
-		ORDER BY username`, group)
+	rows, err := s.db.DB().Query(`SELECT`+selectUserColumns+` FROM users WHERE target_group = ? ORDER BY username`, group)
 	if err != nil {
 		return nil, fmt.Errorf("SQLiteUserStore.ListByGroup: %w", err)
 	}
@@ -245,41 +214,10 @@ func (s *SQLiteUserStore) ListByGroup(group string) ([]*contracts.User, error) {
 
 	var users []*contracts.User
 	for rows.Next() {
-		u := &contracts.User{}
-		var expiryStr sql.NullString
-		var portMappingsStr string
-
-		if err := rows.Scan(
-			&u.Username, &u.AuthToken, &expiryStr,
-			&u.TrafficLimit, &u.UploadLimit, &u.DownloadLimit,
-			&u.BandwidthUploadBps, &u.BandwidthDownloadBps,
-			&u.MaxClients, &u.ClientRecycleDelaySec, &u.ClientDrainSec,
-			&portMappingsStr,
-			&u.TrafficTotalUplink, &u.TrafficTotalDownlink,
-			&u.Role, &u.LoginPassword,
-			&u.TargetGroup, &u.UpdatedAtUs, &u.OriginNode, &u.Hash,
-			&u.DeletionState,
-		); err != nil {
+		u, err := scanUserRow(rows, "SQLiteUserStore.ListByGroup")
+		if err != nil {
 			return nil, fmt.Errorf("SQLiteUserStore.ListByGroup scan: %w", err)
 		}
-
-		if expiryStr.Valid && expiryStr.String != "" {
-			t, parseErr := time.Parse(time.RFC3339, expiryStr.String)
-			if parseErr != nil {
-				t, parseErr = time.Parse("2006-01-02 15:04:05", expiryStr.String)
-				if parseErr != nil {
-					return nil, fmt.Errorf("SQLiteUserStore.ListByGroup parse expiry_time %q: %w", expiryStr.String, parseErr)
-				}
-			}
-			u.ExpiryTime = t
-		}
-
-		if portMappingsStr != "" && portMappingsStr != "{}" {
-			if err := json.Unmarshal([]byte(portMappingsStr), &u.PortMappings); err != nil {
-				log.Printf("SQLiteUserStore.ListByGroup: failed to parse port_mappings for user %s: %v", u.Username, err)
-			}
-		}
-
 		users = append(users, u)
 	}
 

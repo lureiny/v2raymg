@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/chain"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/inbound"
@@ -99,6 +101,12 @@ type MihomoContainer struct {
 	// listed here.
 	safePathRoots []string
 }
+
+var (
+	_ container.ChainCapable        = (*MihomoContainer)(nil)
+	_ container.InboundTagUpdater   = (*MihomoContainer)(nil)
+	_ container.InboundMetaProvider = (*MihomoContainer)(nil)
+)
 
 // MihomoOption configures optional dependencies at construction time.
 type MihomoOption func(*MihomoContainer)
@@ -310,6 +318,63 @@ func (c *MihomoContainer) Init(_ any) error { return nil }
 func (c *MihomoContainer) Reload() error      { return c.pushConfig() }
 func (c *MihomoContainer) ConfigFile() string { return c.cfg.ConfigFilePath }
 
+// SupportsChainOutbound reports that mihomo supports 1:1 per-inbound chained outbounds.
+func (c *MihomoContainer) SupportsChainOutbound() bool { return true }
+
+// ValidateChainURI verifies that rawURI parses cleanly and can be rendered as a
+// mihomo proxies[] outbound entry.
+func (c *MihomoContainer) ValidateChainURI(rawURI string) error {
+	spec, err := chain.ParseURI(rawURI)
+	if err != nil {
+		return err
+	}
+	if _, err := chain.RenderMihomoProxy("__validate__", spec); err != nil {
+		return err
+	}
+	return nil
+}
+
+// GetInboundMeta returns the chain and two-layer visibility metadata for tag,
+// with a cloned AccessTags slice.
+func (c *MihomoContainer) GetInboundMeta(tag string) (contracts.InboundMeta, bool) {
+	c.inboundsMu.Lock()
+	inb, exists := c.inbounds[tag]
+	c.inboundsMu.Unlock()
+	if !exists {
+		return contracts.InboundMeta{}, false
+	}
+	return inb.Meta(), true
+}
+
+// SetInboundAccessTags updates an inbound's Layer 2 access_tags in memory and
+// InboundStore without reloading the mihomo process, then runs bidirectional
+// user reconciliation so ports are allocated or revoked immediately.
+func (c *MihomoContainer) SetInboundAccessTags(tag string, accessTags []string) error {
+	normalized, err := contracts.NormalizeAccessTags(accessTags)
+	if err != nil {
+		return fmt.Errorf("mihomo: %w", err)
+	}
+
+	c.inboundsMu.Lock()
+	inb, exists := c.inbounds[tag]
+	if !exists {
+		c.inboundsMu.Unlock()
+		return fmt.Errorf("mihomo: inbound %q not found", tag)
+	}
+
+	prevTags := inb.GetAccessTags()
+	inb.SetAccessTags(normalized)
+	if err := c.persistInbound(inb); err != nil {
+		inb.SetAccessTags(prevTags)
+		c.inboundsMu.Unlock()
+		return fmt.Errorf("mihomo: persist access tags for inbound %q: %w", tag, err)
+	}
+	c.inboundsMu.Unlock()
+
+	c.reconcileUsersForInbound(tag)
+	return nil
+}
+
 // Restore is the Restorable capability entry point invoked by
 // container.ContainerMgr.StartAll after Start() returns. It rebuilds the
 // in-memory inbound map from the InboundStore and converges forward rules
@@ -478,7 +543,19 @@ func (c *MihomoContainer) refreshCachedVersionAfterRestart() {
 // mihomo accepts the config and only logs the bind failure, leaving us
 // advertising a listener that never came up.
 func (c *MihomoContainer) FastAddInbound(tag string, params map[string]any) error {
-	params, claimed, err := c.claimPortForParams(params)
+	if err := contracts.ValidateInboundTag(tag); err != nil {
+		return fmt.Errorf("mihomo: %w", err)
+	}
+	if params == nil {
+		return fmt.Errorf("mihomo: params must not be nil")
+	}
+
+	meta, listen, listenAddr, err := c.parseFastAddMetadata(tag, params)
+	if err != nil {
+		return err
+	}
+
+	resolved, claimed, err := c.claimPortForParams(params)
 	if err != nil {
 		return err
 	}
@@ -493,10 +570,22 @@ func (c *MihomoContainer) FastAddInbound(tag string, params map[string]any) erro
 		}
 	}()
 
-	inb, err := fastAddBuildInbound(tag, params)
+	if meta.InboundType == contracts.InboundTypeChain {
+		resolved["listen"] = "127.0.0.1"
+		resolved["listen_addr"] = "127.0.0.1"
+	} else if listen != "" && listenAddr == "" {
+		resolved["listen_addr"] = listen
+	}
+
+	inb, err := fastAddBuildInbound(tag, resolved)
 	if err != nil {
 		return err
 	}
+	if meta.InboundType == contracts.InboundTypeChain && inb.ListenAddr() != "127.0.0.1" {
+		return fmt.Errorf("mihomo: chain inbound %q must listen on 127.0.0.1 (got %q)", tag, inb.ListenAddr())
+	}
+	inb.SetMeta(meta)
+
 	// Wire the user manager onto the inbound before it enters the map so
 	// a concurrent user event reading inbounds via handleUserEvent finds
 	// it ready for AddUser. No-op when userMgr is nil (unit tests).
@@ -517,6 +606,124 @@ func (c *MihomoContainer) FastAddInbound(tag string, params map[string]any) erro
 	// periodic reconcile loop converges further drift. Matches xray.
 	c.reconcileUsersForInbound(tag)
 	return nil
+}
+
+func (c *MihomoContainer) parseFastAddMetadata(tag string, params map[string]any) (contracts.InboundMeta, string, string, error) {
+	rawType, err := optionalParamString(params, "inbound_type")
+	if err != nil {
+		return contracts.InboundMeta{}, "", "", err
+	}
+	chainURI, err := optionalParamString(params, "chain_uri")
+	if err != nil {
+		return contracts.InboundMeta{}, "", "", err
+	}
+	chainURI = strings.TrimSpace(chainURI)
+
+	remark, err := optionalParamString(params, "remark")
+	if err != nil {
+		return contracts.InboundMeta{}, "", "", err
+	}
+	remark = strings.TrimSpace(remark)
+
+	listen, err := optionalParamString(params, "listen")
+	if err != nil {
+		return contracts.InboundMeta{}, "", "", err
+	}
+	listen = strings.TrimSpace(listen)
+
+	listenAddr, err := optionalParamString(params, "listen_addr")
+	if err != nil {
+		return contracts.InboundMeta{}, "", "", err
+	}
+	listenAddr = strings.TrimSpace(listenAddr)
+
+	rawTags, err := parseAccessTagsParam(params["access_tags"])
+	if err != nil {
+		return contracts.InboundMeta{}, "", "", err
+	}
+	accessTags, err := contracts.NormalizeAccessTags(rawTags)
+	if err != nil {
+		return contracts.InboundMeta{}, "", "", fmt.Errorf("mihomo: %w", err)
+	}
+
+	var inboundType contracts.InboundType
+	if strings.TrimSpace(rawType) == "" {
+		if chainURI != "" {
+			inboundType = contracts.InboundTypeChain
+		} else {
+			inboundType = contracts.InboundTypeDirect
+		}
+	} else {
+		inboundType, err = contracts.NormalizeInboundType(rawType)
+		if err != nil {
+			return contracts.InboundMeta{}, "", "", fmt.Errorf("mihomo: %w", err)
+		}
+	}
+
+	if inboundType == contracts.InboundTypeChain && chainURI == "" {
+		return contracts.InboundMeta{}, "", "", fmt.Errorf("mihomo: chain_uri is required when inbound_type is %q", contracts.InboundTypeChain)
+	}
+	if inboundType == contracts.InboundTypeDirect && chainURI != "" {
+		return contracts.InboundMeta{}, "", "", fmt.Errorf("mihomo: chain_uri must be empty when inbound_type is %q", contracts.InboundTypeDirect)
+	}
+
+	if inboundType == contracts.InboundTypeChain {
+		if listen != "" && listen != "127.0.0.1" {
+			return contracts.InboundMeta{}, "", "", fmt.Errorf("mihomo: chain inbound %q must listen on 127.0.0.1 (got listen=%q)", tag, listen)
+		}
+		if listenAddr != "" && listenAddr != "127.0.0.1" {
+			return contracts.InboundMeta{}, "", "", fmt.Errorf("mihomo: chain inbound %q must listen on 127.0.0.1 (got listen_addr=%q)", tag, listenAddr)
+		}
+		if err := c.ValidateChainURI(chainURI); err != nil {
+			return contracts.InboundMeta{}, "", "", fmt.Errorf("mihomo: validate chain_uri for %q: %w", tag, err)
+		}
+		if remark == "" {
+			if spec, parseErr := chain.ParseURI(chainURI); parseErr == nil {
+				remark = strings.TrimSpace(spec.Remark)
+			}
+		}
+	}
+
+	return contracts.InboundMeta{
+		InboundType:      inboundType,
+		AccessTags:       accessTags,
+		ChainOutboundURI: chainURI,
+		Remark:           remark,
+	}, listen, listenAddr, nil
+}
+
+func optionalParamString(params map[string]any, key string) (string, error) {
+	v, ok := params[key]
+	if !ok || v == nil {
+		return "", nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("mihomo: param %q must be string, got %T", key, v)
+	}
+	return s, nil
+}
+
+func parseAccessTagsParam(raw any) ([]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v, nil
+	case []any:
+		out := make([]string, 0, len(v))
+		for i, elem := range v {
+			s, ok := elem.(string)
+			if !ok {
+				return nil, fmt.Errorf("mihomo: param \"access_tags\"[%d] must be string, got %T", i, elem)
+			}
+			out = append(out, s)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("mihomo: param \"access_tags\" must be []string, got %T", raw)
+	}
 }
 
 // claimPortForParams resolves params["port"] through the shared port authority
@@ -613,9 +820,12 @@ func (c *MihomoContainer) RemoveInboundConfig(tag string) error {
 		return fmt.Errorf("mihomo: inbound %q not found", tag)
 	}
 
-	// Phase 2: Release forward rules BEFORE REST push. If this fails we
-	// haven't changed any state yet; caller can retry.
+	// Phase 2: Mark removed and release forward rules BEFORE REST push. If this
+	// or a later phase fails before map delete, unmark removed so the inbound
+	// remains usable until retried.
+	inb.removed.Store(true)
 	if err := inb.ReleaseAllUserPorts(); err != nil {
+		inb.removed.Store(false)
 		return fmt.Errorf("mihomo: release forward rules for inbound %q: %w", tag, err)
 	}
 
@@ -628,11 +838,13 @@ func (c *MihomoContainer) RemoveInboundConfig(tag string) error {
 		snapshot = append(snapshot, v)
 	}
 	if err := c.pushConfigWithSnapshot(snapshot); err != nil {
+		inb.removed.Store(false)
 		return fmt.Errorf("mihomo: push config: %w", err)
 	}
 
 	// Phase 4: Store delete then map delete.
 	if err := c.deleteInboundRecord(tag); err != nil {
+		inb.removed.Store(false)
 		return fmt.Errorf("mihomo: delete inbound record %q (listener already removed from mihomo; retry to finish): %w", tag, err)
 	}
 
@@ -722,10 +934,19 @@ func (c *MihomoContainer) persistInbound(inb *MihomoInbound) error {
 	if err != nil {
 		return fmt.Errorf("serialise: %w", err)
 	}
+	meta := inb.Meta()
+	inboundType := string(meta.InboundType)
+	if inboundType == "" {
+		inboundType = string(contracts.InboundTypeDirect)
+	}
 	rec := &store.InboundRecord{
-		Tag:           inb.Tag(),
-		ContainerType: string(contracts.ContainerMihomo),
-		NativeJSON:    native,
+		Tag:              inb.Tag(),
+		ContainerType:    string(contracts.ContainerMihomo),
+		NativeJSON:       native,
+		InboundType:      inboundType,
+		AccessTags:       meta.AccessTags,
+		ChainOutboundURI: meta.ChainOutboundURI,
+		Remark:           meta.Remark,
 	}
 	return c.storeMgr.InboundStore().Save(rec)
 }
@@ -786,10 +1007,11 @@ func (c *MihomoContainer) buildBaseConfig() mihomoInitialConfig {
 	return mihomoInitialConfig{
 		MixedPort:          0,
 		AllowLan:           false,
+		IPv6:               true,
 		ExternalController: c.cfg.ExternalController,
 		Secret:             c.cfg.Secret,
 		LogLevel:           "info",
-		Mode:               "global",
+		Mode:               "rule",
 		Proxies:            []any{},
 		ProxyGroups:        []any{},
 		Rules:              []string{"MATCH,DIRECT"},
@@ -817,17 +1039,22 @@ func (c *MihomoContainer) buildBaseConfig() mihomoInitialConfig {
 // earlier claim and be indistinguishable from a real conflict. A Stop/Start
 // cycle keeps its claims for the same reason: the records never went away.
 func (c *MihomoContainer) restoreAndPushInbounds() error {
+	var dropped []*MihomoInbound
+	dbMihomoTags := make(map[string]struct{})
+	keptPorts := make(map[uint32]struct{})
 	if c.storeMgr != nil {
 		records, err := c.storeMgr.InboundStore().Load()
 		if err != nil {
 			return fmt.Errorf("load inbound records: %w", err)
 		}
 		c.inboundsMu.Lock()
-		clear(c.inbounds)
+		prevInbounds := c.inbounds
+		nextInbounds := make(map[string]*MihomoInbound, len(records))
 		for _, rec := range records {
 			if rec.ContainerType != string(contracts.ContainerMihomo) {
 				continue
 			}
+			dbMihomoTags[rec.Tag] = struct{}{}
 			inb, err := FromNative(rec.NativeJSON)
 			if err != nil {
 				// A single corrupt record shouldn't block startup. Log and
@@ -835,20 +1062,81 @@ func (c *MihomoContainer) restoreAndPushInbounds() error {
 				log.Warnf("mihomo: skip unrecoverable inbound record %q: %v", rec.Tag, err)
 				continue
 			}
+			inboundType, err := contracts.NormalizeInboundType(rec.InboundType)
+			if err != nil {
+				log.Warnf("mihomo: skip inbound record %q with invalid inbound_type %q: %v", rec.Tag, rec.InboundType, err)
+				continue
+			}
+			if inboundType == contracts.InboundTypeChain {
+				if err := c.ValidateChainURI(rec.ChainOutboundURI); err != nil {
+					log.Warnf("mihomo: skip chain inbound record %q with invalid chain_outbound_uri (%s): %v",
+						rec.Tag, chain.RedactURI(rec.ChainOutboundURI), err)
+					continue
+				}
+				if inb.ListenAddr() != "127.0.0.1" {
+					inb.DefaultInbound.SetListenAddr("127.0.0.1")
+					if inb.ProtocolParams != nil {
+						inb.ProtocolParams.ListenAddr = "127.0.0.1"
+					}
+				}
+			}
+			accessTags, err := contracts.NormalizeAccessTags(rec.AccessTags)
+			if err != nil {
+				log.Warnf("mihomo: skip inbound record %q with invalid access_tags: %v", rec.Tag, err)
+				continue
+			}
+			inb.SetMeta(contracts.InboundMeta{
+				InboundType:      inboundType,
+				AccessTags:       accessTags,
+				ChainOutboundURI: rec.ChainOutboundURI,
+				Remark:           rec.Remark,
+			})
 			// Re-attach user manager to restored inbounds so user-event and
 			// reconcile paths can call AddUser/RemoveUser/ReleaseAllUserPorts.
 			if c.userMgr != nil {
 				inb.SetUserManager(c.userMgr)
 			}
-			c.inbounds[rec.Tag] = inb
+			// Preserve prior addedUsers snapshot for same-tag same-port inbounds
+			// so subsequent reconcileUsers can still revoke rules for users who
+			// lost access across the restore.
+			if prev, existed := prevInbounds[rec.Tag]; existed && prev.Port() == inb.Port() {
+				for _, u := range prev.listAddedUsers() {
+					inb.markAddedUser(u)
+				}
+			}
+			nextInbounds[rec.Tag] = inb
+			if inb.Port() != 0 {
+				keptPorts[inb.Port()] = struct{}{}
+			}
 		}
+		for tag, prev := range prevInbounds {
+			if next, kept := nextInbounds[tag]; !kept || next.Port() != prev.Port() {
+				dropped = append(dropped, prev)
+			}
+		}
+		c.inbounds = nextInbounds
 		c.inboundsMu.Unlock()
 	} else {
 		// No store configured: still clear the map so the restore path is
 		// idempotent across retries.
 		c.inboundsMu.Lock()
+		for _, prev := range c.inbounds {
+			dropped = append(dropped, prev)
+		}
 		clear(c.inbounds)
 		c.inboundsMu.Unlock()
+	}
+
+	for _, prev := range dropped {
+		prev.removed.Store(true)
+		if err := prev.ReleaseAllUserPorts(); err != nil {
+			log.Warnf("mihomo: release forward rules for dropped inbound %q on restore failed: %v", prev.Tag(), err)
+		}
+		if _, stillPersisted := dbMihomoTags[prev.Tag()]; !stillPersisted {
+			if _, portUsed := keptPorts[prev.Port()]; !portUsed {
+				container.ReleaseInboundPort(c.portClaimer, prev.Port())
+			}
+		}
 	}
 	return c.pushConfig()
 }
@@ -920,9 +1208,9 @@ func (c *MihomoContainer) startUserEventHandler() {
 
 // handleUserEvent routes a single user event to every inbound.
 //
-//   - Add:    allocate forward rule on every inbound for this user
-//   - Remove: release forward rule on every inbound for this user
-//   - Update: re-evaluate IsUserVisible; flip to add or remove accordingly
+//   - Add/Update: evaluate CanUserAccessInbound per inbound (Layer 1 node group
+//   - Layer 2 access_tags); add forward rule if allowed, remove if denied.
+//   - Remove: release forward rule on every inbound for this user.
 //
 // Per-inbound failures are logged (inside syncUserToInbound /
 // removeUserFromInbounds) and do not short-circuit the rest of the
@@ -932,30 +1220,39 @@ func (c *MihomoContainer) handleUserEvent(event usermanager.UserEvent) {
 		return
 	}
 	switch event.Type {
-	case usermanager.UserEventAdd:
-		c.syncUserToInbound(event.Username, event.User)
-	case usermanager.UserEventRemove:
-		c.removeUserFromInbounds(event.Username)
-	case usermanager.UserEventUpdate:
-		if event.User != nil && !c.userMgr.IsUserVisible(event.User) {
-			c.removeUserFromInbounds(event.Username)
-		} else if event.User != nil {
-			c.syncUserToInbound(event.Username, event.User)
+	case usermanager.UserEventAdd, usermanager.UserEventUpdate:
+		if event.User == nil {
+			return
 		}
+		c.syncUserToInbound(event.Username, event.User)
+	case usermanager.UserEventRemove, usermanager.UserEventExpire:
+		c.removeUserFromInbounds(event.Username)
 	}
 }
 
-// syncUserToInbound wires a user onto every current inbound. Snapshots
-// the inbound list under inboundsMu so the AddUser calls — which may block
-// on UserManager.GetBindPort — run outside any container-level lock.
+// syncUserToInbound evaluates two-layer access control per inbound and wires or
+// tears down the user's forward rule accordingly. Snapshots the inbound list
+// under inboundsMu so AddUser/RemoveUser — which may block on UserManager —
+// run outside any container-level lock.
 func (c *MihomoContainer) syncUserToInbound(username string, user *contracts.User) {
-	if user == nil {
+	if user == nil || c.userMgr == nil {
 		return
 	}
 	for _, inb := range c.snapshotInbounds() {
-		if _, err := inb.AddUser(username, user); err != nil {
-			log.Warn("mihomo: add user to inbound failed",
-				"user", username, "inbound", inb.Tag(), "err", err)
+		if c.userMgr.CanUserAccessInbound(user, inb.GetAccessTags()) {
+			if _, err := inb.AddUser(username, user); err != nil {
+				log.Warn("mihomo: add user to inbound failed",
+					"user", username, "inbound", inb.Tag(), "err", err)
+				continue
+			}
+			if !c.userMgr.CanUserAccessInbound(user, inb.GetAccessTags()) {
+				_ = inb.RemoveUser(username)
+			}
+		} else {
+			if err := inb.RemoveUser(username); err != nil {
+				log.Warn("mihomo: remove unauthorized user from inbound failed",
+					"user", username, "inbound", inb.Tag(), "err", err)
+			}
 		}
 	}
 }
@@ -989,12 +1286,8 @@ func (c *MihomoContainer) snapshotInbounds() []*MihomoInbound {
 }
 
 // reconcileUsers is the "full sweep" path: bring every inbound's forward
-// rules in line with the UserManager's current visible-user set.
-//
-// Two phases per inbound:
-//  1. Remove users that the inbound has tracked but UserManager no longer
-//     considers visible (e.g. group change, user removed).
-//  2. Add users that are visible but not yet tracked by the inbound.
+// rules in line with UserManager's current visible users and each inbound's
+// Layer 2 access_tags.
 //
 // Called on Start after the initial restore, and on every reconcile tick.
 // Best-effort: per-user failures are logged and skipped.
@@ -1003,41 +1296,17 @@ func (c *MihomoContainer) reconcileUsers() {
 		return
 	}
 	users := c.userMgr.ListUsers()
-	visible := make(map[string]*contracts.User, len(users))
-	for _, u := range users {
-		visible[u.Username] = u
-	}
+	visible := indexUsersByName(users)
 
 	for _, inb := range c.snapshotInbounds() {
-		for _, username := range inb.listAddedUsers() {
-			if _, ok := visible[username]; ok {
-				continue
-			}
-			if err := inb.RemoveUser(username); err != nil {
-				log.Warn("mihomo: reconcile remove stale user failed",
-					"user", username, "inbound", inb.Tag(), "err", err)
-			}
-		}
-		for _, user := range users {
-			if inb.hasAddedUser(user.Username) {
-				continue
-			}
-			if _, err := inb.AddUser(user.Username, user); err != nil {
-				log.Warn("mihomo: reconcile add user failed",
-					"user", user.Username, "inbound", inb.Tag(), "err", err)
-			}
-		}
+		c.reconcileInboundUsers(inb, users, visible)
 	}
 }
 
-// reconcileUsersForInbound wires every currently-visible user to a single
-// newly-added inbound. Called by FastAddInbound (outside inboundsMu) so
-// existing users get forward rules on the fresh listener without waiting
-// for the next reconcile tick.
-//
-// Looks up the inbound via inboundsMu; a concurrent RemoveInboundConfig
-// that beat this call returns silently (the Remove's ReleaseAllUserPorts
-// cleaned any earlier state).
+// reconcileUsersForInbound performs bidirectional reconciliation for a single
+// inbound: removing tracked users who are no longer authorized (Layer 1 + Layer 2)
+// and adding visible users who pass CanUserAccessInbound and are not yet tracked.
+// Called by FastAddInbound and SetInboundAccessTags outside inboundsMu.
 func (c *MihomoContainer) reconcileUsersForInbound(tag string) {
 	if c.userMgr == nil {
 		return
@@ -1048,13 +1317,44 @@ func (c *MihomoContainer) reconcileUsersForInbound(tag string) {
 	if !exists {
 		return
 	}
-	for _, user := range c.userMgr.ListUsers() {
+	users := c.userMgr.ListUsers()
+	c.reconcileInboundUsers(inb, users, indexUsersByName(users))
+}
+
+func indexUsersByName(users []*contracts.User) map[string]*contracts.User {
+	visible := make(map[string]*contracts.User, len(users))
+	for _, u := range users {
+		visible[u.Username] = u
+	}
+	return visible
+}
+
+func (c *MihomoContainer) reconcileInboundUsers(inb *MihomoInbound, users []*contracts.User, visible map[string]*contracts.User) {
+	accessTags := inb.GetAccessTags()
+	for _, username := range inb.listAddedUsers() {
+		user, ok := visible[username]
+		if ok && c.userMgr.CanUserAccessInbound(user, accessTags) {
+			continue
+		}
+		if err := inb.RemoveUser(username); err != nil {
+			log.Warn("mihomo: reconcile remove stale/unauthorized user failed",
+				"user", username, "inbound", inb.Tag(), "err", err)
+		}
+	}
+	for _, user := range users {
+		if !c.userMgr.CanUserAccessInbound(user, accessTags) {
+			continue
+		}
 		if inb.hasAddedUser(user.Username) {
 			continue
 		}
 		if _, err := inb.AddUser(user.Username, user); err != nil {
-			log.Warn("mihomo: reconcile for inbound add user failed",
-				"user", user.Username, "inbound", tag, "err", err)
+			log.Warn("mihomo: reconcile add user failed",
+				"user", user.Username, "inbound", inb.Tag(), "err", err)
+			continue
+		}
+		if !c.userMgr.CanUserAccessInbound(user, inb.GetAccessTags()) {
+			_ = inb.RemoveUser(user.Username)
 		}
 	}
 }

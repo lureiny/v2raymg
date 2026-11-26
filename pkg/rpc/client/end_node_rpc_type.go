@@ -36,4 +36,5 @@ const (
 	ResetAuthTokenReqType
 	GetContainersReqType
 	ResetUserTrafficReqType
+	SetInboundAccessTagsReqType
 )

@@ -156,7 +156,7 @@ func (r *Renderer) applyUserBindings(inbounds []interface{}, userBindings map[st
 func (r *Renderer) buildAPI(port int) map[string]interface{} {
 	return map[string]interface{}{
 		"tag":      APIInboundTag,
-		"services": []string{"HandlerService", "LoggerService", "StatsService"},
+		"services": []string{"HandlerService", "LoggerService", "StatsService", "RoutingService"},
 	}
 }
 

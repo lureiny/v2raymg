@@ -22,6 +22,11 @@ type ClusterNode struct {
 	Name   string
 	Host   string
 	Port   int32
+	// TLS records how to reach Host:Port. Stored alongside the address because
+	// it is part of reaching it: a peer behind a TLS-terminating reverse proxy
+	// cannot be dialled in plaintext, and without this the first outbound dial
+	// after every restart would go out wrong.
+	TLS bool
 }
 
 // ClusterSeed is an address-only bootstrap hint with no known identity.
@@ -35,6 +40,7 @@ type ClusterSeed struct {
 	Host string
 	Port int32
 	Name string
+	TLS  bool
 }
 
 // ClusterNodesStore persists the dynamically discovered part of the node
@@ -80,7 +86,7 @@ func NewSQLiteClusterNodesStore(db *DB) *SQLiteClusterNodesStore {
 
 // List returns all persisted nodes, or an empty (non-nil) slice when there are none.
 func (s *SQLiteClusterNodesStore) List() ([]ClusterNode, error) {
-	rows, err := s.db.DB().Query(`SELECT node_id, name, host, port FROM cluster_nodes`)
+	rows, err := s.db.DB().Query(`SELECT node_id, name, host, port, tls FROM cluster_nodes`)
 	if err != nil {
 		return nil, fmt.Errorf("SQLiteClusterNodesStore.List: %w", err)
 	}
@@ -89,7 +95,7 @@ func (s *SQLiteClusterNodesStore) List() ([]ClusterNode, error) {
 	nodes := []ClusterNode{}
 	for rows.Next() {
 		var n ClusterNode
-		if err := rows.Scan(&n.NodeID, &n.Name, &n.Host, &n.Port); err != nil {
+		if err := rows.Scan(&n.NodeID, &n.Name, &n.Host, &n.Port, &n.TLS); err != nil {
 			return nil, fmt.Errorf("SQLiteClusterNodesStore.List scan: %w", err)
 		}
 		nodes = append(nodes, n)
@@ -108,11 +114,12 @@ func (s *SQLiteClusterNodesStore) Upsert(node ClusterNode) error {
 		return fmt.Errorf("SQLiteClusterNodesStore.Upsert: empty node id")
 	}
 	_, err := s.db.DB().Exec(`
-		INSERT INTO cluster_nodes (node_id, name, host, port, created_at)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO cluster_nodes (node_id, name, host, port, tls, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(node_id) DO UPDATE SET
-			name = excluded.name, host = excluded.host, port = excluded.port`,
-		node.NodeID, node.Name, node.Host, node.Port, time.Now().Unix())
+			name = excluded.name, host = excluded.host, port = excluded.port,
+			tls = excluded.tls`,
+		node.NodeID, node.Name, node.Host, node.Port, node.TLS, time.Now().Unix())
 	if err != nil {
 		return fmt.Errorf("SQLiteClusterNodesStore.Upsert %q: %w", node.NodeID, err)
 	}
@@ -130,7 +137,7 @@ func (s *SQLiteClusterNodesStore) Delete(nodeID string) error {
 // ListSeeds returns the pre-2.8 rows drained by migration 16, or an empty
 // (non-nil) slice once they have been consumed.
 func (s *SQLiteClusterNodesStore) ListSeeds() ([]ClusterSeed, error) {
-	rows, err := s.db.DB().Query(`SELECT host, port, name FROM cluster_seeds`)
+	rows, err := s.db.DB().Query(`SELECT host, port, name, tls FROM cluster_seeds`)
 	if err != nil {
 		return nil, fmt.Errorf("SQLiteClusterNodesStore.ListSeeds: %w", err)
 	}
@@ -139,7 +146,7 @@ func (s *SQLiteClusterNodesStore) ListSeeds() ([]ClusterSeed, error) {
 	seeds := []ClusterSeed{}
 	for rows.Next() {
 		var sd ClusterSeed
-		if err := rows.Scan(&sd.Host, &sd.Port, &sd.Name); err != nil {
+		if err := rows.Scan(&sd.Host, &sd.Port, &sd.Name, &sd.TLS); err != nil {
 			return nil, fmt.Errorf("SQLiteClusterNodesStore.ListSeeds scan: %w", err)
 		}
 		seeds = append(seeds, sd)

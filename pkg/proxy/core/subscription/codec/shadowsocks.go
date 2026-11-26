@@ -2,7 +2,9 @@ package codec
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strconv"
@@ -71,9 +73,35 @@ func (n *ShadowsocksNode) Encode() string {
 }
 
 func DecodeShadowsocks(uri string) (*ShadowsocksNode, error) {
+	idx := strings.Index(uri, "://")
+	if idx < 0 {
+		return nil, fmt.Errorf("ss: parse URI: missing scheme")
+	}
+	scheme := strings.ToLower(uri[:idx])
+	if scheme != "ss" {
+		return nil, fmt.Errorf("ss: unexpected scheme %q", scheme)
+	}
+
+	// Check whether authority before '?'/'#' lacks '@' — if so, handle OpenWrt
+	// PassWall/SSRPlus full-string base64 format: ss://BASE64(method:pass@host:port)#remark
+	rest := uri[idx+3:]
+	beforeFrag := rest
+	if fragIdx := strings.IndexByte(rest, '#'); fragIdx >= 0 {
+		beforeFrag = rest[:fragIdx]
+	}
+	beforeQuery := beforeFrag
+	if qIdx := strings.IndexByte(beforeFrag, '?'); qIdx >= 0 {
+		beforeQuery = beforeFrag[:qIdx]
+	}
+	if !strings.Contains(beforeQuery, "@") {
+		if n, err := decodeShadowsocksFullBase64(uri); err == nil {
+			return n, nil
+		}
+	}
+
 	u, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("ss: parse URI: %w", err)
+		return nil, fmt.Errorf("ss: parse URI: %w", sanitizeURLError(err))
 	}
 	if u.Scheme != "ss" {
 		return nil, fmt.Errorf("ss: unexpected scheme %q", u.Scheme)
@@ -99,13 +127,124 @@ func DecodeShadowsocks(uri string) (*ShadowsocksNode, error) {
 		Method:   method,
 	}
 
-	if raw := u.Query().Get("plugin"); raw != "" {
+	applyShadowsocksPluginQuery(n, u.Query())
+	return n, nil
+}
+
+func decodeShadowsocksFullBase64(uri string) (*ShadowsocksNode, error) {
+	idx := strings.Index(uri, "://")
+	rest := uri[idx+3:]
+
+	var fragment string
+	beforeFrag := rest
+	if fragIdx := strings.IndexByte(rest, '#'); fragIdx >= 0 {
+		beforeFrag = rest[:fragIdx]
+		rawFrag := rest[fragIdx+1:]
+		if p, err := url.Parse("ss://x#" + rawFrag); err == nil {
+			fragment = p.Fragment
+		} else {
+			fragment = rawFrag
+		}
+	}
+
+	beforeQuery := beforeFrag
+	rawQuery := ""
+	if qIdx := strings.IndexByte(beforeFrag, '?'); qIdx >= 0 {
+		beforeQuery = beforeFrag[:qIdx]
+		rawQuery = beforeFrag[qIdx+1:]
+	}
+
+	decodedStr, ok := decodeBase64Any(beforeQuery)
+	if !ok && strings.HasSuffix(beforeQuery, "/") {
+		decodedStr, ok = decodeBase64Any(strings.TrimSuffix(beforeQuery, "/"))
+	}
+	if !ok {
+		return nil, fmt.Errorf("ss: invalid full-string base64")
+	}
+
+	decBeforeQuery := decodedStr
+	decRawQuery := ""
+	if qIdx := strings.IndexByte(decodedStr, '?'); qIdx >= 0 {
+		decBeforeQuery = decodedStr[:qIdx]
+		decRawQuery = decodedStr[qIdx+1:]
+	}
+
+	atIdx := strings.LastIndexByte(decBeforeQuery, '@')
+	if atIdx <= 0 {
+		return nil, fmt.Errorf("ss: decoded payload missing @")
+	}
+	credPart := decBeforeQuery[:atIdx]
+	addrPart := strings.TrimSuffix(decBeforeQuery[atIdx+1:], "/")
+
+	credParts := strings.SplitN(credPart, ":", 2)
+	if len(credParts) != 2 || credParts[0] == "" {
+		return nil, fmt.Errorf("ss: cannot extract cipher method")
+	}
+	if credParts[1] == "" {
+		return nil, fmt.Errorf("ss: empty password")
+	}
+
+	host, portStr, err := net.SplitHostPort(addrPart)
+	if err != nil || host == "" {
+		return nil, fmt.Errorf("ss: missing or invalid host:port")
+	}
+	port, err := strconv.ParseUint(portStr, 10, 32)
+	if err != nil || port == 0 || port > 65535 {
+		return nil, fmt.Errorf("ss: missing or invalid port")
+	}
+
+	n := &ShadowsocksNode{
+		NodeName: fragment,
+		Host:     host,
+		Port:     uint32(port),
+		Method:   credParts[0],
+		Password: credParts[1],
+	}
+
+	if rawQuery != "" {
+		if q, err := url.ParseQuery(rawQuery); err == nil {
+			applyShadowsocksPluginQuery(n, q)
+		}
+	} else if decRawQuery != "" {
+		if q, err := url.ParseQuery(decRawQuery); err == nil {
+			applyShadowsocksPluginQuery(n, q)
+		}
+	}
+	return n, nil
+}
+
+func applyShadowsocksPluginQuery(n *ShadowsocksNode, q url.Values) {
+	if raw := q.Get("plugin"); raw != "" {
 		plugin, opts := parsePluginSpec(raw)
 		n.Plugin = plugin
 		n.PluginOpts = opts
+		return
 	}
-
-	return n, nil
+	if raw := q.Get("shadow-tls"); raw != "" {
+		jsonStr := raw
+		if !strings.HasPrefix(strings.TrimSpace(raw), "{") {
+			if decoded, ok := decodeBase64Any(raw); ok {
+				jsonStr = decoded
+			}
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(jsonStr), &m); err == nil && len(m) > 0 {
+			n.Plugin = "shadow-tls"
+			n.PluginOpts = make(map[string]string, len(m))
+			for k, v := range m {
+				switch val := v.(type) {
+				case string:
+					n.PluginOpts[k] = val
+				case float64:
+					n.PluginOpts[k] = strconv.Itoa(int(val))
+				case bool:
+					if val {
+						n.PluginOpts[k] = "true"
+					}
+				}
+			}
+		}
+	}
 }
 
 func decodeSSUserInfo(u *url.URL) (method, password string) {

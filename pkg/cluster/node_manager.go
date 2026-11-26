@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"sync"
 	"time"
@@ -142,11 +143,7 @@ func (nm *NodeManager) MarkDirty(nodeID string, now int64) {
 	delete(*nm.nodes, nodeID)
 	if n != nil && n.IsLocal() {
 		seed := &Node{
-			Node: &proto.Node{
-				Name: n.GetName(),
-				Host: n.GetHost(),
-				Port: n.GetPort(),
-			},
+			Node:       CopyIdentityWithout(n.Node),
 			isLocal:    true,
 			CreateTime: now,
 		}
@@ -227,14 +224,18 @@ func (nm *NodeManager) LoadStaticNode(nodes []StaticNode) error {
 		if node.IsValide(localNode) {
 			log.Info("Load Static Node",
 				"manager_name", nm.name,
-				"node", fmt.Sprintf("%s:%d", node.Host, node.Port),
+				"node", net.JoinHostPort(node.Host, strconv.Itoa(int(node.Port))),
+				"tls", node.TLS,
 			)
 			n := &Node{
 				// No name: we have an address and nothing else. The peer supplies
-				// its own in the first response.
+				// its own in the first response. TLS does come from config — a
+				// seed behind a TLS-terminating proxy is unreachable without it,
+				// and there is no earlier exchange to learn it from.
 				Node: &proto.Node{
 					Port: node.Port,
 					Host: node.Host,
+					Tls:  node.TLS,
 				},
 				isLocal:    true,
 				CreateTime: time.Now().Unix(),
@@ -649,15 +650,12 @@ func (nm *NodeManager) AdoptIdentity(host string, port int32, nodeID, name strin
 	}
 
 	repl := &Node{
-		Node: &proto.Node{
-			Name:   pickName(name, inc.GetName()),
-			Host:   inc.GetHost(),
-			Port:   inc.GetPort(),
-			NodeId: nodeID,
-		},
+		Node:       CopyIdentity(inc.Node),
 		isLocal:    inc.IsLocal(),
 		CreateTime: inc.CreateTime,
 	}
+	repl.Name = pickName(name, inc.GetName())
+	repl.NodeId = nodeID
 	inc.handOffRuntimeTo(repl)
 
 	delete(*nm.nodes, DirectoryKey(inc))
@@ -703,15 +701,12 @@ func (nm *NodeManager) RefreshName(nodeID, name string) (*Node, bool) {
 	}
 
 	repl := &Node{
-		Node: &proto.Node{
-			Name:   name,
-			Host:   inc.GetHost(),
-			Port:   inc.GetPort(),
-			NodeId: nodeID,
-		},
+		Node:       CopyIdentity(inc.Node),
 		isLocal:    inc.IsLocal(),
 		CreateTime: inc.CreateTime,
 	}
+	repl.Name = name
+	repl.NodeId = nodeID
 	inc.handOffRuntimeTo(repl)
 	(*nm.nodes)[nodeID] = repl
 	return repl, true
@@ -782,12 +777,7 @@ func (nm *NodeManager) clearDirtyLocked(nodeID string) {
 // address, so carrying it over would authenticate us to the wrong process.
 func nodeFromClaim(claim *proto.Node, inToken string, now int64, isLocal bool, createTime int64) *Node {
 	n := &Node{
-		Node: &proto.Node{
-			Name:   claim.GetName(),
-			Host:   claim.GetHost(),
-			Port:   claim.GetPort(),
-			NodeId: claim.GetNodeId(),
-		},
+		Node:       CopyIdentity(claim),
 		isLocal:    isLocal,
 		CreateTime: createTime,
 	}

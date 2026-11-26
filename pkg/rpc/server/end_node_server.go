@@ -6,6 +6,7 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lureiny/v2raymg/pkg/cluster"
@@ -18,6 +19,7 @@ import (
 	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription"
 	"github.com/lureiny/v2raymg/pkg/proxy/usermanager"
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
+	"github.com/lureiny/v2raymg/pkg/store"
 
 	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/encoding"
@@ -52,6 +54,13 @@ type EndNodeServer struct {
 	userMgr      *usermanager.UserManager
 	containerMgr *container.ContainerMgr
 	subMgr       *subscription.Manager
+	inboundStore store.InboundStore
+
+	// inboundOpMu serializes cross-container tag uniqueness checks and
+	// inbound mutations (FastAddInbound / AddInbound / DeleteInboundByName)
+	// so two concurrent requests targeting different containers with the same
+	// tag cannot race past the check and overwrite SQLite records.
+	inboundOpMu sync.Mutex
 }
 
 const (
@@ -72,6 +81,23 @@ const (
 
 func GetEndNodeServer() *EndNodeServer {
 	return endNodeServer
+}
+
+// ContainerMgr returns the server's container manager (may be nil before Init or in unit tests).
+func (s *EndNodeServer) ContainerMgr() *container.ContainerMgr {
+	if s == nil {
+		return nil
+	}
+	return s.containerMgr
+}
+
+// SetInboundStore injects the persistent inbound store used for global
+// cross-container tag uniqueness checks (including disabled containers).
+func (s *EndNodeServer) SetInboundStore(st store.InboundStore) {
+	if s == nil {
+		return
+	}
+	s.inboundStore = st
 }
 
 // heartbeatInterval returns the configured cluster heartbeat period, falling back
@@ -133,6 +159,7 @@ var methodRspMap = map[string]interface{}{
 	"UpsertClusterUsers":   &proto.UpsertClusterUsersRsp{},
 	"GetStatus":            &proto.GetStatusRsp{},
 	"GetContainers":        &proto.GetContainersRsp{},
+	"SetInboundAccessTags": &proto.InboundOpRsp{},
 }
 
 // newEmptyRsp returns a fresh, per-call response instance for the given method.
@@ -332,6 +359,7 @@ func (s *EndNodeServer) reconcileNodeStore() {
 			Name:   n.GetName(),
 			Host:   n.GetHost(),
 			Port:   n.GetPort(),
+			TLS:    n.GetTls(),
 		}); err != nil {
 			log.Warn("persist cluster node failed", "node", key, "err", err)
 		}

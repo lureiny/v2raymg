@@ -27,10 +27,12 @@ type VMessNode struct {
 	Host     string
 	Port     uint32
 	UUID     string
-	AlterId  int // 0 for AEAD; non-zero for legacy mode
+	AlterId  int    // 0 for AEAD; non-zero for legacy mode
+	Cipher   string // "scy" cipher field, e.g. "auto", "aes-128-gcm", "chacha20-poly1305"
 
 	Security       string
 	SNI            string
+	ALPN           []string
 	Fingerprint    string // uTLS fingerprint (not TLS cert pinning)
 	SkipCertVerify bool
 
@@ -46,6 +48,9 @@ type VMessNode struct {
 
 	GRPCServiceName string
 
+	HTTPUpgradePath string
+	HTTPUpgradeHost string
+
 	XHTTPPath string
 	XHTTPHost string
 }
@@ -53,20 +58,22 @@ type VMessNode struct {
 func (n *VMessNode) Protocol() contracts.Protocol { return contracts.ProtocolVMess }
 
 type vmessEncodeBody struct {
-	V            string `json:"v"`
-	PS           string `json:"ps"`
-	Add          string `json:"add"`
-	Port         string `json:"port"`
-	ID           string `json:"id"`
-	Aid          string `json:"aid"`
-	Net          string `json:"net"`
-	Type         string `json:"type"`
-	Host         string `json:"host,omitempty"`
-	Path         string `json:"path,omitempty"`
-	TLS          string `json:"tls,omitempty"`
-	SNI          string `json:"sni,omitempty"`
-	FP           string `json:"fp,omitempty"`
-	AllowInsecure bool  `json:"allowInsecure,omitempty"`
+	V             string `json:"v"`
+	PS            string `json:"ps"`
+	Add           string `json:"add"`
+	Port          string `json:"port"`
+	ID            string `json:"id"`
+	Aid           string `json:"aid"`
+	Scy           string `json:"scy,omitempty"`
+	Net           string `json:"net"`
+	Type          string `json:"type"`
+	Host          string `json:"host,omitempty"`
+	Path          string `json:"path,omitempty"`
+	TLS           string `json:"tls,omitempty"`
+	SNI           string `json:"sni,omitempty"`
+	ALPN          string `json:"alpn,omitempty"`
+	FP            string `json:"fp,omitempty"`
+	AllowInsecure bool   `json:"allowInsecure,omitempty"`
 }
 
 func (n *VMessNode) Encode() string {
@@ -83,8 +90,10 @@ func (n *VMessNode) Encode() string {
 		Port: strconv.FormatUint(uint64(n.Port), 10),
 		ID:   n.UUID,
 		Aid:  strconv.Itoa(n.AlterId),
+		Scy:  n.Cipher,
 		Type: headerType,
 		SNI:  n.SNI,
+		ALPN: strings.Join(n.ALPN, ","),
 		FP:   n.Fingerprint,
 	}
 	if n.Security == "tls" {
@@ -112,6 +121,10 @@ func (n *VMessNode) Encode() string {
 		b.Host = n.H2Host
 	case "grpc":
 		b.Path = n.GRPCServiceName
+	case "httpupgrade":
+		b.Net = "httpupgrade"
+		b.Path = n.HTTPUpgradePath
+		b.Host = n.HTTPUpgradeHost
 	case "xhttp", "splithttp":
 		b.Net = "xhttp"
 		b.Path = n.XHTTPPath
@@ -122,25 +135,31 @@ func (n *VMessNode) Encode() string {
 	return "vmess://" + base64.StdEncoding.EncodeToString(data)
 }
 
-// vmessDecodeBody tolerates port/aid being either a JSON number or string.
+// vmessDecodeBody tolerates port/aid being either a JSON number or string,
+// and allowInsecure being bool, number (1/0), or string ("1"/"true").
 type vmessDecodeBody struct {
 	PS            string `json:"ps"`
 	Add           string `json:"add"`
 	Port          any    `json:"port"`
 	ID            string `json:"id"`
 	Aid           any    `json:"aid"`
+	Scy           string `json:"scy"`
 	Net           string `json:"net"`
 	Type          string `json:"type"`
 	Host          string `json:"host"`
 	Path          string `json:"path"`
 	TLS           string `json:"tls"`
 	SNI           string `json:"sni"`
+	ALPN          any    `json:"alpn"`
 	FP            string `json:"fp"`
-	AllowInsecure bool   `json:"allowInsecure"`
+	AllowInsecure any    `json:"allowInsecure"`
 }
 
 func DecodeVMess(uri string) (*VMessNode, error) {
 	body := strings.TrimPrefix(uri, "vmess://")
+	if strings.HasPrefix(strings.ToLower(uri), "vmess://") {
+		body = uri[len("vmess://"):]
+	}
 	var raw []byte
 	for _, enc := range []*base64.Encoding{
 		base64.StdEncoding,
@@ -180,7 +199,7 @@ func DecodeVMess(uri string) (*VMessNode, error) {
 	// Collapse wire-level "tcp" (VMess default) back to canonical empty, and
 	// canonicalize "http" → "h2" here so Encode/Decode are symmetric when a
 	// caller constructs VMessNode{Transport: "http"} directly.
-	transport := b.Net
+	transport := strings.ToLower(strings.TrimSpace(b.Net))
 	switch transport {
 	case "tcp":
 		transport = ""
@@ -195,14 +214,16 @@ func DecodeVMess(uri string) (*VMessNode, error) {
 		Port:        port,
 		UUID:        b.ID,
 		AlterId:     anyToInt(b.Aid),
+		Cipher:      b.Scy,
 		SNI:         b.SNI,
+		ALPN:        anyToStringList(b.ALPN),
 		Fingerprint: b.FP,
 		HeaderType:  headerType,
 		Transport:   transport,
 	}
-	if b.TLS == "tls" {
+	if strings.EqualFold(strings.TrimSpace(b.TLS), "tls") {
 		n.Security = "tls"
-		n.SkipCertVerify = b.AllowInsecure
+		n.SkipCertVerify = anyToBool(b.AllowInsecure)
 	}
 
 	switch transport {
@@ -214,12 +235,32 @@ func DecodeVMess(uri string) (*VMessNode, error) {
 		n.H2Host = b.Host
 	case "grpc":
 		n.GRPCServiceName = b.Path
+	case "httpupgrade":
+		n.HTTPUpgradePath = b.Path
+		n.HTTPUpgradeHost = b.Host
 	case "xhttp":
 		n.XHTTPPath = b.Path
 		n.XHTTPHost = b.Host
 	}
 
 	return n, nil
+}
+
+func anyToBool(v any) bool {
+	switch val := v.(type) {
+	case bool:
+		return val
+	case float64:
+		return val != 0
+	case int:
+		return val != 0
+	case int64:
+		return val != 0
+	case string:
+		s := strings.TrimSpace(strings.ToLower(val))
+		return s == "true" || s == "1" || s == "yes"
+	}
+	return false
 }
 
 // anyToUint32 / anyToInt read a VMess JSON field that may be number or string
@@ -244,4 +285,39 @@ func anyToInt(v any) int {
 		return n
 	}
 	return 0
+}
+
+func anyToStringList(v any) []string {
+	switch val := v.(type) {
+	case string:
+		if strings.TrimSpace(val) == "" {
+			return nil
+		}
+		var out []string
+		for _, part := range strings.Split(val, ",") {
+			if s := strings.TrimSpace(part); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []any:
+		var out []string
+		for _, item := range val {
+			if s, ok := item.(string); ok {
+				if trimmed := strings.TrimSpace(s); trimmed != "" {
+					out = append(out, trimmed)
+				}
+			}
+		}
+		return out
+	case []string:
+		var out []string
+		for _, item := range val {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	}
+	return nil
 }

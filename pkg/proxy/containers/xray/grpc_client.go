@@ -15,7 +15,6 @@ import (
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/app/proxyman"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/app/proxyman/command"
-	"github.com/lureiny/v2raymg/pkg/xrayapi/types"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/common/serial"
 	proxycfg "github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/proxy/shadowsocks_2022"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/proxy/trojan"
@@ -24,18 +23,19 @@ import (
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/proxy/vmess"
 	vmessinbound "github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/proxy/vmess/inbound"
 	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet"
-	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet/tls"
-	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet/reality"
-	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet/websocket"
-	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet/tcp"
 	grpcpkg "github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet/grpc"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
+	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet/reality"
+	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet/tcp"
+	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet/tls"
+	"github.com/lureiny/v2raymg/pkg/xrayapi/internalproto/gen/transport/internet/websocket"
+	"github.com/lureiny/v2raymg/pkg/xrayapi/types"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // statsRegex matches xray stats output pattern.
@@ -44,20 +44,20 @@ var statsRegex = regexp.MustCompile(`(user|inbound|outbound)>>>(\S+)>>>traffic>>
 // typeRegistry maps protobuf type names to proto.Message factory functions.
 // This is used to deserialize TypedMessage.Value for debug output.
 var typeRegistry = map[string]func() proto.Message{
-	"xray.app.proxyman.ReceiverConfig":              func() proto.Message { return &proxyman.ReceiverConfig{} },
-	"xray.proxy.vmess.inbound.Config":              func() proto.Message { return &vmessinbound.Config{} },
-	"xray.proxy.vless.inbound.Config":              func() proto.Message { return &vlessinbound.Config{} },
-	"xray.proxy.trojan.ServerConfig":               func() proto.Message { return &trojan.ServerConfig{} },
-	"xray.proxy.shadowsocks_2022.ServerConfig":    func() proto.Message { return &proxycfg.ServerConfig{} },
-	"xray.transport.internet.StreamConfig":        func() proto.Message { return &internet.StreamConfig{} },
-	"xray.transport.internet.tls.Config":           func() proto.Message { return &tls.Config{} },
-	"xray.transport.internet.reality.Config":       func() proto.Message { return &reality.Config{} },
-	"xray.transport.internet.websocket.Config":     func() proto.Message { return &websocket.Config{} },
-	"xray.transport.internet.tcp.Config":           func() proto.Message { return &tcp.Config{} },
-	"xray.transport.internet.grpc.Config":           func() proto.Message { return &grpcpkg.Config{} },
-	"xray.proxy.vmess.Account":                      func() proto.Message { return &vmess.Account{} },
-	"xray.proxy.vless.Account":                      func() proto.Message { return &vlessaccount.Account{} },
-	"xray.proxy.trojan.Account":                    func() proto.Message { return &trojan.Account{} },
+	"xray.app.proxyman.ReceiverConfig":         func() proto.Message { return &proxyman.ReceiverConfig{} },
+	"xray.proxy.vmess.inbound.Config":          func() proto.Message { return &vmessinbound.Config{} },
+	"xray.proxy.vless.inbound.Config":          func() proto.Message { return &vlessinbound.Config{} },
+	"xray.proxy.trojan.ServerConfig":           func() proto.Message { return &trojan.ServerConfig{} },
+	"xray.proxy.shadowsocks_2022.ServerConfig": func() proto.Message { return &proxycfg.ServerConfig{} },
+	"xray.transport.internet.StreamConfig":     func() proto.Message { return &internet.StreamConfig{} },
+	"xray.transport.internet.tls.Config":       func() proto.Message { return &tls.Config{} },
+	"xray.transport.internet.reality.Config":   func() proto.Message { return &reality.Config{} },
+	"xray.transport.internet.websocket.Config": func() proto.Message { return &websocket.Config{} },
+	"xray.transport.internet.tcp.Config":       func() proto.Message { return &tcp.Config{} },
+	"xray.transport.internet.grpc.Config":      func() proto.Message { return &grpcpkg.Config{} },
+	"xray.proxy.vmess.Account":                 func() proto.Message { return &vmess.Account{} },
+	"xray.proxy.vless.Account":                 func() proto.Message { return &vlessaccount.Account{} },
+	"xray.proxy.trojan.Account":                func() proto.Message { return &trojan.Account{} },
 }
 
 // XrayAPI provides gRPC-based runtime operations for Xray.
@@ -134,6 +134,9 @@ func (api *XrayAPI) AddInbound(nativeInboundJSON []byte) error {
 	inboundConfig, err := types.ParseInboundConfig(nativeInboundJSON)
 	if err != nil {
 		return fmt.Errorf("failed to parse inbound config: %w", err)
+	}
+	if inboundConfig == nil || inboundConfig.ProxySettings == nil {
+		return fmt.Errorf("invalid inbound config: missing proxy settings")
 	}
 
 	// Create typed request

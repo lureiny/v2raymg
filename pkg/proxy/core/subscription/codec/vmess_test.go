@@ -487,3 +487,94 @@ func TestDecodeVMess_EmptyID_Error(t *testing.T) {
 		t.Error("expected error for empty UUID")
 	}
 }
+
+func TestDecodeVMess_AllowInsecureTypesAndScyCipher(t *testing.T) {
+	cases := []struct {
+		name          string
+		allowInsecure any
+		wantSkip      bool
+	}{
+		{"bool true", true, true},
+		{"bool false", false, false},
+		{"int 1", 1, true},
+		{"int 0", 0, false},
+		{"string 1", "1", true},
+		{"string true", "true", true},
+		{"string 0", "0", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			uri := makeVMessURI(t, map[string]any{
+				"ps": "Home", "add": "home.example.com", "port": 443,
+				"id": "uuid-1", "aid": 0, "scy": "aes-128-gcm",
+				"net": "ws", "tls": "tls", "allowInsecure": tc.allowInsecure,
+			})
+			n, err := DecodeVMess(uri)
+			if err != nil {
+				t.Fatalf("DecodeVMess: %v", err)
+			}
+			if n.SkipCertVerify != tc.wantSkip {
+				t.Errorf("SkipCertVerify = %v, want %v", n.SkipCertVerify, tc.wantSkip)
+			}
+			if n.Cipher != "aes-128-gcm" {
+				t.Errorf("Cipher = %q, want aes-128-gcm", n.Cipher)
+			}
+		})
+	}
+
+	orig := &VMessNode{
+		NodeName: "ScyRT", Host: "h", Port: 443, UUID: "u",
+		Cipher: "chacha20-poly1305", Security: "tls", SkipCertVerify: true,
+	}
+	dec, err := DecodeVMess(orig.Encode())
+	if err != nil {
+		t.Fatalf("Decode(Encode): %v", err)
+	}
+	if !reflect.DeepEqual(dec, orig) {
+		t.Errorf("round-trip mismatch\n got  %+v\n want %+v", dec, orig)
+	}
+}
+
+func TestDecodeVMess_HTTPUpgradeAndALPN(t *testing.T) {
+	// CSV string ALPN + httpupgrade path/host
+	uri := makeVMessURI(t, map[string]any{
+		"ps": "VMHU", "add": "vm.example.com", "port": 443,
+		"id": "uuid-hu", "aid": 0, "scy": "auto",
+		"net": "httpupgrade", "path": "/hu-path", "host": "hu.example.com",
+		"tls": "tls", "sni": "vm.example.com", "alpn": "h2, http/1.1",
+	})
+	n, err := DecodeVMess(uri)
+	if err != nil {
+		t.Fatalf("DecodeVMess: %v", err)
+	}
+	if n.Transport != "httpupgrade" || n.HTTPUpgradePath != "/hu-path" || n.HTTPUpgradeHost != "hu.example.com" {
+		t.Errorf("httpupgrade fields mismatch: %+v", n)
+	}
+	if !reflect.DeepEqual(n.ALPN, []string{"h2", "http/1.1"}) {
+		t.Errorf("ALPN = %v, want [h2 http/1.1]", n.ALPN)
+	}
+
+	// JSON array ALPN
+	uriArr := makeVMessURI(t, map[string]any{
+		"ps": "VMHU2", "add": "vm.example.com", "port": 443,
+		"id": "uuid-hu2", "aid": 0,
+		"net": "httpupgrade", "path": "/hu2", "host": "hu2.example.com",
+		"tls": "tls", "alpn": []string{"h3", "h2"},
+	})
+	nArr, err := DecodeVMess(uriArr)
+	if err != nil {
+		t.Fatalf("DecodeVMess(array alpn): %v", err)
+	}
+	if !reflect.DeepEqual(nArr.ALPN, []string{"h3", "h2"}) {
+		t.Errorf("array ALPN = %v, want [h3 h2]", nArr.ALPN)
+	}
+
+	// Round-trip Encode -> Decode preserves httpupgrade and ALPN
+	rt, err := DecodeVMess(n.Encode())
+	if err != nil {
+		t.Fatalf("Decode(Encode): %v", err)
+	}
+	if !reflect.DeepEqual(rt, n) {
+		t.Errorf("round-trip mismatch\n got  %+v\n want %+v", rt, n)
+	}
+}

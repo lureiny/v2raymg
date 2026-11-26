@@ -40,6 +40,18 @@ func TestRenderer_ToProvider_EmptyModel(t *testing.T) {
 	}
 	if _, ok := m["api"]; !ok {
 		t.Error("expected api key")
+	} else if apiMap, ok := m["api"].(map[string]interface{}); ok {
+		services, _ := apiMap["services"].([]interface{})
+		hasRouting := false
+		for _, svc := range services {
+			if s, _ := svc.(string); s == "RoutingService" {
+				hasRouting = true
+				break
+			}
+		}
+		if !hasRouting {
+			t.Errorf("expected api.services to include RoutingService, got %v", services)
+		}
 	}
 	if _, ok := m["inbounds"]; !ok {
 		t.Error("expected inbounds key")

@@ -1,7 +1,10 @@
 package cluster
 
 import (
+	"crypto/tls"
 	"fmt"
+	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -9,6 +12,7 @@ import (
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -185,12 +189,31 @@ func (node *Node) GetGrpcClientConn() (*grpc.ClientConn, error) {
 		_ = node.grpcClientConn.Close()
 		node.grpcClientConn = nil
 	}
-	addr := fmt.Sprintf("%s:%d", node.GetHost(), node.GetPort())
+	// JoinHostPort, not Sprintf: an IPv6 literal host needs brackets, and
+	// proxy_host is never normalised, so "2001:db8::1" used to produce the
+	// unparseable "2001:db8::1:9090".
+	addr := net.JoinHostPort(node.GetHost(), strconv.Itoa(int(node.GetPort())))
+
+	// The transport comes from the peer, not from a guess. A node behind a
+	// TLS-terminating reverse proxy advertises tls=true along with the proxy's
+	// address; everything else — every pre-2.10 peer included — reports false
+	// and is dialled in plaintext h2c exactly as before.
+	//
+	// Deliberately no probe-and-fall-back: a client that retries in plaintext
+	// when a TLS handshake fails can be downgraded by anyone able to send an
+	// RST, which is precisely the attacker the TLS was for.
+	creds := insecure.NewCredentials()
+	if node.GetTls() {
+		// ServerName from the advertised host so certificate validation checks
+		// the name peers were told to dial.
+		creds = credentials.NewTLS(&tls.Config{ServerName: node.GetHost()})
+	}
+
 	// StampDestMethod binds every outgoing request to its gRPC method inside the
 	// authenticated payload, so an on-path attacker cannot redirect a ciphertext
 	// to a sibling method sharing the same request type (finding #2).
 	conn, err := grpc.Dial(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(creds),
 		grpc.WithChainUnaryInterceptor(commonrpc.StampDestMethodClientInterceptor),
 	)
 	if err != nil {
@@ -299,8 +322,18 @@ func (node *Node) RegisteredLocal() bool {
 }
 
 // IsComplete reports whether a node carries enough identity to be usable.
+//
+// The port test is "is this a port", not "is this above 1000". It used to be
+// > 1000, which made mergeRemoteNodes drop any peer advertising 443 as
+// "incomplete" — the default port for a grpcs:// address, so a node behind a
+// TLS-terminating reverse proxy could never join by gossip.
+//
+// Note this is a different question from isAddrValid in the RPC server, which
+// gates the LOCAL bind and keeps its own floor: refusing to bind a privileged
+// port is a sensible local policy, refusing to dial one a peer told us about
+// is not.
 func (node *Node) IsComplete() bool {
-	return node.Host != "" && node.Port > 1000 && node.Name != ""
+	return node.Host != "" && node.Port > 0 && node.Port <= 65535 && node.Name != ""
 }
 
 // StaticNode is a configured bootstrap address — nothing more.
@@ -314,6 +347,10 @@ func (node *Node) IsComplete() bool {
 type StaticNode struct {
 	Host string `json:"host,omitempty"`
 	Port int32  `json:"port,omitempty"`
+	// TLS dials this seed over TLS. Set by writing the seed as a URL
+	// ("grpcs://host:443"); the original host/port mapping form has always
+	// meant plaintext and still does.
+	TLS bool `json:"tls,omitempty"`
 }
 
 // IsValide 判断静态节点是否有效.
@@ -326,9 +363,14 @@ type StaticNode struct {
 // actually works happens at runtime, by comparing the responder's node_id
 // against our own (see EndNodeServer.assertResponder); the host+port test here
 // is just a cheap first pass.
+//
+// The port test is "is this a port", not "is this above 1000". It used to be
+// > 1000, which silently discarded any seed on 443 — the default for a
+// grpcs:// address, and therefore the most likely port for a peer behind a
+// TLS-terminating reverse proxy.
 func (sn *StaticNode) IsValide(node *Node) bool {
 	sameInstance := sn.Host == node.Host && sn.Port == node.Port
-	return sn.Host != "" && sn.Port > 1000 && !sameInstance
+	return sn.Host != "" && sn.Port > 0 && sn.Port <= 65535 && !sameInstance
 }
 
 var globalLocalNode = &LocalNode{}

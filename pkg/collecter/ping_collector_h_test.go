@@ -1,9 +1,11 @@
 package collecter
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/lureiny/v2raymg/pkg/collecter/ping"
+	"github.com/lureiny/v2raymg/pkg/proxy/appconfig"
 )
 
 func newTestCollector(m map[string]pingResults) *PingCollector {
@@ -67,5 +69,27 @@ func TestCleanupStaleResults_DeletesRemovedIPNode(t *testing.T) {
 
 	if _, ok := pc.pingResultMap["icmp_ping"]["us_att_5.6.7.8"]; ok {
 		t.Fatal("removed IP-node result should have been cleaned up")
+	}
+}
+
+func TestNewPingCollector_DisabledSkipsCheckersAndLoaders(t *testing.T) {
+	pc := NewPingCollector(PingCollectorConfig{
+		Host:           "127.0.0.1",
+		EnableICMPPing: false,
+		EnableTCPPing:  false,
+		NodeSources: []appconfig.PingNodeSource{
+			{Type: "file", Source: filepath.Join(t.TempDir(), "nonexistent.yaml")},
+		},
+	})
+	defer pc.StopPing()
+
+	if pc.nodeManager != nil {
+		t.Fatal("disabled PingCollector must not initialize NodeManager or load sources")
+	}
+	if len(pc.pingCheckers) != 0 {
+		t.Fatalf("disabled PingCollector must have 0 checkers, got %d", len(pc.pingCheckers))
+	}
+	if res := pc.GetPingResults(); len(res) != 0 {
+		t.Fatalf("disabled PingCollector must return 0 results, got %d", len(res))
 	}
 }

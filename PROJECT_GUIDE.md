@@ -27,14 +27,16 @@ main.go                    # 程序入口
 pkg/
   proxy/                   # 代理核心(原 proxyrefactor,现为主干)
     core/
-      contracts/           # 领域模型(InboundSpec/UserSpec/ContainerModel/Protocol)
-      container/           # Container 抽象(Manager/Registry/Factory)
+      chain/               # 链式代理后端 URI 解析/安全策略(Plan A)/脱敏与 mihomo/xray 出站渲染
+      contracts/           # 领域模型(InboundSpec/InboundType/InboundMeta/UserSpec/ContainerModel/Protocol)
+      container/           # Container 抽象(Manager/Registry/Factory + ChainCapable/InboundTagUpdater/InboundMetaProvider)
       inbound/             # Inbound 抽象
       subscription/        # 订阅核心(codec + converter:clash/surge/qv2ray)
     containers/
       xray/                # xray 实现(exec + grpc + adapter + profilegen + updater)
       hysteria/            # hysteria 实现
       snell/               # snell 实现
+      mihomo/              # mihomo 实现(模式 B + per-user listener + 1:1 链式出站)
     forward/               # TCP/UDP 转发层(relay + port_allocator + traffic + ratelimit + clientlimit)
     usermanager/           # 用户管理(CRUD + 带宽统计 + 端口轮转 + sync 一致性)
     systemtest/            # 系统测试(xray 协议矩阵 / e2e / 降级链)
@@ -82,6 +84,14 @@ Makefile                   # build / build-full (full_dns tag) / proto
      - 用途:集群里通常只让**一个**节点对外提供管理 API。配法是**对外那台留空或写 `0.0.0.0`,其余每台显式写 `127.0.0.1`** —— 隐藏必须显式,留空不隐藏
      - 因为默认是继承,**"忘记配"的方向是暴露而不是隐藏**。所以启动时区分两种可达:因继承 `listen` 而对外可达 → **WARN**(没人显式选择过这个暴露);显式配置的对外可达 → INFO。仅本机 → INFO
      - **历史(2.9.1)**:`config.go` 与 `config.example.yaml` 一直写着"留空回退到 listen",而代码自 `f3ebd40` 起实际是 `127.0.0.1`,分歧跨越六个版本没人发现 —— 因为解析逻辑是 `cmd/server.go` 里的内联默认值且零测试。2.9.1 按文档语义统一为继承 `listen`,**这是行为变更**:升级前 `listen: 0.0.0.0` 且未配 `http_listen` 的节点,管理 API 从仅本机变为对外可达,必须在升级前给这些节点补 `http_listen: 127.0.0.1`。解析已收敛为带表驱动测试的函数,不要再改回内联
+   - **广播地址 ≠ 监听地址** — 对端要拨的地址由 `EndNodeConfig.ResolveAdvertise()` 决定:配了 `end_node.reverse_proxy.grpc_addr` 就广播反代的 `(scheme, host, port)`,否则等价于 `grpc://{proxy_host}:{rpc_port}`(与 2.9 逐字节一致)。**本节点的 gRPC server 永远是明文 h2c**,`grpcs://` 描述的是反代终止的 TLS,不是本进程说 TLS
+     - **传输方式必须被声明,不能被探测**。客户端"先试 TLS、失败回退明文"是典型降级面:攻击者一个 RST 就能把你打回明文。所以 scheme 写在配置里、`Node.tls` 走线上,`grpc.Dial` 只按标志选 credentials,没有任何回退
+     - **`Node.tls` 不折入 `ComputeNodesSum`**(与 `node_id` 同理)。但 host/port 折入 —— 换成反代地址是**真实的成员变更**,应该触发一次重新同步
+     - **`static_nodes` 支持 URL 标量**(`"grpcs://host:443"`)与原 mapping 形式共存。种子必须能表达协议,否则无法 bootstrap 到反代后面的节点
+     - **新增 proto 字段必须过 `cluster.CopyIdentity`**。目录有六个逐字段重建点(`nodeFromClaim` / `AdoptIdentity` / `RefreshName` / `MarkDirty` 降级 / `LoadStaticNode` / `loadPersistedNodes`),漏一处就是该路径静默丢字段;gossip 路径存的是收到的指针所以免费随行,这种不对称最容易漏。`TestCopyIdentity_CoversEveryProtoField` 用反射兜底,加字段不处理会直接失败
+     - **端口守卫是"是不是端口",不是"是不是 >1000"**。`IsComplete` / `StaticNode.IsValide` 原先要求 `Port > 1000`,会把 443(grpcs 默认端口)判为不完整而丢弃。本地 bind 的 `isAddrValid` 保持自己的下限,那是另一个问题
+   - **`http_token` 留空时自动生成并落库**(`local_secrets` 表,migration 17),照 `node_id` 的模式而不是 `jwt_secret`:jwt 每次重启换只是让人重新登录,而 token 每次变会废掉运维的 CLI 配置。**只在生成那一次打印明文**,后续启动只说"已从存储读取"
+     - 它是**纯本机**凭据,从不跨节点比较(跨节点用的是 `cluster.token`),所以每台自己生成一个是对的
 7. **持久化走 SQLite** — user/inbound/node_groups 全部落 SQLite,DB 操作通过 `pkg/store/manager` 的 `Provider` + `Tx` 抽象
 8. **集群通信走 gRPC,无 center node** — 节点间协议定义在 `pkg/rpc/proto/rpc_server.proto`;默认加密已切到 GCM(老 CBC 回退已移除)
    - **center node 已于 2026-07 彻底移除**。它唯一的作用是发现,而 `static_nodes` 覆盖了同样的能力且更好:静态节点带 `isLocal`、**永不被 60s 超时回收**,注册又是双向的(种子立刻通过 `RegisterNode` 认识加入者,不必等自己下一跳)。同时 center 是集群面**唯一一条默认明文的链路**,还携带集群主密钥。旧配置里的 `node_type: center` / `center_node` / `center_node_host` / `center_token` 一律忽略并在启动时逐条 WARN
@@ -148,6 +158,19 @@ Makefile                   # build / build-full (full_dns tag) / proto
     升级要注意什么"**,完整的设计取舍和 why 留在 annotated tag message 里
     (`git tag -a` 写长文,`git tag -l --format='%(contents)' <tag>` 可读回)。
     两边都不写只写 commit message 的话,运维升级前无处可查。
+12. **服务端链式代理(Chained Proxy)与两层 Tag 物理隔离(Migration 18)** — 详见 `docs/chain-proxy-design.md`:
+    - **协议解析、安全准入与脱敏收口在 `pkg/proxy/core/chain`**:补齐 `pkg/proxy/core/subscription/codec/{socks5,http}.go` 及家宽 URI 兼容(含 VMess `httpupgrade`/`alpn`、Hy2 `pinSHA256` 剥离可选 `sha256:` 前缀)后,由 `chain` 包统一负责 `ParseAndValidate`/`ValidateSpec`、`RenderMihomoProxy`/`RenderXrayOutbound` 与 `RedactURI`/`SummarizeURI`(同时剥离 `*url.Error` 与缺失 `@` 的畸形含密 URI 凭据)。域名按原样保留(Xray 26+ 出站设 `targetStrategy: "AsIs"`,替代已忽略的顶层 `domainStrategy`),不在添加时解析固化 DNS,以支持动态 DDNS 后端;因 Xray 26.2.6 已移除 `allowInsecure`、`network: "http"`(`h2`) 与 `security: "xtls"`,Xray 链式渲染与校验直接拒绝这三类配置并引导改用 `mihomo`(或 `xhttp`)。
+    - **后端地址准入策略(方案 A + `allow_loopback_chain_target`)**:`chain.AddressPolicy` 无条件拦截 `0.0.0.0/8`、未指定地址、非标准/尾部点号数值 IPv4 字面量(`127.1`/`2130706433`/`0177.0.0.1`/`0x7f000001`/`127.0.0.1.`)、多播/广播、链路本地/云元数据段(`169.254.0.0/16`、`fe80::/10`),以及命中本机地址/`LocalHosts` 上 `reservedManagementPorts`、`DefaultForwardManager.IsPortAllocated`(含已声明容器端口、Forward 端口与自定义管理预留端口)或活跃容器入站端口的 URI;默认放行公网、Tailscale(`100.64.0.0/10`)、RFC1918 与 IPv6 ULA(`fc00::/7`);默认拒绝 loopback(`127.0.0.0/8`、`::1`、`localhost`),除非显式配置 `end_node.allow_loopback_chain_target: true`(开启后仍拦截本机管理端口与已分配端口)。
+    - **可选容器能力接口(`pkg/proxy/core/container/interface.go`)**:通过窄接口 `ChainCapable`(`SupportsChainOutbound`/`ValidateChainURI`)、`InboundTagUpdater`(`SetInboundAccessTags`)、`InboundMetaProvider`(`GetInboundMeta`) 扩展能力而不破坏 `Container` 契约。模式 B(`mihomo`/`xray`)支持链式出站;模式 A(`hysteria`/`snell`)`SupportsChainOutbound() == false`。
+    - **新建 1:1 不可变绑定 + 全局 tag 防覆盖**:仅允许通过 `POST /api/inbound/fast` 在**全新 inbound** 上设置 `inbound_type="chain"` 与 `chain_uri`(空 `inbound_type` + 非空 `chain_uri` 归一为 `"chain"`),禁止原地修改已有 inbound 的类型或后端 URI。`tag` 必须匹配 `^[a-zA-Z0-9._-]{1,64}$`、禁止 `__` 前缀,并在 `ContainerMgr` 全部已注册容器及 `InboundStore` 间全局查重(仅对同一容器下处于禁用态 `"enabled": false` 的模式 A 记录允许以 `direct` 重新启用),防止 SQLite `INSERT OR REPLACE` 跨容器静默覆盖。
+    - **Loopback 收口与 Fail-Closed 零直连泄漏**:`FastAddInbound` 默认监听地址收紧为 `127.0.0.1`,且 `inbound_type="chain"` 强制锁定 `listen` 与 `listen_addr` 均为 `127.0.0.1`(重放 `Restore` 亦夹紧)。`mihomo` 切为 `Mode: "rule"` + `IPv6: true` + `proxies[]` + `listener.proxy` + 顶部 `"IN-NAME,<tag>,<proxy>"` 双重锁死,`Restore` 保留同 tag 同端口 `addedUsers` 快照以确保撤销用户被回收;`xray` 启用 `RoutingService`,通过 `inboundOpMu` 串行化入站生命周期并发操作,经 `stdin:` 管道按 `ado` → `adrules -append` → `AddInbound` 顺序注入(失败逆序回滚,`Restore`/`Restart`/升级重启等待 gRPC 就绪后重放并剔除失效残留,启用嗅探时强制 `routeOnly: true`)。后端断连、持久化 `access_tags` 损坏或 `hysteria-default` 禁用(`AuthHysteria2` 403)时均严格 Fail-Closed。
+    - **持久化扩展(SQLite Migration 18)**:`users` 新增 `inbound_tags TEXT NOT NULL DEFAULT '[]'`;`inbounds` 新增 `inbound_type`(`'direct'`)、`access_tags`(`'[]'`)、`chain_outbound_uri`、`remark`。只读查询(`GET /api/inbounds`/MCP `list_inbounds`)仅返回脱敏后的 `chain_protocol` 与 `chain_target`,绝不回显原始 `chain_uri`。
+    - **两层 Tag 命名空间物理隔离与核心不变量**:
+      - Layer 1(Node 层:`local_node_groups` ↔ `UserSpec.TargetGroup`)与 Layer 2(Inbound 层:`InboundMeta.AccessTags` ↔ `UserSpec.InboundTags`)物理隔离、允许同名重用且绝不交叉穿透。`UserManager.CanUserAccessInbound` / `CanUserAccessInboundByUsername` 恒定按「未删除/未过期 → Layer 1 `IsUserVisible` → Layer 2(`len(AccessTags)==0` 放行,否则需交集非空)」顺序判定,同时约束数据面(4 容器 Forward 端口分配与 `AuthHysteria2` 本地鉴权)与用户侧视图(`/sub`、`/api/profile`、普通用户 `GET /api/user`),管理员控制面始终返回全量 inbound。
+      - **`UserEventAdd` 不变量**:4 个容器(`xray`/`mihomo`/`hysteria`/`snell`)在 `UserEventAdd` 与 `UserEventUpdate` 分支均执行 `CanUserAccessInbound`,避免跨组或无标签用户先泄漏 Forward 端口再等对账回收;`UserSpec.Clone()` 必须深拷贝 `InboundTags`;`pkg/proxy/usermanager/sync/hash.go` 仅在排序去重后 `len(InboundTags) > 0` 时折入摘要以兼容存量空标签节点。
+      - **启动顺序与本地接线不变量(`cmd/server.go`)**:`initClusterSync` 必须在调用 `userMgr.EnableClusterSync` **之前**将 `DefaultGroup` 播种进空 `local_node_groups` 并随后 `BackfillClusterFields()`,否则 `cachedNodeGroups` 为空导致首启 Layer 1 Fail-Open;同时 `httpServer` 显式调用 `httpServer.SetContainerMgr(containerMgr)`,确保本地 `AuthHysteria2` 两层 tag 门控不依赖 RPC 全局单例回退。
+      - **UDP 轮转与端口回收不变量(`pkg/proxy/usermanager/usermanager.go`)**:`RotateUserPortForInbound` 重建 `tmpRule` 与 `finalRule` 时必须保留 `Network`、`ListenStack`、`UDPSessionIdleSec`(防止 `hy2`/`tuic` 端口轮转后退化为纯 TCP 断流);`ReleaseInboundPorts` 同步清理对应 `BindPorts` 与 `PortMappings`,防止后端端口复用命中旧映射。
+    - **运行期免重启改签与订阅防重名**:`PUT /api/inbounds/tags`(MCP `set_inbound_tags` / gRPC `SetInboundAccessTags`)支持跨节点、跨全 4 容器在锁内原子更新内存与 SQLite(写库失败回滚内存),不重启代理进程且不断开仍合法用户的连接,并立即触发双向 `reconcileUsersForInbound`。多 inbound 订阅输出 `<NodeName>-<remark|tag>`(chain 默认取 `chain_uri` `#fragment`),`ClashConverter`/`SurgeConverter` 对撞名自动追加 `_2`/`_3` 去重。
 
 > **新增 container 必读** — `docs/container-design-principles.md` 把上述 #1/#3/#4/#5 落成三条可操作的 container 开发原则,并给出"底层是否支持多 inbound / 是否有运行时 API"的适配模式矩阵(A/B/C)。接入新代理内核前必须读完并在设计文档里声明模式。
 
@@ -228,6 +251,9 @@ go test ./pkg/proxy/systemtest -tags=integration -run TestClusterE2E -v -timeout
 
 # 路由覆盖守卫(无 tag,默认 CI 就跑;新增路由没补集成用例会红)
 go test ./pkg/http -run TestRouteCoverage -v
+
+# MCP 路由防漂移守卫(校验所有 HTTP 路由均经 registerEndpoint 接入或列入显式非 MCP 白名单)
+go test ./pkg/http -run TestMCP_RouteDriftGuard -v
 ```
 
 `pkg/proxy/systemtest/README.md` 里仍写的是 `./pkg/proxyrefactor/...`,是历史残留,实际路径应当是 `./pkg/proxy/...`。
@@ -248,6 +274,8 @@ go test ./pkg/http -run TestRouteCoverage -v
   - `cluster-user-*` — 集群用户体系各阶段设计
   - `inbound-user-tracker-refactor.md` — 延后的用户追踪架构统一方案
   - `http-api-reference.md` — HTTP API 参考
+  - `mcp-guide.md` — 内嵌 MCP Server（`/mcp`）使用与开发指南（配置、鉴权/脱敏、33 工具参考与 `Endpoint[Req, Resp]` 扩展方式）
+  - `chain-proxy-design.md` — **服务端链式代理（Chained Proxy）与两层 Tag 资源隔离设计方案**（`pkg/proxy/core/chain`、Migration 18、两层隔离与动态打标）
   - `certmgmt-design.md` — 证书管理设计
   - `user-placement-controller-design.md` / `user-sync-design.md` — 多节点用户编排
   - `heartbeat-optimization-design.md` — **集群心跳流量优化(有序聚合 hash + 不一致才拉全量,兼容旧版)设计稿,待评审**

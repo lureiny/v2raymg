@@ -133,3 +133,99 @@ func TestReqAddUsers_StampsAuthAndMapsResponse(t *testing.T) {
 		t.Error("transport error must propagate")
 	}
 }
+
+type mockChainEndNodeAccessClient struct {
+	proto.EndNodeAccessClient
+	gotSetTags *proto.SetInboundAccessTagsReq
+	setTagsRsp *proto.InboundOpRsp
+	setTagsErr error
+	listRsp    *proto.ListInboundRsp
+	contRsp    *proto.GetContainersRsp
+}
+
+func (m *mockChainEndNodeAccessClient) SetInboundAccessTags(ctx context.Context, in *proto.SetInboundAccessTagsReq, opts ...grpc.CallOption) (*proto.InboundOpRsp, error) {
+	m.gotSetTags = in
+	return m.setTagsRsp, m.setTagsErr
+}
+
+func (m *mockChainEndNodeAccessClient) ListInbound(ctx context.Context, in *proto.ListInboundReq, opts ...grpc.CallOption) (*proto.ListInboundRsp, error) {
+	return m.listRsp, nil
+}
+
+func (m *mockChainEndNodeAccessClient) GetContainers(ctx context.Context, in *proto.GetContainersReq, opts ...grpc.CallOption) (*proto.GetContainersRsp, error) {
+	return m.contRsp, nil
+}
+
+func TestSetInboundAccessTagsAndChainClientRPC(t *testing.T) {
+	if getReqAndCallbakcFunc(SetInboundAccessTagsReqType) == nil {
+		t.Fatal("SetInboundAccessTagsReqType must be registered by init()")
+	}
+	auth := NewNodeAuthInfo("tok", &proto.Node{Name: "n1"}, &proto.Node{Name: "dst"})
+
+	reqBytes, err := pb.Marshal(&proto.SetInboundAccessTagsReq{
+		Container:  "mihomo",
+		Name:       "hy2-chain",
+		AccessTags: []string{"hk", "vip"},
+	})
+	if err != nil {
+		t.Fatalf("marshal SetInboundAccessTagsReq: %v", err)
+	}
+	m := &mockChainEndNodeAccessClient{
+		setTagsRsp: &proto.InboundOpRsp{Code: 0},
+		listRsp: &proto.ListInboundRsp{
+			Code: 0,
+			Inbounds: []*proto.InboundInfo{
+				{
+					Container:     "mihomo",
+					Name:          "hy2-chain",
+					InboundType:   "chain",
+					AccessTags:    []string{"hk", "vip"},
+					Remark:        "HK Exit",
+					ChainProtocol: "socks5",
+					ChainTarget:   "1.2.3.4:1080",
+				},
+			},
+		},
+		contRsp: &proto.GetContainersRsp{
+			Code:       0,
+			Containers: []string{"xray", "mihomo", "snell"},
+			ContainerInfos: []*proto.ContainerInfo{
+				{Type: "xray", SupportsChain: true},
+				{Type: "mihomo", SupportsChain: true},
+				{Type: "snell", SupportsChain: false},
+			},
+		},
+	}
+
+	if _, err := ReqSetInboundAccessTags(context.Background(), reqBytes, m, auth, "tok"); err != nil {
+		t.Fatalf("ReqSetInboundAccessTags failed: %v", err)
+	}
+	if m.gotSetTags == nil || m.gotSetTags.GetNodeAuthInfo() == nil || m.gotSetTags.GetName() != "hy2-chain" {
+		t.Fatalf("unexpected outgoing SetInboundAccessTagsReq: %+v", m.gotSetTags)
+	}
+
+	mErr := &mockChainEndNodeAccessClient{setTagsRsp: &proto.InboundOpRsp{Code: 601, Msg: "not supported"}}
+	if _, err := ReqSetInboundAccessTags(context.Background(), reqBytes, mErr, auth, "tok"); err == nil || err.Error() != "not supported" {
+		t.Fatalf("expected 'not supported', got %v", err)
+	}
+
+	listReq, _ := pb.Marshal(&proto.ListInboundReq{})
+	listRes, err := ReqListInbound(context.Background(), listReq, m, auth, "tok")
+	if err != nil {
+		t.Fatalf("ReqListInbound failed: %v", err)
+	}
+	inbs := listRes.([]*proto.InboundInfo)
+	if len(inbs) != 1 || inbs[0].GetInboundType() != "chain" || inbs[0].GetChainProtocol() != "socks5" || inbs[0].GetChainTarget() != "1.2.3.4:1080" || inbs[0].GetRemark() != "HK Exit" {
+		t.Fatalf("ReqListInbound dropped chain metadata: %+v", inbs)
+	}
+
+	contReq, _ := pb.Marshal(&proto.GetContainersReq{})
+	contRes, err := ReqGetContainers(context.Background(), contReq, m, auth, "tok")
+	if err != nil {
+		t.Fatalf("ReqGetContainers failed: %v", err)
+	}
+	rsp, ok := contRes.(*proto.GetContainersRsp)
+	if !ok || len(rsp.GetContainers()) != 3 || len(rsp.GetContainerInfos()) != 3 || !rsp.GetContainerInfos()[1].GetSupportsChain() {
+		t.Fatalf("unexpected ReqGetContainers response: %#v", contRes)
+	}
+}

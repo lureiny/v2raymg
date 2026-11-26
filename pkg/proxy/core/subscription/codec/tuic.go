@@ -88,7 +88,7 @@ func (n *TuicNode) Encode() string {
 func DecodeTuic(uri string) (*TuicNode, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("tuic: parse URI: %w", err)
+		return nil, fmt.Errorf("tuic: parse URI: %w", sanitizeURLError(err))
 	}
 	if u.Scheme != "tuic" {
 		return nil, fmt.Errorf("tuic: unexpected scheme %q", u.Scheme)

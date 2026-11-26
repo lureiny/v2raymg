@@ -4,6 +4,50 @@
 > 对应的 annotated tag message 里(`git tag -l --format='%(contents)' v2.9.0`),
 > 这里只留"改了什么、升级要注意什么"。
 
+## 2026-07-29 — v2.10.0 反代感知的广播地址 + http_token 自动生成
+
+节点现在可以广播"反向代理的地址"而不是自己的地址,并用 `grpcs://` 拨对端。
+**本节点的 gRPC server 仍然是明文 h2c** —— TLS 由反代终止,服务端零改动。
+
+### Highlights
+
+- 新增 `end_node.reverse_proxy.grpc_addr`,形如 `grpcs://cluster.example.com:443`。
+  留空 = 广播 `grpc://{proxy_host}:{rpc_port}`,**与 v2.9 逐字节一致**。缺 scheme 按
+  `grpc://`,缺端口按 grpc→80 / grpcs→443(比照 http/https)
+- `proto.Node` 新增 `bool tls = 6`。**传输方式被声明,不被探测** —— 客户端"试 TLS
+  失败回退明文"是典型降级面,一个 RST 就能打回明文,所以没有任何回退逻辑
+- `static_nodes` 支持 URL 标量(`"grpcs://node2.example.com:443"`),与原
+  `{host, port}` mapping 共存。种子必须能表达协议,否则拨不到反代后面的节点
+- **`end_node.http_token` 留空时自动生成**,存进数据库(`local_secrets`,migration 17),
+  重启保持不变,**只在生成那一次把明文打进日志**。它是纯本机凭据,从不跨节点比较
+- 顺带修一个**当前就存在的鉴权绕过**:`getAuthHandlerFunc` 没有空值守卫,
+  `http_token` 为空时不带 `X-Token` 的请求 `"" == ""` 直接通过 —— `/api/metrics`
+  一直是无鉴权的。现在空 token 一律拒绝
+- 顺带修 `IsComplete` / `StaticNode.IsValide` 的 `Port > 1000`:它会把 443
+  (grpcs 默认端口)判为"不完整"丢弃,反代后面的节点根本进不了目录
+- 顺带修拨号地址拼接:`fmt.Sprintf("%s:%d")` 对 IPv6 字面量会拼出
+  `2001:db8::1:9090`,改用 `net.JoinHostPort`
+
+### ⚠️ 升级注意
+
+**不配 `reverse_proxy` 时行为与 v2.9 完全一致**,proto / 配置 / 静态节点写法全部向后兼容。
+但 migration 17 动了 DB,是单向的。
+
+启用 `grpcs://` 必须按顺序走:
+
+```
+1. 全集群升到 v2.10(不配 reverse_proxy)  → 行为与 v2.9 一致,零风险
+2. 逐台配 grpc:// 反代(无 TLS)           → 老节点也能拨通,仍然兼容
+3. 全部升完后才改成 grpcs://              → 此时已无老节点
+```
+
+老节点不认识线上的 `tls` 标志,只会用明文拨 —— 所以第 3 步之前开 grpcs 会让老节点
+连不上该节点。配了 `grpcs://` 时启动会打 WARN 提醒这个前置条件。
+
+**已知后果**:CLI 的 `--domain` 缺省取 `node.GetHost()`,配了反代后该值变成集群面地址,
+不再适合当证书域名。配了反代就显式传 `--domain`。根因是 `proxy_host` 一个字段扛了
+三重身份(广播拨号 / 订阅链接 / ping 目标),拆分留作后续。
+
 ## 2026-07-28 — v2.9.1 管理 API 监听地址与 gRPC 解耦
 
 `end_node.http_listen` 一直存在,但它留空时的行为与文档相反:`config.go` 和

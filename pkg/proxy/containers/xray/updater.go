@@ -6,8 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"github.com/lureiny/v2raymg/pkg/log"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -193,6 +193,28 @@ func (u *Updater) Update(ctx context.Context, req container.UpdateRequest) (*con
 			return result, &ErrUpdateFailed{Stage: "restart", Cause: err, Wrapped: ErrRestartFailed}
 		}
 		restarted = true
+		restoreCtx := ctx
+		if restoreCtx == nil {
+			restoreCtx = context.Background()
+		}
+		if waiter, ok := u.processCtrl.(interface {
+			WaitForAPIReady(ctx context.Context) error
+		}); ok {
+			if err := waiter.WaitForAPIReady(restoreCtx); err != nil {
+				log.Error("[Xray Updater] xray gRPC API not ready after restart", "err", err)
+				result.Restarted = restarted
+				return result, &ErrUpdateFailed{Stage: "restore", Cause: err}
+			}
+		}
+		if restorer, ok := u.processCtrl.(interface {
+			Restore(ctx context.Context) error
+		}); ok {
+			if err := restorer.Restore(restoreCtx); err != nil {
+				log.Error("[Xray Updater] failed to restore inbounds after restart", "err", err)
+				result.Restarted = restarted
+				return result, &ErrUpdateFailed{Stage: "restore", Cause: err}
+			}
+		}
 	}
 
 	result.Restarted = restarted

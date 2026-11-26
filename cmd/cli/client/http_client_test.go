@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 )
 
@@ -377,5 +378,74 @@ func TestGetStatus_ServerError_ReturnsHTTPError(t *testing.T) {
 	}
 	if got := err.Error(); got != "HTTP 500: boom" {
 		t.Fatalf("expected 'HTTP 500: boom', got %q", got)
+	}
+}
+
+func TestChainAndIsolationHTTPClientPayloads(t *testing.T) {
+	var lastMethod, lastPath string
+	var lastBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastMethod = r.Method
+		lastPath = r.URL.Path
+		lastBody = nil
+		_ = json.NewDecoder(r.Body).Decode(&lastBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":0,"msg":"ok"}`))
+	}))
+	defer srv.Close()
+
+	// FastAddInbound omits empty chain fields and sends populated ones.
+	if _, err := FastAddInbound(srv.URL, "tok", &FastAddInboundRequest{Protocol: "vless"}); err != nil {
+		t.Fatalf("FastAddInbound direct: %v", err)
+	}
+	for _, k := range []string{"inbound_type", "chain_uri", "access_tags", "remark"} {
+		if _, exists := lastBody[k]; exists {
+			t.Fatalf("expected empty %q omitted, got %+v", k, lastBody)
+		}
+	}
+
+	if _, err := FastAddInbound(srv.URL, "tok", &FastAddInboundRequest{
+		Protocol:    "vless",
+		InboundType: "chain",
+		ChainURI:    "socks5://1.2.3.4:1080",
+		AccessTags:  []string{"hk", "vip"},
+		Remark:      "HK",
+	}); err != nil {
+		t.Fatalf("FastAddInbound chain: %v", err)
+	}
+	if lastBody["inbound_type"] != "chain" || lastBody["chain_uri"] != "socks5://1.2.3.4:1080" || lastBody["remark"] != "HK" || !reflect.DeepEqual(lastBody["access_tags"], []any{"hk", "vip"}) {
+		t.Fatalf("unexpected FastAddInbound body: %+v", lastBody)
+	}
+
+	// SetInboundTags sends PUT /api/inbounds/tags with non-nil [] for empty clear.
+	if _, err := SetInboundTags(srv.URL, "tok", "node-a", "mihomo", "hy2", nil); err != nil {
+		t.Fatalf("SetInboundTags: %v", err)
+	}
+	if lastMethod != http.MethodPut || lastPath != "/api/inbounds/tags" || !reflect.DeepEqual(lastBody["access_tags"], []any{}) {
+		t.Fatalf("unexpected SetInboundTags call: %s %s %+v", lastMethod, lastPath, lastBody)
+	}
+
+	// AddUser & UpdateUser inbound_tags semantics (omit vs clear vs set).
+	if _, err := AddUser(srv.URL, "tok", "", "alice", "pw", 0, 0, "", "", 0, 0, 0, 0, 0, []string{"hk"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	if !reflect.DeepEqual(lastBody["inbound_tags"], []any{"hk"}) {
+		t.Fatalf("AddUser expected inbound_tags=[hk], got %+v", lastBody)
+	}
+
+	if _, err := UpdateUser(srv.URL, "tok", "", "alice", "", 0, 0, "", 0, 0, 0, 0, 0, "", nil); err != nil {
+		t.Fatalf("UpdateUser nil: %v", err)
+	}
+	if _, exists := lastBody["inbound_tags"]; exists {
+		t.Fatalf("UpdateUser with nil inboundTags must omit key, got %+v", lastBody)
+	}
+
+	empty := []string{}
+	if _, err := UpdateUser(srv.URL, "tok", "", "alice", "", 0, 0, "", 0, 0, 0, 0, 0, "", &empty); err != nil {
+		t.Fatalf("UpdateUser empty: %v", err)
+	}
+	if !reflect.DeepEqual(lastBody["inbound_tags"], []any{}) {
+		t.Fatalf("UpdateUser with empty slice must send [], got %+v", lastBody)
 	}
 }

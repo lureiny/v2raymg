@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
@@ -228,5 +229,74 @@ func TestUserStore_UpdateLoginPassword(t *testing.T) {
 	}
 	if users[0].LoginPassword != "$2a$10$newhash" {
 		t.Errorf("expected updated LoginPassword, got %q", users[0].LoginPassword)
+	}
+}
+
+func TestUserStore_InboundTags_RoundTrip(t *testing.T) {
+	s := openUserStore(t)
+
+	alice := &contracts.User{
+		Username:    "alice",
+		AuthToken:   "tok-a",
+		TargetGroup: "vip",
+		InboundTags: []string{"home-sh", "vip"},
+	}
+	bob := &contracts.User{
+		Username:    "bob",
+		AuthToken:   "tok-b",
+		TargetGroup: "vip",
+	}
+	if err := s.Save(alice); err != nil {
+		t.Fatalf("Save alice: %v", err)
+	}
+	if err := s.Save(bob); err != nil {
+		t.Fatalf("Save bob: %v", err)
+	}
+
+	// Verify Load
+	loaded, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("expected 2 users, got %d", len(loaded))
+	}
+
+	// Verify Get
+	gotAlice, err := s.Get("alice")
+	if err != nil {
+		t.Fatalf("Get alice: %v", err)
+	}
+	if !reflect.DeepEqual(gotAlice.InboundTags, []string{"home-sh", "vip"}) {
+		t.Errorf("Get alice InboundTags = %v, want [home-sh vip]", gotAlice.InboundTags)
+	}
+	gotBob, err := s.Get("bob")
+	if err != nil {
+		t.Fatalf("Get bob: %v", err)
+	}
+	if len(gotBob.InboundTags) != 0 {
+		t.Errorf("Get bob InboundTags = %v, want empty", gotBob.InboundTags)
+	}
+
+	// Verify ListByGroup
+	byGroup, err := s.ListByGroup("vip")
+	if err != nil {
+		t.Fatalf("ListByGroup: %v", err)
+	}
+	if len(byGroup) != 2 || !reflect.DeepEqual(byGroup[0].InboundTags, []string{"home-sh", "vip"}) {
+		t.Errorf("ListByGroup alice InboundTags = %v", byGroup[0].InboundTags)
+	}
+
+	// Clear tags and verify update persists
+	alice.InboundTags = nil
+	if err := s.Save(alice); err != nil {
+		t.Fatalf("Save cleared alice: %v", err)
+	}
+	gotCleared, err := s.Get("alice")
+	if err != nil {
+		t.Fatalf("Get cleared alice: %v", err)
+	}
+	if len(gotCleared.InboundTags) != 0 {
+		t.Errorf("expected empty InboundTags after clear, got %v", gotCleared.InboundTags)
 	}
 }

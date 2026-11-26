@@ -3,7 +3,9 @@ package sync
 import (
 	"crypto/sha256"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 )
@@ -60,6 +62,36 @@ func ComputeHash(u *contracts.User) string {
 	if u.LoginPassword != "" {
 		writeField(u.LoginPassword)
 	}
+	// InboundTags is only included when non-empty after normalization so that
+	// empty-tag legacy users keep 100% byte-identical hashes with older peers.
+	if tags := normalizeTagsForHash(u.InboundTags); len(tags) > 0 {
+		writeField("inbound_tags")
+		writeField(strings.Join(tags, "\x00"))
+	}
 
 	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func normalizeTagsForHash(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	if normalized, err := contracts.NormalizeAccessTags(raw); err == nil {
+		return normalized
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, t := range raw {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
 }

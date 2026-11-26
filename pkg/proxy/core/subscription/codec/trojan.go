@@ -28,6 +28,7 @@ type TrojanNode struct {
 
 	RealityPublicKey string
 	RealityShortID   string
+	RealitySpiderX   string
 
 	Transport string
 
@@ -35,6 +36,12 @@ type TrojanNode struct {
 	WSHost string
 
 	GRPCServiceName string
+
+	H2Path string
+	H2Host string
+
+	HTTPUpgradePath string
+	HTTPUpgradeHost string
 }
 
 func (n *TrojanNode) Protocol() contracts.Protocol { return contracts.ProtocolTrojan }
@@ -62,6 +69,9 @@ func (n *TrojanNode) Encode() string {
 		if n.RealityShortID != "" {
 			q.Set("sid", n.RealityShortID)
 		}
+		if n.RealitySpiderX != "" {
+			q.Set("spx", n.RealitySpiderX)
+		}
 	}
 	if n.SkipCertVerify {
 		q.Set("insecure", "1")
@@ -69,6 +79,9 @@ func (n *TrojanNode) Encode() string {
 
 	t := n.Transport
 	if t != "" && t != "tcp" {
+		if t == "http" {
+			t = "h2"
+		}
 		q.Set("type", t)
 	}
 	switch t {
@@ -82,6 +95,20 @@ func (n *TrojanNode) Encode() string {
 	case "grpc":
 		if n.GRPCServiceName != "" {
 			q.Set("serviceName", n.GRPCServiceName)
+		}
+	case "h2", "http":
+		if n.H2Path != "" {
+			q.Set("path", n.H2Path)
+		}
+		if n.H2Host != "" {
+			q.Set("host", n.H2Host)
+		}
+	case "httpupgrade":
+		if n.HTTPUpgradePath != "" {
+			q.Set("path", n.HTTPUpgradePath)
+		}
+		if n.HTTPUpgradeHost != "" {
+			q.Set("host", n.HTTPUpgradeHost)
 		}
 	}
 
@@ -98,7 +125,7 @@ func (n *TrojanNode) Encode() string {
 func DecodeTrojan(uri string) (*TrojanNode, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("trojan: parse URI: %w", err)
+		return nil, fmt.Errorf("trojan: parse URI: %w", sanitizeURLError(err))
 	}
 	if u.Scheme != "trojan" {
 		return nil, fmt.Errorf("trojan: unexpected scheme %q", u.Scheme)
@@ -123,9 +150,12 @@ func DecodeTrojan(uri string) (*TrojanNode, error) {
 		security = ""
 	}
 	transport := q.Get("type")
-	if transport == "tcp" {
+	switch transport {
+	case "tcp":
 		// tcp is the default; normalize to "" so Transport has a single canonical form.
 		transport = ""
+	case "http":
+		transport = "h2"
 	}
 	n := &TrojanNode{
 		NodeName:    u.Fragment,
@@ -141,8 +171,9 @@ func DecodeTrojan(uri string) (*TrojanNode, error) {
 	if n.Security == "reality" {
 		n.RealityPublicKey = q.Get("pbk")
 		n.RealityShortID = q.Get("sid")
+		n.RealitySpiderX = q.Get("spx")
 	}
-	if q.Get("insecure") == "1" {
+	if isTruthyParam(q.Get("insecure")) || isTruthyParam(q.Get("allowInsecure")) {
 		n.SkipCertVerify = true
 	}
 
@@ -152,6 +183,12 @@ func DecodeTrojan(uri string) (*TrojanNode, error) {
 		n.WSHost = q.Get("host")
 	case "grpc":
 		n.GRPCServiceName = q.Get("serviceName")
+	case "h2":
+		n.H2Path = q.Get("path")
+		n.H2Host = q.Get("host")
+	case "httpupgrade":
+		n.HTTPUpgradePath = q.Get("path")
+		n.HTTPUpgradeHost = q.Get("host")
 	}
 
 	return n, nil

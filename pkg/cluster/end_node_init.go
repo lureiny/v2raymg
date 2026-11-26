@@ -27,6 +27,10 @@ type NodeInitConfig struct {
 	// deployments running without persistence, which then fall back to the
 	// pre-2.8 name/address matching.
 	ID string
+	// TLS says peers must dial Host:Port over TLS. Set when this node sits
+	// behind a TLS-terminating reverse proxy, in which case Host/Port are the
+	// PROXY's address; this node's own listener stays plaintext regardless.
+	TLS bool
 }
 
 // NewEndNodeClusterManagerFromConfig creates an EndNodeClusterManager, initialises the
@@ -45,6 +49,7 @@ func NewEndNodeClusterManagerFromConfig(clusterCfg ClusterInitConfig, nodeCfg No
 		Port:   nodeCfg.Port,
 		Name:   nodeCfg.Name,
 		NodeId: nodeCfg.ID,
+		Tls:    nodeCfg.TLS,
 	}
 
 	mgr := &EndNodeClusterManager{}

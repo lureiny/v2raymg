@@ -112,6 +112,7 @@ func migrateLegacyConfig(old *legacyConfig) *AppConfig {
 	cfg.EndNode.RpcPort = old.Server.Rpc.Port
 	cfg.EndNode.HttpPort = old.Server.Http.Port
 	cfg.EndNode.HttpToken = old.Server.Http.Token
+	cfg.EndNode.EnablePingCheck = old.Server.PingCheck || old.Server.IcmpPingCheck
 	cfg.EndNode.Ping.EnableICMPPing = old.Server.IcmpPingCheck
 	cfg.EndNode.EnablePrometheus = old.Server.Http.SupportPrometheus
 	cfg.EndNode.OnlyGateway = old.Server.Rpc.OnlyGateway
@@ -139,6 +140,8 @@ func defaultAppConfig() *AppConfig {
 	cfg.EndNode.Ping.TCPPingInterval = 5
 	cfg.EndNode.Ping.TCPPingTimeout = 1
 	cfg.EndNode.JWTExpireHours = 24
+	cfg.EndNode.MCP.Enabled = false
+	cfg.EndNode.MCP.ReadOnly = true
 	cfg.EndNode.Cluster.NodeSumSync = true
 	cfg.EndNode.Cluster.HeartbeatIntervalSec = 10
 	cfg.ClusterUser = DefaultClusterUserConfig()
@@ -233,6 +236,12 @@ func applyRuntimeDefaults(cfg *AppConfig) error {
 	}
 	return nil
 }
+
+// GenerateRandomSecret returns a URL-safe base64-encoded random string of n
+// bytes of crypto/rand entropy. Exported so the credentials minted outside the
+// config loader — the auto-generated http_token, which is persisted rather than
+// regenerated each boot — come from the same place with the same strength.
+func GenerateRandomSecret(n int) (string, error) { return generateRandomSecret(n) }
 
 // generateRandomSecret returns a URL-safe base64-encoded random string of n bytes.
 func generateRandomSecret(n int) (string, error) {

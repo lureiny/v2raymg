@@ -160,11 +160,16 @@ type e2eServerOpts struct {
 	ClusterUserEnabled bool
 	// EnablePrometheus registers GET /api/metrics.
 	EnablePrometheus bool
+	// EnableMCP registers POST/GET/DELETE /mcp (embedded stateless MCP server).
+	EnableMCP bool
 	// LogLevel defaults to "info". Cluster tests set "debug" because the
 	// node-directory reconcile is logged at debug, and an assertion that it
 	// happened would otherwise pass vacuously against a log that can never
 	// contain the line.
 	LogLevel string
+	// AllowLoopbackChainTarget enables end_node.allow_loopback_chain_target so
+	// cluster E2E tests can mount loopback test SOCKS5 chain backends.
+	AllowLoopbackChainTarget bool
 
 	// Xray container — required
 	XrayBin      string // path to xray binary; empty → auto_download
@@ -339,18 +344,23 @@ func generateE2EConfig(t *testing.T, opts e2eServerOpts) string {
 			"containers": containers,
 		},
 		"end_node": map[string]any{
-			"name":              opts.NodeName,
-			"proxy_host":        "127.0.0.1",
-			"listen":            "127.0.0.1",
-			"http_listen":       "127.0.0.1",
-			"rpc_port":          opts.RpcPort,
-			"http_port":         opts.HttpPort,
-			"http_token":        e2eHTTPToken,
-			"jwt_secret":        "e2e-jwt-secret-this-is-32-chars!",
-			"jwt_expire_hours":  24,
-			"enable_prometheus": opts.EnablePrometheus,
-			"only_gateway":      false,
-			"cluster":           clusterSection,
+			"name":                        opts.NodeName,
+			"proxy_host":                  "127.0.0.1",
+			"listen":                      "127.0.0.1",
+			"http_listen":                 "127.0.0.1",
+			"rpc_port":                    opts.RpcPort,
+			"http_port":                   opts.HttpPort,
+			"http_token":                  e2eHTTPToken,
+			"jwt_secret":                  "e2e-jwt-secret-this-is-32-chars!",
+			"jwt_expire_hours":            24,
+			"enable_prometheus":           opts.EnablePrometheus,
+			"allow_loopback_chain_target": opts.AllowLoopbackChainTarget,
+			"mcp": map[string]any{
+				"enabled":   opts.EnableMCP,
+				"read_only": true,
+			},
+			"only_gateway": false,
+			"cluster":      clusterSection,
 		},
 		"cluster_user": map[string]any{
 			"enabled":              opts.ClusterUserEnabled,
@@ -412,6 +422,10 @@ type e2eServer struct {
 	name string
 	// rpcPort is this node's gRPC port, used to seed later nodes' static_nodes.
 	rpcPort int
+	// xrayGRPCPort and mihomoAPIPort record custom container management ports
+	// configured on this node (used by chain address policy negative E2E checks).
+	xrayGRPCPort  int
+	mihomoAPIPort int
 	// cfgPath is this node's config file, so a test can restart it with changes.
 	cfgPath string
 	// logs captures stdout+stderr while the process runs. Cluster tests read it
@@ -592,6 +606,10 @@ func (s *e2eServer) apiDelete(path string, body any) (int, []byte, error) {
 // gin route template (not the concrete path), which is what the coverage guard in
 // pkg/http/route_coverage_test.go compares against.
 func (s *e2eServer) apiDo(method, path string, params url.Values, body any) (int, []byte, error) {
+	return s.apiDoWithHeaders(method, path, params, nil, body)
+}
+
+func (s *e2eServer) apiDoWithHeaders(method, path string, params url.Values, headers map[string]string, body any) (int, []byte, error) {
 	recordRouteHit(method, path)
 
 	var reader io.Reader
@@ -615,6 +633,9 @@ func (s *e2eServer) apiDo(method, path string, params url.Values, body any) (int
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("X-Token", s.token)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {

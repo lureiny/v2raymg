@@ -142,6 +142,13 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	//     start (step 12).
 	preClaimPersistedInboundPorts(storeMgr, forwardMgr, cfg)
 
+	// 2c. Resolve the management API token.
+	httpToken, err := resolveHTTPToken(storeMgr, cfg)
+	if err != nil {
+		log.Error("resolve http token failed", "err", err)
+		os.Exit(1)
+	}
+
 	// 3. User Manager
 	// 3a. Init login_password for existing users that don't have one yet (blocking).
 	//     Must run BEFORE NewUserManagerWithStore so that users are loaded with
@@ -174,6 +181,22 @@ func runEndNode(cfg *appconfig.AppConfig) {
 		log.Error("init local node identity failed", "err", err)
 		os.Exit(1)
 	}
+	// What peers must dial to reach this node's gRPC server, which is not
+	// necessarily where it listens: behind a reverse proxy it is the proxy's
+	// address and scheme, while the listener below stays plaintext on
+	// end_node.listen. Without reverse_proxy configured this is proxy_host +
+	// rpc_port over plaintext, exactly as every earlier release advertised.
+	advertise, err := cfg.EndNode.ResolveAdvertise()
+	if err != nil {
+		log.Error("resolve advertised cluster address failed", "err", err)
+		os.Exit(1)
+	}
+	if advertise.TLS {
+		log.Warn("advertising a TLS cluster address; peers older than this release cannot dial it",
+			"advertise", advertise.String(),
+			"hint", "upgrade every peer before switching this node to grpcs://")
+	}
+
 	clusterMgr, localNode, err := cluster.NewEndNodeClusterManagerFromConfig(
 		cluster.ClusterInitConfig{
 			ClusterToken: cfg.EndNode.Cluster.Token,
@@ -181,8 +204,9 @@ func runEndNode(cfg *appconfig.AppConfig) {
 		},
 		cluster.NodeInitConfig{
 			Name: cfg.EndNode.Name,
-			Host: cfg.EndNode.ProxyHost,
-			Port: int32(cfg.EndNode.RpcPort),
+			Host: advertise.Host,
+			Port: advertise.Port,
+			TLS:  advertise.TLS,
 			ID:   localNodeID,
 		},
 	)
@@ -190,7 +214,9 @@ func runEndNode(cfg *appconfig.AppConfig) {
 		log.Error("init cluster manager failed", "err", err)
 		os.Exit(1)
 	}
-	log.Info("local node identity", "node_id", localNodeID, "node_name", cfg.EndNode.Name)
+	log.Info("local node identity",
+		"node_id", localNodeID, "node_name", cfg.EndNode.Name,
+		"advertise", advertise.String())
 
 	// 7. Cert Manager + lifecycle context for background tasks
 	ctx, cancel := context.WithCancel(context.Background())
@@ -225,8 +251,8 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	statsCol := usermanager.NewBandwidthStatsCollector(userMgr)
 	pingCol := collecter.NewPingCollector(collecter.PingCollectorConfig{
 		Host:             cfg.EndNode.ProxyHost,
-		EnableICMPPing:   cfg.EndNode.Ping.EnableICMPPing,
-		EnableTCPPing:    cfg.EndNode.Ping.EnableTCPPing,
+		EnableICMPPing:   cfg.EndNode.EnablePingCheck && cfg.EndNode.Ping.EnableICMPPing,
+		EnableTCPPing:    cfg.EndNode.EnablePingCheck && cfg.EndNode.Ping.EnableTCPPing,
 		ICMPPingInterval: cfg.EndNode.Ping.ICMPPingInterval,
 		ICMPPingTimeout:  cfg.EndNode.Ping.ICMPPingTimeout,
 		TCPPingInterval:  cfg.EndNode.Ping.TCPPingInterval,
@@ -257,23 +283,11 @@ func runEndNode(cfg *appconfig.AppConfig) {
 		nodeMetricCol,
 		nodeStoreAdapter{nodeStore},
 	)
+	rpcServer.SetInboundStore(storeMgr.InboundStore())
 
 	// 9a. Cluster sync — enable on UserManager when configured.
 	if cfg.ClusterUser.Enabled {
-		ngStore := store.NewSQLiteNodeGroupsStore(storeMgr.DB())
-		userMgr.EnableClusterSync(cfg.ClusterUser.DefaultGroup, ngStore)
-
-		// Seed node groups if empty.
-		if groups, _ := ngStore.List(); len(groups) == 0 {
-			_ = ngStore.Set([]string{cfg.ClusterUser.DefaultGroup})
-		}
-
-		// Backfill cluster fields for users loaded before cluster sync was enabled.
-		userMgr.BackfillClusterFields()
-
-		log.Info("cluster sync enabled",
-			"default_group", cfg.ClusterUser.DefaultGroup,
-		)
+		initClusterSync(cfg, storeMgr, userMgr)
 	}
 
 	// 10. HTTP Server
@@ -305,12 +319,14 @@ func runEndNode(cfg *appconfig.AppConfig) {
 		http.HttpServerConfig{
 			Listen:                  httpListen,
 			Port:                    cfg.EndNode.HttpPort,
-			Token:                   cfg.EndNode.HttpToken,
+			Token:                   httpToken,
 			Name:                    cfg.EndNode.Name,
 			JWTSecret:               cfg.EndNode.JWTSecret,
 			JWTExpireHours:          cfg.EndNode.JWTExpireHours,
 			EnableSubUserInfoHeader: cfg.Subscription.EnableUserInfoHeader,
 			SubUserInfoHeaderFormat: cfg.Subscription.UserinfoHeaderFormat,
+			EnableMCP:               cfg.EndNode.MCP.Enabled,
+			MCPReadOnly:             cfg.EndNode.MCP.ReadOnly,
 		},
 		localNode,
 		clusterMgr,
@@ -318,8 +334,14 @@ func runEndNode(cfg *appconfig.AppConfig) {
 		userMgr,
 		cfg.ClusterUser.Enabled,
 	)
+	// Inject containerMgr explicitly so local handlers (e.g. AuthHysteria2
+	// two-layer access gating) do not fall back to the global RPC singleton.
+	httpServer.SetContainerMgr(containerMgr)
 	if cfg.EndNode.EnablePrometheus {
 		http.RegisterPrometheus(httpServer)
+	}
+	if cfg.EndNode.MCP.Enabled {
+		http.RegisterMCP(httpServer)
 	}
 
 	// Bind both core listeners synchronously BEFORE serving either, so a bind
@@ -360,6 +382,7 @@ func runEndNode(cfg *appconfig.AppConfig) {
 	log.Info("shutting down", "signal", sig.String())
 
 	cancel() // stop auto-renew and other ctx-bound background tasks
+	pingCol.StopPing()
 	containerMgr.StopAll()
 }
 
@@ -369,6 +392,7 @@ func convertStaticNodes(nodes []appconfig.StaticNodeConfig) []cluster.StaticNode
 		out[i] = cluster.StaticNode{
 			Host: n.Host,
 			Port: n.Port,
+			TLS:  n.TLS,
 		}
 	}
 	return out
@@ -387,13 +411,13 @@ func (a nodeStoreAdapter) List() ([]server.PersistedNode, error) {
 	}
 	out := make([]server.PersistedNode, 0, len(nodes))
 	for _, n := range nodes {
-		out = append(out, server.PersistedNode{NodeID: n.NodeID, Name: n.Name, Host: n.Host, Port: n.Port})
+		out = append(out, server.PersistedNode{NodeID: n.NodeID, Name: n.Name, Host: n.Host, Port: n.Port, TLS: n.TLS})
 	}
 	return out, nil
 }
 
 func (a nodeStoreAdapter) Upsert(n server.PersistedNode) error {
-	return a.s.Upsert(store.ClusterNode{NodeID: n.NodeID, Name: n.Name, Host: n.Host, Port: n.Port})
+	return a.s.Upsert(store.ClusterNode{NodeID: n.NodeID, Name: n.Name, Host: n.Host, Port: n.Port, TLS: n.TLS})
 }
 
 func (a nodeStoreAdapter) Delete(nodeID string) error { return a.s.Delete(nodeID) }
@@ -430,7 +454,7 @@ func loadPersistedNodes(st *store.SQLiteClusterNodesStore, clusterMgr *cluster.E
 			continue // already present as a static peer; config wins
 		}
 		clusterMgr.Add(&cluster.Node{
-			Node:       &proto.Node{Name: n.Name, Host: n.Host, Port: n.Port, NodeId: n.NodeID},
+			Node:       &proto.Node{Name: n.Name, Host: n.Host, Port: n.Port, NodeId: n.NodeID, Tls: n.TLS},
 			CreateTime: now,
 		})
 		loaded++
@@ -446,7 +470,7 @@ func loadPersistedNodes(st *store.SQLiteClusterNodesStore, clusterMgr *cluster.E
 			continue
 		}
 		clusterMgr.Add(&cluster.Node{
-			Node:       &proto.Node{Name: sd.Name, Host: sd.Host, Port: sd.Port},
+			Node:       &proto.Node{Name: sd.Name, Host: sd.Host, Port: sd.Port, Tls: sd.TLS},
 			CreateTime: now,
 		})
 		loaded++
@@ -460,4 +484,28 @@ func loadPersistedNodes(st *store.SQLiteClusterNodesStore, clusterMgr *cluster.E
 	if loaded > 0 {
 		log.Info("loaded persisted cluster nodes", "count", loaded, "seeds", len(seeds))
 	}
+}
+
+// initClusterSync seeds default node groups before enabling cluster sync on
+// UserManager so cachedNodeGroups is never empty on a fresh database (which
+// would otherwise fail-open Layer 1 visibility until restart).
+func initClusterSync(cfg *appconfig.AppConfig, storeMgr *store.StoreManager, userMgr *usermanager.UserManager) {
+	ngStore := store.NewSQLiteNodeGroupsStore(storeMgr.DB())
+
+	if groups, err := ngStore.List(); err != nil {
+		log.Warn("list node groups failed before seeding default group", "err", err)
+	} else if len(groups) == 0 {
+		if err := ngStore.Set([]string{cfg.ClusterUser.DefaultGroup}); err != nil {
+			log.Warn("seed default node group failed", "group", cfg.ClusterUser.DefaultGroup, "err", err)
+		}
+	}
+
+	userMgr.EnableClusterSync(cfg.ClusterUser.DefaultGroup, ngStore)
+
+	// Backfill cluster fields for users loaded before cluster sync was enabled.
+	userMgr.BackfillClusterFields()
+
+	log.Info("cluster sync enabled",
+		"default_group", cfg.ClusterUser.DefaultGroup,
+	)
 }

@@ -58,7 +58,11 @@ func (pi *tcpPingerInfo) pingLoop(ch chan<- *PingResult) {
 			return
 		case <-ticker.C:
 			result := pi.doPing()
-			ch <- result
+			select {
+			case ch <- result:
+			case <-pi.ctx.Done():
+				return
+			}
 		}
 	}
 }
@@ -112,7 +116,7 @@ func (tpc *TcpPingChecker) Init(opts ...OptionFunc) {
 
 // Start begins the TCP ping probing loop.
 func (tpc *TcpPingChecker) Start() {
-	if tpc.isRunning.Load() {
+	if !tpc.isRunning.CompareAndSwap(false, true) {
 		return
 	}
 
@@ -133,8 +137,6 @@ func (tpc *TcpPingChecker) Start() {
 			}
 		}
 	}()
-
-	tpc.isRunning.Store(true)
 }
 
 func (tpc *TcpPingChecker) updatePingers() {

@@ -12,10 +12,11 @@ const (
 	FastAddInbound = "api/inbound/fast"
 	Inbound        = "api/inbound"
 	Inbounds       = "api/inbounds"
+	InboundsTags   = "api/inbounds/tags"
 
 	CopyUserBetweenNodes = "api/copyUserBetweenNodes"
-	User      = "api/user"
-	UserReset = "api/user/reset"
+	User                 = "api/user"
+	UserReset            = "api/user/reset"
 
 	Update = "api/update"
 

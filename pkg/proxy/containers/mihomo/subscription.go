@@ -63,6 +63,10 @@ func (c *MihomoContainer) GetUserSubscriptions(req contracts.SubscriptionRequest
 	specs := make([]contracts.SubscriptionSpec, 0, len(inbounds))
 
 	for _, inb := range inbounds {
+		if !c.userMgr.CanUserAccessInboundByUsername(req.User.Username, inb.GetAccessTags()) {
+			log.Debugf("mihomo: subscription skip inbound %q for user %q (access denied)", inb.Tag(), req.User.Username)
+			continue
+		}
 		port, ok := c.userMgr.GetUserPortByDst(req.User.Username, inb.Port())
 		if !ok {
 			// No forward rule — user not wired to this inbound yet (or at
@@ -103,8 +107,21 @@ func (c *MihomoContainer) GetUserSubscriptions(req contracts.SubscriptionRequest
 //	tuic → fillTuicSubscriptionSpec (Phase 6, ProtocolParams only)
 //	anytls → fillAnyTLSSubscriptionSpec (Phase 7, ProtocolParams only)
 func buildSubscriptionSpec(inb *MihomoInbound, req contracts.SubscriptionRequest, port uint32) (contracts.SubscriptionSpec, error) {
+	meta := inb.Meta()
 	nodeName := req.NodeName
-	if nodeName == "" {
+	if meta.Remark != "" {
+		if nodeName == "" {
+			nodeName = meta.Remark
+		} else {
+			nodeName = nodeName + "-" + meta.Remark
+		}
+	} else if meta.InboundType == contracts.InboundTypeChain {
+		if nodeName == "" {
+			nodeName = inb.Tag()
+		} else {
+			nodeName = nodeName + "-" + inb.Tag()
+		}
+	} else if nodeName == "" {
 		nodeName = inb.Tag()
 	}
 

@@ -86,6 +86,9 @@ type clusterOpts struct {
 	// Empty XrayBin makes each node fall back to auto_download.
 	XrayBin   string
 	MihomoBin string
+	// HystBin / SnellBin optionally enable the Mode A containers on every node.
+	HystBin  string
+	SnellBin string
 	// NodeSumSync overrides the node-directory delta sync setting on every end
 	// node; nil keeps the production default (on).
 	NodeSumSync *bool
@@ -93,6 +96,9 @@ type clusterOpts struct {
 	// static_nodes entry, reproducing a config written before the field was
 	// dropped. It must be silently ignored and change nothing.
 	LegacySeedName string
+	// AllowLoopbackChainTarget forwards end_node.allow_loopback_chain_target to
+	// every cluster node config.
+	AllowLoopbackChainTarget bool
 }
 
 type e2eCluster struct {
@@ -172,7 +178,12 @@ func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 		}}
 	}
 
-	configPath := generateE2EConfig(t, e2eServerOpts{
+	xrayConfFile := filepath.Join(dir, "xray.json")
+	if err := writeMinimalXrayConfig(xrayConfFile, xrayGRPCPort); err != nil {
+		t.Fatalf("write xray config for %s: %v", name, err)
+	}
+
+	serverOpts := e2eServerOpts{
 		Dir:          dir,
 		NodeName:     name,
 		HttpPort:     httpPort,
@@ -186,19 +197,42 @@ func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 		HeartbeatIntervalSec: c.opts.HeartbeatIntervalSec,
 		// Node-groups routes are only registered when the cluster-user layer is on,
 		// so the suite cannot cover them otherwise.
-		ClusterUserEnabled: true,
-		EnablePrometheus:   true,
-		NodeSumSync:        c.opts.NodeSumSync,
-		XrayBin:            c.opts.XrayBin,
-		XrayGRPCPort:       xrayGRPCPort,
-		XrayConfFile:       filepath.Join(dir, "xray.json"),
-		MihomoBin:          c.opts.MihomoBin,
-		MihomoAPIPort:      mihomoAPIPort,
-		MihomoDataDir:      mihomoDataDir,
-		MihomoConf:         filepath.Join(dir, "mihomo.yaml"),
-		FwdMinPort:         fwdBase,
-		FwdMaxPort:         fwdBase + 500,
-	})
+		ClusterUserEnabled:       true,
+		EnablePrometheus:         true,
+		EnableMCP:                true,
+		NodeSumSync:              c.opts.NodeSumSync,
+		AllowLoopbackChainTarget: c.opts.AllowLoopbackChainTarget,
+		XrayBin:                  c.opts.XrayBin,
+		XrayGRPCPort:             xrayGRPCPort,
+		XrayConfFile:             xrayConfFile,
+		MihomoBin:                c.opts.MihomoBin,
+		MihomoAPIPort:            mihomoAPIPort,
+		MihomoDataDir:            mihomoDataDir,
+		MihomoConf:               filepath.Join(dir, "mihomo.yaml"),
+		FwdMinPort:               fwdBase,
+		FwdMaxPort:               fwdBase + 500,
+	}
+	if c.opts.HystBin != "" {
+		hystCert, hystKey, _, _, err := writeTempCert(dir)
+		if err != nil {
+			t.Fatalf("writeTempCert for %s hysteria: %v", name, err)
+		}
+		serverOpts.HystBin = c.opts.HystBin
+		serverOpts.HystConf = filepath.Join(dir, "hysteria.yaml")
+		serverOpts.HystUDPPort = freeUDPPort(t)
+		serverOpts.HystCert = hystCert
+		serverOpts.HystKey = hystKey
+	}
+	if c.opts.SnellBin != "" {
+		snellPort, err := freeTCPPort()
+		if err != nil {
+			t.Fatalf("freeTCPPort for %s snell: %v", name, err)
+		}
+		serverOpts.SnellBin = c.opts.SnellBin
+		serverOpts.SnellConf = filepath.Join(dir, "snell.conf")
+		serverOpts.SnellPort = snellPort
+	}
+	configPath := generateE2EConfig(t, serverOpts)
 
 	logs := &syncBuffer{}
 	cmd := exec.Command(c.bin, "server", "--conf", configPath)
@@ -209,14 +243,16 @@ func (c *e2eCluster) addEndNode(t *testing.T) *e2eServer {
 	}
 
 	srv := &e2eServer{
-		cmd:     cmd,
-		baseURL: fmt.Sprintf("http://127.0.0.1:%d", httpPort),
-		token:   e2eHTTPToken,
-		dir:     dir,
-		name:    name,
-		rpcPort: rpcPort,
-		cfgPath: configPath,
-		logs:    logs,
+		cmd:           cmd,
+		baseURL:       fmt.Sprintf("http://127.0.0.1:%d", httpPort),
+		token:         e2eHTTPToken,
+		dir:           dir,
+		name:          name,
+		rpcPort:       rpcPort,
+		xrayGRPCPort:  xrayGRPCPort,
+		mihomoAPIPort: mihomoAPIPort,
+		cfgPath:       configPath,
+		logs:          logs,
 	}
 	c.ends = append(c.ends, srv)
 
@@ -552,4 +588,20 @@ func (c *e2eCluster) restartWithConfigEdit(t *testing.T, s *e2eServer, what stri
 		t.Fatalf("%s did not come back: %v\nlogs:\n%s", s.name, err, truncate(logs.String(), 6000))
 	}
 	t.Logf("%s restarted (%s)", s.name, what)
+}
+
+// restartWithReverseProxy restarts a node configured to believe it sits behind a
+// reverse proxy at the given URL, so it advertises that address instead of
+// proxy_host + rpc_port.
+//
+// The URL is plaintext grpc:// on purpose. Standing up a real TLS-terminating
+// proxy would test the proxy, not this code — what needs proving here is that
+// the advertised address comes from reverse_proxy.grpc_addr and that peers
+// follow it to an entry they update in place rather than a second one.
+func (c *e2eCluster) restartWithReverseProxy(t *testing.T, s *e2eServer, addr string) {
+	t.Helper()
+	c.restartWithConfigEdit(t, s, "reverse_proxy "+addr, func(endNode map[string]any) {
+		endNode["listen"] = "0.0.0.0"
+		endNode["reverse_proxy"] = map[string]any{"grpc_addr": addr}
+	})
 }

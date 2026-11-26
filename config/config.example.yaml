@@ -161,15 +161,43 @@ end_node:
   http_listen: 0.0.0.0
   rpc_port: 9090
   http_port: 8080
+
+  # reverse_proxy 告诉本进程"我在某个反向代理后面"。它只影响**广播给对端的
+  # 地址**,不影响上面的 listen —— 本节点的 gRPC server 始终是明文 h2c,
+  # TLS 由反代终止。
+  #
+  #   grpc_addr: "grpcs://cluster.example.com:443"
+  #
+  # 留空 = 广播 grpc://{proxy_host}:{rpc_port},与 2.9.x 行为逐字节一致。
+  # 缺 scheme 按 grpc:// 处理;缺端口按 grpc→80 / grpcs→443(比照 http/https)。
+  #
+  # ⚠️ 配 grpcs:// 前必须先把**所有**对端升级到本版本 —— 老节点不认识线上的
+  # tls 标志,只会用明文去拨,连不上。配了会在启动时打 WARN 提醒。
+  # reverse_proxy:
+  #   grpc_addr: "grpcs://cluster.example.com:443"
+
+  # http_token: 管理 API 的静态 token(纯本机,不跨节点比较)。
+  # 留空则自动生成并**只在生成那一次**打印到日志,同时存进数据库,重启保持不变。
+  # 记得把它填进 CLI 的 .v2raymg-tools.yaml。
   http_token: your-secret-token
   # jwt_secret: signing key for frontend JWT tokens (POST /login).
-  # Required (end node). Minimum 16 characters. Service will refuse to start if missing or too short.
+  # Auto-generated when empty (in memory only — sessions are invalidated on
+  # restart). Set it explicitly to keep sessions across restarts.
   jwt_secret: change-this-to-a-random-secret-at-least-16-chars
   # jwt_expire_hours: JWT token validity in hours. Default: 24.
   jwt_expire_hours: 24
   enable_prometheus: false
+  # Embedded Streamable HTTP MCP server (/mcp), protected by the same auth as the HTTP API.
+  mcp:
+    enabled: false               # mount /mcp on the HTTP management server. Default: false.
+    read_only: true              # restrict MCP tools to read-only operations. Default: true.
+  # Master switch for active ICMP/TCP ping probing and ping_nodes loading. Default: false.
   enable_ping_check: false
   only_gateway: false
+  # Allow chain proxy backend URIs targeting loopback (127.0.0.0/8, ::1, localhost),
+  # e.g. for local frps port-forwarding tunnels. Local management and allocated ports
+  # are still unconditionally blocked. Default: false.
+  allow_loopback_chain_target: false
   ping:
     enable_icmp_ping: true       # requires root/cap_net_raw
     icmp_ping_interval: 5        # seconds
@@ -219,10 +247,14 @@ end_node:
     # first response, so a label written here could only ever be an unverified
     # guess. A leftover `name:` from an older config is accepted and silently
     # ignored, so upgrading needs no edit.
+    # 种子支持两种写法,可混用:
+    #   - URL 形式,能表达协议。要 bootstrap 到一个 grpcs 反代后面的节点,
+    #     必须用这种写法,否则首次拨号会走明文而失败
+    #   - 原来的 host/port mapping,含义不变(始终是明文)
     static_nodes: []
-    #  - host: 10.0.0.1
-    #    port: 9090
-    #  - host: 10.0.0.2
+    #  - "grpcs://node2.example.com:443"   # TLS,反代终止
+    #  - "grpc://node3.internal"           # 缺省端口 → 80
+    #  - host: 10.0.0.1                    # 旧形式,原样有效
     #    port: 9090
 
 # The center node was removed. Use end_node.cluster.static_nodes for discovery.

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"math/big"
@@ -15,12 +16,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lureiny/v2raymg/pkg/proxy/containers/xray/profilegen"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/chain"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/inbound"
@@ -40,11 +45,19 @@ type Executor struct {
 	grpcAPIAddress           string
 	inbounds                 map[string]*XrayInbound // in-memory inbound storage
 	inboundsMu               sync.RWMutex
+	inboundOpMu              sync.Mutex // serializes inbound lifecycle mutations (FastAdd/Remove/AddNative/SetTags/Restore)
 	renderer                 *Renderer
 
 	// UserManager integration
-	userMgr     *usermanager.UserManager
-	userEventCh chan usermanager.UserEvent
+	userMgr         *usermanager.UserManager
+	userEventCh     chan usermanager.UserEvent
+	userEventStopCh chan struct{}
+	userEventWg     sync.WaitGroup
+	userMgrSubCh    <-chan usermanager.UserEvent
+	forwardStopCh   chan struct{}
+	forwardWg       sync.WaitGroup
+	lifecycleMu     sync.Mutex
+	closeOnce       sync.Once
 
 	// certManager provides certificate lookup for TLS inbounds.
 	// Optional: only required when FastAddInbound is called with a domain parameter.
@@ -64,6 +77,13 @@ type Executor struct {
 	// Reconcile loop for periodic user sync
 	reconcileStopCh chan struct{}
 	reconcileWg     sync.WaitGroup
+
+	// routingRunner overrides subprocess execution for xray api routing commands in tests.
+	routingRunner cliRunner
+}
+
+func (e *Executor) routingCLI() *routingCLIClient {
+	return newRoutingCLIClient(e.config.BinaryPath, e.grpcAPIAddress, e.routingRunner)
 }
 
 // ExecutorConfig holds executor configuration.
@@ -166,7 +186,7 @@ func NewExecutor(cfg ExecutorConfig) (*Executor, error) {
 	if cfg.UserManager != nil {
 		e.userMgr = cfg.UserManager
 		e.userEventCh = make(chan usermanager.UserEvent, 100)
-		go e.forwardUserEvents(cfg.UserManager.Subscribe())
+		e.forwardStopCh = make(chan struct{})
 	}
 	if cfg.CertManager != nil {
 		e.certManager = cfg.CertManager
@@ -209,6 +229,13 @@ func NewExecutor(cfg ExecutorConfig) (*Executor, error) {
 		}
 		updater.SetProcessController(e)
 		e.updater = updater
+	}
+
+	if cfg.UserManager != nil {
+		sub := cfg.UserManager.Subscribe()
+		e.userMgrSubCh = sub
+		e.forwardWg.Add(1)
+		go e.forwardUserEvents(sub, e.forwardStopCh)
 	}
 
 	return e, nil
@@ -265,17 +292,183 @@ func (e *Executor) EnsureBinary(ctx context.Context) error {
 }
 
 // EnsureConfig checks if a valid config file exists.
-// If not provided, generates a default config with API enabled.
+// If present on disk, ensures api.services contains "RoutingService" (updating
+// the file if missing) and emits warnings if outbounds[0] is not "direct" or
+// routing.rules ends with a catch-all rule that would shadow appended chain rules.
+// If not provided or missing, generates a default config with API enabled.
 func (e *Executor) EnsureConfig() error {
 	if e.config.ConfigFilePath != "" {
-		// Check if config file exists
-		if _, err := os.Stat(e.config.ConfigFilePath); err == nil {
-			return nil // Config exists
+		if info, err := os.Stat(e.config.ConfigFilePath); err == nil {
+			return e.prepareExistingConfig(e.config.ConfigFilePath, info.Mode().Perm())
 		}
 	}
 
 	// Generate default config
 	return e.generateDefaultConfig()
+}
+
+func (e *Executor) prepareExistingConfig(configPath string, perm os.FileMode) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read existing xray config %s: %w", configPath, err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("failed to parse existing xray config %s: %w", configPath, err)
+	}
+	if raw == nil {
+		raw = map[string]interface{}{}
+	}
+
+	needsWrite := false
+	apiMap, ok := raw["api"].(map[string]interface{})
+	if !ok || apiMap == nil {
+		raw["api"] = map[string]interface{}{
+			"tag":      APIInboundTag,
+			"services": []string{"HandlerService", "LoggerService", "StatsService", "RoutingService"},
+		}
+		needsWrite = true
+	} else {
+		if _, hasTag := apiMap["tag"]; !hasTag {
+			apiMap["tag"] = APIInboundTag
+			needsWrite = true
+		}
+		rawServices, hasServices := apiMap["services"].([]interface{})
+		if !hasServices {
+			apiMap["services"] = []string{"HandlerService", "LoggerService", "StatsService", "RoutingService"}
+			needsWrite = true
+		} else {
+			hasRouting := false
+			for _, svc := range rawServices {
+				if s, _ := svc.(string); s == "RoutingService" {
+					hasRouting = true
+					break
+				}
+			}
+			if !hasRouting {
+				apiMap["services"] = append(rawServices, "RoutingService")
+				needsWrite = true
+			}
+		}
+	}
+
+	if needsWrite {
+		updated, err := json.MarshalIndent(raw, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal updated xray config %s: %w", configPath, err)
+		}
+		updated = append(updated, '\n')
+		if perm == 0 {
+			perm = 0644
+		}
+		if err := os.WriteFile(configPath, updated, perm); err != nil {
+			return fmt.Errorf("failed to write updated xray config %s: %w", configPath, err)
+		}
+	}
+
+	// Warn if outbounds[0] is not "direct" (default fallback could misroute).
+	warnOutbound0 := false
+	if outbounds, ok := raw["outbounds"].([]interface{}); !ok || len(outbounds) == 0 {
+		warnOutbound0 = true
+	} else if first, ok := outbounds[0].(map[string]interface{}); !ok {
+		warnOutbound0 = true
+	} else if tag, _ := first["tag"].(string); tag != "direct" {
+		warnOutbound0 = true
+	}
+	if warnOutbound0 {
+		log.Warn("[EnsureConfig] xray config outbounds[0] is not tagged \"direct\"; direct traffic without matching routing rules may misroute", "config", configPath)
+	}
+
+	// Warn if routing.rules ends with a catch-all rule that shadows -append chain rules.
+	if routing, ok := raw["routing"].(map[string]interface{}); ok {
+		if rules, ok := routing["rules"].([]interface{}); ok && len(rules) > 0 {
+			if lastRule, ok := rules[len(rules)-1].(map[string]interface{}); ok && isCatchAllRoutingRule(lastRule) {
+				log.Warn("[EnsureConfig] xray config routing.rules ends with a catch-all rule that may shadow dynamically appended chain rules", "config", configPath)
+			}
+		}
+	}
+
+	return nil
+}
+
+func isCatchAllRoutingRule(rule map[string]interface{}) bool {
+	if rule == nil {
+		return false
+	}
+	outTag, _ := rule["outboundTag"].(string)
+	balTag, _ := rule["balancerTag"].(string)
+	if strings.TrimSpace(outTag) == "" && strings.TrimSpace(balTag) == "" {
+		return false
+	}
+
+	for _, key := range []string{"inboundTag", "domain", "source", "sourceIP", "user", "protocol", "attrs", "sourcePort"} {
+		if hasNonEmptyRuleSelector(rule[key]) {
+			return false
+		}
+	}
+
+	if ipVal, exists := rule["ip"]; exists && hasNonEmptyRuleSelector(ipVal) {
+		if !isAllIPSelector(ipVal) {
+			return false
+		}
+	}
+
+	if portVal, exists := rule["port"]; exists && portVal != nil {
+		portStr := strings.TrimSpace(fmt.Sprint(portVal))
+		if portStr != "" && portStr != "0-65535" && portStr != "1-65535" {
+			return false
+		}
+	}
+
+	if netVal, exists := rule["network"]; exists && netVal != nil {
+		netStr := strings.ToLower(strings.TrimSpace(fmt.Sprint(netVal)))
+		if netStr != "" {
+			hasTCP := strings.Contains(netStr, "tcp")
+			hasUDP := strings.Contains(netStr, "udp")
+			if !(hasTCP && hasUDP) {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func hasNonEmptyRuleSelector(v interface{}) bool {
+	if v == nil {
+		return false
+	}
+	switch val := v.(type) {
+	case string:
+		return strings.TrimSpace(val) != ""
+	case []string:
+		return len(val) > 0
+	case []interface{}:
+		return len(val) > 0
+	case map[string]interface{}:
+		return len(val) > 0
+	default:
+		return true
+	}
+}
+
+func isAllIPSelector(v interface{}) bool {
+	items, ok := v.([]interface{})
+	if !ok {
+		return false
+	}
+	hasV4, hasV6 := false, false
+	for _, item := range items {
+		s, _ := item.(string)
+		switch strings.TrimSpace(s) {
+		case "0.0.0.0/0":
+			hasV4 = true
+		case "::/0":
+			hasV6 = true
+		}
+	}
+	return hasV4 && hasV6
 }
 
 // killProcessOnPort kills any process listening on the given TCP port.
@@ -369,7 +562,7 @@ func parsePortFromAddr(addr string) int {
 		return 62789
 	}
 	port, err := strconv.Atoi(strings.TrimSpace(addr[idx+1:]))
-	if err != nil {
+	if err != nil || port <= 0 || port > 65535 {
 		return 62789
 	}
 	return port
@@ -381,10 +574,10 @@ func (e *Executor) generateDefaultConfig() error {
 	tmpDir := os.TempDir()
 	configPath := filepath.Join(tmpDir, "xray-"+time.Now().Format("20060102150405")+".json")
 
-	// Generate minimal config with API
+	// Generate minimal config with API port aligned to grpcAPIAddress
 	model := contracts.ContainerModel{
 		Type:     contracts.ContainerXray,
-		APIPort:  62789,                     // 固定端口，与 GRPCAPIAddress 默认值保持一致
+		APIPort:  parsePortFromAddr(e.grpcAPIAddress),
 		Inbounds: []contracts.InboundSpec{}, // 空，不创建默认 inbound
 	}
 
@@ -436,10 +629,22 @@ func (e *Executor) Start() error {
 
 	// Step 1: Start user event handler (for checkUser sync)
 	// This must be done before starting to process user events
-	e.startUserEventHandler()
+	startedHandler := e.startUserEventHandler()
 
 	// Step 1b: Start periodic user reconciliation
-	e.startReconcileLoop()
+	startedReconcile := e.startReconcileLoop()
+
+	started := false
+	defer func() {
+		if !started {
+			if startedReconcile {
+				e.stopReconcileLoop()
+			}
+			if startedHandler {
+				e.stopUserEventHandler()
+			}
+		}
+	}()
 
 	// Step 2: Ensure binary exists
 	if err := e.EnsureBinary(context.Background()); err != nil {
@@ -460,12 +665,17 @@ func (e *Executor) Start() error {
 	// Without this delay, subsequent gRPC calls may fail because xray hasn't
 	// begun execution yet.
 	time.Sleep(500 * time.Millisecond)
+	started = true
 	return nil
 }
 
-// Reload triggers config reload via restart.
+// Reload triggers config reload via restart and restores persisted inbounds.
 func (e *Executor) Reload() error {
-	return e.BaseContainer.Restart()
+	if err := e.BaseContainer.Restart(); err != nil {
+		return err
+	}
+	e.waitForAPIReadyBeforeRestore()
+	return e.Restore(context.Background())
 }
 
 // IsRunning checks if the Xray process is running.
@@ -476,14 +686,93 @@ func (e *Executor) IsRunning() bool {
 
 // Stop stops the Xray process directly (for Updater).
 func (e *Executor) Stop() error {
-	// Stop the reconcile loop first
+	// Stop background loops before stopping the process.
 	e.stopReconcileLoop()
+	e.stopUserEventHandler()
 	return e.Runner.Stop()
 }
 
-// Restart restarts the Xray process directly (for Container interface).
+// Close tears down background loops and the UserManager event subscription
+// started at construction. Safe to call multiple times and concurrently.
+func (e *Executor) Close() {
+	e.closeOnce.Do(func() {
+		e.stopReconcileLoop()
+		e.stopUserEventHandler()
+
+		e.lifecycleMu.Lock()
+		stopCh := e.forwardStopCh
+		sub := e.userMgrSubCh
+		e.userMgrSubCh = nil
+		e.lifecycleMu.Unlock()
+
+		if stopCh != nil {
+			close(stopCh)
+		}
+		if e.userMgr != nil && sub != nil {
+			e.userMgr.Unsubscribe(sub)
+		}
+		e.forwardWg.Wait()
+	})
+}
+
+// Restart restarts the Xray process directly (for Container interface)
+// and replays persisted inbounds and chain routing state.
 func (e *Executor) Restart() error {
-	return e.Runner.Restart()
+	if err := e.Runner.Restart(); err != nil {
+		return err
+	}
+	e.waitForAPIReadyBeforeRestore()
+	return e.Restore(context.Background())
+}
+
+// WaitForAPIReady blocks until xray's gRPC API is accepting connections when
+// persisted non-API xray inbounds need restoration. Used by Restart, Reload,
+// and Updater after restarting the xray subprocess.
+func (e *Executor) WaitForAPIReady(ctx context.Context) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	if e.storeMgr == nil || e.grpcAPIAddress == "" {
+		return nil
+	}
+	recs, err := e.storeMgr.InboundStore().Load()
+	if err != nil {
+		return fmt.Errorf("load inbounds for api readiness check: %w", err)
+	}
+	hasXray := false
+	for _, r := range recs {
+		if r.ContainerType == string(contracts.ContainerXray) && r.Tag != APIInboundTag {
+			hasXray = true
+			break
+		}
+	}
+	if !hasXray {
+		return nil
+	}
+	timeout := 5 * time.Second
+	if ctx != nil {
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				return context.DeadlineExceeded
+			}
+			if remaining < timeout {
+				timeout = remaining
+			}
+		}
+	}
+	if err := NewXrayAPI(e.grpcAPIAddress, e.config.Debug).WaitForReady(timeout); err != nil {
+		return fmt.Errorf("xray gRPC API %s not ready: %w", e.grpcAPIAddress, err)
+	}
+	return nil
+}
+
+func (e *Executor) waitForAPIReadyBeforeRestore() {
+	if err := e.WaitForAPIReady(context.Background()); err != nil {
+		log.Warn("[Restart] xray gRPC API not ready before restore", "addr", e.grpcAPIAddress, "err", err)
+	}
 }
 
 // Type returns the container type.
@@ -529,6 +818,9 @@ func (e *Executor) Update(ctx context.Context, req container.UpdateRequest) (*co
 // It first releases all user ports associated with this inbound (synchronous).
 // Uses two-phase lock: read inbound, release outside lock, then delete.
 func (e *Executor) RemoveInboundConfig(tag string) error {
+	e.inboundOpMu.Lock()
+	defer e.inboundOpMu.Unlock()
+
 	// Phase 1: First lock - read and get inbound reference
 	e.inboundsMu.Lock()
 	xrayIn, exists := e.inbounds[tag]
@@ -538,7 +830,10 @@ func (e *Executor) RemoveInboundConfig(tag string) error {
 		return fmt.Errorf("inbound %s not found", tag)
 	}
 
-	// Phase 2: Release all user ports (outside lock)
+	// Phase 2: Mark removed before releasing user ports so any concurrent
+	// AddUser racing with RemoveInboundConfig rolls back its forward rule
+	// instead of leaking an orphan listening port.
+	xrayIn.removed.Store(true)
 	_ = xrayIn.ReleaseAllUserPorts()
 
 	// Phase 3: Delete persistent store first — ensures restart won't resurrect the inbound
@@ -552,6 +847,18 @@ func (e *Executor) RemoveInboundConfig(tag string) error {
 	api := NewXrayAPI(e.grpcAPIAddress)
 	if err := api.RemoveInbound(tag); err != nil {
 		log.Warn("[RemoveInboundConfig] failed to remove inbound via gRPC, continuing with local cleanup", "tag", tag, "err", err)
+	}
+
+	// Phase 4b: Remove chain routing rule and outbound after inbound removal
+	if xrayIn.GetInboundType() == contracts.InboundTypeChain {
+		ctx := context.Background()
+		cli := e.routingCLI()
+		if err := cli.RemoveRule(ctx, chainRuleTag(tag)); err != nil {
+			log.Warn("[RemoveInboundConfig] failed to remove chain rule, continuing cleanup", "tag", tag, "ruleTag", chainRuleTag(tag), "err", err)
+		}
+		if err := cli.RemoveOutbound(ctx, chainOutboundTag(tag)); err != nil {
+			log.Warn("[RemoveInboundConfig] failed to remove chain outbound, continuing cleanup", "tag", tag, "outboundTag", chainOutboundTag(tag), "err", err)
+		}
 	}
 
 	// Phase 5: Delete from memory
@@ -604,10 +911,81 @@ func (e *Executor) ListInboundConfigs() []inbound.Inbound {
 	return result
 }
 
+type inboundAddOptions struct {
+	meta          contracts.InboundMeta
+	certSource    string
+	certDomain    string
+	tempCertFiles []string
+	persist       bool
+	reconcile     bool
+}
+
 // AddInbound adds an inbound via gRPC (for RuntimeAPI compatibility).
 // After a successful gRPC call, the inbound is also registered in the in-memory
 // map so that GetUserSubscriptions and other local queries can find it.
+// If an InboundRecord already exists in the store for this tag, its metadata
+// (inbound_type, access_tags, chain_outbound_uri, remark, cert_source, cert_domain)
+// is preserved instead of being overwritten with blank defaults.
 func (e *Executor) AddInboundNative(nativeInboundJSON []byte) error {
+	e.inboundOpMu.Lock()
+	tag, err := e.addInboundNativeLocked(nativeInboundJSON, true)
+	e.inboundOpMu.Unlock()
+	if err != nil {
+		return err
+	}
+	if tag != "" {
+		e.reconcileUsersForInbound(tag)
+	}
+	return nil
+}
+
+// addInboundNativeLocked adds a native inbound while caller holds e.inboundOpMu.
+// It never calls reconcileUsersForInbound directly so callers can reconcile
+// outside inboundOpMu.
+func (e *Executor) addInboundNativeLocked(nativeInboundJSON []byte, persist bool) (string, error) {
+	opts := inboundAddOptions{
+		meta: contracts.InboundMeta{
+			InboundType: contracts.InboundTypeDirect,
+		},
+		certSource: "none",
+		persist:    persist,
+		reconcile:  false,
+	}
+
+	var tag string
+	var peek struct {
+		Tag string `json:"tag"`
+	}
+	if err := json.Unmarshal(nativeInboundJSON, &peek); err == nil {
+		tag = peek.Tag
+	}
+
+	if e.storeMgr != nil && tag != "" {
+		if existingRec, err := e.storeMgr.InboundStore().Get(tag); err == nil && existingRec != nil {
+			it, normErr := contracts.NormalizeInboundType(existingRec.InboundType)
+			if normErr != nil {
+				it = contracts.InboundTypeDirect
+			}
+			opts.meta = contracts.InboundMeta{
+				InboundType:      it,
+				AccessTags:       slices.Clone(existingRec.AccessTags),
+				ChainOutboundURI: existingRec.ChainOutboundURI,
+				Remark:           existingRec.Remark,
+			}
+			if existingRec.CertSource != "" {
+				opts.certSource = existingRec.CertSource
+			}
+			opts.certDomain = existingRec.CertDomain
+		}
+	}
+
+	if err := e.addInboundNativeInternal(nativeInboundJSON, opts); err != nil {
+		return "", err
+	}
+	return tag, nil
+}
+
+func (e *Executor) addInboundNativeInternal(nativeInboundJSON []byte, opts inboundAddOptions) error {
 	api := NewXrayAPI(e.grpcAPIAddress, e.config.Debug)
 	if err := api.AddInbound(nativeInboundJSON); err != nil {
 		return err
@@ -698,6 +1076,18 @@ func (e *Executor) AddInboundNative(nativeInboundJSON []byte) error {
 	// Without extra, subscription URIs won't contain transport-specific params.
 	extra := extractNativeExtra(raw, transport, security)
 
+	inboundType := opts.meta.InboundType
+	if inboundType == "" {
+		inboundType = contracts.InboundTypeDirect
+	}
+	certSource := opts.certSource
+	if certSource == "" {
+		certSource = "none"
+	}
+	if certSource != "none" {
+		extra["cert_source"] = certSource
+	}
+
 	xi := &XrayInbound{
 		tag:               tag,
 		protocol:          protocol,
@@ -709,6 +1099,13 @@ func (e *Executor) AddInboundNative(nativeInboundJSON []byte) error {
 		defaultClientUUID: defaultClientUUID,
 		defaultPassword:   defaultPassword,
 		extra:             extra,
+		tempCertFiles:     slices.Clone(opts.tempCertFiles),
+		certSource:        certSource,
+		certDomain:        opts.certDomain,
+		inboundType:       inboundType,
+		accessTags:        slices.Clone(opts.meta.AccessTags),
+		chainOutboundURI:  opts.meta.ChainOutboundURI,
+		remark:            opts.meta.Remark,
 		addedUsers:        make(map[string]struct{}),
 	}
 
@@ -717,14 +1114,14 @@ func (e *Executor) AddInboundNative(nativeInboundJSON []byte) error {
 		xi.SetUserManager(e.userMgr)
 	}
 
-	// Record the port with the shared allocator so no forward rule is later
-	// handed a port this inbound owns. Best-effort by necessity: unlike
-	// FastAddInbound, xray has ALREADY accepted and bound this listener by the
-	// time we get here, so a failed claim cannot be undone — it means our
-	// bookkeeping disagrees with reality, which is worth a warning and nothing
-	// more. The port itself belongs to xray's own listener; the public relay in
-	// front of it comes from UserManager.GetBindPort -> forward.AddRule.
-	if port != 0 {
+	// Avoid duplicate ClaimInboundPort noise when Restore replaces an already-tracked
+	// inbound on the same port (e.g. after Executor.Restart or binary upgrade).
+	e.inboundsMu.RLock()
+	existingIn, hadExisting := e.inbounds[tag]
+	samePortAsExisting := hadExisting && existingIn.Port() == port
+	e.inboundsMu.RUnlock()
+
+	if port != 0 && !samePortAsExisting {
 		if _, err := container.ClaimInboundPort(e.portClaimer, port); err != nil {
 			log.Warn("[AddInboundNative] could not record inbound port with the shared allocator; "+
 				"it may be handed to a forward rule later", "tag", tag, "port", port, "err", err)
@@ -732,26 +1129,125 @@ func (e *Executor) AddInboundNative(nativeInboundJSON []byte) error {
 	}
 
 	e.inboundsMu.Lock()
+	replaced := e.inbounds[tag]
+	if replaced != nil && replaced.Port() == port {
+		for _, u := range replaced.listAddedUsers() {
+			xi.addedUsers[u] = struct{}{}
+		}
+	}
 	e.inbounds[tag] = xi
 	e.inboundsMu.Unlock()
 
-	// Persist to store (best effort — log only, no rollback on failure)
-	if e.storeMgr != nil && tag != "" {
-		rec := &InboundRecord{
-			Tag:           tag,
-			ContainerType: string(contracts.ContainerXray),
-			CertSource:    "none",
-			NativeJSON:    nativeInboundJSON,
+	// Clean up replaced inbound's temp cert files and changed port claim outside lock.
+	if replaced != nil {
+		newCertSet := make(map[string]struct{}, len(xi.tempCertFiles))
+		for _, f := range xi.tempCertFiles {
+			if f != "" {
+				newCertSet[f] = struct{}{}
+			}
 		}
+		for _, f := range replaced.tempCertFiles {
+			if f == "" {
+				continue
+			}
+			if _, kept := newCertSet[f]; !kept {
+				_ = os.Remove(f)
+			}
+		}
+		if replaced.Port() != 0 && replaced.Port() != port {
+			container.ReleaseInboundPort(e.portClaimer, replaced.Port())
+		}
+	}
+
+	// Persist to store (best effort — log only, no rollback on failure)
+	if opts.persist && e.storeMgr != nil && tag != "" {
+		rec := xi.toInboundRecord()
 		if err := e.storeMgr.InboundStore().Save(rec); err != nil {
 			log.Warn("[AddInboundNative] failed to persist inbound", "tag", tag, "err", err)
 		}
 	}
 
 	// Sync existing users to this new inbound
-	e.reconcileUsersForInbound(tag)
+	if opts.reconcile {
+		e.reconcileUsersForInbound(tag)
+	}
 
 	return nil
+}
+
+// SupportsChainOutbound implements container.ChainCapable.
+func (e *Executor) SupportsChainOutbound() bool {
+	return true
+}
+
+// ValidateChainURI implements container.ChainCapable by parsing rawURI and verifying
+// that Xray can render an outbound configuration for it.
+func (e *Executor) ValidateChainURI(rawURI string) error {
+	_, _, err := parseAndRenderXrayChainOutbound("__validate__", rawURI)
+	return err
+}
+
+// SetInboundAccessTags implements container.InboundTagUpdater.
+// It updates the inbound's access_tags in memory and persistent store without
+// restarting or reloading xray, rolling back memory on store failure, and
+// immediately runs bidirectional user reconciliation for the inbound.
+func (e *Executor) SetInboundAccessTags(tag string, accessTags []string) error {
+	if strings.TrimSpace(tag) == "" {
+		return errs.Newf(errs.ErrInvalidInboundSpec, "inbound tag is required")
+	}
+	normalized, err := contracts.NormalizeAccessTags(accessTags)
+	if err != nil {
+		return errs.Wrap(errs.ErrInvalidInboundSpec, "invalid access_tags", err)
+	}
+
+	e.inboundOpMu.Lock()
+	e.inboundsMu.Lock()
+	xi, exists := e.inbounds[tag]
+	if !exists {
+		e.inboundsMu.Unlock()
+		e.inboundOpMu.Unlock()
+		return errs.Newf(errs.ErrInboundNotFound, "inbound %s not found", tag)
+	}
+
+	prevTags := xi.GetAccessTags()
+	xi.SetAccessTags(normalized)
+
+	if e.storeMgr != nil {
+		rec, getErr := e.storeMgr.InboundStore().Get(tag)
+		if getErr != nil {
+			xi.SetAccessTags(prevTags)
+			e.inboundsMu.Unlock()
+			e.inboundOpMu.Unlock()
+			return errs.Wrap(errs.ErrInternal, "failed to load inbound record for tag update", getErr)
+		}
+		if rec == nil {
+			rec = xi.toInboundRecord()
+		} else {
+			rec.AccessTags = slices.Clone(normalized)
+		}
+		if saveErr := e.storeMgr.InboundStore().Save(rec); saveErr != nil {
+			xi.SetAccessTags(prevTags)
+			e.inboundsMu.Unlock()
+			e.inboundOpMu.Unlock()
+			return errs.Wrap(errs.ErrInternal, "failed to persist inbound access_tags", saveErr)
+		}
+	}
+	e.inboundsMu.Unlock()
+	e.inboundOpMu.Unlock()
+
+	e.reconcileUsersForInbound(tag)
+	return nil
+}
+
+// GetInboundMeta implements container.InboundMetaProvider.
+func (e *Executor) GetInboundMeta(tag string) (contracts.InboundMeta, bool) {
+	e.inboundsMu.RLock()
+	xi, exists := e.inbounds[tag]
+	e.inboundsMu.RUnlock()
+	if !exists {
+		return contracts.InboundMeta{}, false
+	}
+	return xi.GetMeta(), true
 }
 
 // extractNativeExtra parses the native xray JSON to extract subscription-relevant fields.
@@ -875,6 +1371,9 @@ func extractNativeExtra(raw map[string]interface{}, transport contracts.Transpor
 // It releases all user ports associated with this inbound before removing.
 // Uses two-phase lock: read inbound, release outside lock, then delete.
 func (e *Executor) RemoveInboundNative(tag string) error {
+	e.inboundOpMu.Lock()
+	defer e.inboundOpMu.Unlock()
+
 	// Phase 1: First lock - read and get inbound reference
 	e.inboundsMu.Lock()
 	xrayIn, exists := e.inbounds[tag]
@@ -887,8 +1386,10 @@ func (e *Executor) RemoveInboundNative(tag string) error {
 		return nil
 	}
 
-	// Phase 2: Release all user ports (outside lock)
-	// This ensures synchronous completion before gRPC call
+	// Phase 2: Mark removed and release all user ports (outside lock)
+	// This ensures synchronous completion before gRPC call and prevents concurrent
+	// AddUser calls from leaking orphan forward rules.
+	xrayIn.removed.Store(true)
 	_ = xrayIn.ReleaseAllUserPorts()
 
 	// Remove via gRPC
@@ -940,37 +1441,84 @@ func (e *Executor) UserEventChannel() <-chan usermanager.UserEvent {
 }
 
 // forwardUserEvents forwards events from UserManager to local channel.
-func (e *Executor) forwardUserEvents(source <-chan usermanager.UserEvent) {
-	for event := range source {
-		if e.userEventCh != nil {
-			select {
-			case e.userEventCh <- event:
-			default:
-				// Channel full, event dropped
+func (e *Executor) forwardUserEvents(source <-chan usermanager.UserEvent, stopCh <-chan struct{}) {
+	defer e.forwardWg.Done()
+	for {
+		select {
+		case event, ok := <-source:
+			if !ok {
+				return
 			}
+			if e.userEventCh != nil {
+				select {
+				case e.userEventCh <- event:
+				default:
+					// Channel full, event dropped
+				}
+			}
+		case <-stopCh:
+			return
 		}
 	}
 }
 
 // startUserEventHandler starts a goroutine to process user events from the channel.
-// This implements the checkUser logic: when a user is added, it allocates a port,
-// creates a forward rule, and adds the user to the inbound. When removed, it reverses.
-func (e *Executor) startUserEventHandler() {
+// It is idempotent so repeated Start() calls cannot spawn duplicate consumers,
+// returning true only when a new handler loop was started.
+func (e *Executor) startUserEventHandler() bool {
 	if e.userEventCh == nil {
-		return
+		return false
 	}
 
-	go func() {
-		for event := range e.userEventCh {
-			e.handleUserEvent(event)
+	e.lifecycleMu.Lock()
+	if e.userEventStopCh != nil {
+		e.lifecycleMu.Unlock()
+		return false
+	}
+	stopCh := make(chan struct{})
+	e.userEventStopCh = stopCh
+	e.userEventWg.Add(1)
+	e.lifecycleMu.Unlock()
+
+	go func(stopCh <-chan struct{}) {
+		defer e.userEventWg.Done()
+		for {
+			select {
+			case <-stopCh:
+				return
+			default:
+			}
+			select {
+			case <-stopCh:
+				return
+			case event, ok := <-e.userEventCh:
+				if !ok {
+					return
+				}
+				e.handleUserEvent(event)
+			}
 		}
-	}()
+	}(stopCh)
+	return true
+}
+
+// stopUserEventHandler stops the user event handler goroutine and waits for it to exit.
+func (e *Executor) stopUserEventHandler() {
+	e.lifecycleMu.Lock()
+	stopCh := e.userEventStopCh
+	e.userEventStopCh = nil
+	e.lifecycleMu.Unlock()
+
+	if stopCh != nil {
+		close(stopCh)
+		e.userEventWg.Wait()
+	}
 }
 
 // handleUserEvent processes a single user event from usermanager.
-// This implements the port mapping flow:
-// - Add: allocate forward port -> create forward rule -> add user to inbound
-// - Remove: remove user from inbound -> release forward port
+// This implements two-layer access control (Node group + Inbound access_tags):
+// - Add/Update: evaluate CanUserAccessInbound per inbound -> AddUser if allowed, RemoveUser if denied
+// - Remove/Expire: remove user from all inbounds -> release forward ports
 func (e *Executor) handleUserEvent(event usermanager.UserEvent) error {
 	if e.userMgr == nil {
 		return errs.New(errs.ErrUserManagerRequired,
@@ -978,36 +1526,23 @@ func (e *Executor) handleUserEvent(event usermanager.UserEvent) error {
 	}
 
 	switch event.Type {
-	case usermanager.UserEventAdd:
-		// User added in usermanager - need to sync to inbounds
+	case usermanager.UserEventAdd, usermanager.UserEventUpdate:
 		e.syncUserToInbound(event.Username, event.User)
 
-	case usermanager.UserEventRemove:
-		// User removed from usermanager - need to remove from inbounds
+	case usermanager.UserEventRemove, usermanager.UserEventExpire:
 		e.removeUserFromInbounds(event.Username)
-
-	case usermanager.UserEventUpdate:
-		// Group (or other visibility-affecting fields) may have changed.
-		// Re-evaluate whether the user should have forwarding rules on this node.
-		if event.User != nil && !e.userMgr.IsUserVisible(event.User) {
-			e.removeUserFromInbounds(event.Username)
-		} else if event.User != nil {
-			e.syncUserToInbound(event.Username, event.User)
-		}
 	}
 
 	return nil
 }
 
-// syncUserToInbound adds a user to all relevant inbounds.
-// It delegates to each inbound's AddUser method which handles forward rule creation
-// and internal mapping atomically.
+// syncUserToInbound evaluates two-layer access control for a user across all
+// inbounds, adding forward ports where allowed and removing them where denied.
 func (e *Executor) syncUserToInbound(username string, user *contracts.User) {
 	if user == nil {
 		return
 	}
 
-	// Get inbounds
 	e.inboundsMu.RLock()
 	inbounds := make([]*XrayInbound, 0, len(e.inbounds))
 	for _, in := range e.inbounds {
@@ -1015,14 +1550,19 @@ func (e *Executor) syncUserToInbound(username string, user *contracts.User) {
 	}
 	e.inboundsMu.RUnlock()
 
-	// For each inbound, call the inbound's AddUser method
-	// This handles forward rule + user addition + mapping atomically with rollback on failure
 	for _, inbound := range inbounds {
-		_, err := inbound.AddUser(username, user)
-		if err != nil {
-			// Log but continue - other inbounds may succeed
-			// The inbound's AddUser already handles rollback on failure
+		if e.userMgr != nil && !e.userMgr.CanUserAccessInbound(user, inbound.GetAccessTags()) {
+			if err := inbound.RemoveUser(username); err != nil {
+				log.Warn("[syncUserToInbound] failed to remove denied user from inbound", "user", username, "inbound", inbound.Tag(), "err", err)
+			}
+			continue
+		}
+		if _, err := inbound.AddUser(username, user); err != nil {
 			log.Warn("[syncUserToInbound] failed to add user to inbound", "user", username, "inbound", inbound.Tag(), "err", err)
+			continue
+		}
+		if e.userMgr != nil && !e.userMgr.CanUserAccessInbound(user, inbound.GetAccessTags()) {
+			_ = inbound.RemoveUser(username)
 		}
 	}
 }
@@ -1049,19 +1589,17 @@ func (e *Executor) removeUserFromInbounds(username string) {
 	}
 }
 
-// reconcileUsers syncs all users from UserManager to all inbounds.
-// This ensures forward rules are rebuilt after restart/restore.
+// reconcileUsers syncs all users from UserManager to all inbounds using two-layer
+// access control. Both adds newly authorized users and removes unauthorized/stale users.
 func (e *Executor) reconcileUsers() {
 	if e.userMgr == nil {
 		return
 	}
 
 	users := e.userMgr.ListUsers()
-
-	// Build a set of visible usernames for fast lookup.
-	visibleSet := make(map[string]struct{}, len(users))
+	userByName := make(map[string]*contracts.User, len(users))
 	for _, u := range users {
-		visibleSet[u.Username] = struct{}{}
+		userByName[u.Username] = u
 	}
 
 	// Sync to all inbounds
@@ -1073,36 +1611,42 @@ func (e *Executor) reconcileUsers() {
 	e.inboundsMu.RUnlock()
 
 	for _, inbound := range inbounds {
-		// Remove users that are tracked but no longer visible (e.g. group changed).
-		// Snapshot the tracked user set first so we can iterate without holding the lock,
-		// then call RemoveUser (which re-acquires the lock via unmarkAddedUser).
+		accessTags := inbound.GetAccessTags()
+
+		// Remove users that are tracked but no longer visible or no longer authorized.
 		for _, username := range inbound.listAddedUsers() {
-			if _, visible := visibleSet[username]; !visible {
+			u, visible := userByName[username]
+			if !visible || !e.userMgr.CanUserAccessInbound(u, accessTags) {
 				if err := inbound.RemoveUser(username); err != nil {
-					log.Warn("[reconcileUsers] failed to remove stale user from inbound",
+					log.Warn("[reconcileUsers] failed to remove stale/unauthorized user from inbound",
 						"user", username, "inbound", inbound.Tag(), "err", err)
 				}
 			}
 		}
 
-		// Add users that are visible but not yet tracked.
+		// Add users that pass both layers and are not yet tracked.
 		for _, user := range users {
-			// Skip users already tracked in this inbound's memory
+			if !e.userMgr.CanUserAccessInbound(user, accessTags) {
+				continue
+			}
 			if inbound.hasAddedUser(user.Username) {
 				continue
 			}
 			if _, err := inbound.AddUser(user.Username, user); err != nil {
 				log.Warn("[reconcileUsers] failed to add user to inbound", "user", user.Username, "inbound", inbound.Tag(), "err", err)
+				continue
+			}
+			if !e.userMgr.CanUserAccessInbound(user, inbound.GetAccessTags()) {
+				_ = inbound.RemoveUser(user.Username)
 			}
 		}
 	}
 }
 
-// reconcileUsersForInbound syncs all users to a specific inbound.
-// This is called after a new inbound is added to ensure existing users are mapped.
+// reconcileUsersForInbound performs bidirectional user reconciliation for a specific inbound:
+// removes tracked users who fail CanUserAccessInbound and adds visible users who pass it.
 // inbound must already be registered in e.inbounds before calling this.
-// This function does NOT acquire inboundsMu to avoid deadlock with callers that
-// already hold the lock — it looks up the inbound itself under RLock.
+// This function does NOT acquire inboundsMu across AddUser/RemoveUser to avoid deadlock.
 func (e *Executor) reconcileUsersForInbound(tag string) {
 	if e.userMgr == nil {
 		return
@@ -1116,35 +1660,65 @@ func (e *Executor) reconcileUsersForInbound(tag string) {
 		return
 	}
 
+	accessTags := inbound.GetAccessTags()
 	users := e.userMgr.ListUsers()
+	userByName := make(map[string]*contracts.User, len(users))
+	for _, u := range users {
+		userByName[u.Username] = u
+	}
+
+	// Remove tracked users who are no longer visible or fail CanUserAccessInbound.
+	for _, username := range inbound.listAddedUsers() {
+		u, visible := userByName[username]
+		if !visible || !e.userMgr.CanUserAccessInbound(u, accessTags) {
+			if err := inbound.RemoveUser(username); err != nil {
+				log.Warn("[reconcileUsersForInbound] failed to remove stale/unauthorized user from inbound",
+					"user", username, "inbound", tag, "err", err)
+			}
+		}
+	}
+
+	// Add visible users who pass CanUserAccessInbound and are not yet tracked.
 	for _, user := range users {
+		if !e.userMgr.CanUserAccessInbound(user, accessTags) {
+			continue
+		}
 		if inbound.hasAddedUser(user.Username) {
 			continue
 		}
 		if _, err := inbound.AddUser(user.Username, user); err != nil {
 			log.Warn("[reconcileUsersForInbound] failed to add user to inbound", "user", user.Username, "inbound", tag, "err", err)
+			continue
+		}
+		if !e.userMgr.CanUserAccessInbound(user, inbound.GetAccessTags()) {
+			_ = inbound.RemoveUser(user.Username)
 		}
 	}
 }
 
 // startReconcileLoop starts the periodic user reconciliation goroutine.
-func (e *Executor) startReconcileLoop() {
+// It is idempotent and returns true only when a new reconcile loop was started.
+func (e *Executor) startReconcileLoop() bool {
 	// Idempotent: a non-nil reconcileStopCh means a loop is already running.
 	// Now that IsRunning reflects real liveness, the updater can skip Stop and
 	// call Start on a crashed executor; without this guard that would spawn a
 	// second reconcile goroutine and race on reconcileStopCh.
+	e.lifecycleMu.Lock()
 	if e.reconcileStopCh != nil {
-		return
+		e.lifecycleMu.Unlock()
+		return false
 	}
 	interval := e.config.ReconcileInterval
 	if interval <= 0 {
 		interval = 30 * time.Second // default
 	}
 
-	e.reconcileStopCh = make(chan struct{})
+	stopCh := make(chan struct{})
+	e.reconcileStopCh = stopCh
 	e.reconcileWg.Add(1)
+	e.lifecycleMu.Unlock()
 
-	go func() {
+	go func(stopCh <-chan struct{}) {
 		defer e.reconcileWg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -1153,19 +1727,24 @@ func (e *Executor) startReconcileLoop() {
 			select {
 			case <-ticker.C:
 				e.reconcileUsers()
-			case <-e.reconcileStopCh:
+			case <-stopCh:
 				return
 			}
 		}
-	}()
+	}(stopCh)
+	return true
 }
 
 // stopReconcileLoop stops the periodic user reconciliation goroutine gracefully.
 func (e *Executor) stopReconcileLoop() {
-	if e.reconcileStopCh != nil {
-		close(e.reconcileStopCh)
+	e.lifecycleMu.Lock()
+	stopCh := e.reconcileStopCh
+	e.reconcileStopCh = nil
+	e.lifecycleMu.Unlock()
+
+	if stopCh != nil {
+		close(stopCh)
 		e.reconcileWg.Wait()
-		e.reconcileStopCh = nil
 	}
 }
 
@@ -1208,6 +1787,19 @@ type XrayInbound struct {
 	// userMgr provides access to user management capabilities.
 	// This is injected by the container (Executor) and used for AddUser/RemoveUser.
 	userMgr *usermanager.UserManager
+
+	// certSource / certDomain preserve certificate metadata across tag updates.
+	certSource string
+	certDomain string
+
+	// Chain proxy & two-layer visibility metadata. accessTags can be updated at
+	// runtime via SetInboundAccessTags while concurrent readers inspect it.
+	metaMu           sync.RWMutex
+	removed          atomic.Bool
+	inboundType      contracts.InboundType
+	accessTags       []string
+	chainOutboundURI string
+	remark           string
 
 	// addedUsers tracks users that have been successfully added to this inbound.
 	// Reconcile uses this to skip users that are already wired up, avoiding
@@ -1257,6 +1849,83 @@ func (in *XrayInbound) unmarkAddedUser(email string) {
 	in.addedUsersMu.Lock()
 	defer in.addedUsersMu.Unlock()
 	delete(in.addedUsers, email)
+}
+
+// GetInboundType returns the inbound type ("direct" by default).
+func (in *XrayInbound) GetInboundType() contracts.InboundType {
+	in.metaMu.RLock()
+	defer in.metaMu.RUnlock()
+	if in.inboundType == "" {
+		return contracts.InboundTypeDirect
+	}
+	return in.inboundType
+}
+
+// GetAccessTags returns a cloned slice of this inbound's Layer-2 access tags.
+func (in *XrayInbound) GetAccessTags() []string {
+	in.metaMu.RLock()
+	defer in.metaMu.RUnlock()
+	return slices.Clone(in.accessTags)
+}
+
+// SetAccessTags replaces this inbound's Layer-2 access tags safely.
+func (in *XrayInbound) SetAccessTags(tags []string) {
+	in.metaMu.Lock()
+	defer in.metaMu.Unlock()
+	in.accessTags = slices.Clone(tags)
+}
+
+// GetChainOutboundURI returns the raw backend URI for a chain inbound.
+func (in *XrayInbound) GetChainOutboundURI() string {
+	in.metaMu.RLock()
+	defer in.metaMu.RUnlock()
+	return in.chainOutboundURI
+}
+
+// GetRemark returns the inbound remark.
+func (in *XrayInbound) GetRemark() string {
+	in.metaMu.RLock()
+	defer in.metaMu.RUnlock()
+	return in.remark
+}
+
+// GetMeta returns a snapshot of the inbound's chain and visibility metadata.
+func (in *XrayInbound) GetMeta() contracts.InboundMeta {
+	in.metaMu.RLock()
+	defer in.metaMu.RUnlock()
+	it := in.inboundType
+	if it == "" {
+		it = contracts.InboundTypeDirect
+	}
+	return contracts.InboundMeta{
+		InboundType:      it,
+		AccessTags:       slices.Clone(in.accessTags),
+		ChainOutboundURI: in.chainOutboundURI,
+		Remark:           in.remark,
+	}
+}
+
+func (in *XrayInbound) toInboundRecord() *InboundRecord {
+	meta := in.GetMeta()
+	certSource := in.certSource
+	if certSource == "" {
+		certSource = "none"
+	}
+	nativeJSON := in.nativeJSON
+	if len(nativeJSON) == 0 {
+		nativeJSON, _ = in.ToNative()
+	}
+	return &InboundRecord{
+		Tag:              in.tag,
+		ContainerType:    string(contracts.ContainerXray),
+		CertSource:       certSource,
+		CertDomain:       in.certDomain,
+		NativeJSON:       nativeJSON,
+		InboundType:      string(meta.InboundType),
+		AccessTags:       slices.Clone(meta.AccessTags),
+		ChainOutboundURI: meta.ChainOutboundURI,
+		Remark:           meta.Remark,
+	}
 }
 
 // Tag returns the inbound tag.
@@ -1372,6 +2041,9 @@ func (in *XrayInbound) AddUser(email string, user *contracts.User) (uint32, erro
 	if in.userMgr == nil {
 		return 0, fmt.Errorf("user manager not configured for inbound %s", in.tag)
 	}
+	if in.removed.Load() {
+		return 0, nil
+	}
 
 	// Fast path: user already tracked in memory
 	if in.hasAddedUser(email) {
@@ -1392,6 +2064,16 @@ func (in *XrayInbound) AddUser(email string, user *contracts.User) (uint32, erro
 	})
 	if err != nil {
 		return 0, fmt.Errorf("failed to get bind port: %w", err)
+	}
+
+	// If this inbound was concurrently removed while GetBindPort was running,
+	// immediately roll back the newly created rule so we never leak an orphan port.
+	if in.removed.Load() {
+		_ = in.userMgr.ReleaseBindPort(usermanager.ReleaseBindPortRequest{
+			Username: email,
+			BindPort: bindPort,
+		})
+		return 0, nil
 	}
 
 	in.markAddedUser(email)
@@ -1450,7 +2132,7 @@ func (in *XrayInbound) ReleaseAllUserPorts() error {
 	if in.userMgr == nil {
 		return nil
 	}
-	return in.userMgr.ReleaseInboundPorts(in.tag)
+	return in.userMgr.ReleaseInboundPorts(in.tag, in.port)
 }
 
 // GetUserPort returns the frontend port for a user in this inbound.
@@ -1478,9 +2160,15 @@ func (in *XrayInbound) SetUserPortForTest(email string, port uint32) {
 }
 
 // GetSub generates a subscription spec for a user on this inbound.
-// It uses UserManager.GetUserPortByDst as the authoritative source for the frontend port.
-// Returns error if the user is not found in UserManager's port mapping.
+// It enforces two-layer access control via UserManager.CanUserAccessInboundByUsername
+// and uses UserManager.GetUserPortByDst as the authoritative source for the frontend port.
+// Returns error if the user is denied or not found in UserManager's port mapping.
 func (in *XrayInbound) GetSub(req contracts.SubscriptionRequest) (contracts.SubscriptionSpec, error) {
+	meta := in.GetMeta()
+	if in.userMgr != nil && !in.userMgr.CanUserAccessInboundByUsername(req.User.Username, meta.AccessTags) {
+		return contracts.SubscriptionSpec{}, fmt.Errorf("user %s not found in inbound %s", req.User.Username, in.tag)
+	}
+
 	// Check if user exists in this inbound's mapping
 	port, exists := in.GetUserPort(req.User.Username)
 	if !exists {
@@ -1501,10 +2189,7 @@ func (in *XrayInbound) GetSub(req contracts.SubscriptionRequest) (contracts.Subs
 	// Build extensions from inbound extra
 	extensions := in.buildSubscriptionExtensions(req.User)
 
-	nodeName := req.NodeName
-	if nodeName == "" {
-		nodeName = in.tag
-	}
+	nodeName := resolveSubscriptionNodeName(req.NodeName, in.tag, meta)
 
 	spec := contracts.SubscriptionSpec{
 		Protocol:   in.protocol,
@@ -1671,11 +2356,15 @@ func (e *Executor) Init(config any) error {
 //   - "protocol": proxy protocol (vmess/vless/trojan/shadowsocks/socks5/http)
 //
 // Optional params with defaults:
-//   - "port": listen port (defaults to random available port in 4000-5000)
-//   - "listen": listen address (defaults to "0.0.0.0")
+//   - "port": listen port (defaults to random available port from PortClaimer)
+//   - "listen": listen address (defaults to "127.0.0.1"; chain inbounds require "127.0.0.1")
 //   - "security": security mode (defaults to "tls" for non-ss protocols, "none" for ss)
 //   - "transport": network transport (defaults to "tcp")
 //   - "server_name": SNI name for TLS (defaults to "localhost")
+//   - "inbound_type": "direct" (default) or "chain"
+//   - "chain_uri": backend proxy URI (required when inbound_type=="chain", forbidden when "direct")
+//   - "access_tags": []string Layer-2 visibility tags
+//   - "remark": display remark (for chain inbounds defaults to URI #fragment)
 //
 // TLS Certificate handling (priority order):
 //   - certificateFile + keyFile: explicit file paths
@@ -1687,14 +2376,18 @@ func (e *Executor) Init(config any) error {
 //   - shadowsocks: "method", "password"
 //
 // Returns error if:
-//   - tag is empty
+//   - tag is empty or invalid
 //   - protocol is missing or invalid
+//   - inbound_type / chain_uri / listen / access_tags invalid
 //   - TLS required but no certificate provided
 //   - shadowsocks protocol missing method or password
 func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 	// Validate tag
 	if tag == "" {
 		return errs.Newf(errs.ErrFastAddInboundFailed, "tag is required")
+	}
+	if err := contracts.ValidateInboundTag(tag); err != nil {
+		return errs.Wrap(errs.ErrFastAddInboundFailed, "invalid inbound tag", err)
 	}
 
 	// Get protocol (required)
@@ -1708,12 +2401,55 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 		return errs.Newf(errs.ErrFastAddInboundFailed, "invalid protocol: %s", protocolStr)
 	}
 
+	// Parse & validate chain / visibility metadata before locking or claiming resources.
+	inboundType, chainURI, err := parseInboundTypeAndChainParams(params)
+	if err != nil {
+		return errs.Wrap(errs.ErrFastAddInboundFailed, "invalid inbound chain parameters", err)
+	}
+	accessTags, err := parseAccessTagsParam(params)
+	if err != nil {
+		return errs.Wrap(errs.ErrFastAddInboundFailed, "invalid access_tags", err)
+	}
+	listenAddr, err := parseListenParam(params, inboundType)
+	if err != nil {
+		return errs.Wrap(errs.ErrFastAddInboundFailed, "invalid listen address", err)
+	}
+
+	remark := strings.TrimSpace(fastGetString(params, "remark", ""))
+	var chainOutboundJSON []byte
+	if inboundType == contracts.InboundTypeChain {
+		specChain, rendered, chainErr := parseAndRenderXrayChainOutbound(chainOutboundTag(tag), chainURI)
+		if chainErr != nil {
+			return errs.Wrap(errs.ErrFastAddInboundFailed, "invalid chain_uri", chainErr)
+		}
+		chainOutboundJSON = rendered
+		if remark == "" {
+			remark = strings.TrimSpace(specChain.Remark)
+		}
+	}
+
+	// Serialize lifecycle mutations (FastAdd/Remove/Restore) so concurrent
+	// same-tag chain requests cannot tear down a live inbound's routing rule
+	// or outbound and leak traffic to direct.
+	e.inboundOpMu.Lock()
+	opLocked := true
+	defer func() {
+		if opLocked {
+			e.inboundOpMu.Unlock()
+		}
+	}()
+
+	// Fail fast on duplicate tag before claiming resources or touching live chain routing.
+	e.inboundsMu.RLock()
+	_, alreadyExists := e.inbounds[tag]
+	e.inboundsMu.RUnlock()
+	if alreadyExists {
+		return errs.Newf(errs.ErrInboundAlreadyExists, "inbound %s already exists", tag)
+	}
+
 	// Resolve port through the shared allocator — the single authority over
-	// every port this process binds. Previously this drew from a private
-	// [4000,5000] pool that nothing else knew about: only 1001 values, no
-	// availability check, and no dedupe against e.inbounds, so a few dozen
-	// inbounds made a silent collision likely. An explicitly requested port is
-	// claimed verbatim or rejected, never substituted.
+	// every port this process binds. An explicitly requested port is claimed
+	// verbatim or rejected, never substituted.
 	requestedPort := fastGetUint32(params, "port", 0)
 	if requestedPort != 0 && (requestedPort < 100 || requestedPort > 65535) {
 		return errs.Newf(errs.ErrFastAddInboundFailed, "port must be between 100 and 65535, got %d", requestedPort)
@@ -1765,6 +2501,7 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 	var certFile, keyFile, certDomain string
 	certSource := "none"
 	var certShouldCleanup bool
+	certCommitted := false
 	if security == contracts.SecurityTLS {
 		var certErr error
 		certFile, keyFile, certSource, certDomain, certShouldCleanup, certErr = e.resolveFastAddCert(params)
@@ -1772,6 +2509,16 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 			return certErr
 		}
 	}
+	defer func() {
+		if !certCommitted && certShouldCleanup {
+			if certFile != "" {
+				_ = os.Remove(certFile)
+			}
+			if keyFile != "" {
+				_ = os.Remove(keyFile)
+			}
+		}
+	}()
 
 	// Step 2: Route to profilegen or simple path
 	var spec contracts.InboundSpec
@@ -1789,7 +2536,7 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 				Transport:  fastGetString(params, "transport", "tcp"),
 				Port:       port,
 				Tag:        tag,
-				ListenAddr: fastGetString(params, "listen", "0.0.0.0"),
+				ListenAddr: listenAddr,
 				WSPath:     fastGetString(params, "ws_path", ""),
 				HTTPPath:   fastGetString(params, "http_path", ""),
 				HTTPHost:   fastGetStringSlice(params, "http_host"),
@@ -1811,13 +2558,18 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 				return simpleErr
 			}
 		} else {
+			sniffEnabled := fastGetBool(params, "sniffing_enabled")
+			sniffRouteOnly := fastGetBool(params, "sniffing_route_only")
+			if inboundType == contracts.InboundTypeChain && sniffEnabled {
+				sniffRouteOnly = true
+			}
 			p := profilegen.GenerateVLessParams{
 				Host:               fastGetString(params, "server_name", "localhost"),
 				Transport:          fastGetString(params, "transport", "tcp"),
 				Security:           string(security),
 				Port:               port,
 				Tag:                tag,
-				ListenAddr:         fastGetString(params, "listen", "0.0.0.0"),
+				ListenAddr:         listenAddr,
 				UUID:               fastGetString(params, "uuid", ""),
 				Flow:               fastGetString(params, "flow", ""),
 				WSPath:             fastGetString(params, "ws_path", ""),
@@ -1835,9 +2587,9 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 				CertFile:           certFile,
 				KeyFile:            keyFile,
 				// Sniffing
-				SniffingEnabled:      fastGetBool(params, "sniffing_enabled"),
+				SniffingEnabled:      sniffEnabled,
 				SniffingDestOverride: fastGetStringSlice(params, "sniffing_dest_override"),
-				SniffingRouteOnly:    fastGetBool(params, "sniffing_route_only"),
+				SniffingRouteOnly:    sniffRouteOnly,
 				// TLS advanced
 				TLSRejectUnknownSNI: fastGetBool(params, "tls_reject_unknown_sni"),
 				TLSMinVersion:       fastGetString(params, "tls_min_version", ""),
@@ -1864,7 +2616,7 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 				Transport:       fastGetString(params, "transport", "tcp"),
 				Port:            port,
 				Tag:             tag,
-				ListenAddr:      fastGetString(params, "listen", "0.0.0.0"),
+				ListenAddr:      listenAddr,
 				Password:        fastGetString(params, "password", ""),
 				GRPCServiceName: fastGetString(params, "grpc_service_name", ""),
 				CertFile:        certFile,
@@ -1896,7 +2648,7 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 			Transport:  fastGetString(params, "transport", "tcp"),
 			Port:       port,
 			Tag:        tag,
-			ListenAddr: fastGetString(params, "listen", "0.0.0.0"),
+			ListenAddr: listenAddr,
 			Method:     method,
 			Password:   password,
 		}
@@ -1914,12 +2666,34 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 			Extensions: map[string]any{
 				"security":    "none",
 				"transport":   fastGetString(params, "transport", "tcp"),
-				"listen_addr": fastGetString(params, "listen", "0.0.0.0"),
+				"listen_addr": listenAddr,
 			},
 		}
 
 	default:
 		return errs.Newf(errs.ErrFastAddInboundFailed, "unsupported protocol: %s", protocol)
+	}
+
+	if spec.Extensions == nil {
+		spec.Extensions = make(map[string]any)
+	}
+	spec.Extensions["listen_addr"] = listenAddr
+
+	// For chain inbounds, sniffing MUST set routeOnly: true so local DNS
+	// sniffing never rewrites the destination domain into a local-resolved IP.
+	if fastGetBool(params, "sniffing_enabled") {
+		spec.Extensions["sniffing_enabled"] = true
+		if dest := fastGetStringSlice(params, "sniffing_dest_override"); len(dest) > 0 {
+			spec.Extensions["sniffing_dest_override"] = dest
+		}
+		if fastGetBool(params, "sniffing_route_only") {
+			spec.Extensions["sniffing_route_only"] = true
+		}
+	}
+	if inboundType == contracts.InboundTypeChain {
+		if enabled, _ := spec.Extensions["sniffing_enabled"].(bool); enabled {
+			spec.Extensions["sniffing_route_only"] = true
+		}
 	}
 
 	// Step 3: Convert to native config using adapter
@@ -1932,7 +2706,7 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 	// Read security/transport/listenAddr from spec.Extensions (set by profilegen or simple path)
 	specSecurity := contracts.Security(fastGetStringFromMap(spec.Extensions, "security", "none"))
 	specTransport := contracts.Transport(fastGetStringFromMap(spec.Extensions, "transport", "tcp"))
-	specListenAddr := fastGetStringFromMap(spec.Extensions, "listen_addr", "0.0.0.0")
+	specListenAddr := fastGetStringFromMap(spec.Extensions, "listen_addr", listenAddr)
 
 	// Extract default credentials from native JSON for subscription support
 	// This mirrors the logic in AddInbound
@@ -1978,19 +2752,16 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 
 	// Store cert_source in extensions for subscription SNI logic
 	if certSource != "none" {
-		if spec.Extensions == nil {
-			spec.Extensions = make(map[string]any)
-		}
 		spec.Extensions["cert_source"] = certSource
 	}
 	// Propagate skip_cert_verify from caller params into extensions so the
 	// subscription URI can emit insecure=1 (self-signed cert hint for clients).
 	if fastGetBool(params, "skip_cert_verify") {
-		if spec.Extensions == nil {
-			spec.Extensions = make(map[string]any)
-		}
 		spec.Extensions["skip_cert_verify"] = true
 	}
+
+	cfgObj := inbound.NewConfig(tag, protocol, spec.Port)
+	cfgObj.ListenAddr = specListenAddr
 
 	xrayInbound := &XrayInbound{
 		tag:               tag,
@@ -1999,11 +2770,17 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 		listenAddr:        specListenAddr,
 		security:          specSecurity,
 		transport:         specTransport,
-		config:            inbound.NewConfig(tag, protocol, spec.Port),
+		config:            cfgObj,
 		extra:             spec.Extensions,
 		nativeJSON:        nativeInbound.JSON,
 		defaultClientUUID: defaultClientUUID,
 		defaultPassword:   defaultPassword,
+		certSource:        certSource,
+		certDomain:        certDomain,
+		inboundType:       inboundType,
+		accessTags:        slices.Clone(accessTags),
+		chainOutboundURI:  chainURI,
+		remark:            remark,
 		addedUsers:        make(map[string]struct{}),
 	}
 	// Track temp cert files so they are cleaned up when the inbound is removed (Bug 2)
@@ -2016,15 +2793,37 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 		xrayInbound.SetUserManager(e.userMgr)
 	}
 
-	// Step 4: Add to running xray process via gRPC (direct API call, not AddInboundNative)
-	// We don't use AddInboundNative here because it would create and store its own XrayInbound,
-	// losing the tempCertFiles and other info we already set up.
+	// Step 4 (zero-leak chain setup): cleanup -> AddOutbound -> AddRule before AddInbound.
+	ctx := context.Background()
+	cli := e.routingCLI()
+	outTag := chainOutboundTag(tag)
+	rTag := chainRuleTag(tag)
+	if inboundType == contracts.InboundTypeChain {
+		_ = cli.RemoveRule(ctx, rTag)
+		_ = cli.RemoveOutbound(ctx, outTag)
+
+		if err := cli.AddOutbound(ctx, chainOutboundJSON); err != nil {
+			return errs.Wrap(errs.ErrFastAddInboundFailed,
+				fmt.Sprintf("failed to add chain outbound for %s (%s)", tag, chain.RedactURI(chainURI)), err)
+		}
+		if err := cli.AddRule(ctx, rTag, tag, outTag); err != nil {
+			if rbErr := cli.RemoveOutbound(ctx, outTag); rbErr != nil {
+				log.Warn("[FastAddInbound] rollback RemoveOutbound failed", "tag", tag, "outboundTag", outTag, "err", rbErr)
+			}
+			return errs.Wrap(errs.ErrFastAddInboundFailed,
+				fmt.Sprintf("failed to add chain routing rule for %s", tag), err)
+		}
+	}
+
+	// Step 5: Add inbound to running xray process via gRPC
 	api := NewXrayAPI(e.grpcAPIAddress, e.config.Debug)
 	if err := api.AddInbound(nativeInbound.JSON); err != nil {
-		// Clean up temp cert files on gRPC failure
-		if certShouldCleanup {
-			for _, f := range xrayInbound.tempCertFiles {
-				os.Remove(f)
+		if inboundType == contracts.InboundTypeChain {
+			if rbErr := cli.RemoveRule(ctx, rTag); rbErr != nil {
+				log.Warn("[FastAddInbound] rollback RemoveRule failed", "tag", tag, "ruleTag", rTag, "err", rbErr)
+			}
+			if rbErr := cli.RemoveOutbound(ctx, outTag); rbErr != nil {
+				log.Warn("[FastAddInbound] rollback RemoveOutbound failed", "tag", tag, "outboundTag", outTag, "err", rbErr)
 			}
 		}
 		// Map xray's "existing tag" gRPC error to ErrInboundAlreadyExists
@@ -2034,24 +2833,40 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 		return errs.Wrap(errs.ErrFastAddInboundFailed, "failed to add inbound to xray process", err)
 	}
 
-	// Store in map
+	// Store in map & persist atomically with rollback if persistence fails.
 	e.inboundsMu.Lock()
 
 	if _, exists := e.inbounds[tag]; exists {
 		e.inboundsMu.Unlock()
+		if rbErr := api.RemoveInbound(tag); rbErr != nil {
+			log.Warn("[FastAddInbound] rollback RemoveInbound failed after duplicate tag check", "tag", tag, "err", rbErr)
+		}
+		if inboundType == contracts.InboundTypeChain {
+			if rbErr := cli.RemoveRule(ctx, rTag); rbErr != nil {
+				log.Warn("[FastAddInbound] rollback RemoveRule failed after duplicate tag check", "tag", tag, "ruleTag", rTag, "err", rbErr)
+			}
+			if rbErr := cli.RemoveOutbound(ctx, outTag); rbErr != nil {
+				log.Warn("[FastAddInbound] rollback RemoveOutbound failed after duplicate tag check", "tag", tag, "outboundTag", outTag, "err", rbErr)
+			}
+		}
 		return errs.Newf(errs.ErrInboundAlreadyExists, "inbound %s already exists", tag)
 	}
 
 	if e.storeMgr != nil {
-		rec := &InboundRecord{
-			Tag:           tag,
-			ContainerType: string(contracts.ContainerXray),
-			CertSource:    certSource,
-			CertDomain:    certDomain,
-			NativeJSON:    nativeInbound.JSON,
-		}
+		rec := xrayInbound.toInboundRecord()
 		if err := e.storeMgr.InboundStore().Save(rec); err != nil {
 			e.inboundsMu.Unlock()
+			if rbErr := api.RemoveInbound(tag); rbErr != nil {
+				log.Warn("[FastAddInbound] rollback RemoveInbound failed after store error", "tag", tag, "err", rbErr)
+			}
+			if inboundType == contracts.InboundTypeChain {
+				if rbErr := cli.RemoveRule(ctx, rTag); rbErr != nil {
+					log.Warn("[FastAddInbound] rollback RemoveRule failed after store error", "tag", tag, "ruleTag", rTag, "err", rbErr)
+				}
+				if rbErr := cli.RemoveOutbound(ctx, outTag); rbErr != nil {
+					log.Warn("[FastAddInbound] rollback RemoveOutbound failed after store error", "tag", tag, "outboundTag", outTag, "err", rbErr)
+				}
+			}
 			return errs.Wrap(errs.ErrFastAddInboundFailed, "failed to persist inbound", err)
 		}
 	}
@@ -2059,12 +2874,147 @@ func (e *Executor) FastAddInbound(tag string, params map[string]any) error {
 	e.inbounds[tag] = xrayInbound
 	e.inboundsMu.Unlock()
 	portCommitted = true
+	certCommitted = true
+	opLocked = false
+	e.inboundOpMu.Unlock()
 
-	// Sync existing users to this new inbound (must be outside lock to avoid deadlock,
+	// Sync existing users to this new inbound (must be outside locks to avoid deadlock,
 	// since reconcileUsersForInbound acquires inboundsMu.RLock internally).
 	e.reconcileUsersForInbound(tag)
 
 	return nil
+}
+
+func parseInboundTypeAndChainParams(params map[string]any) (contracts.InboundType, string, error) {
+	var rawType string
+	if v, exists := params["inbound_type"]; exists && v != nil {
+		switch t := v.(type) {
+		case string:
+			rawType = t
+		case contracts.InboundType:
+			rawType = string(t)
+		default:
+			return "", "", fmt.Errorf("inbound_type must be a string, got %T", v)
+		}
+	}
+
+	var chainURI string
+	if v, exists := params["chain_uri"]; exists && v != nil {
+		s, ok := v.(string)
+		if !ok {
+			return "", "", fmt.Errorf("chain_uri must be a string, got %T", v)
+		}
+		chainURI = strings.TrimSpace(s)
+	}
+
+	var inboundType contracts.InboundType
+	if strings.TrimSpace(rawType) == "" && chainURI != "" {
+		inboundType = contracts.InboundTypeChain
+	} else {
+		var err error
+		inboundType, err = contracts.NormalizeInboundType(rawType)
+		if err != nil {
+			return "", "", err
+		}
+	}
+
+	if inboundType == contracts.InboundTypeChain && chainURI == "" {
+		return "", "", fmt.Errorf("inbound_type=chain requires non-empty chain_uri")
+	}
+	if inboundType == contracts.InboundTypeDirect && chainURI != "" {
+		return "", "", fmt.Errorf("inbound_type=direct forbids non-empty chain_uri")
+	}
+	return inboundType, chainURI, nil
+}
+
+func parseAccessTagsParam(params map[string]any) ([]string, error) {
+	raw, exists := params["access_tags"]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+	var items []string
+	switch v := raw.(type) {
+	case []string:
+		items = v
+	case []interface{}:
+		items = make([]string, 0, len(v))
+		for i, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("access_tags[%d] must be a string, got %T", i, item)
+			}
+			items = append(items, s)
+		}
+	default:
+		return nil, fmt.Errorf("access_tags must be a string slice, got %T", raw)
+	}
+	return contracts.NormalizeAccessTags(items)
+}
+
+func parseListenParam(params map[string]any, inboundType contracts.InboundType) (string, error) {
+	var rawListen string
+	if v, exists := params["listen"]; exists && v != nil {
+		s, ok := v.(string)
+		if !ok {
+			return "", fmt.Errorf("listen must be a string, got %T", v)
+		}
+		rawListen = strings.TrimSpace(s)
+	}
+	var rawListenAddr string
+	if v, exists := params["listen_addr"]; exists && v != nil {
+		s, ok := v.(string)
+		if !ok {
+			return "", fmt.Errorf("listen_addr must be a string, got %T", v)
+		}
+		rawListenAddr = strings.TrimSpace(s)
+	}
+	if inboundType == contracts.InboundTypeChain {
+		if rawListen != "" && rawListen != "127.0.0.1" {
+			return "", fmt.Errorf("chain inbound requires listen=\"127.0.0.1\", got %q", rawListen)
+		}
+		if rawListenAddr != "" && rawListenAddr != "127.0.0.1" {
+			return "", fmt.Errorf("chain inbound requires listen_addr=\"127.0.0.1\", got %q", rawListenAddr)
+		}
+		return "127.0.0.1", nil
+	}
+	if rawListen != "" {
+		return rawListen, nil
+	}
+	if rawListenAddr != "" {
+		return rawListenAddr, nil
+	}
+	return "127.0.0.1", nil
+}
+
+func parseAndRenderXrayChainOutbound(outboundTag, rawURI string) (*chain.OutboundSpec, []byte, error) {
+	spec, err := chain.ParseURI(rawURI)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse chain URI (%s): %w", chain.RedactURI(rawURI), err)
+	}
+	outboundJSON, err := chain.RenderXrayOutbound(outboundTag, spec)
+	if err != nil {
+		return nil, nil, fmt.Errorf("render xray chain outbound (%s): %w", chain.RedactURI(rawURI), err)
+	}
+	return spec, outboundJSON, nil
+}
+
+func resolveSubscriptionNodeName(reqNodeName, tag string, meta contracts.InboundMeta) string {
+	if meta.Remark != "" {
+		if reqNodeName == "" {
+			return meta.Remark
+		}
+		return reqNodeName + "-" + meta.Remark
+	}
+	if meta.InboundType == contracts.InboundTypeChain {
+		if reqNodeName == "" {
+			return tag
+		}
+		return reqNodeName + "-" + tag
+	}
+	if reqNodeName == "" {
+		return tag
+	}
+	return reqNodeName
 }
 
 // resolveFastAddCert resolves TLS certificate paths from params.
@@ -2171,7 +3121,7 @@ func buildFastAddSimpleSpec(tag string, port uint32, protocol contracts.Protocol
 	extensions := map[string]any{
 		"security":    "none",
 		"transport":   fastGetString(params, "transport", "tcp"),
-		"listen_addr": fastGetString(params, "listen", "0.0.0.0"),
+		"listen_addr": fastGetString(params, "listen", "127.0.0.1"),
 	}
 	// Credentials must go into extensions["users"] — the only key Adapter.ToProvider
 	// reads to build settings.clients. The old extensions["uuid"]/["password"]
@@ -2240,17 +3190,47 @@ func fastGetString(params map[string]any, key, defaultVal string) string {
 }
 
 // fastGetUint32 extracts a uint32 value from params with a default.
+// Handles all Go numeric types including proto int32 (from FastAddInboundReq.GetPort()).
 func fastGetUint32(params map[string]any, key string, defaultVal uint32) uint32 {
-	if v, ok := params[key].(float64); ok {
-		return uint32(v)
-	}
-	if v, ok := params[key].(uint32); ok {
+	const maxU32 = ^uint32(0)
+	switch v := params[key].(type) {
+	case uint32:
 		return v
-	}
-	if v, ok := params[key].(int); ok {
+	case uint16:
 		return uint32(v)
+	case uint:
+		if uint64(v) > uint64(maxU32) {
+			return maxU32
+		}
+		return uint32(v)
+	case uint64:
+		if v > uint64(maxU32) {
+			return maxU32
+		}
+		return uint32(v)
+	case int:
+		if v < 0 || uint64(v) > uint64(maxU32) {
+			return maxU32
+		}
+		return uint32(v)
+	case int32:
+		if v < 0 {
+			return maxU32
+		}
+		return uint32(v)
+	case int64:
+		if v < 0 || uint64(v) > uint64(maxU32) {
+			return maxU32
+		}
+		return uint32(v)
+	case float64:
+		if v < 0 || v > float64(maxU32) {
+			return maxU32
+		}
+		return uint32(v)
+	default:
+		return defaultVal
 	}
-	return defaultVal
 }
 
 // fastGetStringSlice extracts a []string value from params.
@@ -2362,14 +3342,34 @@ func generateSSPassword(method string) (string, error) {
 //   - "pem": skips with warning (PEM content is not re-persisted after restart)
 //   - "none" / "file": uses native_json as-is
 func (e *Executor) Restore(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if e.storeMgr == nil {
 		return nil
 	}
+
+	e.inboundOpMu.Lock()
+	opLocked := true
+	defer func() {
+		if opLocked {
+			e.inboundOpMu.Unlock()
+		}
+	}()
 
 	records, err := e.storeMgr.InboundStore().Load()
 	if err != nil {
 		return fmt.Errorf("restore: load inbounds: %w", err)
 	}
+
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Tag < records[j].Tag
+	})
+
+	cli := e.routingCLI()
+	restoredTags := make(map[string]struct{}, len(records))
+	dbXrayTags := make(map[string]struct{}, len(records))
+	var restoreErrs []error
 
 	for _, rec := range records {
 		// Only restore inbounds belonging to this container type
@@ -2380,9 +3380,56 @@ func (e *Executor) Restore(ctx context.Context) error {
 		if rec.Tag == APIInboundTag {
 			continue
 		}
+		dbXrayTags[rec.Tag] = struct{}{}
+
+		inboundType, typeErr := contracts.NormalizeInboundType(rec.InboundType)
+		if typeErr != nil {
+			log.Error("[Restore] invalid inbound_type, skipping inbound",
+				"inbound", rec.Tag, "inbound_type", rec.InboundType, "err", typeErr)
+			continue
+		}
+		accessTags, tagErr := contracts.NormalizeAccessTags(rec.AccessTags)
+		if tagErr != nil {
+			// Fail-closed: never downgrade access control by clearing invalid tags.
+			log.Error("[Restore] invalid access_tags, skipping inbound",
+				"inbound", rec.Tag, "err", tagErr)
+			continue
+		}
+
+		meta := contracts.InboundMeta{
+			InboundType:      inboundType,
+			AccessTags:       accessTags,
+			ChainOutboundURI: rec.ChainOutboundURI,
+			Remark:           rec.Remark,
+		}
+
+		var chainOutboundJSON []byte
+		if inboundType == contracts.InboundTypeChain {
+			if strings.TrimSpace(rec.ChainOutboundURI) == "" {
+				log.Error("[Restore] chain inbound missing chain_outbound_uri, skipping", "inbound", rec.Tag)
+				continue
+			}
+			_, rendered, chainErr := parseAndRenderXrayChainOutbound(chainOutboundTag(rec.Tag), rec.ChainOutboundURI)
+			if chainErr != nil {
+				log.Error("[Restore] failed to render chain outbound, skipping",
+					"inbound", rec.Tag, "chain_uri", chain.RedactURI(rec.ChainOutboundURI), "err", chainErr)
+				continue
+			}
+			chainOutboundJSON = rendered
+		}
 
 		nativeJSON := make([]byte, len(rec.NativeJSON))
 		copy(nativeJSON, rec.NativeJSON)
+
+		if inboundType == contracts.InboundTypeChain {
+			clamped, clampErr := ensureNativeJSONListenLoopback(nativeJSON)
+			if clampErr != nil {
+				log.Error("[Restore] failed to clamp chain inbound listen to 127.0.0.1, skipping",
+					"inbound", rec.Tag, "err", clampErr)
+				continue
+			}
+			nativeJSON = clamped
+		}
 
 		var tempCertFiles []string
 
@@ -2473,60 +3520,125 @@ func (e *Executor) Restore(ctx context.Context) error {
 			// "none" or "file": use native_json as-is
 		}
 
-		if err := e.AddInboundNative(nativeJSON); err != nil {
+		outTag := chainOutboundTag(rec.Tag)
+		rTag := chainRuleTag(rec.Tag)
+		if inboundType == contracts.InboundTypeChain {
+			_ = cli.RemoveRule(ctx, rTag)
+			_ = cli.RemoveOutbound(ctx, outTag)
+
+			if err := cli.AddOutbound(ctx, chainOutboundJSON); err != nil {
+				log.Error("[Restore] failed to replay chain outbound",
+					"inbound", rec.Tag, "chain_uri", chain.RedactURI(rec.ChainOutboundURI), "err", err)
+				for _, f := range tempCertFiles {
+					_ = os.Remove(f)
+				}
+				restoreErrs = append(restoreErrs, fmt.Errorf("restore chain outbound %s: %w", rec.Tag, err))
+				continue
+			}
+			if err := cli.AddRule(ctx, rTag, rec.Tag, outTag); err != nil {
+				log.Error("[Restore] failed to replay chain rule", "inbound", rec.Tag, "ruleTag", rTag, "err", err)
+				_ = cli.RemoveOutbound(ctx, outTag)
+				for _, f := range tempCertFiles {
+					_ = os.Remove(f)
+				}
+				restoreErrs = append(restoreErrs, fmt.Errorf("restore chain rule %s: %w", rec.Tag, err))
+				continue
+			}
+		}
+
+		if err := e.addInboundNativeInternal(nativeJSON, inboundAddOptions{
+			meta:          meta,
+			certSource:    certSource,
+			certDomain:    rec.CertDomain,
+			tempCertFiles: tempCertFiles,
+			persist:       false,
+			reconcile:     false,
+		}); err != nil {
 			log.Error("[Restore] failed to restore inbound", "inbound", rec.Tag, "err", err)
-			// Clean up any temp cert files we created if AddInboundNative failed
+			if inboundType == contracts.InboundTypeChain {
+				_ = cli.RemoveRule(ctx, rTag)
+				_ = cli.RemoveOutbound(ctx, outTag)
+			}
 			for _, f := range tempCertFiles {
 				_ = os.Remove(f)
 			}
+			restoreErrs = append(restoreErrs, fmt.Errorf("restore inbound %s: %w", rec.Tag, err))
 			continue
 		}
+		restoredTags[rec.Tag] = struct{}{}
+	}
 
-		// For self_signed: record temp cert files in the in-memory inbound for cleanup on removal
-		if len(tempCertFiles) > 0 {
-			e.inboundsMu.Lock()
-			if xi, exists := e.inbounds[rec.Tag]; exists {
-				xi.tempCertFiles = tempCertFiles
-			}
-			e.inboundsMu.Unlock()
+	// Sync inbounds from running xray process (catches inbounds defined in config.json
+	// that were never registered via FastAddInbound/AddInboundNative) and record all
+	// currently live xray inbound tags.
+	for _, liveTag := range e.syncInboundsFromXrayLocked() {
+		restoredTags[liveTag] = struct{}{}
+	}
+
+	// Evict stale e.inbounds entries that failed or skipped restoration (and are not
+	// running in xray), releasing their forward rules so users cannot hit dead ports.
+	var stale []*XrayInbound
+	keptPorts := make(map[uint32]struct{}, len(restoredTags))
+	e.inboundsMu.Lock()
+	for tag, inb := range e.inbounds {
+		if _, ok := restoredTags[tag]; !ok {
+			stale = append(stale, inb)
+			delete(e.inbounds, tag)
+		} else if inb.Port() != 0 {
+			keptPorts[inb.Port()] = struct{}{}
 		}
+	}
+	e.inboundsMu.Unlock()
 
-		// Re-save the original InboundRecord to DB to preserve cert_source/cert_domain.
-		// AddInboundNative internally saves with cert_source="none", which would overwrite
-		// the correct cert_source (e.g. "self_signed") we loaded from DB.
-		if e.storeMgr != nil {
-			if saveErr := e.storeMgr.InboundStore().Save(rec); saveErr != nil {
-				log.Warn("[Restore] failed to re-persist cert_source", "inbound", rec.Tag, "err", saveErr)
+	for _, inb := range stale {
+		log.Warn("[Restore] evicting stale inbound not restored after restart/reload", "inbound", inb.Tag())
+		inb.removed.Store(true)
+		if err := inb.ReleaseAllUserPorts(); err != nil {
+			log.Warn("[Restore] failed to release forward rules for stale inbound", "inbound", inb.Tag(), "err", err)
+		}
+		for _, f := range inb.tempCertFiles {
+			if f != "" {
+				_ = os.Remove(f)
+			}
+		}
+		// Only release the port claim when the record no longer exists in DB and
+		// no surviving inbound uses the port; persisted-but-skipped records retain
+		// their port claim so forward rules cannot hijack it before next restore.
+		if _, stillPersisted := dbXrayTags[inb.Tag()]; !stillPersisted {
+			if _, portUsed := keptPorts[inb.Port()]; !portUsed {
+				container.ReleaseInboundPort(e.portClaimer, inb.Port())
 			}
 		}
 	}
 
-	// Sync inbounds from running xray process (catches inbounds defined in config.json
-	// that were never registered via FastAddInbound/AddInboundNative).
-	e.syncInboundsFromXray()
+	opLocked = false
+	e.inboundOpMu.Unlock()
 
 	// Reconcile users after restore to rebuild forward rules
 	e.reconcileUsers()
 
-	return nil
+	return errors.Join(restoreErrs...)
 }
 
-// syncInboundsFromXray queries the running xray process via gRPC to discover all inbounds
-// and registers any that are not yet in the in-memory map.
-// This handles inbounds defined statically in xray's config.json.
-func (e *Executor) syncInboundsFromXray() {
+// syncInboundsFromXrayLocked queries the running xray process via gRPC to discover
+// all inbounds, registers any that are not yet in the in-memory map, and returns
+// the tags of all non-API inbounds live in xray. Caller must hold e.inboundOpMu.
+func (e *Executor) syncInboundsFromXrayLocked() []string {
 	api := NewXrayAPI(e.grpcAPIAddress, e.config.Debug)
 	inbounds, err := api.ListInbounds()
 	if err != nil {
 		log.Warn("[syncInboundsFromXray] failed to list inbounds from xray", "err", err)
-		return
+		return nil
 	}
 
+	var liveTags []string
 	for _, inboundCfg := range inbounds {
 		tag := inboundCfg.GetTag()
-		if tag == "" || tag == APIInboundTag {
+		proxyType := inboundCfg.GetProxySettings().GetType()
+		if tag == "" || tag == APIInboundTag || strings.Contains(strings.ToLower(proxyType), "dokodemo") {
 			continue
 		}
+		liveTags = append(liveTags, tag)
 
 		// Skip if already registered
 		e.inboundsMu.RLock()
@@ -2543,13 +3655,26 @@ func (e *Executor) syncInboundsFromXray() {
 			continue
 		}
 
-		if err := e.AddInboundNative(nativeJSON); err != nil {
+		if _, err := e.addInboundNativeLocked(nativeJSON, true); err != nil {
 			log.Warn("[syncInboundsFromXray] register inbound failed", "tag", tag, "err", err)
 			continue
 		}
 
 		log.Info("[syncInboundsFromXray] registered inbound from xray config", "tag", tag)
 	}
+	return liveTags
+}
+
+func ensureNativeJSONListenLoopback(nativeJSON []byte) ([]byte, error) {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(nativeJSON, &raw); err != nil {
+		return nil, err
+	}
+	if listen, _ := raw["listen"].(string); strings.TrimSpace(listen) == "127.0.0.1" {
+		return nativeJSON, nil
+	}
+	raw["listen"] = "127.0.0.1"
+	return json.MarshalIndent(raw, "", "  ")
 }
 
 // nativeJSONHasTLSSettings returns true if the native xray inbound JSON contains
@@ -2696,6 +3821,9 @@ func updateTLSCertPaths(nativeJSON []byte, certFile, keyFile string) ([]byte, er
 // Verify interface compliance.
 var _ container.Container = (*Executor)(nil)
 var _ container.RuntimeAPI = (*Executor)(nil)
+var _ container.ChainCapable = (*Executor)(nil)
+var _ container.InboundTagUpdater = (*Executor)(nil)
+var _ container.InboundMetaProvider = (*Executor)(nil)
 var _ inbound.Inbound = (*XrayInbound)(nil)
 
 // init registers the xray container to the global registry.

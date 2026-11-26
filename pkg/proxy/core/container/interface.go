@@ -74,6 +74,25 @@ type RuntimeAPI interface {
 	QueryStats(pattern string, reset bool) (map[string]*contracts.Stats, error)
 }
 
+// ChainCapable is an optional capability interface implemented by containers
+// that support 1:1 per-inbound chained outbound proxies.
+type ChainCapable interface {
+	SupportsChainOutbound() bool
+	ValidateChainURI(rawURI string) error
+}
+
+// InboundTagUpdater is an optional capability interface implemented by containers
+// that support updating an inbound's access tags at runtime without restart.
+type InboundTagUpdater interface {
+	SetInboundAccessTags(tag string, accessTags []string) error
+}
+
+// InboundMetaProvider is an optional capability interface implemented by containers
+// that expose chain and visibility metadata for managed inbounds.
+type InboundMetaProvider interface {
+	GetInboundMeta(tag string) (contracts.InboundMeta, bool)
+}
+
 // UpdateRequest holds the parameters for a container update.
 type UpdateRequest struct {
 	TargetTag     string

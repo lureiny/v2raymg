@@ -116,6 +116,43 @@ func TestDecode_DispatchSnell(t *testing.T) {
 	}
 }
 
+func TestDecode_DispatchSOCKS5Aliases(t *testing.T) {
+	for _, uri := range []string{
+		"socks5://alice:secret@host:1080#S5",
+		"socks://YWxpY2U6c2VjcmV0@[2001:db8::1]:1080#S",
+		"socks5h://host:1080#S5H",
+	} {
+		n, err := Decode(uri)
+		if err != nil {
+			t.Fatalf("Decode(%q): %v", uri, err)
+		}
+		if _, ok := n.(*SOCKS5Node); !ok {
+			t.Errorf("Decode(%q): expected *SOCKS5Node, got %T", uri, n)
+		}
+		if n.Protocol() != contracts.ProtocolSOCKS5 {
+			t.Errorf("Decode(%q).Protocol() = %q, want socks5", uri, n.Protocol())
+		}
+	}
+}
+
+func TestDecode_DispatchHTTPAndHTTPS(t *testing.T) {
+	for _, uri := range []string{
+		"http://alice:secret@host:8080#H",
+		"https://alice:secret@host:443?sni=host&insecure=1#HS",
+	} {
+		n, err := Decode(uri)
+		if err != nil {
+			t.Fatalf("Decode(%q): %v", uri, err)
+		}
+		if _, ok := n.(*HTTPNode); !ok {
+			t.Errorf("Decode(%q): expected *HTTPNode, got %T", uri, n)
+		}
+		if n.Protocol() != contracts.ProtocolHTTP {
+			t.Errorf("Decode(%q).Protocol() = %q, want http", uri, n.Protocol())
+		}
+	}
+}
+
 func TestDecode_UnknownScheme(t *testing.T) {
 	_, err := Decode("unknown://foo@host:443")
 	if err == nil {
@@ -169,6 +206,11 @@ func TestDecode_EncodeRoundTrip_AllProtocols(t *testing.T) {
 		"tuic://00112233-4455-6677-8899-aabbccddeeff:pwd@host.com:443?sni=host.com#TUIC",
 		"anytls://pwd@host.com:443?sni=host.com&insecure=1#A",
 		"snell://psk@host.com:443?version=5#N",
+		"socks5://alice:secret@host.com:1080#S5",
+		"socks://YWxpY2U6c2VjcmV0@[2001:db8::1]:1080#SV6",
+		"socks5h://host.com:1080#S5H",
+		"http://alice:secret@host.com:8080#HTTP",
+		"https://alice:secret@host.com:443?sni=host.com&insecure=1#HTTPS",
 	}
 	for _, uri := range cases {
 		n, err := Decode(uri)
@@ -184,6 +226,46 @@ func TestDecode_EncodeRoundTrip_AllProtocols(t *testing.T) {
 		}
 		if reDecoded.Protocol() != n.Protocol() {
 			t.Errorf("protocol drift: %q -> %q", n.Protocol(), reDecoded.Protocol())
+		}
+	}
+}
+
+func TestDecode_MalformedErrorsNeverLeakCredentials(t *testing.T) {
+	const secret = "CODEC_TOP_SECRET_8822"
+	cases := []string{
+		secret,
+		"vless://" + secret + "@host.example.com:443%ZZ",
+		"trojan://" + secret + "@host.example.com:443%ZZ",
+		"hy2://u:" + secret + "@host.example.com:443%ZZ",
+		"tuic://uuid:" + secret + "@host.example.com:443%ZZ",
+		"anytls://" + secret + "@host.example.com:443%ZZ",
+		"snell://" + secret + "@host.example.com:443%ZZ",
+		"http://u:" + secret + "@host.example.com:8080%ZZ",
+		"ss://" + secret + "@host.example.com:8388%ZZ",
+		"socks5://user:" + secret,
+		"socks5://" + secret,
+		// Missing '@' with ':' causes Go net/url to emit `invalid port ":SECRET" after host`
+		"vless://user:" + secret,
+		"trojan://user:" + secret,
+		"hy2://user:" + secret,
+		"hysteria2://user:" + secret,
+		"tuic://uuid:" + secret,
+		"anytls://user:" + secret,
+		"snell://user:" + secret,
+		"http://user:" + secret,
+		"https://user:" + secret,
+		"ss://2022-blake3-aes-128-gcm:" + secret,
+		// Malformed scheme containing embedded credentials
+		"user:" + secret + "://host.example.com:443",
+	}
+	for _, raw := range cases {
+		_, err := Decode(raw)
+		if err == nil {
+			t.Errorf("Decode(%q) expected error, got nil", raw)
+			continue
+		}
+		if strings.Contains(strings.ToLower(err.Error()), strings.ToLower(secret)) {
+			t.Errorf("Decode(%q) leaked secret in error: %v", raw, err)
 		}
 	}
 }

@@ -33,8 +33,19 @@ func (c *SnellConfig) Decode(cfg map[string]any) error {
 	if v, ok := cfg["listen"].(string); ok {
 		c.Listen = v
 	}
-	if v, ok := cfg["port"].(float64); ok {
-		c.Port = int(v)
+	var port int
+	switch v := cfg["port"].(type) {
+	case int:
+		port = v
+	case int64:
+		port = int(v)
+	case uint64:
+		port = int(v)
+	case float64:
+		port = int(v)
+	}
+	if port > 0 {
+		c.Port = port
 	}
 	if v, ok := cfg["psk"].(string); ok {
 		c.PSK = v

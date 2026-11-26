@@ -1,12 +1,15 @@
 package appconfig
 
 import (
+	"fmt"
 	"os"
+	"strings"
 
 	certmgmtservice "github.com/lureiny/v2raymg/pkg/certmgmt/service"
 	"github.com/lureiny/v2raymg/pkg/log"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
 	"github.com/lureiny/v2raymg/pkg/proxy/forward"
+	"gopkg.in/yaml.v3"
 )
 
 // LogConfig holds logging configuration.
@@ -99,7 +102,6 @@ type SubscriptionConfig struct {
 	UserinfoHeaderFormat string `yaml:"userinfo_header_format" json:"userinfo_header_format"`
 }
 
-// StaticNodeConfig is a statically configured peer node used for initial cluster discovery.
 // StaticNodeConfig is one bootstrap address.
 //
 // There is no name field. A seed says WHERE to dial and nothing else: each node
@@ -107,9 +109,66 @@ type SubscriptionConfig struct {
 // first response, so a label typed here could only ever be an unverified guess
 // presented as fact. A `name:` key left over in an existing config is accepted
 // and silently dropped — decoding is lenient, so upgrades need no edit.
+//
+// Two spellings are accepted. The URL form carries the transport, which a bare
+// host/port cannot — a seed pointing at a peer behind a TLS-terminating reverse
+// proxy has to say so, or the first dial goes out in plaintext and fails:
+//
+//	static_nodes:
+//	  - "grpcs://node2.example.com:443"
+//	  - "grpc://node3.internal"          # port defaults to 80
+//	  - host: node4.internal             # original form, still exact
+//	    port: 9090
 type StaticNodeConfig struct {
 	Host string `yaml:"host" json:"host"`
 	Port int32  `yaml:"port" json:"port"`
+	// TLS dials this seed over TLS. Only reachable through the URL form; the
+	// mapping form has always meant plaintext and continues to.
+	TLS bool `yaml:"tls" json:"tls"`
+}
+
+// UnmarshalYAML accepts either a URL scalar or the original mapping.
+//
+// The mapping branch uses a type alias to shed this method, otherwise decoding
+// the mapping would call back into UnmarshalYAML forever.
+func (s *StaticNodeConfig) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		var raw string
+		if err := value.Decode(&raw); err != nil {
+			return err
+		}
+		addr, err := ParseClusterAddr(raw)
+		if err != nil {
+			return err
+		}
+		s.Host, s.Port, s.TLS = addr.Host, addr.Port, addr.TLS
+		return nil
+	}
+
+	type plain StaticNodeConfig
+	var p plain
+	if err := value.Decode(&p); err != nil {
+		return err
+	}
+	*s = StaticNodeConfig(p)
+	return nil
+}
+
+// ReverseProxyConfig tells a node it is running behind a reverse proxy, so it
+// advertises the proxy's address to peers instead of its own.
+//
+// Only the cluster plane is covered for now. The management API is fronted by
+// reverse-proxying http_port directly, which needs nothing from this side.
+type ReverseProxyConfig struct {
+	// GrpcAddr is the address peers should dial to reach this node's gRPC
+	// server, as "grpc://host:port" or "grpcs://host:port". Empty means no
+	// reverse proxy: the node advertises proxy_host + rpc_port, exactly as
+	// before.
+	//
+	// The node's own server is unaffected — it keeps listening in plaintext on
+	// end_node.listen:rpc_port. A grpcs:// value describes TLS terminated by
+	// the proxy, not TLS spoken by this process.
+	GrpcAddr string `yaml:"grpc_addr" json:"grpc_addr"`
 }
 
 // ClusterConfig holds cluster membership and authentication configuration.
@@ -192,6 +251,15 @@ type PingConfig struct {
 	NodeSources []PingNodeSource `yaml:"node_sources" json:"node_sources"`
 }
 
+// MCPConfig holds embedded MCP server settings.
+type MCPConfig struct {
+	// Enabled controls whether the embedded Streamable HTTP MCP endpoint (/mcp)
+	// is mounted on the HTTP management server. Default: false.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// ReadOnly restricts the MCP server to read-only tools when true. Default: true.
+	ReadOnly bool `yaml:"read_only" json:"read_only"`
+}
+
 // EndNodeConfig holds End Node specific configuration.
 type EndNodeConfig struct {
 	NodeConfig `yaml:",inline"`
@@ -200,16 +268,23 @@ type EndNodeConfig struct {
 	// OnlyGateway enables gateway-only mode: the node forwards traffic but does not
 	// expose proxy services itself.
 	OnlyGateway bool `yaml:"only_gateway" json:"only_gateway"`
+	// EnablePingCheck is the master switch controlling whether ICMP/TCP ping
+	// probing and ping node source loading are started. Default: false.
+	EnablePingCheck bool `yaml:"enable_ping_check" json:"enable_ping_check"`
 	// Ping holds ping checker configuration.
 	Ping PingConfig `yaml:"ping" json:"ping"`
+	// ReverseProxy declares that this node sits behind a reverse proxy. See
+	// ResolveAdvertise.
+	ReverseProxy ReverseProxyConfig `yaml:"reverse_proxy" json:"reverse_proxy"`
 	// HttpPort is the HTTP management interface port.
 	HttpPort int `yaml:"http_port" json:"http_port"`
-	// HttpListen is the listen address for the HTTP management server, chosen
-	// independently of the gRPC one so a cluster can expose the management API
-	// on a single node while every other node keeps it unreachable.
+	// HttpListen overrides the listen address for the HTTP management server on
+	// this node alone, so a cluster can publish the management API on one node
+	// and keep it unreachable on the rest.
 	//
-	// When empty it is "127.0.0.1", NOT the shared Listen address — see
-	// ResolveHTTPListen for why the two differ deliberately.
+	// Empty inherits Listen. Resolution and the reasoning live on
+	// ResolveHTTPListen — do not restate the rule here, that is how this comment
+	// and the code came to disagree for six releases.
 	HttpListen string `yaml:"http_listen" json:"http_listen"`
 	// HttpToken is the HTTP management interface authentication token.
 	HttpToken string `yaml:"http_token" json:"http_token"`
@@ -220,11 +295,17 @@ type EndNodeConfig struct {
 	JWTExpireHours int `yaml:"jwt_expire_hours" json:"jwt_expire_hours"`
 	// EnablePrometheus enables the Prometheus metrics endpoint.
 	EnablePrometheus bool `yaml:"enable_prometheus" json:"enable_prometheus"`
+	// MCP holds embedded MCP server settings.
+	MCP MCPConfig `yaml:"mcp" json:"mcp"`
 	// MonitorInterfaces is an optional list of network interface names to use for
 	// bandwidth speed monitoring (e.g. ["eth0", "ens3"]).
 	// When empty, the interface with the default route is detected automatically.
 	// If auto-detection fails, all non-loopback interfaces are summed (fallback).
 	MonitorInterfaces []string `yaml:"monitor_interfaces" json:"monitor_interfaces"`
+	// AllowLoopbackChainTarget controls whether chain_uri targets pointing to
+	// loopback addresses (127.0.0.0/8, ::1, localhost) are permitted. Default: false.
+	// Local management and allocated ports remain unconditionally blocked even when true.
+	AllowLoopbackChainTarget bool `yaml:"allow_loopback_chain_target" json:"allow_loopback_chain_target"`
 }
 
 // defaultHTTPListen applies only when BOTH http_listen and listen are empty.
@@ -252,6 +333,32 @@ func (c *EndNodeConfig) ResolveHTTPListen() string {
 		return c.Listen
 	}
 	return defaultHTTPListen
+}
+
+// ResolveAdvertise returns the address peers must dial to reach this node's
+// gRPC server — which is not necessarily the address it listens on.
+//
+// With no reverse_proxy configured this is proxy_host + rpc_port over plaintext,
+// byte-for-byte what every release before 2.10 advertised. With one configured,
+// it is the proxy's address and scheme, and the node's own listener is left
+// alone: the proxy terminates TLS and forwards plaintext h2c to it.
+//
+// Peers key the directory by node_id (2.8), so a node that starts advertising a
+// different address updates its existing entry in place rather than racing a
+// stale one — which is what makes changing this safe at runtime.
+func (c *EndNodeConfig) ResolveAdvertise() (ClusterAddr, error) {
+	if raw := strings.TrimSpace(c.ReverseProxy.GrpcAddr); raw != "" {
+		addr, err := ParseClusterAddr(raw)
+		if err != nil {
+			return ClusterAddr{}, fmt.Errorf("end_node.reverse_proxy.grpc_addr: %w", err)
+		}
+		return addr, nil
+	}
+	// An empty proxy_host is not rejected here. Validate already requires one
+	// when rpc_port >= 1000, and a single node running with the cluster plane
+	// switched off has nothing to advertise to — failing here would refuse to
+	// start a configuration that has always been legal.
+	return ClusterAddr{TLS: false, Host: c.ProxyHost, Port: int32(c.RpcPort)}, nil
 }
 
 // HTTPListenIsInherited reports whether the HTTP listener took its address from

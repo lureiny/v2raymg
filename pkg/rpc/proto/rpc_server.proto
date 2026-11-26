@@ -22,6 +22,8 @@ message User {
     string group = 13;
     string auth_token = 14;  // proxy auth token (UUID), returned by GetUsers/ClusterSync
     string login_password_hash = 15; // bcrypt hash of login password, propagated via ClusterSync
+    repeated string inbound_tags = 16;
+    bool update_inbound_tags = 17;
 }
 
 enum BuilderType {
@@ -199,6 +201,24 @@ message Node {
     // Deliberately NOT folded into ComputeNodesSum: the digest must stay
     // byte-compatible with 2.7 or mixed clusters would never converge.
     string node_id = 5;
+    // tls says how to reach host:port, not where. False (the default, and what
+    // every pre-2.10 peer sends) means plaintext h2c, which is what this
+    // cluster plane has always spoken; true means the dial must be TLS.
+    //
+    // It exists because a node may sit behind a reverse proxy that terminates
+    // TLS: host/port then carry the PROXY's address — the address peers must
+    // actually dial — while the node's own server keeps listening in plaintext
+    // behind it. The scheme has to travel on the wire rather than live in each
+    // node's config, because a peer usually learns an address by gossip from a
+    // third node and would otherwise have no idea how to reach it.
+    //
+    // Deliberately NOT folded into ComputeNodesSum, for the same reason as
+    // node_id: a 2.9 peer cannot see this field, so folding it would make the
+    // two sides compute different digests for an identical member set and a
+    // mixed cluster would never converge. host and port ARE folded, and they
+    // change when a reverse proxy is configured — that is a real membership
+    // change and should trigger a resync.
+    bool tls = 6;
 }
 
 message HeartBeatRsp {
@@ -306,6 +326,18 @@ message GetInboundRsp {
 message InboundInfo {
     string container = 1; // container type: "xray" / "snell" / "hysteria"
     string name = 2;      // inbound unique identifier within the container (tag)
+    string inbound_type = 3;
+    repeated string access_tags = 4;
+    string remark = 5;
+    string chain_protocol = 6;
+    string chain_target = 7;
+}
+
+message SetInboundAccessTagsReq {
+    NodeAuthInfo node_auth_info = 1;
+    string container = 2;
+    string name = 3;
+    repeated string access_tags = 4;
 }
 
 message ListInboundReq {
@@ -385,6 +417,10 @@ message FastAddInboundReq {
     repeated string reality_short_ids = 12;    // short ID list for Reality
     string transport = 13;      // transport type string: "tcp","ws","grpc","httpupgrade","xhttp","splithttp"
     map<string, string> extra_params = 14; // additional params: ws_path, grpc_service_name, httpupgrade_path, xhttp_path, xhttp_mode, alpn, sniffing_enabled, etc.
+    string inbound_type = 15;
+    string chain_uri = 16;
+    repeated string access_tags = 17;
+    string remark = 18;
 }
 
 message FastAddInboundRsp {
@@ -542,6 +578,7 @@ service EndNodeAccess {
     rpc GetInbound(GetInboundReq) returns (GetInboundRsp) {}
     rpc ListInbound(ListInboundReq) returns (ListInboundRsp) {}
     rpc DeleteInboundByName(DeleteInboundByNameReq) returns (InboundOpRsp) {}
+    rpc SetInboundAccessTags(SetInboundAccessTagsReq) returns (InboundOpRsp) {}
 
     // proxy
     rpc UpdateProxy(UpdateProxyReq) returns (UpdateProxyRsp) {}
@@ -636,6 +673,11 @@ message ResetAuthTokenRsp {
     string auth_token = 3;
 }
 
+message ContainerInfo {
+    string type = 1;
+    bool supports_chain = 2;
+}
+
 message GetContainersReq {
     NodeAuthInfo node_auth_info = 1;
 }
@@ -643,6 +685,7 @@ message GetContainersRsp {
     int32 code = 1;
     string msg = 2;
     repeated string containers = 3;
+    repeated ContainerInfo container_infos = 4;
 }
 
 // The center node was removed in 2026-07. Discovery is handled entirely by

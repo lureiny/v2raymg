@@ -50,6 +50,7 @@ GET /api/inbound
 POST /api/inbound
 GET /api/inbounds
 DELETE /api/inbounds
+PUT /api/inbounds/tags
 POST /api/inbound/fast
 
 # --- admin scope: certificates ---
@@ -68,3 +69,8 @@ POST /api/update
 POST /api/copyUserBetweenNodes
 GET /api/node/:name/groups
 PUT /api/node/:name/groups
+
+# --- embedded MCP server (Streamable HTTP, X-Token or JWT) ---
+POST /mcp
+GET /mcp
+DELETE /mcp

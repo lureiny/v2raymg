@@ -6,8 +6,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 )
+
+// InboundAccessChecker is an optional extension of UserLister (implemented by
+// *usermanager.UserManager) for evaluating two-layer access control against an
+// inbound's access tags.
+type InboundAccessChecker interface {
+	CanUserAccessInboundByUsername(username string, inboundAccessTags []string) bool
+}
 
 // UserLister provides user lookup for HTTP handlers.
 type UserLister interface {
@@ -42,14 +50,49 @@ func (handler *AuthHysteria2) parseParam(c *gin.Context) map[string]string {
 
 func (handler *AuthHysteria2) handlerFunc(c *gin.Context) {
 	parasMap := handler.parseParam(c)
-	ul := handler.getHttpServer().userLister
-	if ul == nil {
+	srv := handler.getHttpServer()
+	ul := srv.userLister
+	if ul == nil || parasMap["auth"] == "" {
 		c.JSON(403, gin.H{"ok": false})
 		return
+	}
+	var (
+		hasGate    bool
+		accessTags []string
+		checker    InboundAccessChecker
+	)
+	if cm := srv.getContainerMgr(); cm != nil {
+		if hyContainer, ok := cm.Get(contracts.ContainerHysteria); ok {
+			if mp, ok := hyContainer.(container.InboundMetaProvider); ok {
+				meta, found := mp.GetInboundMeta("hysteria-default")
+				if !found {
+					if inbs := hyContainer.ListInboundConfigs(); len(inbs) > 0 {
+						meta, found = mp.GetInboundMeta(inbs[0].Tag())
+					}
+				}
+				if !found {
+					// hysteria-default is disabled (no active inbound metadata) -> Fail-Closed.
+					c.JSON(403, gin.H{"ok": false})
+					return
+				}
+				if ac, ok := ul.(InboundAccessChecker); ok {
+					hasGate = true
+					checker = ac
+					accessTags = meta.AccessTags
+				} else if len(meta.AccessTags) > 0 {
+					// Restricted inbound cannot be verified without InboundAccessChecker -> Fail-Closed.
+					c.JSON(403, gin.H{"ok": false})
+					return
+				}
+			}
+		}
 	}
 	for name, passwd := range ul.ListUsersWithPasswd() {
 		if passwd == parasMap["auth"] ||
 			base64.RawStdEncoding.EncodeToString([]byte(passwd)) == parasMap["auth"] {
+			if hasGate && !checker.CanUserAccessInboundByUsername(name, accessTags) {
+				continue
+			}
 			c.JSON(200, map[string]interface{}{
 				"ok": true,
 				"id": name,

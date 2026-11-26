@@ -7,6 +7,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lureiny/v2raymg/pkg/cluster"
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/container"
+	rpcserver "github.com/lureiny/v2raymg/pkg/rpc/server"
 )
 
 // HttpServerConfig holds HTTP server configuration.
@@ -26,6 +28,11 @@ type HttpServerConfig struct {
 	// DefaultSubUserInfoFormat. Per-request ?sub_userinfo_format= overrides
 	// this value.
 	SubUserInfoHeaderFormat string
+	// EnableMCP controls whether the embedded Streamable HTTP MCP server (/mcp)
+	// is enabled.
+	EnableMCP bool
+	// MCPReadOnly restricts the embedded MCP server to read-only tools when true.
+	MCPReadOnly bool
 }
 
 // ClusterNodes provides node lookup for routing HTTP requests to cluster members.
@@ -33,7 +40,6 @@ type ClusterNodes interface {
 	GetNodesWithFilter(f cluster.NodeFilter) []*cluster.Node
 	GetClusterToken() string
 }
-
 
 // CertReader provides read access to local certificate files.
 // It is a subset of the full CertManager interface, used only by TransferCertHandler.
@@ -58,9 +64,13 @@ type HttpServer struct {
 	clusterNodes            ClusterNodes
 	localNode               *cluster.LocalNode
 	userLister              UserLister
+	containerMgr            *container.ContainerMgr
 	clusterEnabled          bool
 	enableSubUserInfoHeader bool
 	subUserInfoHeaderFormat string
+	EnableMCP               bool
+	MCPReadOnly             bool
+	mcpRegistrars           []mcpToolRegistrar
 }
 
 // Init initializes the HttpServer with config and dependencies.
@@ -78,6 +88,8 @@ func (s *HttpServer) Init(cfg HttpServerConfig, localNode *cluster.LocalNode, cl
 	s.clusterEnabled = clusterEnabled
 	s.enableSubUserInfoHeader = cfg.EnableSubUserInfoHeader
 	s.subUserInfoHeaderFormat = cfg.SubUserInfoHeaderFormat
+	s.EnableMCP = cfg.EnableMCP
+	s.MCPReadOnly = cfg.MCPReadOnly
 	s.registerRoutes()
 }
 
@@ -88,6 +100,21 @@ func (s *HttpServer) GetLocalNode() *cluster.LocalNode {
 
 func (s *HttpServer) SetName(name string) {
 	s.Name = name
+}
+
+// SetContainerMgr injects a local ContainerMgr for HTTP handlers (e.g. AuthHysteria2).
+func (s *HttpServer) SetContainerMgr(cm *container.ContainerMgr) {
+	s.containerMgr = cm
+}
+
+func (s *HttpServer) getContainerMgr() *container.ContainerMgr {
+	if s.containerMgr != nil {
+		return s.containerMgr
+	}
+	if srv := rpcserver.GetEndNodeServer(); srv != nil {
+		return srv.ContainerMgr()
+	}
+	return nil
 }
 
 // Listen binds the HTTP listener synchronously so a bind failure can fail-fast

@@ -14,13 +14,20 @@ package systemtest
 // that calls it.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
@@ -141,6 +148,66 @@ func eventually(t *testing.T, what string, timeout time.Duration, fn func() bool
 	t.Errorf("%s: still false after %s", what, timeout)
 }
 
+type e2eHeaderRoundTripper struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (h *e2eHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	for k, v := range h.headers {
+		clone.Header.Set(k, v)
+	}
+	base := h.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(clone)
+}
+
+func connectE2EMCPClient(t *testing.T, baseURL string, headers map[string]string) *mcp.ClientSession {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	t.Cleanup(cancel)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "e2e-mcp-client", Version: "1.0.0"}, nil)
+	transport := &mcp.StreamableClientTransport{
+		Endpoint: baseURL + "/mcp",
+		HTTPClient: &http.Client{
+			Transport: &e2eHeaderRoundTripper{headers: headers},
+		},
+	}
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		t.Fatalf("connectE2EMCPClient(%s): %v", baseURL, err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	return session
+}
+
+func extractE2EMCPText(t *testing.T, res *mcp.CallToolResult) string {
+	t.Helper()
+	if res == nil || len(res.Content) == 0 {
+		t.Fatalf("expected non-empty CallToolResult.Content")
+	}
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected *mcp.TextContent, got %T", res.Content[0])
+	}
+	return tc.Text
+}
+
+func createStubContainerBin(t *testing.T, dir, name string) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	// Sleep until terminated so Mode A containers load and stay registered
+	// cleanly in CI without downloading external binaries.
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nexec sleep 300\n"), 0o755); err != nil {
+		t.Fatalf("write stub binary %s: %v", p, err)
+	}
+	return p
+}
+
 func TestClusterE2E_FullAPI(t *testing.T) {
 	// Deliberately no network precondition. This suite exercises the HTTP and
 	// cluster planes, not proxy data paths: container binaries are resolved from
@@ -149,10 +216,20 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 	// Requiring a download here would make the whole regression suite hostage to
 	// GitHub reachability. Protocol-level coverage lives in the matrix tests.
 	tmpDir := t.TempDir()
+	hystBin := os.Getenv("HYSTERIA_BIN")
+	if hystBin == "" {
+		hystBin = createStubContainerBin(t, tmpDir, "stub-hysteria")
+	}
+	snellBin := os.Getenv("SNELL_BIN")
+	if snellBin == "" {
+		snellBin = createStubContainerBin(t, tmpDir, "stub-snell")
+	}
 	c := startE2ECluster(t, tmpDir, clusterOpts{
 		HeartbeatIntervalSec: 1,
 		XrayBin:              os.Getenv("XRAY_BIN"),
 		MihomoBin:            os.Getenv("MIHOMO_BIN"),
+		HystBin:              hystBin,
+		SnellBin:             snellBin,
 	})
 	for i := 0; i < 3; i++ {
 		c.addEndNode(t)
@@ -207,8 +284,62 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 	t.Run("GET_containers", func(t *testing.T) {
 		code, body, err := nodeA.apiGet("/api/containers", url.Values{"target": {"all"}})
 		requireOK(t, "GET /api/containers", code, body, err)
-		if !strings.Contains(string(body), "xray") {
-			t.Errorf("containers response has no xray entry: %s", truncate(string(body), 600))
+
+		var parsed struct {
+			Nodes   map[string][]string `json:"nodes"`
+			Failed  map[string]string   `json:"failed"`
+			Details map[string][]struct {
+				Type          string `json:"type"`
+				SupportsChain bool   `json:"supports_chain"`
+			} `json:"details"`
+		}
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			t.Fatalf("decode GET /api/containers: %v (body=%s)", err, truncate(string(body), 600))
+		}
+		if len(parsed.Failed) != 0 {
+			t.Fatalf("GET /api/containers reported failures: %v", parsed.Failed)
+		}
+		wantSupport := map[string]bool{
+			"xray":     true,
+			"mihomo":   true,
+			"hysteria": false,
+			"snell":    false,
+		}
+		for _, nodeName := range c.nodeNames() {
+			nodeContainers := parsed.Nodes[nodeName]
+			if len(nodeContainers) == 0 {
+				t.Errorf("GET /api/containers missing nodes[%q]: %+v", nodeName, parsed)
+				continue
+			}
+			nodeSet := map[string]bool{}
+			for _, ct := range nodeContainers {
+				nodeSet[ct] = true
+			}
+			for wantCT := range wantSupport {
+				if !nodeSet[wantCT] {
+					t.Errorf("nodes[%q] missing container %q: %v", nodeName, wantCT, nodeContainers)
+				}
+			}
+
+			detList := parsed.Details[nodeName]
+			if len(detList) == 0 {
+				t.Errorf("GET /api/containers missing details[%q]: %+v", nodeName, parsed)
+				continue
+			}
+			gotDetail := map[string]bool{}
+			for _, d := range detList {
+				gotDetail[d.Type] = d.SupportsChain
+			}
+			for wantCT, wantChain := range wantSupport {
+				got, ok := gotDetail[wantCT]
+				if !ok {
+					t.Errorf("details[%q] missing container %q: %+v", nodeName, wantCT, detList)
+					continue
+				}
+				if got != wantChain {
+					t.Errorf("details[%q][%q].supports_chain = %v, want %v", nodeName, wantCT, got, wantChain)
+				}
+			}
 		}
 	})
 
@@ -249,6 +380,101 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 			"ttl":    172800,
 		})
 		requireOK(t, "PUT /api/user", code, body, err)
+	})
+
+	t.Run("user_inbound_tags_cluster_propagation", func(t *testing.T) {
+		const (
+			tagUser = "e2e-inbound-tag-user"
+			tagPass = "e2e-inbound-tag-pass-1234"
+		)
+		t.Cleanup(func() {
+			_, _, _ = nodeA.apiDelete("/api/user", map[string]any{
+				"target": "all",
+				"user":   tagUser,
+			})
+		})
+
+		fetchUserInboundTags := func(s *e2eServer) ([]string, bool) {
+			code, body, err := s.apiGet("/api/user", url.Values{"target": {s.name}})
+			if err != nil || code != 200 {
+				return nil, false
+			}
+			var usersByNode map[string][]struct {
+				Name        string   `json:"name"`
+				InboundTags []string `json:"inbound_tags"`
+			}
+			if err := json.Unmarshal(body, &usersByNode); err != nil {
+				return nil, false
+			}
+			for _, u := range usersByNode[s.name] {
+				if u.Name == tagUser {
+					return u.InboundTags, true
+				}
+			}
+			return nil, false
+		}
+
+		// POST /api/user with inbound_tags (whitespace & duplicates normalized).
+		code, body, err := nodeA.apiPost("/api/user", map[string]any{
+			"target":       "all",
+			"user":         tagUser,
+			"pwd":          tagPass,
+			"ttl":          86400,
+			"inbound_tags": []string{" vip ", "hk-home", "vip"},
+		})
+		requireOK(t, "POST /api/user with inbound_tags", code, body, err)
+
+		for _, s := range []*e2eServer{nodeA, nodeB, nodeC} {
+			s := s
+			eventually(t, fmt.Sprintf("%s sees %s initial inbound_tags", s.name, tagUser), 20*time.Second, func() bool {
+				tags, ok := fetchUserInboundTags(s)
+				return ok && reflect.DeepEqual(tags, []string{"hk-home", "vip"})
+			})
+		}
+
+		// PUT /api/user omitting inbound_tags must preserve existing tags.
+		code, body, err = nodeA.apiPut("/api/user", map[string]any{
+			"target": "all",
+			"user":   tagUser,
+			"ttl":    172800,
+		})
+		requireOK(t, "PUT /api/user omit inbound_tags", code, body, err)
+		for _, s := range []*e2eServer{nodeA, nodeB, nodeC} {
+			tags, ok := fetchUserInboundTags(s)
+			if !ok || !reflect.DeepEqual(tags, []string{"hk-home", "vip"}) {
+				t.Errorf("%s did not preserve inbound_tags after omitted PUT: ok=%v tags=%v", s.name, ok, tags)
+			}
+		}
+
+		// PUT /api/user updating inbound_tags fans out across all 3 nodes.
+		code, body, err = nodeB.apiPut("/api/user", map[string]any{
+			"target":       "all",
+			"user":         tagUser,
+			"inbound_tags": []string{"sh-home", "alpha"},
+		})
+		requireOK(t, "PUT /api/user update inbound_tags", code, body, err)
+		for _, s := range []*e2eServer{nodeA, nodeB, nodeC} {
+			s := s
+			eventually(t, fmt.Sprintf("%s sees updated inbound_tags", s.name), 20*time.Second, func() bool {
+				tags, ok := fetchUserInboundTags(s)
+				return ok && reflect.DeepEqual(tags, []string{"alpha", "sh-home"})
+			})
+		}
+
+		// PUT /api/user with explicit [] clears inbound_tags across the cluster.
+		code, body, err = nodeC.apiPut("/api/user", map[string]any{
+			"target":       "all",
+			"user":         tagUser,
+			"inbound_tags": []string{},
+		})
+		requireOK(t, "PUT /api/user clear inbound_tags", code, body, err)
+		for _, s := range []*e2eServer{nodeA, nodeB, nodeC} {
+			s := s
+			eventually(t, fmt.Sprintf("%s sees cleared inbound_tags", s.name), 20*time.Second, func() bool {
+				tags, ok := fetchUserInboundTags(s)
+				return ok && len(tags) == 0
+			})
+		}
 	})
 
 	t.Run("PUT_user_role_fans_out", func(t *testing.T) {
@@ -384,6 +610,280 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 		requireRouted(t, "DELETE /api/inbounds", code, body, err)
 	})
 
+	const sharedChainTag = "e2e-chain-shared"
+	t.Cleanup(func() {
+		_, _, _ = nodeA.apiDelete("/api/inbounds", map[string]any{
+			"target": "all", "container": "mihomo", "name": sharedChainTag,
+		})
+	})
+
+	t.Run("chain_inbound_validation_admin_view_and_dynamic_tags", func(t *testing.T) {
+		const (
+			directTagged = "e2e-direct-tagged"
+			chainSecret  = "super-secret-chain-pw-9988"
+			loopSecret   = "loopback-secret-never-leak"
+		)
+		t.Cleanup(func() {
+			_, _, _ = nodeA.apiDelete("/api/inbounds", map[string]any{
+				"target": nodeA.name, "container": "mihomo", "name": directTagged,
+			})
+		})
+
+		// 1. Validation rejections on POST /api/inbound/fast.
+		validationCases := []struct {
+			name     string
+			body     map[string]any
+			wantCode int
+			wantSub  string
+		}{
+			{
+				name: "chain_without_chain_uri",
+				body: map[string]any{
+					"target":       nodeA.name,
+					"container":    "mihomo",
+					"protocol":     "vless",
+					"inbound_type": "chain",
+				},
+				wantCode: http.StatusBadRequest,
+				wantSub:  "chain_uri",
+			},
+			{
+				name: "direct_with_chain_uri",
+				body: map[string]any{
+					"target":       nodeA.name,
+					"container":    "mihomo",
+					"protocol":     "vless",
+					"inbound_type": "direct",
+					"chain_uri":    "socks5://1.2.3.4:1080",
+				},
+				wantCode: http.StatusBadRequest,
+				wantSub:  "chain_uri",
+			},
+			{
+				name: "unsupported_mode_a_snell",
+				body: map[string]any{
+					"target":       nodeA.name,
+					"container":    "snell",
+					"protocol":     "vless",
+					"inbound_type": "chain",
+					"chain_uri":    "socks5://1.2.3.4:1080",
+				},
+				wantCode: http.StatusInternalServerError,
+				wantSub:  "does not support chain outbound",
+			},
+			{
+				name: "unsupported_mode_a_hysteria",
+				body: map[string]any{
+					"target":       nodeA.name,
+					"container":    "hysteria",
+					"protocol":     "vless",
+					"inbound_type": "chain",
+					"chain_uri":    "socks5://1.2.3.4:1080",
+				},
+				wantCode: http.StatusInternalServerError,
+				wantSub:  "does not support chain outbound",
+			},
+			{
+				name: "loopback_rejected_when_disabled",
+				body: map[string]any{
+					"target":       nodeA.name,
+					"container":    "mihomo",
+					"protocol":     "vless",
+					"inbound_type": "chain",
+					"chain_uri":    "socks5://lbuser:" + loopSecret + "@127.0.0.1:17890",
+				},
+				wantCode: http.StatusInternalServerError,
+				wantSub:  "loopback",
+			},
+		}
+		for _, tc := range validationCases {
+			tc := tc
+			t.Run("reject_"+tc.name, func(t *testing.T) {
+				code, body, err := nodeA.apiPost("/api/inbound/fast", tc.body)
+				if err != nil {
+					t.Fatalf("POST /api/inbound/fast (%s): %v", tc.name, err)
+				}
+				if code != tc.wantCode {
+					t.Fatalf("%s: got status %d, want %d (body=%s)", tc.name, code, tc.wantCode, truncate(string(body), 400))
+				}
+				if !strings.Contains(strings.ToLower(string(body)), strings.ToLower(tc.wantSub)) {
+					t.Errorf("%s: body %q missing %q", tc.name, truncate(string(body), 400), tc.wantSub)
+				}
+				if strings.Contains(string(body), loopSecret) {
+					t.Errorf("SECURITY: %s leaked raw chain_uri password in error response: %s", tc.name, truncate(string(body), 400))
+				}
+			})
+		}
+
+		// 2. Create real chain inbound across all 3 nodes + tagged direct inbound on nodeA.
+		code, body, err := nodeA.apiPost("/api/inbound/fast", map[string]any{
+			"target":       "all",
+			"tag":          sharedChainTag,
+			"container":    "mihomo",
+			"protocol":     "ss",
+			"method":       "aes-256-gcm",
+			"inbound_type": "chain",
+			"chain_uri":    "socks5://chainuser:" + chainSecret + "@203.0.113.10:1080#HK-Home",
+			"access_tags":  []string{"vip", "hk"},
+			"remark":       "HK Home",
+		})
+		requireOK(t, "POST /api/inbound/fast shared chain", code, body, err)
+
+		code, body, err = nodeA.apiPost("/api/inbound/fast", map[string]any{
+			"target":       nodeA.name,
+			"tag":          directTagged,
+			"container":    "mihomo",
+			"protocol":     "ss",
+			"method":       "aes-256-gcm",
+			"inbound_type": "direct",
+			"access_tags":  []string{"tier-a"},
+			"remark":       "Direct Tier A",
+		})
+		requireOK(t, "POST /api/inbound/fast tagged direct", code, body, err)
+
+		// 3. Cross-container duplicate tag rejection (mihomo tag rejected on xray and snell).
+		for _, dupContainer := range []string{"xray", "snell"} {
+			code, body, err = nodeA.apiPost("/api/inbound/fast", map[string]any{
+				"target":    nodeA.name,
+				"tag":       sharedChainTag,
+				"container": dupContainer,
+				"protocol":  "vless",
+			})
+			if err != nil {
+				t.Fatalf("POST /api/inbound/fast duplicate on %s: %v", dupContainer, err)
+			}
+			if code == http.StatusOK {
+				t.Fatalf("expected cross-container duplicate tag %q on %s to be rejected, got 200", sharedChainTag, dupContainer)
+			}
+			if !strings.Contains(string(body), "already exists in container mihomo") {
+				t.Errorf("duplicate tag on %s: expected 'already exists in container mihomo', got: %s", dupContainer, truncate(string(body), 400))
+			}
+		}
+
+		// 4. Admin Control Plane GET /api/inbounds returns all inbounds with redacted chain summary.
+		type inboundItem struct {
+			Container     string   `json:"container"`
+			Name          string   `json:"name"`
+			InboundType   string   `json:"inbound_type"`
+			AccessTags    []string `json:"access_tags"`
+			Remark        string   `json:"remark"`
+			ChainProtocol string   `json:"chain_protocol"`
+			ChainTarget   string   `json:"chain_target"`
+		}
+		fetchInbounds := func(s *e2eServer, target string) map[string][]inboundItem {
+			t.Helper()
+			code, body, err := s.apiGet("/api/inbounds", url.Values{"target": {target}})
+			requireOK(t, fmt.Sprintf("%s GET /api/inbounds?target=%s", s.name, target), code, body, err)
+			if strings.Contains(string(body), chainSecret) || strings.Contains(string(body), "chainuser") {
+				t.Fatalf("SECURITY: GET /api/inbounds leaked raw chain_uri credential: %s", truncate(string(body), 600))
+			}
+			if strings.Contains(string(body), "chain_uri") || strings.Contains(string(body), "chain_outbound_uri") {
+				t.Fatalf("SECURITY: GET /api/inbounds exposed raw chain_uri field: %s", truncate(string(body), 600))
+			}
+			var parsed map[string][]inboundItem
+			if err := json.Unmarshal(body, &parsed); err != nil {
+				t.Fatalf("decode GET /api/inbounds: %v (body=%s)", err, truncate(string(body), 600))
+			}
+			return parsed
+		}
+
+		allInbounds := fetchInbounds(nodeC, "all")
+		for _, nodeName := range c.nodeNames() {
+			var foundChain *inboundItem
+			for i := range allInbounds[nodeName] {
+				it := &allInbounds[nodeName][i]
+				if it.Container == "mihomo" && it.Name == sharedChainTag {
+					foundChain = it
+				}
+			}
+			if foundChain == nil {
+				t.Fatalf("GET /api/inbounds[%s] missing %s: %+v", nodeName, sharedChainTag, allInbounds[nodeName])
+			}
+			if foundChain.InboundType != "chain" ||
+				!reflect.DeepEqual(foundChain.AccessTags, []string{"hk", "vip"}) ||
+				foundChain.Remark != "HK Home" ||
+				foundChain.ChainProtocol != "socks5" ||
+				foundChain.ChainTarget != "203.0.113.10:1080" {
+				t.Errorf("GET /api/inbounds[%s] unexpected chain item: %+v", nodeName, *foundChain)
+			}
+		}
+
+		var foundDirect *inboundItem
+		for i := range allInbounds[nodeA.name] {
+			it := &allInbounds[nodeA.name][i]
+			if it.Container == "mihomo" && it.Name == directTagged {
+				foundDirect = it
+			}
+		}
+		if foundDirect == nil {
+			t.Fatalf("GET /api/inbounds[%s] missing %s", nodeA.name, directTagged)
+		}
+		if foundDirect.InboundType != "direct" ||
+			!reflect.DeepEqual(foundDirect.AccessTags, []string{"tier-a"}) ||
+			foundDirect.Remark != "Direct Tier A" ||
+			foundDirect.ChainProtocol != "" ||
+			foundDirect.ChainTarget != "" {
+			t.Errorf("GET /api/inbounds[%s] unexpected direct item: %+v", nodeA.name, *foundDirect)
+		}
+
+		// 5. Dynamic PUT /api/inbounds/tags across cluster nodes.
+		code, body, err = nodeA.apiPut("/api/inbounds/tags", map[string]any{
+			"target":      "all",
+			"container":   "mihomo",
+			"name":        sharedChainTag,
+			"access_tags": []string{" gold ", "alpha", "gold"},
+		})
+		requireOK(t, "PUT /api/inbounds/tags target=all", code, body, err)
+
+		afterUpdate := fetchInbounds(nodeC, "all")
+		for _, nodeName := range c.nodeNames() {
+			var tags []string
+			for _, it := range afterUpdate[nodeName] {
+				if it.Container == "mihomo" && it.Name == sharedChainTag {
+					tags = it.AccessTags
+				}
+			}
+			if !reflect.DeepEqual(tags, []string{"alpha", "gold"}) {
+				t.Errorf("%s after PUT /api/inbounds/tags: access_tags=%v, want [alpha gold]", nodeName, tags)
+			}
+		}
+
+		// Single-node clear on nodeC leaves nodeA/nodeB untouched.
+		code, body, err = nodeB.apiPut("/api/inbounds/tags", map[string]any{
+			"target":      nodeC.name,
+			"container":   "mihomo",
+			"name":        sharedChainTag,
+			"access_tags": []string{},
+		})
+		requireOK(t, "PUT /api/inbounds/tags clear on nodeC", code, body, err)
+
+		afterClear := fetchInbounds(nodeA, "all")
+		for _, nodeName := range c.nodeNames() {
+			var tags []string
+			for _, it := range afterClear[nodeName] {
+				if it.Container == "mihomo" && it.Name == sharedChainTag {
+					tags = it.AccessTags
+				}
+			}
+			if nodeName == nodeC.name {
+				if len(tags) != 0 {
+					t.Errorf("%s expected cleared access_tags, got %v", nodeName, tags)
+				}
+			} else if !reflect.DeepEqual(tags, []string{"alpha", "gold"}) {
+				t.Errorf("%s expected preserved access_tags [alpha gold], got %v", nodeName, tags)
+			}
+		}
+
+		// Restore uniform tags on nodeC before MCP_3node_full_e2e inspects list_inbounds.
+		code, body, err = nodeA.apiPut("/api/inbounds/tags", map[string]any{
+			"target":      nodeC.name,
+			"container":   "mihomo",
+			"name":        sharedChainTag,
+			"access_tags": []string{"alpha", "gold"},
+		})
+		requireOK(t, "PUT /api/inbounds/tags restore nodeC", code, body, err)
+	})
+
 	t.Run("rotate_ports", func(t *testing.T) {
 		code, body, err := nodeA.apiPost("/api/rotateInboundPort", map[string]any{
 			"target": nodeA.name, "username": apiTestUser, "container": "xray",
@@ -498,6 +998,366 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 		}
 	})
 
+	// ---------------------------------------------------- MCP full 3-node E2E
+	// Runs before DELETE_user_fans_out so apiTestUser exists across the cluster.
+
+	t.Run("MCP_3node_full_e2e", func(t *testing.T) {
+		const (
+			mcpNormalUser = "e2e-mcp-normal"
+			mcpNormalPass = "e2e-mcp-pass-123456"
+		)
+
+		// Create a dedicated normal-role user and wait for cluster sync to all 3 nodes.
+		code, body, err := nodeA.apiPost("/api/user", map[string]any{
+			"target":       "all",
+			"user":         mcpNormalUser,
+			"pwd":          mcpNormalPass,
+			"role":         "normal",
+			"ttl":          86400,
+			"inbound_tags": []string{"mcp-vip"},
+		})
+		requireOK(t, "POST /api/user (mcpNormalUser)", code, body, err)
+		t.Cleanup(func() {
+			_, _, _ = nodeA.apiDelete("/api/user", map[string]any{
+				"target": "all",
+				"user":   mcpNormalUser,
+			})
+		})
+		for _, s := range []*e2eServer{nodeA, nodeB, nodeC} {
+			s := s
+			eventually(t, fmt.Sprintf("%s sees %s", s.name, mcpNormalUser), 20*time.Second, func() bool {
+				return userNames(t, s, s.name)[mcpNormalUser]
+			})
+		}
+
+		// Verify HTTP GET /api/user returns real plaintext auth_token values.
+		code, body, err = nodeA.apiGet("/api/user", url.Values{"target": {nodeA.name}})
+		requireOK(t, "GET /api/user (extract plaintext auth_token)", code, body, err)
+		var httpUsersByNode map[string][]struct {
+			Name      string `json:"name"`
+			AuthToken string `json:"auth_token"`
+		}
+		if err := json.Unmarshal(body, &httpUsersByNode); err != nil {
+			t.Fatalf("decode HTTP GET /api/user: %v (body=%s)", err, truncate(string(body), 600))
+		}
+		var normalRealAuthToken, apiUserRealAuthToken string
+		for _, u := range httpUsersByNode[nodeA.name] {
+			switch u.Name {
+			case mcpNormalUser:
+				normalRealAuthToken = u.AuthToken
+			case apiTestUser:
+				apiUserRealAuthToken = u.AuthToken
+			}
+		}
+		if normalRealAuthToken == "" {
+			t.Fatalf("expected non-empty plaintext auth_token from HTTP GET /api/user for %s", mcpNormalUser)
+		}
+
+		// Login as mcpNormalUser to acquire a real normal-role Bearer JWT.
+		code, body, err = nodeA.apiPost("/api/login", map[string]any{
+			"username": mcpNormalUser,
+			"password": mcpNormalPass,
+		})
+		requireOK(t, "POST /api/login (mcpNormalUser)", code, body, err)
+		var loginRsp struct {
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal(body, &loginRsp); err != nil || loginRsp.Token == "" {
+			t.Fatalf("POST /api/login returned invalid token: err=%v body=%s", err, truncate(string(body), 400))
+		}
+		normalJWT := loginRsp.Token
+
+		// Unauthenticated and invalid-credential POST /mcp requests must return 401.
+		for _, tc := range []struct {
+			name   string
+			header map[string]string
+		}{
+			{"no_auth", nil},
+			{"wrong_x_token", map[string]string{"X-Token": "wrong-mcp-token"}},
+		} {
+			req, reqErr := http.NewRequest(http.MethodPost, nodeA.baseURL+"/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+			if reqErr != nil {
+				t.Fatalf("build raw /mcp request (%s): %v", tc.name, reqErr)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			for k, v := range tc.header {
+				req.Header.Set(k, v)
+			}
+			rsp, doErr := http.DefaultClient.Do(req)
+			if doErr != nil {
+				t.Fatalf("POST /mcp (%s): %v", tc.name, doErr)
+			}
+			_ = rsp.Body.Close()
+			if rsp.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("POST /mcp (%s): got status %d, want 401", tc.name, rsp.StatusCode)
+			}
+		}
+
+		ctx := context.Background()
+
+		// 1. Official MCP SDK client authenticated as Admin via X-Token.
+		adminSess := connectE2EMCPClient(t, nodeA.baseURL, map[string]string{"X-Token": nodeA.token})
+		adminList, err := adminSess.ListTools(ctx, &mcp.ListToolsParams{})
+		if err != nil {
+			t.Fatalf("admin ListTools: %v", err)
+		}
+		gotAdminTools := make([]string, 0, len(adminList.Tools))
+		for _, tl := range adminList.Tools {
+			gotAdminTools = append(gotAdminTools, tl.Name)
+			if tl.Annotations == nil || !tl.Annotations.ReadOnlyHint {
+				t.Errorf("admin tool %q missing ReadOnlyHint=true: %+v", tl.Name, tl.Annotations)
+			}
+		}
+		sort.Strings(gotAdminTools)
+		wantAdminTools := []string{
+			"get_inbound",
+			"get_node_groups",
+			"get_node_status",
+			"get_profile",
+			"list_certs",
+			"list_containers",
+			"list_inbounds",
+			"list_nodes",
+			"list_users",
+		}
+		if strings.Join(gotAdminTools, ",") != strings.Join(wantAdminTools, ",") {
+			t.Fatalf("admin ListTools mismatch: got %v, want %v", gotAdminTools, wantAdminTools)
+		}
+
+		// list_nodes
+		res, err := adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_nodes"})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool list_nodes failed: err=%v res=%+v", err, res)
+		}
+		listNodesText := extractE2EMCPText(t, res)
+		for _, wantNode := range c.nodeNames() {
+			if !strings.Contains(listNodesText, wantNode) {
+				t.Errorf("list_nodes missing %q: %s", wantNode, truncate(listNodesText, 800))
+			}
+		}
+
+		// get_node_status with empty args tests default:"all" fan-out over real 3-node gRPC.
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "get_node_status"})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool get_node_status failed: err=%v res=%+v", err, res)
+		}
+		statusText := extractE2EMCPText(t, res)
+		var statusPayload struct {
+			Nodes []struct {
+				NodeName string `json:"node_name"`
+			} `json:"nodes"`
+		}
+		if err := json.Unmarshal([]byte(statusText), &statusPayload); err != nil {
+			t.Fatalf("decode get_node_status JSON: %v (text=%s)", err, truncate(statusText, 600))
+		}
+		seenStatusNodes := map[string]bool{}
+		for _, n := range statusPayload.Nodes {
+			seenStatusNodes[n.NodeName] = true
+		}
+		for _, wantNode := range c.nodeNames() {
+			if !seenStatusNodes[wantNode] {
+				t.Errorf("get_node_status missing node %q in 3-node fan-out: %s", wantNode, truncate(statusText, 800))
+			}
+		}
+
+		// list_containers with empty args tests default:"all" fan-out across 3 nodes.
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_containers"})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool list_containers failed: err=%v res=%+v", err, res)
+		}
+		containersText := extractE2EMCPText(t, res)
+		for _, wantNode := range c.nodeNames() {
+			if !strings.Contains(containersText, wantNode) {
+				t.Errorf("list_containers missing %q: %s", wantNode, truncate(containersText, 800))
+			}
+		}
+		var mcpContainers struct {
+			Details map[string][]struct {
+				Type          string `json:"type"`
+				SupportsChain bool   `json:"supports_chain"`
+			} `json:"details"`
+		}
+		if err := json.Unmarshal([]byte(containersText), &mcpContainers); err != nil {
+			t.Fatalf("decode MCP list_containers: %v (text=%s)", err, truncate(containersText, 600))
+		}
+		for _, wantNode := range c.nodeNames() {
+			det := map[string]bool{}
+			for _, d := range mcpContainers.Details[wantNode] {
+				det[d.Type] = d.SupportsChain
+			}
+			if !det["xray"] || !det["mihomo"] || det["hysteria"] || det["snell"] {
+				t.Errorf("MCP list_containers details[%q] unexpected: %+v", wantNode, mcpContainers.Details[wantNode])
+			}
+		}
+
+		// get_node_groups for nodeB verifies path param + groups updated in node_groups_get_and_set.
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "get_node_groups",
+			Arguments: map[string]any{"name": nodeB.name},
+		})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool get_node_groups failed: err=%v res=%+v", err, res)
+		}
+		if txt := extractE2EMCPText(t, res); !strings.Contains(txt, "premium") {
+			t.Errorf("get_node_groups(%s) expected \"premium\", got: %s", nodeB.name, truncate(txt, 400))
+		}
+
+		// list_inbounds across all 3 nodes: sees chain inbound summary and redacts credentials.
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_inbounds"})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool list_inbounds failed: err=%v res=%+v", err, res)
+		}
+		inboundsText := extractE2EMCPText(t, res)
+		if !json.Valid([]byte(inboundsText)) {
+			t.Errorf("list_inbounds returned invalid JSON: %s", truncate(inboundsText, 400))
+		}
+		if !strings.Contains(inboundsText, sharedChainTag) ||
+			!strings.Contains(inboundsText, `"chain_protocol":"socks5"`) ||
+			!strings.Contains(inboundsText, `"chain_target":"203.0.113.10:1080"`) {
+			t.Errorf("MCP list_inbounds missing chain inbound metadata: %s", truncate(inboundsText, 800))
+		}
+		if strings.Contains(inboundsText, "super-secret-chain-pw-9988") || strings.Contains(inboundsText, "chainuser") {
+			t.Errorf("SECURITY: MCP list_inbounds leaked raw chain_uri credential: %s", truncate(inboundsText, 800))
+		}
+
+		// get_inbound graceful handling + validation error mapping to IsError=true.
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "get_inbound",
+			Arguments: map[string]any{"target": nodeA.name, "src_tag": "e2e-nonexistent"},
+		})
+		if err != nil {
+			t.Fatalf("admin CallTool get_inbound transport/protocol error: %v", err)
+		}
+		if txt := extractE2EMCPText(t, res); txt == "" {
+			t.Errorf("get_inbound returned empty text content")
+		}
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "get_inbound",
+			Arguments: map[string]any{"container": "snell"},
+		})
+		if err != nil {
+			t.Fatalf("admin CallTool get_inbound(snell) protocol error: %v", err)
+		}
+		if !res.IsError {
+			t.Errorf("get_inbound(snell) expected IsError=true, got success: %s", extractE2EMCPText(t, res))
+		}
+
+		// list_certs across all 3 nodes.
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_certs"})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool list_certs failed: err=%v res=%+v", err, res)
+		}
+		if txt := extractE2EMCPText(t, res); !json.Valid([]byte(txt)) {
+			t.Errorf("list_certs returned invalid JSON: %s", truncate(txt, 400))
+		}
+
+		// list_users across all 3 nodes: sees both users, redacts auth_token, never leaks plaintext!
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_users"})
+		if err != nil || res.IsError {
+			t.Fatalf("admin CallTool list_users failed: err=%v res=%+v", err, res)
+		}
+		adminUsersText := extractE2EMCPText(t, res)
+		if !strings.Contains(adminUsersText, apiTestUser) || !strings.Contains(adminUsersText, mcpNormalUser) {
+			t.Errorf("admin list_users missing expected users: %s", truncate(adminUsersText, 800))
+		}
+		for _, wantNode := range c.nodeNames() {
+			if !strings.Contains(adminUsersText, wantNode) {
+				t.Errorf("admin list_users missing node %q: %s", wantNode, truncate(adminUsersText, 800))
+			}
+		}
+		if !strings.Contains(adminUsersText, "[REDACTED]") {
+			t.Errorf("admin list_users missing [REDACTED] marker: %s", truncate(adminUsersText, 800))
+		}
+		if !strings.Contains(adminUsersText, `"inbound_tags"`) || !strings.Contains(adminUsersText, `"mcp-vip"`) {
+			t.Errorf("admin list_users missing inbound_tags field/value: %s", truncate(adminUsersText, 800))
+		}
+		if strings.Contains(adminUsersText, normalRealAuthToken) {
+			t.Errorf("SECURITY: admin MCP list_users leaked plaintext auth_token for %s", mcpNormalUser)
+		}
+		if apiUserRealAuthToken != "" && strings.Contains(adminUsersText, apiUserRealAuthToken) {
+			t.Errorf("SECURITY: admin MCP list_users leaked plaintext auth_token for %s", apiTestUser)
+		}
+
+		// get_profile with X-Token (no JWT username) must return IsError=true ("JWT required").
+		res, err = adminSess.CallTool(ctx, &mcp.CallToolParams{Name: "get_profile"})
+		if err != nil {
+			t.Fatalf("admin CallTool get_profile protocol error: %v", err)
+		}
+		if !res.IsError || !strings.Contains(extractE2EMCPText(t, res), "JWT required") {
+			t.Errorf("admin get_profile expected IsError=true with 'JWT required', got isErr=%v text=%s",
+				res.IsError, extractE2EMCPText(t, res))
+		}
+
+		// 2. Official MCP SDK client authenticated as normal user via Bearer JWT.
+		normalSess := connectE2EMCPClient(t, nodeA.baseURL, map[string]string{
+			"Authorization": "Bearer " + normalJWT,
+		})
+		normalList, err := normalSess.ListTools(ctx, &mcp.ListToolsParams{})
+		if err != nil {
+			t.Fatalf("normal ListTools: %v", err)
+		}
+		gotNormalTools := make([]string, 0, len(normalList.Tools))
+		for _, tl := range normalList.Tools {
+			gotNormalTools = append(gotNormalTools, tl.Name)
+		}
+		sort.Strings(gotNormalTools)
+		wantNormalTools := []string{"get_node_status", "get_profile", "list_users"}
+		if strings.Join(gotNormalTools, ",") != strings.Join(wantNormalTools, ",") {
+			t.Fatalf("normal ListTools mismatch: got %v, want %v", gotNormalTools, wantNormalTools)
+		}
+
+		// Normal user can query get_node_status across all 3 nodes.
+		res, err = normalSess.CallTool(ctx, &mcp.CallToolParams{Name: "get_node_status"})
+		if err != nil || res.IsError {
+			t.Fatalf("normal CallTool get_node_status failed: err=%v res=%+v", err, res)
+		}
+		normalStatusText := extractE2EMCPText(t, res)
+		for _, wantNode := range c.nodeNames() {
+			if !strings.Contains(normalStatusText, wantNode) {
+				t.Errorf("normal get_node_status missing %q: %s", wantNode, truncate(normalStatusText, 800))
+			}
+		}
+
+		// Normal user get_profile returns own data with redacted auth_token across all 3 nodes.
+		res, err = normalSess.CallTool(ctx, &mcp.CallToolParams{Name: "get_profile"})
+		if err != nil || res.IsError {
+			t.Fatalf("normal CallTool get_profile failed: err=%v res=%+v", err, res)
+		}
+		profileText := extractE2EMCPText(t, res)
+		if !strings.Contains(profileText, mcpNormalUser) || !strings.Contains(profileText, "[REDACTED]") {
+			t.Errorf("normal get_profile unexpected output: %s", truncate(profileText, 800))
+		}
+		if strings.Contains(profileText, normalRealAuthToken) {
+			t.Errorf("SECURITY: normal MCP get_profile leaked plaintext auth_token")
+		}
+
+		// Normal user list_users returns ONLY self (never apiTestUser) and redacts auth_token.
+		res, err = normalSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_users"})
+		if err != nil || res.IsError {
+			t.Fatalf("normal CallTool list_users failed: err=%v res=%+v", err, res)
+		}
+		normalUsersText := extractE2EMCPText(t, res)
+		if !strings.Contains(normalUsersText, mcpNormalUser) {
+			t.Errorf("normal list_users missing self (%s): %s", mcpNormalUser, truncate(normalUsersText, 800))
+		}
+		if strings.Contains(normalUsersText, apiTestUser) {
+			t.Errorf("RBAC: normal list_users exposed another user (%s): %s", apiTestUser, truncate(normalUsersText, 800))
+		}
+		if !strings.Contains(normalUsersText, "[REDACTED]") {
+			t.Errorf("normal list_users missing [REDACTED]: %s", truncate(normalUsersText, 800))
+		}
+		if strings.Contains(normalUsersText, normalRealAuthToken) {
+			t.Errorf("SECURITY: normal MCP list_users leaked plaintext auth_token")
+		}
+
+		// Admin-only tool must be rejected for normal JWT.
+		res, err = normalSess.CallTool(ctx, &mcp.CallToolParams{Name: "list_nodes"})
+		if err == nil && (res == nil || !res.IsError) {
+			t.Fatalf("RBAC: normal user calling admin-only list_nodes unexpectedly succeeded: %+v", res)
+		}
+	})
+
 	// -------------------------------------------------------- user deletion
 	// Last, so earlier subtests still have the user.
 
@@ -512,6 +1372,75 @@ func TestClusterE2E_FullAPI(t *testing.T) {
 			eventually(t, fmt.Sprintf("%s no longer sees %s", s.name, apiTestUser), 20*time.Second, func() bool {
 				return !userNames(t, s, s.name)[apiTestUser]
 			})
+		}
+	})
+
+	// -------------------------------------------------------------------- MCP
+
+	t.Run("MCP_stateless_smoke", func(t *testing.T) {
+		mcpHeaders := map[string]string{
+			"Accept": "application/json, text/event-stream",
+		}
+		// POST /mcp — tools/list returns the 9 read-only tools.
+		code, body, err := nodeA.apiDoWithHeaders(http.MethodPost, "/mcp", nil, mcpHeaders, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/list",
+			"params":  map[string]any{},
+		})
+		requireOK(t, "POST /mcp tools/list", code, body, err)
+		var listResp struct {
+			Result struct {
+				Tools []struct {
+					Name string `json:"name"`
+				} `json:"tools"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(body, &listResp); err != nil {
+			t.Fatalf("POST /mcp tools/list decode: %v (body=%s)", err, truncate(string(body), 600))
+		}
+		if len(listResp.Result.Tools) != 9 {
+			t.Errorf("POST /mcp tools/list: got %d tools, want 9 (body=%s)",
+				len(listResp.Result.Tools), truncate(string(body), 600))
+		}
+
+		// POST /mcp — tools/call list_nodes returns the converged 3-node cluster.
+		code, body, err = nodeA.apiDoWithHeaders(http.MethodPost, "/mcp", nil, mcpHeaders, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      2,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "list_nodes",
+				"arguments": map[string]any{},
+			},
+		})
+		requireOK(t, "POST /mcp tools/call list_nodes", code, body, err)
+		for _, want := range c.nodeNames() {
+			if !strings.Contains(string(body), want) {
+				t.Errorf("POST /mcp list_nodes missing node %q: %s", want, truncate(string(body), 800))
+			}
+		}
+
+		// GET /mcp — routed to stateless MCP handler (returns 405 per MCP spec).
+		code, body, err = nodeA.apiDoWithHeaders(http.MethodGet, "/mcp", nil, map[string]string{
+			"Accept": "text/event-stream",
+		}, nil)
+		if err != nil {
+			t.Fatalf("GET /mcp: transport error: %v", err)
+		}
+		if code != http.StatusMethodNotAllowed {
+			t.Errorf("GET /mcp stateless: got status %d (body=%s), want 405", code, truncate(string(body), 400))
+		}
+
+		// DELETE /mcp — routed to stateless MCP handler (returns 204 with Mcp-Session-Id).
+		code, body, err = nodeA.apiDoWithHeaders(http.MethodDelete, "/mcp", nil, map[string]string{
+			"Mcp-Session-Id": "e2e-stateless-session",
+		}, nil)
+		if err != nil {
+			t.Fatalf("DELETE /mcp: transport error: %v", err)
+		}
+		if code != http.StatusNoContent {
+			t.Errorf("DELETE /mcp stateless: got status %d (body=%s), want 204", code, truncate(string(body), 400))
 		}
 	})
 
