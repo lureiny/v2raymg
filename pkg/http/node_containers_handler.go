@@ -10,7 +10,7 @@ import (
 	"github.com/lureiny/v2raymg/pkg/rpc/proto"
 )
 
-const containersHelp = `GET /api/containers?target=<node|all> 获取节点已启用的 container 类型列表`
+const containersHelp = `GET /api/containers?target=<node|all> 获取节点已启用的 container 类型列表及 supports_chain 能力详情`
 
 // ContainersReq is the request payload for GET /containers (MCP tool: list_containers).
 type ContainersReq struct {

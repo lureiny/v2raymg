@@ -769,8 +769,8 @@ func TestGetUserSubscriptions_IsolationAndNodeNaming(t *testing.T) {
 	wantNames := map[string]string{
 		"direct-plain":       "hk-01",
 		"direct-remark":      "hk-01-DirectVIP",
-		"chain-remark":       "hk-01-SH-Home",
-		"chain-notag-remark": "hk-01-chain-notag-remark",
+		"chain-remark":       "SH-Home",
+		"chain-notag-remark": "chain-notag-remark",
 	}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Errorf("NodeNames with prefix = %v, want %v", gotNames, wantNames)

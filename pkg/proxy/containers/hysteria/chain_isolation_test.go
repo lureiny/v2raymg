@@ -2,6 +2,7 @@ package hysteria
 
 import (
 	"context"
+	"net/url"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -526,6 +527,32 @@ func TestHysteria_GetUserSubscriptions_GatingAndRemark(t *testing.T) {
 	}
 	if len(subs) != 1 || subs[0].NodeName != "Tokyo" {
 		t.Fatalf("unexpected subs without remark: %+v", subs)
+	}
+
+	// Remark with spaces must use %20 (RFC 3986 fragment encoding) and round-trip via url.Parse.
+	if err := hc.FastAddInbound(defaultInboundTag, map[string]any{
+		"remark":      "Tokyo VIP 01",
+		"access_tags": []string{"vip"},
+	}); err != nil {
+		t.Fatalf("FastAddInbound spaced remark: %v", err)
+	}
+	subs, err = hc.GetUserSubscriptions(contracts.SubscriptionRequest{
+		User:     contracts.UserSpec{Username: "carol", AuthToken: carolUser.AuthToken},
+		Host:     "example.com",
+		NodeName: "Edge 1",
+	})
+	if err != nil {
+		t.Fatalf("GetUserSubscriptions(carol, spaced): %v", err)
+	}
+	if len(subs) != 1 || subs[0].NodeName != "Edge 1-Tokyo VIP 01" {
+		t.Fatalf("unexpected spaced subs: %+v", subs)
+	}
+	parsed, parseErr := url.Parse(subs[0].URI)
+	if parseErr != nil {
+		t.Fatalf("url.Parse(%q): %v", subs[0].URI, parseErr)
+	}
+	if parsed.Fragment != subs[0].NodeName {
+		t.Errorf("parsed.Fragment = %q, want %q", parsed.Fragment, subs[0].NodeName)
 	}
 }
 

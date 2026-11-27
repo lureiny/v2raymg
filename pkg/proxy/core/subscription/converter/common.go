@@ -17,14 +17,9 @@ func (c *CommonConverter) Format() subscription.ClientFormat {
 	return subscription.FormatCommon
 }
 
-// Convert 将所有 spec.URI 用换行符连接后 base64 编码。
+// Convert 将所有 spec.URI 统一命名并去重后，用换行符连接并 base64 编码。
 func (c *CommonConverter) Convert(specs []contracts.SubscriptionSpec) (string, error) {
-	var uris []string
-	for _, spec := range specs {
-		if spec.URI != "" {
-			uris = append(uris, spec.URI)
-		}
-	}
+	uris := renderNamedURIs(specs)
 	joined := strings.Join(uris, "\n")
 	return base64.StdEncoding.EncodeToString([]byte(joined)), nil
 }

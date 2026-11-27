@@ -830,7 +830,7 @@ func (sc *SnellContainer) GetUserSubscriptions(req contracts.SubscriptionRequest
 		NodeName:   nodeName,
 		InboundTag: defaultInboundTag,
 		Username:   req.User.Username,
-		URI:        fmt.Sprintf("snell://%s@%s:%d?version=5#%s", psk, req.Host, port, url.QueryEscape(nodeName)),
+		URI:        fmt.Sprintf("snell://%s@%s:%d?version=5#%s", psk, req.Host, port, (&url.URL{Fragment: nodeName}).EscapedFragment()),
 	}
 	return []contracts.SubscriptionSpec{spec}, nil
 }

@@ -291,7 +291,7 @@ func generateVLESSURI(spec contracts.SubscriptionSpec) (string, error) {
 		spec.Host,
 		spec.Port,
 		strings.Join(queryParts, "&"),
-		url.QueryEscape(spec.NodeName),
+		encodeURIFragment(spec.NodeName),
 	), nil
 }
 
@@ -405,7 +405,7 @@ func generateTrojanURI(spec contracts.SubscriptionSpec) (string, error) {
 		spec.Host,
 		spec.Port,
 		strings.Join(params, "&"),
-		url.QueryEscape(spec.NodeName),
+		encodeURIFragment(spec.NodeName),
 	), nil
 }
 
@@ -451,7 +451,7 @@ func generateShadowsocksURI(spec contracts.SubscriptionSpec) (string, error) {
 	// Fragment: tag
 	if spec.NodeName != "" {
 		sb.WriteString("#")
-		sb.WriteString(url.QueryEscape(spec.NodeName))
+		sb.WriteString(encodeURIFragment(spec.NodeName))
 	}
 
 	return sb.String(), nil
@@ -471,7 +471,7 @@ func generateSOCKS5URI(spec contracts.SubscriptionSpec) (string, error) {
 		encodedUserinfo,
 		spec.Host,
 		spec.Port,
-		url.QueryEscape(spec.NodeName),
+		encodeURIFragment(spec.NodeName),
 	), nil
 }
 
@@ -593,6 +593,12 @@ func buildShareLinkParams(spec contracts.SubscriptionSpec) []string {
 }
 
 // --- helpers ---
+
+// encodeURIFragment encodes a URI fragment using RFC 3986 percent-encoding so
+// spaces become %20 (not '+' as url.QueryEscape produces).
+func encodeURIFragment(name string) string {
+	return (&url.URL{Fragment: name}).EscapedFragment()
+}
 
 func extString(m map[string]any, key string) string {
 	if m == nil {

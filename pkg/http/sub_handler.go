@@ -177,13 +177,14 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 	log.Info("[SubHandler] total URIs from cluster", "count", len(allURIs))
 
 	// 拉取外部扩展订阅（在 HTTP handler 层处理，不下沉到 RPC）
+	var extURIs []string
 	if len(extSubs) > 0 {
-		extURIs, truncated := subscription.FetchAndMergeExtSubs(extSubs)
+		var truncated bool
+		extURIs, truncated = subscription.FetchAndMergeExtSubs(extSubs)
 		if truncated {
 			log.Warn("ext_sub count exceeds limit, truncated", "count", len(extSubs), "max", subscription.MaxExtSubs)
 		}
-		allURIs = append(allURIs, extURIs...)
-		log.Info("[SubHandler] total URIs after merge", "count", len(allURIs))
+		log.Info("[SubHandler] total URIs after merge", "count", len(allURIs)+len(extURIs))
 	}
 
 	// 构建 ConvertOptions（仅 Clash 格式需要）
@@ -199,7 +200,7 @@ func (handler *SubHandler) handlerFunc(c *gin.Context) {
 		)
 	}
 
-	result, err := subscription.ConvertURIsWithOptions(strings.ToLower(formatHint), allURIs, opts)
+	result, err := subscription.ConvertURIsWithExternalAndOptions(strings.ToLower(formatHint), allURIs, extURIs, opts)
 	if err != nil {
 		log.Error("convert sub uri failed", "err", err)
 		c.String(500, err.Error())

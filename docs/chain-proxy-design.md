@@ -255,8 +255,8 @@ sequenceDiagram
 - **现状隐患**：当前 [exec_runner.go](file:///workspace/v2raymg/pkg/proxy/containers/xray/exec_runner.go#L1612-L1626) 与 [subscription.go](file:///workspace/v2raymg/pkg/proxy/containers/mihomo/subscription.go#L106-L109) 生成订阅时全部使用节点 `NodeName`（忽略 `inbound.Tag()`），且 `/sub` RPC 只传 URI 字符串导致下游 [uri_convert.go](file:///workspace/v2raymg/pkg/proxy/core/subscription/uri_convert.go#L139-L157) 反解后 `InboundTag` 为空。当同一前置机挂载“上海电信家宽”、“北京联通家宽”等多个同协议链式 Inbound 时，Clash（[clash.go](file:///workspace/v2raymg/pkg/proxy/core/subscription/converter/clash.go#L769)）与 Surge（[surge.go](file:///workspace/v2raymg/pkg/proxy/core/subscription/converter/surge.go#L249)）会产出完全同名的节点直接报错拒绝加载！
 - **修复方案**：
   1. 支持创建时指定 `remark`（未传且为 `chain` 时自动取 `chain_uri` 的 `#fragment`，仍为空则回退 `inbound.Tag()`）；
-  2. 在 `xray` 与 `mihomo` 生成订阅 URI 源头将非默认/链式 Inbound 的 `NodeName` 拼接为 `<NodeName>-<remark|tag>` 写入 `#fragment`；
-  3. 在 `ClashConverter` 与 `SurgeConverter` 输出前增加同名自动追加 `_2`、`_3` 兜底去重。
+  2. 链式 Inbound 的订阅基础 `NodeName` 直接采用 `remark` / 后端代理名（均为空回退 `inbound.Tag()`），不再拼接前置节点名；直连有备注时仍输出 `<NodeName>-<remark>`；
+  3. 全部客户端格式（`Clash`、`Surge`、`Qv2ray`、`Common`/Base64）统一输出 `🌿 <PROTO>_<Name>`（`ext_sub` 保留原名），发生重名时对全部重复项按 `_01`、`_02` 去重。
 
 ### 漏洞 5：UDP / QUIC 跨链式承载兼容性与 MTU 分片陷阱
 - **协议组合指引**：

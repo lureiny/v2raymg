@@ -134,7 +134,11 @@ func extractSuffixSetAndSSMap(t *testing.T, uris []string, expectedSuffixes []st
 			return nil, false
 		}
 		for _, sfx := range expectedSuffixes {
-			if strings.HasSuffix(ss.NodeName, sfx) {
+			matched := strings.HasSuffix(ss.NodeName, sfx)
+			if strings.HasPrefix(sfx, "🌿 ") {
+				matched = ss.NodeName == sfx
+			}
+			if matched {
 				bySuffix[sfx] = uri
 				break
 			}
@@ -340,6 +344,14 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 
 	// Fetch subscriptions from Layer-1-ineligible access nodes (nodeC for carol/alice, nodeA for dave)
 	// to prove cross-node RPC subscription aggregation ignores the access node's own Layer 1 visibility.
+	directAName := "🌿 SS_" + nodeA.name + "-DirectA"
+	directBName := "🌿 SS_" + nodeB.name + "-DirectB"
+	chainAName := "🌿 SS_ChainXrayA"
+	chainBName := "🌿 SS_ChainMihomoB"
+	chainCName := "🌿 SS_ChainXrayC"
+	rebornAName := "🌿 SS_RebornXrayA"
+	rebornBName := "🌿 SS_RebornMihomoB"
+
 	var carolSubBySuffix, aliceSubBySuffix, daveSubBySuffix map[string]string
 
 	eventually(t, "carol aggregated /sub from nodeC has 4 expected URIs", 20*time.Second, func() bool {
@@ -347,7 +359,7 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		m, ok := extractSuffixSetAndSSMap(t, uris, []string{"-DirectA", "-ChainXrayA", "-DirectB", "-ChainMihomoB"})
+		m, ok := extractSuffixSetAndSSMap(t, uris, []string{directAName, chainAName, directBName, chainBName})
 		if !ok {
 			return false
 		}
@@ -360,7 +372,7 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		m, ok := extractSuffixSetAndSSMap(t, uris, []string{"-DirectA", "-DirectB"})
+		m, ok := extractSuffixSetAndSSMap(t, uris, []string{directAName, directBName})
 		if !ok {
 			return false
 		}
@@ -373,7 +385,7 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		m, ok := extractSuffixSetAndSSMap(t, uris, []string{"-ChainXrayC"})
+		m, ok := extractSuffixSetAndSSMap(t, uris, []string{chainCName})
 		if !ok {
 			return false
 		}
@@ -383,8 +395,8 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 
 	require.Len(t, carolSubBySuffix, 4)
 	require.Len(t, aliceSubBySuffix, 2)
-	require.NotEmpty(t, aliceSubBySuffix["-DirectA"])
-	require.NotEmpty(t, aliceSubBySuffix["-DirectB"])
+	require.NotEmpty(t, aliceSubBySuffix[directAName])
+	require.NotEmpty(t, aliceSubBySuffix[directBName])
 	require.Len(t, daveSubBySuffix, 1)
 
 	carolJWT := loginBearer(t, nodeA, carolUser, carolPass)
@@ -446,11 +458,11 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 	// Phase 2: Real Cross-Node Two-Hop Data Plane + Remote DNS Zero-Leak
 	// =========================================================================
 
-	carolDirectXraySocks := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "carol-direct-a"), xrayBin, carolSubBySuffix["-DirectA"])
-	carolChainXraySocks := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "carol-chain-a"), xrayBin, carolSubBySuffix["-ChainXrayA"])
-	carolDirectMihomoSocks := spawnMihomoSSClient(t, uniqueClientDir(t, tmpDir, "carol-direct-b"), mihomoBin, carolSubBySuffix["-DirectB"])
-	carolChainMihomoSocks := spawnMihomoSSClient(t, uniqueClientDir(t, tmpDir, "carol-chain-b"), mihomoBin, carolSubBySuffix["-ChainMihomoB"])
-	daveChainXraySocks := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "dave-chain-c"), xrayBin, daveSubBySuffix["-ChainXrayC"])
+	carolDirectXraySocks := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "carol-direct-a"), xrayBin, carolSubBySuffix[directAName])
+	carolChainXraySocks := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "carol-chain-a"), xrayBin, carolSubBySuffix[chainAName])
+	carolDirectMihomoSocks := spawnMihomoSSClient(t, uniqueClientDir(t, tmpDir, "carol-direct-b"), mihomoBin, carolSubBySuffix[directBName])
+	carolChainMihomoSocks := spawnMihomoSSClient(t, uniqueClientDir(t, tmpDir, "carol-chain-b"), mihomoBin, carolSubBySuffix[chainBName])
+	daveChainXraySocks := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "dave-chain-c"), xrayBin, daveSubBySuffix[chainCName])
 
 	// 1. Direct Xray on nodeA must NOT hit backendA.
 	dialsBefore := backendA.DialCount()
@@ -565,7 +577,7 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		m, ok := extractSuffixSetAndSSMap(t, uris, []string{"-DirectA", "-ChainXrayA", "-DirectB", "-ChainMihomoB"})
+		m, ok := extractSuffixSetAndSSMap(t, uris, []string{directAName, chainAName, directBName, chainBName})
 		if !ok {
 			return false
 		}
@@ -587,8 +599,8 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 	})
 
 	// Prove alice now sends real 2-hop traffic through nodeA->backendA and nodeB->backendB.
-	aliceChainXraySocks := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "alice-chain-a"), xrayBin, aliceGrantedSub["-ChainXrayA"])
-	aliceChainMihomoSocks := spawnMihomoSSClient(t, uniqueClientDir(t, tmpDir, "alice-chain-b"), mihomoBin, aliceGrantedSub["-ChainMihomoB"])
+	aliceChainXraySocks := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "alice-chain-a"), xrayBin, aliceGrantedSub[chainAName])
+	aliceChainMihomoSocks := spawnMihomoSSClient(t, uniqueClientDir(t, tmpDir, "alice-chain-b"), mihomoBin, aliceGrantedSub[chainBName])
 
 	dialsA = backendA.DialCount()
 	got, err = sendEchoViaSocks5(aliceChainXraySocks, "127.0.0.1", echoSrv.Port(), "alice-promo-a\n")
@@ -615,7 +627,7 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		_, ok := extractSuffixSetAndSSMap(t, uris, []string{"-DirectA", "-DirectB"})
+		_, ok := extractSuffixSetAndSSMap(t, uris, []string{directAName, directBName})
 		return ok
 	})
 	eventually(t, "alice /api/profile removes chain inbounds", 15*time.Second, func() bool {
@@ -656,7 +668,7 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		_, ok := extractSuffixSetAndSSMap(t, uris, []string{"-DirectA", "-ChainXrayA", "-DirectB", "-ChainMihomoB"})
+		_, ok := extractSuffixSetAndSSMap(t, uris, []string{directAName, chainAName, directBName, chainBName})
 		return ok
 	})
 
@@ -687,7 +699,7 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		m, ok := extractSuffixSetAndSSMap(t, uris, []string{"-DirectA", "-ChainXrayA", "-DirectB", "-ChainMihomoB", "-ChainXrayC"})
+		m, ok := extractSuffixSetAndSSMap(t, uris, []string{directAName, chainAName, directBName, chainBName, chainCName})
 		if !ok {
 			return false
 		}
@@ -707,7 +719,7 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 	})
 
 	// Prove carol sends real 2-hop traffic through nodeC -> backendC -> echoSrv.
-	carolChainC := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "carol-chain-c"), xrayBin, carolExpandedSub["-ChainXrayC"])
+	carolChainC := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "carol-chain-c"), xrayBin, carolExpandedSub[chainCName])
 	dialsC = backendC.DialCount()
 	got, err = sendEchoViaSocks5(carolChainC, "127.0.0.1", echoSrv.Port(), "carol-nodec-2hop\n")
 	require.NoError(t, err)
@@ -722,7 +734,7 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		_, ok := extractSuffixSetAndSSMap(t, uris, []string{"-DirectA", "-ChainXrayA", "-DirectB", "-ChainMihomoB"})
+		_, ok := extractSuffixSetAndSSMap(t, uris, []string{directAName, chainAName, directBName, chainBName})
 		return ok
 	})
 	eventually(t, "carol /api/profile removes c-xray-chain and closes port", 15*time.Second, func() bool {
@@ -775,7 +787,7 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		m, ok := extractSuffixSetAndSSMap(t, uris, []string{"-DirectA", "-ChainXrayA", "-DirectB", "-ChainMihomoB"})
+		m, ok := extractSuffixSetAndSSMap(t, uris, []string{directAName, chainAName, directBName, chainBName})
 		if !ok {
 			return false
 		}
@@ -783,8 +795,8 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 		return true
 	})
 
-	carolPostRestartXray := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "carol-restart-a"), xrayBin, carolPostRestartSub["-ChainXrayA"])
-	carolPostRestartMihomo := spawnMihomoSSClient(t, uniqueClientDir(t, tmpDir, "carol-restart-b"), mihomoBin, carolPostRestartSub["-ChainMihomoB"])
+	carolPostRestartXray := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "carol-restart-a"), xrayBin, carolPostRestartSub[chainAName])
+	carolPostRestartMihomo := spawnMihomoSSClient(t, uniqueClientDir(t, tmpDir, "carol-restart-b"), mihomoBin, carolPostRestartSub[chainBName])
 
 	dialsA = backendA.DialCount()
 	got, err = sendEchoViaSocks5(carolPostRestartXray, "127.0.0.1", echoSrv.Port(), "after-restart-xray\n")
@@ -865,8 +877,8 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 			return false
 		}
 		m, ok := extractSuffixSetAndSSMap(t, uris, []string{
-			"-DirectA", "-ChainXrayA", "-RebornXrayA",
-			"-DirectB", "-ChainMihomoB", "-RebornMihomoB",
+			directAName, chainAName, rebornAName,
+			directBName, chainBName, rebornBName,
 		})
 		if !ok {
 			return false
@@ -875,8 +887,8 @@ func TestClusterE2E_ChainProxy_ThreeNodeRealDataPlane(t *testing.T) {
 		return true
 	})
 
-	rebornXrayClient := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "carol-reborn-a"), xrayBin, rebornSub["-RebornXrayA"])
-	rebornMihomoClient := spawnMihomoSSClient(t, uniqueClientDir(t, tmpDir, "carol-reborn-b"), mihomoBin, rebornSub["-RebornMihomoB"])
+	rebornXrayClient := spawnXraySSClient(t, uniqueClientDir(t, tmpDir, "carol-reborn-a"), xrayBin, rebornSub[rebornAName])
+	rebornMihomoClient := spawnMihomoSSClient(t, uniqueClientDir(t, tmpDir, "carol-reborn-b"), mihomoBin, rebornSub[rebornBName])
 
 	dialsA = backendA.DialCount()
 	got, err = sendEchoViaSocks5(rebornXrayClient, "127.0.0.1", echoSrv.Port(), "reborn-xray\n")

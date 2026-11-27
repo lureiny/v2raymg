@@ -223,19 +223,23 @@ func ValidatePolicy(policy string, definedGroups map[string]bool) error {
 //  3. inject proxies + reconcile template-defined Auto/Manual groups
 //  4. if opts has custom groups/rules, patch the template; else return as-is
 func (c *ClashConverter) ConvertWithOptions(specs []contracts.SubscriptionSpec, opts *ConvertOptions) (string, error) {
-	usedNames := make(map[string]bool, len(specs))
 	var proxies []*ClashProxy
 	for _, spec := range specs {
 		proxy := c.convertSpec(spec)
 		if proxy != nil {
-			proxy.Name = uniqueProxyName(proxy.Name, usedNames)
 			proxies = append(proxies, proxy)
 		}
 	}
 
-	nodeNames := make([]string, 0, len(proxies))
-	for _, p := range proxies {
-		nodeNames = append(nodeNames, p.Name)
+	baseNames := make([]string, len(proxies))
+	for i, p := range proxies {
+		baseNames[i] = p.Name
+	}
+	deduped := deduplicateDisplayNames(baseNames)
+	nodeNames := make([]string, len(proxies))
+	for i, p := range proxies {
+		p.Name = deduped[i]
+		nodeNames[i] = p.Name
 	}
 
 	hasCustomOptions := opts != nil && (len(opts.ProxyGroups) > 0 || len(opts.RuleProviders) > 0 || len(opts.Rules) > 0)
@@ -743,7 +747,7 @@ func (c *ClashConverter) convertTuic(spec contracts.SubscriptionSpec) *ClashProx
 func (c *ClashConverter) convertAnyTLS(spec contracts.SubscriptionSpec) *ClashProxy {
 	ext := spec.Extensions
 	proxy := &ClashProxy{
-		Name:     c.nodeName(spec, "AnyTLS"),
+		Name:     c.nodeName(spec, "ANYTLS"),
 		Type:     "anytls",
 		Server:   spec.Host,
 		Port:     int(spec.Port),
@@ -768,25 +772,8 @@ func (c *ClashConverter) convertAnyTLS(spec contracts.SubscriptionSpec) *ClashPr
 	return proxy
 }
 
-func uniqueProxyName(name string, used map[string]bool) string {
-	if !used[name] {
-		used[name] = true
-		return name
-	}
-	for i := 2; ; i++ {
-		candidate := fmt.Sprintf("%s_%d", name, i)
-		if !used[candidate] {
-			used[candidate] = true
-			return candidate
-		}
-	}
-}
-
 func (c *ClashConverter) nodeName(spec contracts.SubscriptionSpec, protoPrefix string) string {
-	if spec.NodeName != "" {
-		return fmt.Sprintf("🌿 %s_%s", protoPrefix, spec.NodeName)
-	}
-	return fmt.Sprintf("🌿 %s_%s", protoPrefix, spec.InboundTag)
+	return formatDisplayName(spec, protoPrefix)
 }
 
 // --- Clash 模板拉取 ---

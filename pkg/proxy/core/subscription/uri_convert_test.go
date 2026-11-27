@@ -489,3 +489,57 @@ func TestUrisToSpecs_VMessHTTPUpgradeAndALPN(t *testing.T) {
 		t.Errorf("alpn extension = %v, want [h2 http/1.1]", ext["alpn"])
 	}
 }
+
+type captureConverter struct {
+	specs []contracts.SubscriptionSpec
+}
+
+func (c *captureConverter) Format() ClientFormat { return FormatCommon }
+
+func (c *captureConverter) Convert(specs []contracts.SubscriptionSpec) (string, error) {
+	c.specs = append([]contracts.SubscriptionSpec(nil), specs...)
+	return "captured", nil
+}
+
+func TestConvertURIsWithExternalAndOptions_MarksExternalSpecs(t *testing.T) {
+	prev, existed := GetConverter(FormatCommon)
+	stub := &captureConverter{}
+	RegisterConverter(stub)
+	t.Cleanup(func() {
+		if existed {
+			RegisterConverter(prev)
+			return
+		}
+		registryMu.Lock()
+		delete(registry, FormatCommon)
+		registryMu.Unlock()
+	})
+
+	localURIs := []string{
+		"trojan://p1@n1.example.com:443?sni=n1.example.com#SH-Home",
+		"anytls://p3@n3.example.com:8443?sni=n3.example.com#Edge1",
+	}
+	extURIs := []string{
+		"trojan://px1@ext1.example.com:443#Airport%20HK",
+	}
+
+	out, err := ConvertURIsWithExternalAndOptions("v2rayN", localURIs, extURIs, nil)
+	if err != nil {
+		t.Fatalf("ConvertURIsWithExternalAndOptions: %v", err)
+	}
+	if out != "captured" {
+		t.Fatalf("out = %q, want captured", out)
+	}
+	if len(stub.specs) != 3 {
+		t.Fatalf("captured %d specs, want 3", len(stub.specs))
+	}
+	if stub.specs[0].IsExternal || stub.specs[0].NodeName != "SH-Home" {
+		t.Errorf("spec[0] unexpected: %+v", stub.specs[0])
+	}
+	if stub.specs[1].IsExternal || stub.specs[1].NodeName != "Edge1" {
+		t.Errorf("spec[1] unexpected: %+v", stub.specs[1])
+	}
+	if !stub.specs[2].IsExternal || stub.specs[2].NodeName != "Airport HK" {
+		t.Errorf("spec[2] unexpected: %+v", stub.specs[2])
+	}
+}

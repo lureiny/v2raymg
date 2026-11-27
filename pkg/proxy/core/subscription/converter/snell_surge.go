@@ -9,12 +9,16 @@ import (
 )
 
 func (c *SurgeConverter) convertSnell(spec contracts.SubscriptionSpec) string {
+	return c.convertSnellWithName(spec, c.nodeName(spec, "SNELL"))
+}
+
+func (c *SurgeConverter) convertSnellWithName(spec contracts.SubscriptionSpec, name string) string {
 	version := extInt(spec.Extensions, "version")
 	if version == 0 {
 		version = 5
 	}
 	parts := []string{
-		fmt.Sprintf("%s = snell", c.nodeName(spec, "SNELL")),
+		fmt.Sprintf("%s = snell", name),
 		spec.Host,
 		strconv.FormatUint(uint64(spec.Port), 10),
 		fmt.Sprintf("psk=%s", spec.Password),

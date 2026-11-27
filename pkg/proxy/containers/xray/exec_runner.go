@@ -2999,22 +2999,7 @@ func parseAndRenderXrayChainOutbound(outboundTag, rawURI string) (*chain.Outboun
 }
 
 func resolveSubscriptionNodeName(reqNodeName, tag string, meta contracts.InboundMeta) string {
-	if meta.Remark != "" {
-		if reqNodeName == "" {
-			return meta.Remark
-		}
-		return reqNodeName + "-" + meta.Remark
-	}
-	if meta.InboundType == contracts.InboundTypeChain {
-		if reqNodeName == "" {
-			return tag
-		}
-		return reqNodeName + "-" + tag
-	}
-	if reqNodeName == "" {
-		return tag
-	}
-	return reqNodeName
+	return chain.ResolveSubscriptionNodeName(reqNodeName, tag, meta)
 }
 
 // resolveFastAddCert resolves TLS certificate paths from params.

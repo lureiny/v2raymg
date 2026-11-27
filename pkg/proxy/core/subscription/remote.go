@@ -33,7 +33,8 @@ func (f *RemoteFetcher) Fetch() ([]contracts.SubscriptionSpec, error) {
 		}
 		for _, uri := range uris {
 			specs = append(specs, contracts.SubscriptionSpec{
-				URI: uri,
+				URI:        uri,
+				IsExternal: true,
 			})
 		}
 	}

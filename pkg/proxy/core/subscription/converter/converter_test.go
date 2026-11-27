@@ -437,16 +437,18 @@ func TestConvertURIs_SSnell_Mixed_CommonFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConvertURIs: %v", err)
 	}
-	// Common format is base64 encoded; decode and check
+	// Common format is base64 encoded; decode and check unified display names
 	decoded, err := base64.StdEncoding.DecodeString(result)
 	if err != nil {
 		t.Fatalf("base64 decode: %v", err)
 	}
-	if !strings.Contains(string(decoded), snellURI) {
-		t.Errorf("expected snell URI preserved, got %q", string(decoded))
+	wantSnell := "snell://psk@snell-host:48162?version=5#%F0%9F%8C%BF%20SNELL_SnellNode"
+	wantSS := "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpteXBhc3N3b3Jk@ss-host:8388#%F0%9F%8C%BF%20SS_SSNode"
+	if !strings.Contains(string(decoded), wantSnell) {
+		t.Errorf("expected snell URI %q, got %q", wantSnell, string(decoded))
 	}
-	if !strings.Contains(string(decoded), ssURI) {
-		t.Errorf("expected SS URI preserved, got %q", string(decoded))
+	if !strings.Contains(string(decoded), wantSS) {
+		t.Errorf("expected SS URI %q, got %q", wantSS, string(decoded))
 	}
 }
 
@@ -510,7 +512,7 @@ func TestClashConverter_DeduplicatesDuplicateProxyNames(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(out), &parsed); err != nil {
 		t.Fatalf("yaml.Unmarshal: %v", err)
 	}
-	wantNames := []string{"🌿 TROJAN_HK", "🌿 TROJAN_HK_2", "🌿 TROJAN_HK_2_2", "🌿 TROJAN_HK_3"}
+	wantNames := []string{"🌿 TROJAN_HK_01", "🌿 TROJAN_HK_02", "🌿 TROJAN_HK_2", "🌿 TROJAN_HK_03"}
 	if len(parsed.Proxies) != len(wantNames) {
 		t.Fatalf("got %d proxies, want %d", len(parsed.Proxies), len(wantNames))
 	}
@@ -546,7 +548,7 @@ func TestClashConverter_DeduplicatesRealCollisionWithExistingSuffix(t *testing.T
 	if err := yaml.Unmarshal([]byte(out), &parsed); err != nil {
 		t.Fatalf("yaml.Unmarshal: %v", err)
 	}
-	wantNames := []string{"🌿 TROJAN_", "🌿 TROJAN__2", "🌿 TROJAN__3"}
+	wantNames := []string{"🌿 TROJAN__01", "🌿 TROJAN__02", "🌿 TROJAN__03"}
 	if len(parsed.Proxies) != len(wantNames) {
 		t.Fatalf("got %d proxies, want %d", len(parsed.Proxies), len(wantNames))
 	}
@@ -575,11 +577,11 @@ func TestSurgeConverter_DeduplicatesDuplicateProxyNames(t *testing.T) {
 		t.Fatalf("got %d lines, want 5:\n%s", len(lines), out)
 	}
 	wants := []string{
-		"🌿 TROJAN_SH=trojan,",
-		"🌿 TROJAN_SH_2=trojan,",
-		"🌿 TROJAN_SH_3=trojan,",
-		"🌿 SNELL_Home = snell,",
-		"🌿 SNELL_Home_2 = snell,",
+		"🌿 TROJAN_SH_01=trojan,",
+		"🌿 TROJAN_SH_02=trojan,",
+		"🌿 TROJAN_SH_03=trojan,",
+		"🌿 SNELL_Home_01 = snell,",
+		"🌿 SNELL_Home_02 = snell,",
 	}
 	for i, w := range wants {
 		if !strings.HasPrefix(lines[i], w) {

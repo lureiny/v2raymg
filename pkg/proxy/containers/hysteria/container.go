@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -970,7 +971,7 @@ func (hc *HysteriaContainer) GetUserSubscriptions(req contracts.SubscriptionRequ
 		params = "/"
 	}
 	uri := fmt.Sprintf("hysteria2://%s@%s:%d%s#%s",
-		req.User.AuthToken, req.Host, port, params, nodeName)
+		req.User.AuthToken, req.Host, port, params, (&url.URL{Fragment: nodeName}).EscapedFragment())
 
 	spec := contracts.SubscriptionSpec{
 		Protocol:   contracts.ProtocolHysteria2,

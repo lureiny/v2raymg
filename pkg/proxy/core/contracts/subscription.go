@@ -29,6 +29,11 @@ type SubscriptionSpec struct {
 	// Populated by the provider-specific generator.
 	URI string `json:"uri,omitempty"`
 
+	// IsExternal marks entries imported via external subscriptions (ext_sub).
+	// Converters preserve original display names for external entries while
+	// still including them in global duplicate-name deduplication.
+	IsExternal bool `json:"is_external,omitempty"`
+
 	// Extensions holds provider-specific fields needed for URI generation.
 	// Examples: transport type, security mode, TLS settings, flow, etc.
 	Extensions map[string]any `json:"extensions,omitempty"`

@@ -31,8 +31,23 @@ func ConvertURIs(userAgent string, uris []string) (string, error) {
 // ConvertURIsWithOptions converts URIs with custom options (proxy-groups, rules, etc).
 // Only Clash format supports custom options; other formats ignore opts.
 func ConvertURIsWithOptions(userAgent string, uris []string, opts *ConvertOptions) (string, error) {
+	return ConvertURIsWithExternalAndOptions(userAgent, uris, nil, opts)
+}
+
+// ConvertURIsWithExternalAndOptions converts cluster-local URIs and external
+// ext_sub URIs into the target client format. External entries are marked with
+// IsExternal=true so converters preserve their original display names while
+// still participating in global duplicate-name deduplication.
+func ConvertURIsWithExternalAndOptions(userAgent string, localURIs, extURIs []string, opts *ConvertOptions) (string, error) {
 	format := detectFormat(userAgent)
-	specs := urisToSpecs(uris)
+	specs := urisToSpecs(localURIs)
+	if len(extURIs) > 0 {
+		extSpecs := urisToSpecs(extURIs)
+		for i := range extSpecs {
+			extSpecs[i].IsExternal = true
+		}
+		specs = append(specs, extSpecs...)
+	}
 	c := GetConverterOrDefault(format)
 	if c == nil {
 		return "", nil

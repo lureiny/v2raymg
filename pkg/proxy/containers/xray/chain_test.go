@@ -1020,8 +1020,8 @@ func TestTwoLayerIsolation_UserEventsReconcileAndSubscription(t *testing.T) {
 	for _, s := range subsBoth {
 		nodeNames[s.InboundTag] = s.NodeName
 	}
-	assert.Equal(t, "NodeA-Tokyo", nodeNames["ch-vip"])
-	assert.Equal(t, "NodeA-ch-noremark", nodeNames["ch-noremark"])
+	assert.Equal(t, "Tokyo", nodeNames["ch-vip"])
+	assert.Equal(t, "ch-noremark", nodeNames["ch-noremark"])
 	assert.Equal(t, "NodeA", nodeNames["direct-open"])
 
 	// When req.NodeName == "":

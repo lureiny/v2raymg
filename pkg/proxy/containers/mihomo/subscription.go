@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/lureiny/v2raymg/pkg/log"
+	"github.com/lureiny/v2raymg/pkg/proxy/core/chain"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/contracts"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/params/protocolparams"
 	"github.com/lureiny/v2raymg/pkg/proxy/core/subscription/codec"
@@ -108,22 +109,7 @@ func (c *MihomoContainer) GetUserSubscriptions(req contracts.SubscriptionRequest
 //	anytls → fillAnyTLSSubscriptionSpec (Phase 7, ProtocolParams only)
 func buildSubscriptionSpec(inb *MihomoInbound, req contracts.SubscriptionRequest, port uint32) (contracts.SubscriptionSpec, error) {
 	meta := inb.Meta()
-	nodeName := req.NodeName
-	if meta.Remark != "" {
-		if nodeName == "" {
-			nodeName = meta.Remark
-		} else {
-			nodeName = nodeName + "-" + meta.Remark
-		}
-	} else if meta.InboundType == contracts.InboundTypeChain {
-		if nodeName == "" {
-			nodeName = inb.Tag()
-		} else {
-			nodeName = nodeName + "-" + inb.Tag()
-		}
-	} else if nodeName == "" {
-		nodeName = inb.Tag()
-	}
+	nodeName := chain.ResolveSubscriptionNodeName(req.NodeName, inb.Tag(), meta)
 
 	spec := contracts.SubscriptionSpec{
 		Host:       req.Host,

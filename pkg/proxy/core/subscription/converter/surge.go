@@ -18,18 +18,21 @@ func (c *SurgeConverter) Format() subscription.ClientFormat {
 }
 
 func (c *SurgeConverter) Convert(specs []contracts.SubscriptionSpec) (string, error) {
-	usedNames := make(map[string]bool, len(specs))
-	var lines []string
+	supported := make([]contracts.SubscriptionSpec, 0, len(specs))
+	baseNames := make([]string, 0, len(specs))
 	for _, spec := range specs {
-		line, ok := c.convertSpec(spec)
-		if ok {
-			if prefix := surgeProtoPrefix(spec); prefix != "" {
-				baseName := c.nodeName(spec, prefix)
-				dedupName := uniqueProxyName(baseName, usedNames)
-				if dedupName != baseName && strings.HasPrefix(line, baseName) {
-					line = dedupName + line[len(baseName):]
-				}
-			}
+		if !c.supportsSpec(spec) {
+			continue
+		}
+		prefix := surgeProtoPrefix(spec)
+		supported = append(supported, spec)
+		baseNames = append(baseNames, c.nodeName(spec, prefix))
+	}
+
+	finalNames := deduplicateDisplayNames(baseNames)
+	lines := make([]string, 0, len(supported))
+	for i, spec := range supported {
+		if line, ok := c.convertSpecWithName(spec, finalNames[i]); ok {
 			lines = append(lines, line)
 		}
 	}
@@ -53,51 +56,67 @@ func surgeProtoPrefix(spec contracts.SubscriptionSpec) string {
 	case contracts.ProtocolAnyTLS:
 		return "ANYTLS"
 	default:
-		if strings.HasPrefix(spec.URI, "hysteria2://") {
+		lower := strings.ToLower(strings.TrimSpace(spec.URI))
+		if strings.HasPrefix(lower, "hysteria2://") || strings.HasPrefix(lower, "hy2://") {
 			return "HYSTERIA2"
 		}
 		return ""
 	}
 }
 
-// convertSpec returns ("", false) for protocols/transports Surge doesn't accept.
-func (c *SurgeConverter) convertSpec(spec contracts.SubscriptionSpec) (string, bool) {
+func (c *SurgeConverter) supportsSpec(spec contracts.SubscriptionSpec) bool {
 	switch spec.Protocol {
 	case contracts.ProtocolVLess:
-		return "", false
-	case contracts.ProtocolVMess:
-		// Surge VMess accepts only TCP and WebSocket.
-		if t := extString(spec.Extensions, "transport"); t != "" && t != "tcp" && t != "ws" {
-			return "", false
-		}
-		return c.convertVMess(spec), true
-	case contracts.ProtocolTrojan:
-		// Surge Trojan accepts only TCP and WebSocket.
-		if t := extString(spec.Extensions, "transport"); t != "" && t != "tcp" && t != "ws" {
-			return "", false
-		}
-		return c.convertTrojan(spec), true
-	case contracts.ProtocolShadowsocks:
-		return c.convertShadowsocks(spec), true
-	case contracts.ProtocolSnell:
-		return c.convertSnell(spec), true
-	case contracts.ProtocolHysteria2:
-		return c.convertHysteria2(spec), true
-	case contracts.ProtocolTUIC:
-		return c.convertTuic(spec), true
-	case contracts.ProtocolAnyTLS:
-		return c.convertAnyTLS(spec), true
+		return false
+	case contracts.ProtocolVMess, contracts.ProtocolTrojan:
+		t := extString(spec.Extensions, "transport")
+		return t == "" || t == "tcp" || t == "ws"
+	case contracts.ProtocolShadowsocks, contracts.ProtocolSnell, contracts.ProtocolHysteria2, contracts.ProtocolTUIC, contracts.ProtocolAnyTLS:
+		return true
 	default:
-		// Pre-refactor data may lack spec.Protocol but still have a hysteria2:// URI.
-		if strings.HasPrefix(spec.URI, "hysteria2://") {
-			return c.convertHysteria2(spec), true
+		lower := strings.ToLower(strings.TrimSpace(spec.URI))
+		return strings.HasPrefix(lower, "hysteria2://") || strings.HasPrefix(lower, "hy2://")
+	}
+}
+
+// convertSpec returns ("", false) for protocols/transports Surge doesn't accept.
+func (c *SurgeConverter) convertSpec(spec contracts.SubscriptionSpec) (string, bool) {
+	return c.convertSpecWithName(spec, c.nodeName(spec, surgeProtoPrefix(spec)))
+}
+
+func (c *SurgeConverter) convertSpecWithName(spec contracts.SubscriptionSpec, name string) (string, bool) {
+	if !c.supportsSpec(spec) {
+		return "", false
+	}
+	switch spec.Protocol {
+	case contracts.ProtocolVMess:
+		return c.convertVMessWithName(spec, name), true
+	case contracts.ProtocolTrojan:
+		return c.convertTrojanWithName(spec, name), true
+	case contracts.ProtocolShadowsocks:
+		return c.convertShadowsocksWithName(spec, name), true
+	case contracts.ProtocolSnell:
+		return c.convertSnellWithName(spec, name), true
+	case contracts.ProtocolHysteria2:
+		return c.convertHysteria2WithName(spec, name), true
+	case contracts.ProtocolTUIC:
+		return c.convertTuicWithName(spec, name), true
+	case contracts.ProtocolAnyTLS:
+		return c.convertAnyTLSWithName(spec, name), true
+	default:
+		lower := strings.ToLower(strings.TrimSpace(spec.URI))
+		if strings.HasPrefix(lower, "hysteria2://") || strings.HasPrefix(lower, "hy2://") {
+			return c.convertHysteria2WithName(spec, name), true
 		}
 		return "", false
 	}
 }
 
 func (c *SurgeConverter) convertVMess(spec contracts.SubscriptionSpec) string {
-	name := c.nodeName(spec, "VMESS")
+	return c.convertVMessWithName(spec, c.nodeName(spec, "VMESS"))
+}
+
+func (c *SurgeConverter) convertVMessWithName(spec contracts.SubscriptionSpec, name string) string {
 	parts := []string{
 		fmt.Sprintf("%s=vmess", name),
 		spec.Host,
@@ -144,7 +163,10 @@ func (c *SurgeConverter) convertVMess(spec contracts.SubscriptionSpec) string {
 }
 
 func (c *SurgeConverter) convertTrojan(spec contracts.SubscriptionSpec) string {
-	name := c.nodeName(spec, "TROJAN")
+	return c.convertTrojanWithName(spec, c.nodeName(spec, "TROJAN"))
+}
+
+func (c *SurgeConverter) convertTrojanWithName(spec contracts.SubscriptionSpec, name string) string {
 	parts := []string{
 		fmt.Sprintf("%s=trojan", name),
 		spec.Host,
@@ -180,7 +202,10 @@ func (c *SurgeConverter) convertTrojan(spec contracts.SubscriptionSpec) string {
 }
 
 func (c *SurgeConverter) convertShadowsocks(spec contracts.SubscriptionSpec) string {
-	name := c.nodeName(spec, "SS")
+	return c.convertShadowsocksWithName(spec, c.nodeName(spec, "SS"))
+}
+
+func (c *SurgeConverter) convertShadowsocksWithName(spec contracts.SubscriptionSpec, name string) string {
 	ext := spec.Extensions
 	method := extString(ext, "method")
 	if method == "" {
@@ -209,7 +234,10 @@ func (c *SurgeConverter) convertShadowsocks(spec contracts.SubscriptionSpec) str
 }
 
 func (c *SurgeConverter) convertHysteria2(spec contracts.SubscriptionSpec) string {
-	name := c.nodeName(spec, "HYSTERIA2")
+	return c.convertHysteria2WithName(spec, c.nodeName(spec, "HYSTERIA2"))
+}
+
+func (c *SurgeConverter) convertHysteria2WithName(spec contracts.SubscriptionSpec, name string) string {
 	parts := []string{
 		fmt.Sprintf("%s=hysteria2", name),
 		spec.Host,
@@ -239,7 +267,10 @@ func (c *SurgeConverter) convertHysteria2(spec contracts.SubscriptionSpec) strin
 // convertTuic emits a Surge TUIC v5 proxy line.
 // Format: name=tuic-v5, host, port[, skip-cert-verify=true][, sni=...], password=..., uuid=..., alpn=h3, version=5
 func (c *SurgeConverter) convertTuic(spec contracts.SubscriptionSpec) string {
-	name := c.nodeName(spec, "TUIC")
+	return c.convertTuicWithName(spec, c.nodeName(spec, "TUIC"))
+}
+
+func (c *SurgeConverter) convertTuicWithName(spec contracts.SubscriptionSpec, name string) string {
 	ext := spec.Extensions
 	parts := []string{
 		fmt.Sprintf("%s=tuic-v5", name),
@@ -261,7 +292,10 @@ func (c *SurgeConverter) convertTuic(spec contracts.SubscriptionSpec) string {
 }
 
 func (c *SurgeConverter) convertAnyTLS(spec contracts.SubscriptionSpec) string {
-	name := c.nodeName(spec, "ANYTLS")
+	return c.convertAnyTLSWithName(spec, c.nodeName(spec, "ANYTLS"))
+}
+
+func (c *SurgeConverter) convertAnyTLSWithName(spec contracts.SubscriptionSpec, name string) string {
 	parts := []string{
 		fmt.Sprintf("%s=anytls", name),
 		spec.Host,
@@ -279,10 +313,7 @@ func (c *SurgeConverter) convertAnyTLS(spec contracts.SubscriptionSpec) string {
 }
 
 func (c *SurgeConverter) nodeName(spec contracts.SubscriptionSpec, protoPrefix string) string {
-	if spec.NodeName != "" {
-		return fmt.Sprintf("🌿 %s_%s", protoPrefix, spec.NodeName)
-	}
-	return fmt.Sprintf("🌿 %s_%s", protoPrefix, spec.InboundTag)
+	return sanitizeSurgeName(formatDisplayName(spec, protoPrefix))
 }
 
 func init() {

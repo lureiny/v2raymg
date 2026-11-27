@@ -2,6 +2,7 @@ package snell
 
 import (
 	"context"
+	"net/url"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -522,6 +523,35 @@ func TestSnell_GetUserSubscriptions_GatingAndRemark(t *testing.T) {
 	}
 	if len(subs) != 1 || subs[0].NodeName != "Tokyo" {
 		t.Fatalf("unexpected subs without remark: %+v", subs)
+	}
+
+	// Remark with spaces must use %20 (RFC 3986 fragment encoding, not '+') and round-trip via url.Parse.
+	if err := sc.FastAddInbound(defaultInboundTag, map[string]any{
+		"remark":      "BJ Home 01",
+		"access_tags": []string{"vip"},
+	}); err != nil {
+		t.Fatalf("FastAddInbound spaced remark: %v", err)
+	}
+	subs, err = sc.GetUserSubscriptions(contracts.SubscriptionRequest{
+		User:     contracts.UserSpec{Username: "carol"},
+		Host:     "example.com",
+		NodeName: "Edge 1",
+	})
+	if err != nil {
+		t.Fatalf("GetUserSubscriptions(carol, spaced): %v", err)
+	}
+	if len(subs) != 1 || subs[0].NodeName != "Edge 1-BJ Home 01" {
+		t.Fatalf("unexpected spaced subs: %+v", subs)
+	}
+	if strings.Contains(subs[0].URI, "+") {
+		t.Errorf("URI fragment must not contain '+' for spaces: %q", subs[0].URI)
+	}
+	parsed, parseErr := url.Parse(subs[0].URI)
+	if parseErr != nil {
+		t.Fatalf("url.Parse(%q): %v", subs[0].URI, parseErr)
+	}
+	if parsed.Fragment != subs[0].NodeName {
+		t.Errorf("parsed.Fragment = %q, want %q", parsed.Fragment, subs[0].NodeName)
 	}
 }
 

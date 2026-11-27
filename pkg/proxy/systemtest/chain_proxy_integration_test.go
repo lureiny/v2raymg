@@ -621,9 +621,9 @@ func spawnMihomoSSClient(t *testing.T, dir, mihomoBin, subURI string) string {
 	return fmt.Sprintf("127.0.0.1:%d", port)
 }
 
-func findSubBySuffix(specs []contracts.SubscriptionSpec, suffix string) (contracts.SubscriptionSpec, bool) {
+func findSubByName(specs []contracts.SubscriptionSpec, name string) (contracts.SubscriptionSpec, bool) {
 	for _, s := range specs {
-		if strings.HasSuffix(s.NodeName, suffix) {
+		if s.NodeName == name {
 			return s, true
 		}
 	}
@@ -759,12 +759,12 @@ func runChainProxyRealTwoHopSuite(t *testing.T, fx chainContainerFixture, socksB
 	})
 	require.NoError(t, err)
 	require.Len(t, carolSubs, 2, "carol must receive direct + chain subscriptions")
-	carolChainSub, hasSuffix := findSubBySuffix(carolSubs, "-Home-SH")
-	require.True(t, hasSuffix, "carol chain subscription NodeName must end with -Home-SH, got %+v", carolSubs)
+	carolChainSub, hasSuffix := findSubByName(carolSubs, "Home-SH")
+	require.True(t, hasSuffix, "carol chain subscription NodeName must be Home-SH, got %+v", carolSubs)
 	require.NotEqual(t, carolChainSub.URI, "")
 	var carolDirectSub contracts.SubscriptionSpec
 	for _, s := range carolSubs {
-		if !strings.HasSuffix(s.NodeName, "-Home-SH") {
+		if s.NodeName != "Home-SH" {
 			carolDirectSub = s
 			break
 		}
@@ -778,8 +778,8 @@ func runChainProxyRealTwoHopSuite(t *testing.T, fx chainContainerFixture, socksB
 	})
 	require.NoError(t, err)
 	require.Len(t, aliceSubs, 1, "alice must receive ONLY direct subscription")
-	_, aliceHasChain := findSubBySuffix(aliceSubs, "-Home-SH")
-	require.False(t, aliceHasChain, "alice must NOT see chain subscription -Home-SH")
+	_, aliceHasChain := findSubByName(aliceSubs, "Home-SH")
+	require.False(t, aliceHasChain, "alice must NOT see chain subscription Home-SH")
 
 	bobSubs, err := fx.subMgr.GetSubscription(contracts.SubscriptionRequest{
 		User:     *bob,
@@ -877,8 +877,8 @@ func runChainProxyRealTwoHopSuite(t *testing.T, fx chainContainerFixture, socksB
 		NodeName: "FrontNode",
 	})
 	require.NoError(t, err)
-	aliceChainSub, aliceNowHasChain := findSubBySuffix(aliceSubsGranted, "-Home-SH")
-	require.True(t, aliceNowHasChain, "alice subscription must now include -Home-SH after tag grant")
+	aliceChainSub, aliceNowHasChain := findSubByName(aliceSubsGranted, "Home-SH")
+	require.True(t, aliceNowHasChain, "alice subscription must now include Home-SH after tag grant")
 
 	aliceChainSocks := fx.socksClientFrom(t, aliceChainSub.URI)
 	alicePayload := fmt.Sprintf("alice-dynamic-grant-%s\n", fx.ctype)
@@ -905,7 +905,7 @@ func runChainProxyRealTwoHopSuite(t *testing.T, fx chainContainerFixture, socksB
 		NodeName: "FrontNode",
 	})
 	require.NoError(t, err)
-	_, aliceStillHasChain := findSubBySuffix(aliceSubsRevoked, "-Home-SH")
+	_, aliceStillHasChain := findSubByName(aliceSubsRevoked, "Home-SH")
 	require.False(t, aliceStillHasChain)
 
 	// Shrink chainTag access_tags back to ["vip"] while keeping carol's persistent connection intact.

@@ -16,14 +16,9 @@ func (c *Qv2rayConverter) Format() subscription.ClientFormat {
 	return subscription.FormatQv2ray
 }
 
-// Convert 将所有 spec.URI 用换行符连接，不做额外编码。
+// Convert 将所有 spec.URI 统一命名并去重后，用换行符连接（不做额外编码）。
 func (c *Qv2rayConverter) Convert(specs []contracts.SubscriptionSpec) (string, error) {
-	var uris []string
-	for _, spec := range specs {
-		if spec.URI != "" {
-			uris = append(uris, spec.URI)
-		}
-	}
+	uris := renderNamedURIs(specs)
 	return strings.Join(uris, "\n"), nil
 }
 

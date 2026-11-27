@@ -1096,8 +1096,8 @@ func TestUsersWriteEndpoints_LegacyHandlerDelegationAndHelp(t *testing.T) {
 			wantPath: "/user",
 			wantHelp: `POST /api/user
 	添加用户
-	body: {"target": "", "user": "", "pwd": "", "expire": 0, "ttl": 0}
-	user: 用户名, pwd: password, expire: 过期时间戳(与ttl同时存在时优先使用ttl), ttl: 存活时间(秒)`,
+	body: {"target": "", "user": "", "pwd": "", "expire": 0, "ttl": 0, "role": "", "group": "", "inbound_tags": [], "upload_bps": 0, "download_bps": 0, "max_clients": 0, "client_recycle_delay_sec": 0, "client_drain_sec": 0}
+	user: 用户名, pwd: password, expire: 过期时间戳(与ttl同时存在时优先使用ttl), ttl: 存活时间(秒), inbound_tags: Layer 2 访问标签数组`,
 		},
 		{
 			name:     "UserUpdateHandler",
@@ -1106,7 +1106,8 @@ func TestUsersWriteEndpoints_LegacyHandlerDelegationAndHelp(t *testing.T) {
 			wantPath: "/user",
 			wantHelp: `PUT /api/user
 	更新用户信息
-	body: {"target": "", "user": "", "pwd": "", "expire": 0, "ttl": 0, "role": "", "upload_bps": 0, "download_bps": 0, "max_clients": 0, "client_recycle_delay_sec": 0, "client_drain_sec": 0}`,
+	body: {"target": "", "user": "", "pwd": "", "expire": 0, "ttl": 0, "role": "", "group": "", "inbound_tags": [], "upload_bps": 0, "download_bps": 0, "max_clients": 0, "client_recycle_delay_sec": 0, "client_drain_sec": 0}
+	inbound_tags: 省略或 null 保持不变, [] 清空全部标签, 非空全量替换; 配额字段 0 保持不变, -1 取消限制`,
 		},
 		{
 			name:     "UserDeleteHandler",

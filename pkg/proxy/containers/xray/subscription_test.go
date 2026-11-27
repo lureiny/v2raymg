@@ -729,7 +729,7 @@ func TestGenerateShadowsocksURI(t *testing.T) {
 					"method": "aes-256-gcm",
 				},
 			},
-			want: fmt.Sprintf("ss://%s@1.2.3.4:8388#My+SS+Node",
+			want: fmt.Sprintf("ss://%s@1.2.3.4:8388#My%%20SS%%20Node",
 				base64.RawURLEncoding.EncodeToString([]byte("aes-256-gcm:test"))),
 		},
 		{
