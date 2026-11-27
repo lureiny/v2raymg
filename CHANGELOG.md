@@ -4,6 +4,20 @@
 > 对应的 annotated tag message 里(`git tag -l --format='%(contents)' v2.9.0`),
 > 这里只留"改了什么、升级要注意什么"。
 
+## 2026-11-27 — v2.10.1 订阅显示命名统一、全局 `_01` 去重与链式代理 API 文档完善
+
+本次小版本统一了多客户端订阅节点的显示命名与全局去重规则，使链式入站直接展示后端代理名称，并补齐了链式代理及两层 Tag 相关的 HTTP API 与内置 `/help` 文档。
+
+### Highlights
+- **全客户端统一命名**：`Clash`、`Surge`、`Qv2ray` 与 `Common`（Base64，覆盖 Shadowrocket / v2rayN 等）统一将集群节点显示名格式收敛为 `🌿 <PROTO>_<Name>`，协议前缀全大写（`VLESS` / `VMESS` / `TROJAN` / `SS` / `SNELL` / `HYSTERIA2` / `TUIC` / `ANYTLS` / `SOCKS5` / `HTTP`）；外部订阅（`ext_sub`）保留原名不加前缀
+- **链式入站展示后端代理名**：链式入站（`inbound_type="chain"`）不再拼接前置节点名 `<NodeName>-`，显示名按 `meta.Remark` → `chain_uri` 后端代理名（`#fragment` / VMess `ps`）→ `tag` 优先级解析；直连入站保持 `<NodeName>` 或 `<NodeName>-<remark>`
+- **全局重名从 `_01` 起去重**：跨集群节点与外部订阅统一全局查重，存在同名时**所有**重复项（含首个）统一追加 `_01`、`_02`、`_03` 后缀，并跳过已被其他唯一条目占用的候选名；同步补齐 URI `#fragment` RFC 3986 编码、无损 VMess/URI 改名与 Surge 控制字符清洗
+- **API 文档与 `/help` 补齐**：更新 `docs/http-api-reference.md` 至 v5 并同步 `/help/user`、`/help/inbound` 等静态帮助文本，完整覆盖链式入站（`inbound_type` / `chain_uri` / `remark` / `access_tags`）、`PUT /api/inbounds/tags` 与用户 `inbound_tags` 字段
+
+### ⚠️ 升级注意
+- **无 proto、配置与数据库 Schema 变更**（仍为 Migration 18），可直接从 `v2.10.0` 原地平滑升级或回滚
+- 若外部客户端策略组或正则规则依赖旧版订阅节点名（如原先无 `🌿 <PROTO>_` 前缀、旧 `_2`/`_3` 去重后缀，或链式入站带 `<NodeName>-` 前缀），升级后请同步调整匹配规则
+
 ## 2026-11-26 — v2.10.0 服务端链式代理 + 两层 Tag 隔离 + 内嵌 MCP + 反代 grpcs:// 与泄漏修复
 
 本次版本合入四组主要能力与稳定性修复：服务端链式代理（Chained Proxy）与两层 Tag 物理隔离、内嵌无状态 MCP Server（`/mcp`）、反代感知广播地址（`grpcs://`）与 `http_token` 自动生成，以及多项内存 / Goroutine 泄漏修复。
